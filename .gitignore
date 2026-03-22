@@ -1,0 +1,16 @@
+# Claude Code local state
+.claude/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Backup files from install.sh
+*.bak

@@ -12,20 +12,26 @@
 set -euo pipefail
 
 usage() {
-  grep '^#' "$0" | sed 's/^# \?//' | tail -n +2
-  exit 1
+	grep '^#' "$0" | sed 's/^# \?//' | tail -n +2
+	exit 1
 }
 
 # Deps check
 for cmd in curl jq; do
-  command -v "$cmd" &>/dev/null || { echo "Error: '$cmd' is required but not found." >&2; exit 1; }
+	command -v "$cmd" &>/dev/null || {
+		echo "Error: '$cmd' is required but not found." >&2
+		exit 1
+	}
 done
 
 # Auth — env var takes precedence, file is the fallback
 if [[ -z "${SLACK_BOT_TOKEN:-}" ]]; then
-  TOKEN_FILE="$HOME/secrets/slack-bot-token"
-  [[ -f "$TOKEN_FILE" ]] || { echo "Error: SLACK_BOT_TOKEN not set and $TOKEN_FILE not found." >&2; exit 1; }
-  SLACK_BOT_TOKEN=$(< "$TOKEN_FILE")
+	TOKEN_FILE="$HOME/secrets/slack-bot-token"
+	[[ -f "$TOKEN_FILE" ]] || {
+		echo "Error: SLACK_BOT_TOKEN not set and $TOKEN_FILE not found." >&2
+		exit 1
+	}
+	SLACK_BOT_TOKEN=$(<"$TOKEN_FILE")
 fi
 BOT_TOKEN="$SLACK_BOT_TOKEN"
 
@@ -39,54 +45,60 @@ MESSAGE=""
 THREAD_TS=""
 
 while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --thread)
-      [[ -z "${2:-}" ]] && { echo "Error: --thread requires a timestamp argument." >&2; exit 1; }
-      THREAD_TS="$2"
-      shift 2
-      ;;
-    --help|-h) usage ;;
-    *)
-      if [[ -z "$CHANNEL" ]]; then
-        CHANNEL="$1"
-      elif [[ -z "$MESSAGE" ]]; then
-        MESSAGE="$1"
-      else
-        echo "Error: Unexpected argument: $1" >&2
-        usage
-      fi
-      shift
-      ;;
-  esac
+	case "$1" in
+	--thread)
+		[[ -z "${2:-}" ]] && {
+			echo "Error: --thread requires a timestamp argument." >&2
+			exit 1
+		}
+		THREAD_TS="$2"
+		shift 2
+		;;
+	--help | -h) usage ;;
+	*)
+		if [[ -z "$CHANNEL" ]]; then
+			CHANNEL="$1"
+		elif [[ -z "$MESSAGE" ]]; then
+			MESSAGE="$1"
+		else
+			echo "Error: Unexpected argument: $1" >&2
+			usage
+		fi
+		shift
+		;;
+	esac
 done
 
-[[ -z "$CHANNEL" || -z "$MESSAGE" ]] && { echo "Error: channel and message are required." >&2; usage; }
+[[ -z "$CHANNEL" || -z "$MESSAGE" ]] && {
+	echo "Error: channel and message are required." >&2
+	usage
+}
 
 # Build JSON payload
 PAYLOAD=$(jq -n \
-  --arg channel "$CHANNEL" \
-  --arg text    "$MESSAGE" \
-  --arg username "$AGENT_NAME" \
-  --arg icon_emoji "$AGENT_EMOJI" \
-  '{channel: $channel, text: $text, username: $username, icon_emoji: $icon_emoji}')
+	--arg channel "$CHANNEL" \
+	--arg text "$MESSAGE" \
+	--arg username "$AGENT_NAME" \
+	--arg icon_emoji "$AGENT_EMOJI" \
+	'{channel: $channel, text: $text, username: $username, icon_emoji: $icon_emoji}')
 
 if [[ -n "$THREAD_TS" ]]; then
-  PAYLOAD=$(jq --arg ts "$THREAD_TS" '. + {thread_ts: $ts}' <<< "$PAYLOAD")
+	PAYLOAD=$(jq --arg ts "$THREAD_TS" '. + {thread_ts: $ts}' <<<"$PAYLOAD")
 fi
 
 # Send
 RESPONSE=$(curl -s -X POST https://slack.com/api/chat.postMessage \
-  -H "Authorization: Bearer $BOT_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "$PAYLOAD")
+	-H "Authorization: Bearer $BOT_TOKEN" \
+	-H "Content-Type: application/json" \
+	-d "$PAYLOAD")
 
 # Check response
-OK=$(jq -r '.ok' <<< "$RESPONSE")
+OK=$(jq -r '.ok' <<<"$RESPONSE")
 if [[ "$OK" != "true" ]]; then
-  ERROR=$(jq -r '.error' <<< "$RESPONSE")
-  echo "Error: Slack API returned: $ERROR" >&2
-  exit 1
+	ERROR=$(jq -r '.error' <<<"$RESPONSE")
+	echo "Error: Slack API returned: $ERROR" >&2
+	exit 1
 fi
 
 # Output ts so callers can thread replies against this message
-jq -r '.ts' <<< "$RESPONSE"
+jq -r '.ts' <<<"$RESPONSE"

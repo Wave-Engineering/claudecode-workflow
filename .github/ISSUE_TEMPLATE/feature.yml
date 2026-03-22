@@ -1,0 +1,29 @@
+name: Feature Request
+description: Propose a new skill, script, or template improvement
+labels: ["feature"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What do you want to add or change?
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: What does "done" look like? List specific, verifiable items.
+      value: |
+        - [ ]
+        - [ ]
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any background, examples, or references that help explain this request.
+    validations:
+      required: false

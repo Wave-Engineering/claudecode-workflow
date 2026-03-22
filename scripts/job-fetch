@@ -17,27 +17,27 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: job-fetch [-C /path/to/repo] <job-id|latest> [branch]"
-    echo ""
-    echo "  job-fetch 12345678                 Fetch specific job trace"
-    echo "  job-fetch latest                   Latest failed job on current branch"
-    echo "  job-fetch latest main              Latest failed job on 'main'"
-    echo "  job-fetch -C /path/to/repo 12345   Fetch from a different repo"
-    exit 1
+	echo "Usage: job-fetch [-C /path/to/repo] <job-id|latest> [branch]"
+	echo ""
+	echo "  job-fetch 12345678                 Fetch specific job trace"
+	echo "  job-fetch latest                   Latest failed job on current branch"
+	echo "  job-fetch latest main              Latest failed job on 'main'"
+	echo "  job-fetch -C /path/to/repo 12345   Fetch from a different repo"
+	exit 1
 }
 
 # ---------------------------------------------------------------------------
 # Parse -C flag
 # ---------------------------------------------------------------------------
 if [[ "${1:-}" == "-C" ]]; then
-    [[ $# -lt 3 ]] && usage
-    REPO_DIR="$2"
-    if [[ ! -d "$REPO_DIR" ]]; then
-        echo "ERROR: Directory does not exist: ${REPO_DIR}" >&2
-        exit 1
-    fi
-    cd "$REPO_DIR"
-    shift 2
+	[[ $# -lt 3 ]] && usage
+	REPO_DIR="$2"
+	if [[ ! -d "$REPO_DIR" ]]; then
+		echo "ERROR: Directory does not exist: ${REPO_DIR}" >&2
+		exit 1
+	fi
+	cd "$REPO_DIR"
+	shift 2
 fi
 
 [[ $# -lt 1 ]] && usage
@@ -48,24 +48,24 @@ JOB_ID="$1"
 # Resolve "latest" to a specific job ID
 # ---------------------------------------------------------------------------
 if [[ "$JOB_ID" == "latest" ]]; then
-    BRANCH="${2:-$(git branch --show-current 2>/dev/null || echo "")}"
-    if [[ -z "$BRANCH" ]]; then
-        echo "ERROR: Could not determine branch. Provide one: job-fetch latest <branch>" >&2
-        exit 1
-    fi
+	BRANCH="${2:-$(git branch --show-current 2>/dev/null || echo "")}"
+	if [[ -z "$BRANCH" ]]; then
+		echo "ERROR: Could not determine branch. Provide one: job-fetch latest <branch>" >&2
+		exit 1
+	fi
 
-    # Find the most recent pipeline for this branch
-    PIPELINE_ID=$(glab api "projects/:id/pipelines?ref=${BRANCH}&per_page=1" \
-        | python3 -c "import json,sys; ps=json.load(sys.stdin); print(ps[0]['id'] if ps else '')")
+	# Find the most recent pipeline for this branch
+	PIPELINE_ID=$(glab api "projects/:id/pipelines?ref=${BRANCH}&per_page=1" |
+		python3 -c "import json,sys; ps=json.load(sys.stdin); print(ps[0]['id'] if ps else '')")
 
-    if [[ -z "$PIPELINE_ID" ]]; then
-        echo "ERROR: No pipelines found for branch '${BRANCH}'" >&2
-        exit 1
-    fi
+	if [[ -z "$PIPELINE_ID" ]]; then
+		echo "ERROR: No pipelines found for branch '${BRANCH}'" >&2
+		exit 1
+	fi
 
-    # Find failed jobs in that pipeline
-    JOB_ID=$(glab api "projects/:id/pipelines/${PIPELINE_ID}/jobs" \
-        | python3 -c "
+	# Find failed jobs in that pipeline
+	JOB_ID=$(glab api "projects/:id/pipelines/${PIPELINE_ID}/jobs" |
+		python3 -c "
 import json, sys
 jobs = json.load(sys.stdin)
 failed = [j for j in jobs if j['status'] == 'failed']
@@ -75,10 +75,10 @@ else:
     print('')
 ")
 
-    if [[ -z "$JOB_ID" ]]; then
-        echo "ERROR: No failed jobs in pipeline ${PIPELINE_ID} on '${BRANCH}'" >&2
-        exit 1
-    fi
+	if [[ -z "$JOB_ID" ]]; then
+		echo "ERROR: No failed jobs in pipeline ${PIPELINE_ID} on '${BRANCH}'" >&2
+		exit 1
+	fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -107,9 +107,9 @@ print(f'FINISHED_AT={j.get(\"finished_at\", \"\")}')
 # Fetch job trace (raw text log)
 # ---------------------------------------------------------------------------
 OUTPUT_FILE="/tmp/${JOB_ID}.out"
-glab api "projects/:id/jobs/${JOB_ID}/trace" > "$OUTPUT_FILE"
+glab api "projects/:id/jobs/${JOB_ID}/trace" >"$OUTPUT_FILE"
 
-LINE_COUNT=$(wc -l < "$OUTPUT_FILE")
+LINE_COUNT=$(wc -l <"$OUTPUT_FILE")
 
 # ---------------------------------------------------------------------------
 # Print metadata to stdout
