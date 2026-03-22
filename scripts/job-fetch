@@ -1,0 +1,119 @@
+#!/usr/bin/env bash
+# job-fetch — Pull GitLab CI job output for analysis
+#
+# Usage:
+#   job-fetch [-C /path/to/repo] <job-id>          Fetch a specific job's trace
+#   job-fetch [-C /path/to/repo] latest [branch]   Fetch the most recent failed job
+#
+# The -C flag sets the working directory so glab resolves the correct project,
+# mirroring git's own -C convention. If omitted, uses the current directory.
+#
+# Output:
+#   Writes full job trace to /tmp/<job-id>.out
+#   Prints structured job metadata to stdout
+#
+# Requires: glab, python3
+
+set -euo pipefail
+
+usage() {
+    echo "Usage: job-fetch [-C /path/to/repo] <job-id|latest> [branch]"
+    echo ""
+    echo "  job-fetch 12345678                 Fetch specific job trace"
+    echo "  job-fetch latest                   Latest failed job on current branch"
+    echo "  job-fetch latest main              Latest failed job on 'main'"
+    echo "  job-fetch -C /path/to/repo 12345   Fetch from a different repo"
+    exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Parse -C flag
+# ---------------------------------------------------------------------------
+if [[ "${1:-}" == "-C" ]]; then
+    [[ $# -lt 3 ]] && usage
+    REPO_DIR="$2"
+    if [[ ! -d "$REPO_DIR" ]]; then
+        echo "ERROR: Directory does not exist: ${REPO_DIR}" >&2
+        exit 1
+    fi
+    cd "$REPO_DIR"
+    shift 2
+fi
+
+[[ $# -lt 1 ]] && usage
+
+JOB_ID="$1"
+
+# ---------------------------------------------------------------------------
+# Resolve "latest" to a specific job ID
+# ---------------------------------------------------------------------------
+if [[ "$JOB_ID" == "latest" ]]; then
+    BRANCH="${2:-$(git branch --show-current 2>/dev/null || echo "")}"
+    if [[ -z "$BRANCH" ]]; then
+        echo "ERROR: Could not determine branch. Provide one: job-fetch latest <branch>" >&2
+        exit 1
+    fi
+
+    # Find the most recent pipeline for this branch
+    PIPELINE_ID=$(glab api "projects/:id/pipelines?ref=${BRANCH}&per_page=1" \
+        | python3 -c "import json,sys; ps=json.load(sys.stdin); print(ps[0]['id'] if ps else '')")
+
+    if [[ -z "$PIPELINE_ID" ]]; then
+        echo "ERROR: No pipelines found for branch '${BRANCH}'" >&2
+        exit 1
+    fi
+
+    # Find failed jobs in that pipeline
+    JOB_ID=$(glab api "projects/:id/pipelines/${PIPELINE_ID}/jobs" \
+        | python3 -c "
+import json, sys
+jobs = json.load(sys.stdin)
+failed = [j for j in jobs if j['status'] == 'failed']
+if failed:
+    print(failed[0]['id'])
+else:
+    print('')
+")
+
+    if [[ -z "$JOB_ID" ]]; then
+        echo "ERROR: No failed jobs in pipeline ${PIPELINE_ID} on '${BRANCH}'" >&2
+        exit 1
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Fetch job metadata
+# ---------------------------------------------------------------------------
+JOB_INFO=$(glab api "projects/:id/jobs/${JOB_ID}")
+
+# Parse all fields in one python call
+META=$(echo "$JOB_INFO" | python3 -c "
+import json, sys
+j = json.load(sys.stdin)
+p = j['pipeline']
+print(f'JOB_ID={j[\"id\"]}')
+print(f'JOB_NAME={j[\"name\"]}')
+print(f'STAGE={j[\"stage\"]}')
+print(f'STATUS={j[\"status\"]}')
+print(f'REF={j[\"ref\"]}')
+print(f'PIPELINE={p[\"id\"]}')
+print(f'URL={j[\"web_url\"]}')
+print(f'FAILURE_REASON={j.get(\"failure_reason\", \"\")}')
+print(f'DURATION={j.get(\"duration\", \"\")}')
+print(f'FINISHED_AT={j.get(\"finished_at\", \"\")}')
+")
+
+# ---------------------------------------------------------------------------
+# Fetch job trace (raw text log)
+# ---------------------------------------------------------------------------
+OUTPUT_FILE="/tmp/${JOB_ID}.out"
+glab api "projects/:id/jobs/${JOB_ID}/trace" > "$OUTPUT_FILE"
+
+LINE_COUNT=$(wc -l < "$OUTPUT_FILE")
+
+# ---------------------------------------------------------------------------
+# Print metadata to stdout
+# ---------------------------------------------------------------------------
+echo "$META"
+echo "OUTPUT_FILE=${OUTPUT_FILE}"
+echo "LINE_COUNT=${LINE_COUNT}"
