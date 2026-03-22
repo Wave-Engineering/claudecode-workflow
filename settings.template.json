@@ -1,0 +1,93 @@
+{
+  "_comment": "Claude Code settings template. Copy to ~/.claude/settings.json and customize.",
+  "permissions": {
+    "allow": [
+      "Read",
+      "WebFetch",
+      "Bash(curl:*)",
+      "Bash(chmod:*)",
+      "Bash(shellcheck:*)",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(python3:*)",
+      "Bash(python:*)",
+      "Bash(pip:*)",
+      "Bash(pip3:*)",
+      "Bash(docker compose:*)",
+      "Bash(glab:*)",
+      "Bash(gh:*)",
+      "Bash(terraform:*)",
+      "Bash(aws:*)",
+      "Bash(git fetch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git push:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git config:*)",
+      "Bash(git rebase:*)",
+      "Bash(git status:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(git log:*)",
+      "Bash(git diff:*)",
+      "Edit(.claude/plans/*)",
+      "Write(.claude/plans/*)"
+    ]
+  },
+  "model": "opus",
+  "hooks": {
+    "_comment": "Hook commands reference scripts that must exist at the specified paths. Remove or update these if you don't use context-crystallizer.",
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/context-crystallizer/hooks/post-tool-use.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/context-crystallizer/hooks/session-start.sh"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/context-crystallizer/hooks/subagent-stop.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bash ~/.claude/statusline-command.sh"
+  },
+  "enabledPlugins": {
+    "context7@claude-plugins-official": true,
+    "code-review@claude-plugins-official": true,
+    "github@claude-plugins-official": true,
+    "gitlab@claude-plugins-official": true,
+    "feature-dev@claude-plugins-official": true,
+    "code-simplifier@claude-plugins-official": true,
+    "commit-commands@claude-plugins-official": true,
+    "pyright-lsp@claude-plugins-official": true,
+    "explanatory-output-style@claude-plugins-official": true,
+    "claude-md-management@claude-plugins-official": true,
+    "claude-code-setup@claude-plugins-official": true,
+    "slack@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true
+  },
+  "effortLevel": "high"
+}

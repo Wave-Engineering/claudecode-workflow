@@ -1,0 +1,13 @@
+stages:
+  - validate
+
+validate:
+  stage: validate
+  image: ubuntu:24.04
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq shellcheck golang-go > /dev/null 2>&1
+    - GOBIN=/usr/local/bin go install mvdan.cc/sh/v3/cmd/shfmt@latest
+  script:
+    - ./scripts/ci/validate.sh
+  rules:
+    - if: $CI_MERGE_REQUEST_IID

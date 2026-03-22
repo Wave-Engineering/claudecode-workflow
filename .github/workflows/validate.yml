@@ -1,0 +1,21 @@
+name: Validate
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Install shfmt
+        run: |
+          GOBIN=/usr/local/bin go install mvdan.cc/sh/v3/cmd/shfmt@latest
+
+      - name: Run validation
+        run: ./scripts/ci/validate.sh

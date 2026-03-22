@@ -1,8 +1,16 @@
 # claudecode-workflow
 
-Portable Claude Code workflow environment — skills, scripts, and a drop-in `CLAUDE.md` template.
+Portable Claude Code workflow environment — skills, scripts, settings, and a drop-in `CLAUDE.md` template.
 
 This repo packages the custom skills, utility scripts, and project instructions that make up a consistent Claude Code development environment. Clone it, run the installer, and you're set up on any machine.
+
+## Quick Start
+
+```bash
+git clone https://github.com/Wave-Engineering/claudecode-workflow.git
+cd claudecode-workflow
+./install.sh
+```
 
 ## What's Included
 
@@ -12,10 +20,11 @@ A drop-in project instructions file that works with both GitHub and GitLab proje
 
 Key features:
 - **Platform detection** — GitHub (`gh`) vs GitLab (`glab`), auto-detected
-- **Discovery-based tooling** — finds the project's linters, formatters, and test runners instead of assuming a stack
+- **Discovery-based code standards** — finds the project's linters, formatters, and test runners instead of assuming a stack
 - **Pre-commit checklist** — enforced review protocol with mandatory verification steps
 - **Agent identity system** — Dev-Team (persisted per-project) + Dev-Name/Dev-Avatar (ephemeral per-session)
 - **Secrets guardrail** — warns before staging sensitive files, confirms with user before proceeding
+- **PR/MR description format** — consistent structure for pull/merge requests
 
 ### Skills
 
@@ -39,53 +48,66 @@ Key features:
 |--------|-------------|-------------|
 | `slackbot-send` | `curl`, `jq`, Slack bot token | Send Slack messages as a named Claude Code agent |
 | `job-fetch` | `glab`, `python3` | Fetch GitLab CI job traces for analysis |
+| `statusline-command.sh` | `jq`, `git` | Custom status line: git branch, dirty state, context window remaining, model |
+
+### Settings Template
+
+`settings.template.json` provides a starting point for `~/.claude/settings.json` with:
+- **Permissions** — Granular tool allowlists for common CLIs (git, gh, glab, docker, terraform, aws, etc.)
+- **Hooks** — PostToolUse, SessionStart, SubagentStop hook structure (requires [context-crystallizer](https://github.com/Wave-Engineering/context-crystallizer) or equivalent)
+- **Status line** — Points to the custom statusline script
+- **Plugins** — Full plugin list (see Plugins section below)
+- **Effort level** — Set to `high` for thorough responses
 
 ## Installation
 
+### Full Install
+
 ```bash
-git clone https://github.com/Wave-Engineering/claudecode-workflow.git
-cd claudecode-workflow
 ./install.sh
 ```
 
-The installer:
-- Copies skills to `~/.claude/skills/`
-- Copies scripts to `~/.local/bin/`
-- Backs up existing files before overwriting (`.bak`)
-- Skips unchanged files
-- Reports missing dependencies
+This will:
+- Copy skills to `~/.claude/skills/`
+- Copy scripts to `~/.local/bin/`
+- Install statusline to `~/.claude/statusline-command.sh`
+- Copy `settings.template.json` → `~/.claude/settings.json` (only if no settings exist yet)
+- Back up existing files before overwriting (`.bak`)
+- Skip unchanged files
+- Report missing dependencies
 
 ### Options
 
 ```bash
-./install.sh --dry-run    # Show what would be done
-./install.sh --skills     # Install skills only
-./install.sh --scripts    # Install scripts only
+./install.sh --dry-run     # Show what would be done
+./install.sh --check       # Show drift between repo and installed versions
+./install.sh --skills      # Install skills only
+./install.sh --scripts     # Install scripts only
+./install.sh --config      # Install config files only
 ```
 
-### Dependencies
+### Check for Drift
 
-| Tool | Required by | Install |
-|------|------------|---------|
-| `gh` | GitHub skills | [cli.github.com](https://cli.github.com) |
-| `glab` | GitLab skills | [gitlab.com/gitlab-org/cli](https://gitlab.com/gitlab-org/cli) |
-| `curl` | slackbot-send | Usually pre-installed |
-| `jq` | slackbot-send | `apt install jq` / `brew install jq` |
-| `python3` | job-fetch | Usually pre-installed |
-| `shellcheck` | Validation | `apt install shellcheck` / `brew install shellcheck` |
-| `shfmt` | Validation | `go install mvdan.cc/sh/v3/cmd/shfmt@latest` |
-
-### Slack Setup (for /ping and /pong)
-
-Create a Slack bot token and save it:
+After making local changes to skills or scripts, see what's out of sync:
 
 ```bash
-mkdir -p ~/secrets
-echo "xoxb-your-token" > ~/secrets/slack-bot-token
-chmod 600 ~/secrets/slack-bot-token
+./install.sh --check
 ```
 
-## Using the CLAUDE.md Template
+This compares every installed file against the repo version and reports `in sync`, `DIFFERS`, or `NOT INSTALLED`.
+
+### Uninstall
+
+```bash
+./uninstall.sh              # Remove everything
+./uninstall.sh --dry-run    # Preview what would be removed
+./uninstall.sh --skills     # Remove skills only
+./uninstall.sh --scripts    # Remove scripts only
+```
+
+Settings and credentials are never removed by the uninstall script.
+
+### Using the CLAUDE.md Template
 
 Copy `CLAUDE.md` into the root of any project:
 
@@ -100,13 +122,71 @@ On first session, Claude will:
 
 No other configuration needed.
 
+## Plugins
+
+The settings template enables these plugins from `claude-plugins-official`:
+
+| Plugin | Purpose |
+|--------|---------|
+| `context7` | Up-to-date library documentation lookup |
+| `code-review` | Structured code review |
+| `github` | GitHub integration |
+| `gitlab` | GitLab integration |
+| `feature-dev` | Guided feature development |
+| `code-simplifier` | Code simplification and cleanup |
+| `commit-commands` | Git commit workflow commands |
+| `pyright-lsp` | Python language server |
+| `explanatory-output-style` | Educational code explanations |
+| `claude-md-management` | CLAUDE.md audit and improvement |
+| `claude-code-setup` | Automation recommendations |
+| `slack` | Slack channel integration (MCP-based) |
+| `frontend-design` | Frontend interface design |
+
+### MCP-Based Integrations
+
+Some plugins provide MCP (Model Context Protocol) server integrations that require OAuth setup on first use:
+
+| Plugin | MCP Capability | Setup |
+|--------|---------------|-------|
+| `slack` | Read/write Slack channels | OAuth — prompted on first `/pong` or `/ping` use |
+| `gitlab` | GitLab API access | OAuth — prompted on first `glab`-based operation |
+| `github` | GitHub API access | Uses existing `gh auth` session |
+
+These authenticate automatically through Claude Code's OAuth flow. No manual token configuration is needed — just approve the OAuth prompt when it appears.
+
+**Exception:** The `slackbot-send` script uses a separate bot token (not the MCP OAuth). See Slack Setup below.
+
+## Slack Setup (for /ping)
+
+The `/ping` skill uses `slackbot-send`, which requires a Slack bot token:
+
+```bash
+mkdir -p ~/secrets
+echo "xoxb-your-token" > ~/secrets/slack-bot-token
+chmod 600 ~/secrets/slack-bot-token
+```
+
+This is separate from the Slack MCP plugin OAuth — `slackbot-send` posts as a custom bot identity (with Dev-Name and Dev-Avatar), while the MCP plugin uses your Slack user identity.
+
+## Dependencies
+
+| Tool | Required by | Install |
+|------|------------|---------|
+| `gh` | GitHub skills | [cli.github.com](https://cli.github.com) |
+| `glab` | GitLab skills | [gitlab.com/gitlab-org/cli](https://gitlab.com/gitlab-org/cli) |
+| `curl` | slackbot-send | Usually pre-installed |
+| `jq` | slackbot-send, statusline | `apt install jq` / `brew install jq` |
+| `python3` | job-fetch | Usually pre-installed |
+| `shellcheck` | Validation | `apt install shellcheck` / `brew install shellcheck` |
+| `shfmt` | Validation | `go install mvdan.cc/sh/v3/cmd/shfmt@latest` |
+
 ## Validation
 
 ```bash
 ./scripts/ci/validate.sh
 ```
 
-Runs shellcheck, shfmt, and SKILL.md frontmatter validation.
+Runs shellcheck, shfmt, and SKILL.md frontmatter validation. Also runs automatically on PRs via GitHub Actions.
 
 ## License
 
