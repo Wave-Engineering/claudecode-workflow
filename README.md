@@ -96,6 +96,18 @@ After making local changes to skills or scripts, see what's out of sync:
 
 This compares every installed file against the repo version and reports `in sync`, `DIFFERS`, or `NOT INSTALLED`.
 
+### Sync Local Changes Back to Repo
+
+When you've edited installed skills or scripts locally and want to capture those changes:
+
+```bash
+./sync.sh              # Interactive — prompt per changed file
+./sync.sh --all        # Pull all changed files without prompting
+./sync.sh --check      # Show drift summary only (no changes)
+```
+
+This is the reverse of `install.sh` — it copies local files *into* the repo working tree. After syncing, review the changes with `git diff` and commit through normal git workflow.
+
 ### Uninstall
 
 ```bash

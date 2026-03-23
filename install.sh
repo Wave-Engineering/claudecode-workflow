@@ -34,16 +34,37 @@ INSTALL_CONFIG=true
 # --- Parse args ---------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-	--dry-run) DRY_RUN=true; shift ;;
-	--check) CHECK_MODE=true; shift ;;
-	--skills) INSTALL_SCRIPTS=false; INSTALL_CONFIG=false; shift ;;
-	--scripts) INSTALL_SKILLS=false; INSTALL_CONFIG=false; shift ;;
-	--config) INSTALL_SKILLS=false; INSTALL_SCRIPTS=false; shift ;;
+	--dry-run)
+		DRY_RUN=true
+		shift
+		;;
+	--check)
+		CHECK_MODE=true
+		shift
+		;;
+	--skills)
+		INSTALL_SCRIPTS=false
+		INSTALL_CONFIG=false
+		shift
+		;;
+	--scripts)
+		INSTALL_SKILLS=false
+		INSTALL_CONFIG=false
+		shift
+		;;
+	--config)
+		INSTALL_SKILLS=false
+		INSTALL_SCRIPTS=false
+		shift
+		;;
 	--help | -h)
 		grep '^#' "$0" | sed 's/^# \?//' | tail -n +2
 		exit 0
 		;;
-	*) echo "Unknown option: $1" >&2; exit 1 ;;
+	*)
+		echo "Unknown option: $1" >&2
+		exit 1
+		;;
 	esac
 done
 
@@ -213,7 +234,7 @@ done
 if [[ -f "$HOME/secrets/slack-bot-token" ]]; then
 	info "slack-bot-token found"
 else
-	warn "~/secrets/slack-bot-token — NOT FOUND (needed for /ping)"
+	warn "$HOME/secrets/slack-bot-token — NOT FOUND (needed for /ping)"
 fi
 
 if [[ ${#missing[@]} -gt 0 ]]; then

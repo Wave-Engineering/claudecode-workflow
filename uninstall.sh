@@ -24,14 +24,28 @@ REMOVE_CONFIG=true
 # --- Parse args ---------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
 	case "$1" in
-	--dry-run) DRY_RUN=true; shift ;;
-	--skills) REMOVE_SCRIPTS=false; REMOVE_CONFIG=false; shift ;;
-	--scripts) REMOVE_SKILLS=false; REMOVE_CONFIG=false; shift ;;
+	--dry-run)
+		DRY_RUN=true
+		shift
+		;;
+	--skills)
+		REMOVE_SCRIPTS=false
+		REMOVE_CONFIG=false
+		shift
+		;;
+	--scripts)
+		REMOVE_SKILLS=false
+		REMOVE_CONFIG=false
+		shift
+		;;
 	--help | -h)
 		grep '^#' "$0" | sed 's/^# \?//' | tail -n +2
 		exit 0
 		;;
-	*) echo "Unknown option: $1" >&2; exit 1 ;;
+	*)
+		echo "Unknown option: $1" >&2
+		exit 1
+		;;
 	esac
 done
 
