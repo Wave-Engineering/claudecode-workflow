@@ -30,6 +30,7 @@ Key features:
 
 | Skill | Command | What it does |
 |-------|---------|-------------|
+| ccfold | `/ccfold` | Merge upstream CLAUDE.md template updates into local project |
 | cryo | `/cryo` | Preserve session state before context compaction |
 | engage | `/engage` | Load CLAUDE.md, confirm rules of engagement |
 | ibm | `/ibm` | Issue-Branch-PR/MR workflow reminder |

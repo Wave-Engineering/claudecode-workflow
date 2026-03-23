@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- `ccfold` skill — Merge upstream CLAUDE.md template changes into a project's local CLAUDE.md, preserving project-specific content (Dev-Team, custom sections)
+- `sync.sh` — Reverse-sync: pull local skill/script changes back into the repo
+
 ## [0.1.0] - 2026-03-22
 
 ### Added
