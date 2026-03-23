@@ -23,10 +23,15 @@ if ! command -v shellcheck &>/dev/null; then
 	FAIL=$((FAIL + 1))
 else
 	SCRIPTS=()
+	# Root-level shell scripts
+	while IFS= read -r f; do
+		SCRIPTS+=("$f")
+	done < <(find "$REPO_DIR" -maxdepth 1 -name "*.sh" -type f 2>/dev/null)
+	# Scripts directory (excluding ci/)
 	while IFS= read -r f; do
 		SCRIPTS+=("$f")
 	done < <(find "$REPO_DIR/scripts" -type f -executable ! -path "*/ci/*" 2>/dev/null)
-	# Also check CI scripts
+	# CI scripts
 	while IFS= read -r f; do
 		SCRIPTS+=("$f")
 	done < <(find "$REPO_DIR/scripts/ci" -name "*.sh" -type f 2>/dev/null)
@@ -56,6 +61,11 @@ if ! command -v shfmt &>/dev/null; then
 	FAIL=$((FAIL + 1))
 else
 	SCRIPTS=()
+	# Root-level shell scripts
+	while IFS= read -r f; do
+		SCRIPTS+=("$f")
+	done < <(find "$REPO_DIR" -maxdepth 1 -name "*.sh" -type f 2>/dev/null)
+	# All scripts in scripts/
 	while IFS= read -r f; do
 		SCRIPTS+=("$f")
 	done < <(find "$REPO_DIR/scripts" -type f \( -executable -o -name "*.sh" \) 2>/dev/null)
