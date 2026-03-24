@@ -176,6 +176,18 @@ After all phases are complete, the VRTM in Section 8 provides the formal proof t
 
 **Requirement traceability.** Each AC item is annotated with the requirement ID(s) it verifies — e.g., `[R-01]`. This creates forward traceability from requirements to verification. After implementation, the VRTM in Section 8 captures the complete trace.
 
+### Foundation Story Checklist
+
+Every project needs certain infrastructure before feature work begins. Wave 1 should include a foundation story that covers the items below. Not every project needs all of them — but each should be explicitly included or marked N/A.
+
+- [ ] **Project scaffold** — dependency manifest (`pyproject.toml`, `package.json`, `pom.xml`, etc.), package/module structure, empty test directory
+- [ ] **CI/CD pipeline** — automated lint + test on every PR/MR. Keep workflow definitions thin (orchestration only) with logic in scripts.
+- [ ] **Linting and formatting** — configured and enforced in CI from the first commit
+- [ ] **Test runner** — configured and passing (even if the only test is a smoke/import test)
+- [ ] **Makefile or task runner** — standard targets (`lint`, `test`, `ci`) so humans and agents use the same commands
+
+If any of these are missing from Wave 1, add a story. CI/CD in particular is easy to forget and painful to retrofit — every PR from Wave 2 onward should be validated automatically.
+
 ### Wave Map
 
 [[Create an ASCII diagram showing the wave dependency flow. Each wave lists its stories. Arrows show which waves must complete before the next can start.]]
