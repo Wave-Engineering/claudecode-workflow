@@ -77,7 +77,7 @@ Wave 2 (parallel — depends on Wave 1)
 
 Include:
 - Which issues are in each wave
-- Which branches they map to (verify branches exist, create if needed)
+- Branch naming convention: `feature/<issue-number>-<description>` (branches created at execution time by `/nextwave`)
 - The dependency chain for each
 - Total number of waves and estimated parallelism
 
@@ -95,7 +95,7 @@ Present the full plan to the user:
 Once approved:
 
 1. **Create/update issues** — If any sub-issues need to be created (not just validated), create them now with full specs
-2. **Create branches** — For any sub-issues that don't have branches yet, create them from `main`
+2. **Do NOT create branches** — Branches are created by `/nextwave` at execution time, not at prep time. This ensures each branch starts from the current main/release branch with all prior waves' merged work included. Creating branches prematurely produces stale branches that require rebasing before every agent can start.
 3. **Capture in task list** — One task per wave with descriptions listing the issues and dependencies. Set up `blockedBy` relationships between wave tasks.
 4. **Update the plan file** — Write the wave execution plan to the active plan file so it survives compaction
 

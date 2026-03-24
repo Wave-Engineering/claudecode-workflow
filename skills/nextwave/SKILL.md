@@ -28,7 +28,13 @@ Before launching any agents:
 2. **Verify the main branch is clean** — `git status` shows no uncommitted changes, `git log` confirms previous wave's commits are present
 3. **Verify previous wave is merged** — If this is not Wave 1, confirm that all issues from the prior wave have their code on the main branch
 4. **Verify issue specs** — For each issue in this wave, read it via the platform CLI and confirm it has: Changes, Tests, Acceptance Criteria
-5. **Verify branches exist** — Each issue's branch must exist (created during `/prepwaves`)
+5. **Create feature branches** — For each issue in this wave, create a branch from the current main/release branch. This ensures each branch includes all prior waves' merged work.
+   ```bash
+   git checkout main && git pull
+   git checkout -b feature/<issue-number>-<description>
+   git push -u origin feature/<issue-number>-<description>
+   ```
+   Repeat for each issue in the wave. Branches are created at execution time (not during `/prepwaves`) to avoid stale branches that need rebasing.
 
 If any check fails, **stop and report** — do not launch agents on a bad foundation.
 
@@ -53,6 +59,17 @@ Read issue #N from this repo using the platform CLI (gh issue view N, or glab is
 2. Do NOT make design changes. If something in the issue doesn't work as described or needs a design change, STOP and report back with what's wrong and why. Do NOT improvise.
 3. Do NOT commit. Leave all changes uncommitted in the worktree.
 4. Work on branch: feature/N-description
+
+## CI/CD Rules
+- If you create or modify CI workflow files (`.github/workflows/*.yml`, `.gitlab-ci.yml`): **NO MORE THAN 5 LINES in any `run:` or `script:` block.** If the logic exceeds 5 lines, create a shell script in `scripts/ci/` and call it instead.
+- Do NOT hardcode secrets or environment-specific values in CI files.
+
+## Test Quality Rules
+- Tests must exercise REAL code paths. Do NOT mock the module under test.
+- Mocks are ONLY acceptable for true external boundaries: network calls, filesystem I/O, external APIs, third-party services.
+- Every new function or module you create must have corresponding test coverage.
+- Tests must assert meaningful outcomes — not just "didn't throw" or "returned something."
+- If you find yourself mocking more than 2 things in a single test, you are probably testing the wrong way. Step back and test the real behavior.
 
 ## Implementation Steps
 1. Read the issue thoroughly — understand every acceptance criterion
@@ -85,6 +102,42 @@ As agents complete, collect their reports. For each agent:
 If any agent escalated a design concern:
 - **Stop the wave** — present the concern to the user before proceeding
 - The user may need to update the issue spec and re-run that agent
+
+## Step 3.5: Parent Agent Quality Review
+
+Before presenting checklists to the user, the parent agent (you) must review each sub-agent's work for quality issues that sub-agents commonly miss. **Read the actual files in the worktree** — do not rely solely on the sub-agent's self-report.
+
+### CI/CD Compliance Review
+
+If any CI/CD files were created or modified (`.github/workflows/*.yml`, `.gitlab-ci.yml`):
+
+1. **Read every modified workflow/CI file** in the worktree
+2. **Check each `run:` / `script:` block** — if any exceeds 5 lines of procedural logic, flag it. The fix is to extract into a shell script in `scripts/ci/`.
+3. **Check for hardcoded values** — secrets, environment-specific URLs, account numbers should be parameterized via secrets/variables, not inline.
+4. **Check for anti-patterns** — `set -e` missing in shell scripts called from CI, missing error handling on critical steps, `latest` tags on Docker images.
+
+If violations are found: **fix them in the worktree before presenting to the user.** Note the fixes in the Change Summary.
+
+### Test Quality Review
+
+For ALL new or modified test files:
+
+1. **Read the test files** in the worktree — do not trust the sub-agent's "all tests pass" at face value
+2. **Check for over-mocking** — If a test mocks the module it's supposed to be testing, it proves nothing. Mocks are only acceptable for true external boundaries (network, filesystem, external APIs, third-party services). Flag any test that mocks internal project code.
+3. **Check for coverage gaps** — Every new function, class, or module introduced by the story should have at least one test that exercises its real behavior. List any untested code paths.
+4. **Check for trivial tests** — Tests that only assert "not None", "isinstance", or "didn't raise" without checking actual behavior are insufficient. Tests must verify correct *outcomes*.
+5. **Check that tests actually ran** — Verify the sub-agent's reported test output. If tests weren't run or results look suspicious, re-run them yourself in the worktree.
+
+If issues are found: **fix them in the worktree before presenting to the user.** Note the fixes in the Change Summary under a `[test-quality]` category.
+
+### Review Summary
+
+After completing both reviews, add a section to the pre-commit checklist:
+
+**[parent-review]** — Summary of what was checked and any fixes applied:
+- CI compliance: (clean / N issues fixed)
+- Test quality: (clean / N issues fixed)
+- Coverage: (all new code covered / gaps noted)
 
 ## Step 4: Present Pre-Commit Checklists
 
