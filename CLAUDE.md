@@ -400,4 +400,4 @@ Any skill or behavior that needs agent identity should:
 1. Read `Dev-Team` from this file
 2. Read `Dev-Name` and `Dev-Avatar` from `/tmp/claude-agent-$PPID.json`
 
-Dev-Team:
+Dev-Team: cc-workflow
