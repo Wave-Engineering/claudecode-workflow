@@ -98,6 +98,19 @@ if [[ "$REMOVE_SCRIPTS" == true ]]; then
 	done
 fi
 
+# --- Remove packages ----------------------------------------------------------
+if [[ "$REMOVE_SCRIPTS" == true && -d "$REPO_DIR/src" ]]; then
+	echo ""
+	echo "Removing packages from $SCRIPTS_DIR"
+	echo "──────────────────────────────────────────"
+	for pkg_dir in "$REPO_DIR"/src/*/; do
+		[[ -f "$pkg_dir/__main__.py" ]] || continue
+		pkg_name="$(basename "$pkg_dir")"
+		artifact_name="${pkg_name//_/-}"
+		do_remove "$SCRIPTS_DIR/$artifact_name"
+	done
+fi
+
 # --- Remove config ------------------------------------------------------------
 if [[ "$REMOVE_CONFIG" == true ]]; then
 	echo ""
