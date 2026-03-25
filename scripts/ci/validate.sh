@@ -4,7 +4,8 @@
 # Checks:
 #   1. shellcheck on all shell scripts
 #   2. shfmt formatting check on all shell scripts
-#   3. SKILL.md frontmatter validation (name + description present)
+#   3. Python syntax check (py_compile) on src/ files
+#   4. SKILL.md frontmatter validation (name + description present)
 
 set -euo pipefail
 
@@ -45,6 +46,18 @@ else
 	while IFS= read -r f; do
 		SCRIPTS+=("$f")
 	done < <(find "$REPO_DIR/scripts/ci" -name "*.sh" -type f 2>/dev/null)
+	# Skill helper scripts (non-SKILL.md files in skill dirs)
+	for skill_dir in "$REPO_DIR"/skills/*/; do
+		for helper in "$skill_dir"/*; do
+			[[ -f "$helper" ]] || continue
+			[[ "$(basename "$helper")" == "SKILL.md" ]] && continue
+			SCRIPTS+=("$helper")
+		done
+	done
+	# Config scripts
+	while IFS= read -r f; do
+		SCRIPTS+=("$f")
+	done < <(find "$REPO_DIR/config" -type f 2>/dev/null)
 
 	if [[ ${#SCRIPTS[@]} -eq 0 ]]; then
 		info "no scripts found"
@@ -83,6 +96,18 @@ else
 	while IFS= read -r f; do
 		SCRIPTS+=("$f")
 	done < <(find "$REPO_DIR/scripts" -type f \( -executable -o -name "*.sh" \) 2>/dev/null)
+	# Skill helper scripts (non-SKILL.md files in skill dirs)
+	for skill_dir in "$REPO_DIR"/skills/*/; do
+		for helper in "$skill_dir"/*; do
+			[[ -f "$helper" ]] || continue
+			[[ "$(basename "$helper")" == "SKILL.md" ]] && continue
+			SCRIPTS+=("$helper")
+		done
+	done
+	# Config scripts
+	while IFS= read -r f; do
+		SCRIPTS+=("$f")
+	done < <(find "$REPO_DIR/config" -type f 2>/dev/null)
 
 	if [[ ${#SCRIPTS[@]} -eq 0 ]]; then
 		info "no scripts found"
@@ -102,6 +127,34 @@ else
 			fi
 		done
 	fi
+fi
+
+# --- Python syntax check -----------------------------------------------------
+echo ""
+echo "Python syntax (py_compile)"
+echo "──────────────────────────────────────────"
+if [[ -d "$REPO_DIR/src" ]]; then
+	PY_FILES=()
+	while IFS= read -r f; do
+		PY_FILES+=("$f")
+	done < <(find "$REPO_DIR/src" -name "*.py" -type f 2>/dev/null)
+
+	if [[ ${#PY_FILES[@]} -eq 0 ]]; then
+		info "no Python files found in src/"
+	else
+		for py_file in "${PY_FILES[@]}"; do
+			rel="${py_file#"$REPO_DIR/"}"
+			if python3 -m py_compile "$py_file" 2>&1; then
+				info "$rel"
+				PASS=$((PASS + 1))
+			else
+				err "$rel"
+				FAIL=$((FAIL + 1))
+			fi
+		done
+	fi
+else
+	info "no src/ directory — skipping"
 fi
 
 # --- SKILL.md frontmatter validation -----------------------------------------

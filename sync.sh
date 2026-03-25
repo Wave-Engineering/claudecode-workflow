@@ -145,6 +145,7 @@ echo "Skills"
 echo "──────────────────────────────────────────"
 for skill_dir in "$REPO_DIR"/skills/*/; do
 	skill_name="$(basename "$skill_dir")"
+	# Check SKILL.md
 	installed="$SKILLS_DIR/$skill_name/SKILL.md"
 	repo_file="$skill_dir/SKILL.md"
 	if check_pair "$installed" "$repo_file" "$skill_name"; then
@@ -152,6 +153,18 @@ for skill_dir in "$REPO_DIR"/skills/*/; do
 		changed_repo+=("$repo_file")
 		changed_labels+=("$skill_name")
 	fi
+	# Check helper scripts (non-SKILL.md files)
+	for helper in "$skill_dir"/*; do
+		[[ -f "$helper" ]] || continue
+		helper_name="$(basename "$helper")"
+		[[ "$helper_name" == "SKILL.md" ]] && continue
+		installed_helper="$SCRIPTS_DIR/$helper_name"
+		if check_pair "$installed_helper" "$helper" "$skill_name/$helper_name"; then
+			changed_installed+=("$installed_helper")
+			changed_repo+=("$helper")
+			changed_labels+=("$skill_name/$helper_name")
+		fi
+	done
 done
 
 # Check for locally installed skills NOT in the repo
@@ -178,8 +191,8 @@ echo "Scripts"
 echo "──────────────────────────────────────────"
 for script in "$REPO_DIR"/scripts/*; do
 	[[ -f "$script" ]] || continue
+	[[ -d "$script" ]] && continue
 	script_name="$(basename "$script")"
-	[[ "$script_name" == "statusline-command.sh" ]] && continue # handled in Config
 	installed="$SCRIPTS_DIR/$script_name"
 	if check_pair "$installed" "$script" "$script_name"; then
 		changed_installed+=("$installed")
@@ -192,9 +205,9 @@ done
 echo ""
 echo "Config"
 echo "──────────────────────────────────────────"
-if [[ -f "$REPO_DIR/scripts/statusline-command.sh" ]]; then
+if [[ -f "$REPO_DIR/config/statusline-command.sh" ]]; then
 	installed="$CLAUDE_DIR/statusline-command.sh"
-	repo_file="$REPO_DIR/scripts/statusline-command.sh"
+	repo_file="$REPO_DIR/config/statusline-command.sh"
 	if check_pair "$installed" "$repo_file" "statusline-command.sh"; then
 		changed_installed+=("$installed")
 		changed_repo+=("$repo_file")

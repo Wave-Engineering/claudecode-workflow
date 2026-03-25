@@ -120,11 +120,21 @@ if [[ "$CHECK_MODE" == true ]]; then
 	echo "──────────────────────────────────────────"
 	for skill_dir in "$REPO_DIR"/skills/*/; do
 		skill_name="$(basename "$skill_dir")"
+		# Check SKILL.md
 		src="$skill_dir/SKILL.md"
 		dest="$SKILLS_DIR/$skill_name/SKILL.md"
-		[[ -f "$src" ]] || continue
-		total=$((total + 1))
-		do_check "$src" "$dest" "$skill_name" || drifted=$((drifted + 1))
+		if [[ -f "$src" ]]; then
+			total=$((total + 1))
+			do_check "$src" "$dest" "$skill_name" || drifted=$((drifted + 1))
+		fi
+		# Check helper scripts (non-SKILL.md files)
+		for helper in "$skill_dir"/*; do
+			[[ -f "$helper" ]] || continue
+			helper_name="$(basename "$helper")"
+			[[ "$helper_name" == "SKILL.md" ]] && continue
+			total=$((total + 1))
+			do_check "$helper" "$SCRIPTS_DIR/$helper_name" "$skill_name/$helper_name" || drifted=$((drifted + 1))
+		done
 	done
 
 	echo ""
@@ -142,9 +152,9 @@ if [[ "$CHECK_MODE" == true ]]; then
 	echo ""
 	echo "Config"
 	echo "──────────────────────────────────────────"
-	if [[ -f "$REPO_DIR/scripts/statusline-command.sh" ]]; then
+	if [[ -f "$REPO_DIR/config/statusline-command.sh" ]]; then
 		total=$((total + 1))
-		do_check "$REPO_DIR/scripts/statusline-command.sh" "$CLAUDE_DIR/statusline-command.sh" "statusline-command.sh" || drifted=$((drifted + 1))
+		do_check "$REPO_DIR/config/statusline-command.sh" "$CLAUDE_DIR/statusline-command.sh" "statusline-command.sh" || drifted=$((drifted + 1))
 	fi
 
 	echo ""
@@ -165,9 +175,20 @@ if [[ "$INSTALL_SKILLS" == true ]]; then
 	echo "──────────────────────────────────────────"
 	for skill_dir in "$REPO_DIR"/skills/*/; do
 		skill_name="$(basename "$skill_dir")"
+		# Install SKILL.md
 		src="$skill_dir/SKILL.md"
 		dest="$SKILLS_DIR/$skill_name/SKILL.md"
 		[[ -f "$src" ]] && do_copy "$src" "$dest"
+		# Install helper scripts (non-SKILL.md files) to ~/.local/bin/
+		for helper in "$skill_dir"/*; do
+			[[ -f "$helper" ]] || continue
+			helper_name="$(basename "$helper")"
+			[[ "$helper_name" == "SKILL.md" ]] && continue
+			do_copy "$helper" "$SCRIPTS_DIR/$helper_name"
+			if [[ "$DRY_RUN" != true ]]; then
+				chmod +x "$SCRIPTS_DIR/$helper_name"
+			fi
+		done
 	done
 fi
 
@@ -193,21 +214,23 @@ if [[ "$INSTALL_CONFIG" == true ]]; then
 	echo ""
 	echo "Config → $CLAUDE_DIR"
 	echo "──────────────────────────────────────────"
-	if [[ -f "$REPO_DIR/scripts/statusline-command.sh" ]]; then
-		do_copy "$REPO_DIR/scripts/statusline-command.sh" "$CLAUDE_DIR/statusline-command.sh"
+	if [[ -f "$REPO_DIR/config/statusline-command.sh" ]]; then
+		do_copy "$REPO_DIR/config/statusline-command.sh" "$CLAUDE_DIR/statusline-command.sh"
 		if [[ "$DRY_RUN" != true ]]; then
 			chmod +x "$CLAUDE_DIR/statusline-command.sh"
 		fi
 	fi
 
-	if [[ -f "$REPO_DIR/settings.template.json" ]]; then
+	if [[ -f "$REPO_DIR/config/settings.template.json" ]]; then
 		if [[ -f "$CLAUDE_DIR/settings.json" ]]; then
 			skip "settings.json already exists (won't overwrite — use settings.template.json as reference)"
 		else
-			do_copy "$REPO_DIR/settings.template.json" "$CLAUDE_DIR/settings.json"
+			do_copy "$REPO_DIR/config/settings.template.json" "$CLAUDE_DIR/settings.json"
 		fi
 	fi
 fi
+
+# Package builds added by Story 4.1
 
 # --- Summary ------------------------------------------------------------------
 echo ""
