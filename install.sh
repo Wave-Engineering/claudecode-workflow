@@ -157,6 +157,25 @@ if [[ "$CHECK_MODE" == true ]]; then
 		do_check "$REPO_DIR/config/statusline-command.sh" "$CLAUDE_DIR/statusline-command.sh" "statusline-command.sh" || drifted=$((drifted + 1))
 	fi
 
+	if [[ -d "$REPO_DIR/src" ]]; then
+		echo ""
+		echo "Packages"
+		echo "──────────────────────────────────────────"
+		# Rebuild to ensure fresh comparison
+		"$REPO_DIR/scripts/ci/build.sh" >/dev/null 2>&1 || true
+		for pkg_dir in "$REPO_DIR"/src/*/; do
+			[[ -f "$pkg_dir/__main__.py" ]] || continue
+			pkg_name="$(basename "$pkg_dir")"
+			artifact_name="${pkg_name//_/-}"
+			src="$REPO_DIR/dist/$artifact_name"
+			dest="$SCRIPTS_DIR/$artifact_name"
+			if [[ -f "$src" ]]; then
+				total=$((total + 1))
+				do_check "$src" "$dest" "$artifact_name" || drifted=$((drifted + 1))
+			fi
+		done
+	fi
+
 	echo ""
 	echo "══════════════════════════════════════════"
 	if [[ $drifted -eq 0 ]]; then
@@ -230,7 +249,36 @@ if [[ "$INSTALL_CONFIG" == true ]]; then
 	fi
 fi
 
-# Package builds added by Story 4.1
+# --- Build and install packages -----------------------------------------------
+if [[ "$INSTALL_SCRIPTS" == true && -d "$REPO_DIR/src" ]]; then
+	echo ""
+	echo "Packages → $SCRIPTS_DIR"
+	echo "──────────────────────────────────────────"
+	# Build from source
+	if [[ "$DRY_RUN" == true ]]; then
+		info "(dry-run) Would run scripts/ci/build.sh"
+	else
+		"$REPO_DIR/scripts/ci/build.sh"
+	fi
+	# Install built artifacts
+	for pkg_dir in "$REPO_DIR"/src/*/; do
+		[[ -f "$pkg_dir/__main__.py" ]] || continue
+		pkg_name="$(basename "$pkg_dir")"
+		artifact_name="${pkg_name//_/-}"
+		src="$REPO_DIR/dist/$artifact_name"
+		dest="$SCRIPTS_DIR/$artifact_name"
+		if [[ "$DRY_RUN" == true ]]; then
+			info "(dry-run) $src → $dest"
+		else
+			if [[ -f "$src" ]]; then
+				do_copy "$src" "$dest"
+				chmod +x "$dest"
+			else
+				warn "Expected artifact not found: $src"
+			fi
+		fi
+	done
+fi
 
 # --- Summary ------------------------------------------------------------------
 echo ""
