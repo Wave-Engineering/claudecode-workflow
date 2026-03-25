@@ -14,3 +14,9 @@ Thumbs.db
 
 # Backup files from install.sh
 *.bak
+
+# Generated files
+.status-panel.html
+
+# Build output
+dist/

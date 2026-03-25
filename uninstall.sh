@@ -75,6 +75,13 @@ if [[ "$REMOVE_SKILLS" == true ]]; then
 	for skill_dir in "$REPO_DIR"/skills/*/; do
 		skill_name="$(basename "$skill_dir")"
 		do_remove "$SKILLS_DIR/$skill_name"
+		# Remove helper scripts (non-SKILL.md files) from ~/.local/bin/
+		for helper in "$skill_dir"/*; do
+			[[ -f "$helper" ]] || continue
+			helper_name="$(basename "$helper")"
+			[[ "$helper_name" == "SKILL.md" ]] && continue
+			do_remove "$SCRIPTS_DIR/$helper_name"
+		done
 	done
 fi
 
@@ -96,7 +103,10 @@ if [[ "$REMOVE_CONFIG" == true ]]; then
 	echo ""
 	echo "Removing config from $CLAUDE_DIR"
 	echo "──────────────────────────────────────────"
-	do_remove "$CLAUDE_DIR/statusline-command.sh"
+	# Discover config files from config/ directory
+	if [[ -f "$REPO_DIR/config/statusline-command.sh" ]]; then
+		do_remove "$CLAUDE_DIR/statusline-command.sh"
+	fi
 	echo "  [-] settings.json — preserved (not managed by uninstall)"
 fi
 
