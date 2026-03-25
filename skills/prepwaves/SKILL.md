@@ -113,3 +113,4 @@ Tell the user:
 - If the user wants to change the wave plan, iterate here — not during `/nextwave`
 - The quality of the issue specs directly determines the quality of agent output
 - Pair with `/nextwave` for execution: `/prepwaves` plans, `/nextwave` executes one wave at a time
+- `/nextwave` uses a **flight model** within each wave — it launches planning agents first to detect file-level conflicts, then partitions the wave into conflict-free flights. You do NOT need to account for file-level conflicts during `/prepwaves` — only dependency-level ordering matters here. Flight partitioning happens at execution time.

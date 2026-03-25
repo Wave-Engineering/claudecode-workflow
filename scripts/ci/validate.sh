@@ -15,6 +15,16 @@ FAIL=0
 info() { echo "  [+] $*"; }
 err() { echo "  [!] $*"; }
 
+# Detect shell scripts by extension or shebang
+is_shell_script() {
+	local f="$1"
+	[[ "$f" == *.sh ]] && return 0
+	local shebang
+	shebang=$(head -1 "$f" 2>/dev/null)
+	[[ "$shebang" =~ ^#!.*/((ba|da|k|z)?sh|env[[:space:]]+(ba|da|k|z)?sh) ]] && return 0
+	return 1
+}
+
 # --- shellcheck ---------------------------------------------------------------
 echo "shellcheck"
 echo "──────────────────────────────────────────"
@@ -41,6 +51,10 @@ else
 	else
 		for script in "${SCRIPTS[@]}"; do
 			rel="${script#"$REPO_DIR/"}"
+			if ! is_shell_script "$script"; then
+				info "$rel (not a shell script — skipped)"
+				continue
+			fi
 			if shellcheck "$script" 2>&1; then
 				info "$rel"
 				PASS=$((PASS + 1))
@@ -75,6 +89,10 @@ else
 	else
 		for script in "${SCRIPTS[@]}"; do
 			rel="${script#"$REPO_DIR/"}"
+			if ! is_shell_script "$script"; then
+				info "$rel (not a shell script — skipped)"
+				continue
+			fi
 			if shfmt -d "$script" &>/dev/null; then
 				info "$rel"
 				PASS=$((PASS + 1))
