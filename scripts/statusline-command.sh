@@ -90,8 +90,24 @@ if [ -n "$model" ]; then
 	model_str="  $(printf '%b' "${c_purple}")${model}$(printf '%b' "${c_reset}")"
 fi
 
+# Agent dev-name (from CLAUDE.md agent identity — written to /tmp/claude-agent-$PPID.json)
+agent_str=""
+agent_file="/tmp/claude-agent-${PPID}.json"
+[ -f "$agent_file" ] || agent_file=""
+if [ -n "$agent_file" ]; then
+	dev_name=$(jq -r '.dev_name // empty' "$agent_file" 2>/dev/null)
+	dev_avatar=$(jq -r '.dev_avatar // empty' "$agent_file" 2>/dev/null)
+	if [ -n "$dev_name" ]; then
+		agent_str="  $(printf '%b' "${c_green}")${dev_name}$(printf '%b' "${c_reset}")"
+		if [ -n "$dev_avatar" ]; then
+			agent_str="${agent_str} ${dev_avatar}"
+		fi
+	fi
+fi
+
 # Assemble output
 printf '%b' "${c_blue}${short_cwd}${c_reset}"
+printf "%s" "$agent_str"
 if [ -n "$git_line" ]; then
 	printf "%s" "$git_line"
 fi
