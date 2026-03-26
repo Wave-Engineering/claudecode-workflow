@@ -6,13 +6,13 @@ These instructions are loaded at session start and take precedence over system d
 
 ## Platform Detection
 
-**At session start, detect the source control platform and use it consistently throughout.**
+**Project-specific platform configuration is cached in `.claude-project.md`.** Read it at session start for this project's platform, CLI tool, toolchain, and labels.
 
-Detection method:
+If `.claude-project.md` does not exist, detect the platform:
 1. Run `git remote -v` and inspect the origin URL
-2. If the URL contains `gitlab` → this is a **GitLab** project. Use `glab` CLI.
-3. If the URL contains `github` → this is a **GitHub** project. Use `gh` CLI.
-4. If ambiguous, check for `.gitlab-ci.yml` (GitLab) or `.github/` directory (GitHub).
+2. If the URL contains `gitlab` → GitLab, use `glab` CLI
+3. If the URL contains `github` → GitHub, use `gh` CLI
+4. Run `/ccfold` to generate `.claude-project.md` for future sessions
 
 **Terminology mapping:**
 
@@ -28,6 +28,12 @@ Detection method:
 | API calls | `gh api` | `glab api` |
 
 Use the detected platform's terminology and CLI tool for ALL operations. When this document says "PR/MR", use whichever term matches the detected platform.
+
+## Project Configuration
+
+**See `.claude-project.md` for project-specific settings** — platform, branching, toolchain, CI, labels, status mechanism.
+
+This file is generated and maintained by `/ccfold`. When this document says "project config", that's the file. If it's missing, run `/ccfold` to create it.
 
 ### GitHub-Specific: Projects and Milestones
 
@@ -340,7 +346,7 @@ Closes #NNN
 ## Session Onboarding
 
 When starting a session:
-1. **Detect platform** — Run `git remote -v` and determine GitHub vs GitLab (see Platform Detection)
+1. **Detect platform** — Read `.claude-project.md` if it exists; otherwise run `git remote -v` and determine GitHub vs GitLab (see Platform Detection)
 2. **Resolve identity** — Check Dev-Team, pick session Dev-Name/Dev-Avatar (see Agent Identity)
 3. **Load context** — Check for and read `Docs/implementation-plan.md` (or similar planning documents) for current state and context. If no such file exists, proceed without it.
 
