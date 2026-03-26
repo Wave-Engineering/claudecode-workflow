@@ -16,6 +16,13 @@ Execute the next pending wave from a plan created by `/prepwaves`. Uses a two-ph
 
 Flow: `Pre-Flight Checks → Planning Phase → Flight 1 (execute + merge) → Re-Validate → Flight 2 (execute + merge) → ... → Design Review → Wave Complete`
 
+## Status Panel
+
+This skill drives the `wave-status` CLI to keep `.status-panel.html` current.
+Every lifecycle transition triggers a dashboard regeneration via a `wave-status`
+command. If `wave-status` is not installed, skip these calls — the wave executes
+normally without them.
+
 ## Prerequisites
 
 - `/prepwaves` must have been run — wave plan must exist in the task list
@@ -35,11 +42,15 @@ Use the correct CLI and terminology throughout. The rest of this document uses "
 
 Before launching any agents:
 
-1. **Identify the next pending wave** — Read the task list, find the first wave task that is not completed
-2. **Verify the main branch is clean** — `git status` shows no uncommitted changes, `git log` confirms previous wave's commits are present
-3. **Verify previous wave is merged** — If this is not Wave 1, confirm that all issues from the prior wave have their code on the main branch
-4. **Verify issue specs** — For each issue in this wave, read it via the platform CLI and confirm it has: Changes, Tests, Acceptance Criteria
-5. **Create feature branches** — For each issue in this wave, create a branch from the current main/release branch. This ensures each branch includes all prior waves' merged work.
+1. **Update status panel** — Signal that pre-flight checks are underway:
+   ```bash
+   wave-status preflight
+   ```
+2. **Identify the next pending wave** — Read the task list, find the first wave task that is not completed
+3. **Verify the main branch is clean** — `git status` shows no uncommitted changes, `git log` confirms previous wave's commits are present
+4. **Verify previous wave is merged** — If this is not Wave 1, confirm that all issues from the prior wave have their code on the main branch
+5. **Verify issue specs** — For each issue in this wave, read it via the platform CLI and confirm it has: Changes, Tests, Acceptance Criteria
+6. **Create feature branches** — For each issue in this wave, create a branch from the current main/release branch. This ensures each branch includes all prior waves' merged work.
    ```bash
    git checkout main && git pull
    git checkout -b feature/<issue-number>-<description>
@@ -52,6 +63,11 @@ If any check fails, **stop and report** — do not launch agents on a bad founda
 ---
 
 ## Step 2: Planning Phase — Target Analysis
+
+Signal the transition to the planning phase:
+```bash
+wave-status planning
+```
 
 Launch **planning agents** for every issue in the wave. These are lightweight, read-only agents that analyze the codebase and report what they would change — without writing any code.
 
@@ -145,9 +161,27 @@ Present the flight plan to the user:
 
 Proceed to execute Flight 1 without waiting for additional approval (the user approved the wave plan during `/prepwaves`). If the flight plan looks unusual (e.g., all issues in separate flights due to heavy conflicts), flag it to the user.
 
+**Store the flight plan in the status dashboard:**
+
+Build a JSON array of flights (one object per flight, with issue numbers and initial status):
+```bash
+cat > /tmp/flight-plan.json << 'FLIGHTS'
+[
+  {"issues": [<issue-numbers-in-flight-1>], "status": "pending"},
+  {"issues": [<issue-numbers-in-flight-2>], "status": "pending"}
+]
+FLIGHTS
+wave-status flight-plan /tmp/flight-plan.json
+```
+
 ---
 
 ## Step 3: Execute Flight
+
+Signal the flight is starting:
+```bash
+wave-status flight <N>
+```
 
 For the current flight, launch **execution agents** — one per issue, all in parallel on isolated worktrees.
 
@@ -348,12 +382,22 @@ For each approved agent:
    3. Verify remaining PR/MR branches are still clean (rebase if needed)
    4. Repeat for the next PR/MR
 
-6. **Pull merged changes** to local main after all flight PR/MRs are merged:
+6. **Update status dashboard** — after each PR/MR is merged, record the closure and PR/MR reference:
+   ```bash
+   wave-status close-issue <issue-number>
+   wave-status record-mr <issue-number> "<PR/MR-number-or-URL>"
+   ```
+   After ALL PR/MRs in the flight are merged, mark the flight complete:
+   ```bash
+   wave-status flight-done <N>
+   ```
+
+7. **Pull merged changes** to local main after all flight PR/MRs are merged:
    ```bash
    git checkout main && git pull
    ```
 
-7. **Clean up worktrees** — remove temporary worktrees for this flight
+8. **Clean up worktrees** — remove temporary worktrees for this flight
 
 ---
 
@@ -422,6 +466,11 @@ Then return to Step 3 for the next flight.
 
 This is NOT optional. It runs for every wave, regardless of size. Rules with exceptions get ignored.
 
+Signal the transition to design review:
+```bash
+wave-status review
+```
+
 ### 5a: Read Next Wave's Issue Specs
 
 Identify the next wave from the task list. For each issue in that wave, read its full spec via the platform CLI.
@@ -487,10 +536,14 @@ If `.claude/status/state.json` exists, update it to reflect any spec changes, ne
 
 After ALL flights in the wave have been executed, merged, and the design review is done:
 
-1. **Mark the wave task as completed** in the task list
-2. **Verify the main branch is clean** — all merges successful, no conflicts
-3. **Close issues** if not auto-closed by the PR/MR merge keywords — verify closure via the platform CLI
-4. **Report wave status:**
+1. **Mark the wave complete in status dashboard:**
+   ```bash
+   wave-status complete
+   ```
+2. **Mark the wave task as completed** in the task list
+3. **Verify the main branch is clean** — all merges successful, no conflicts
+4. **Close issues** if not auto-closed by the PR/MR merge keywords — verify closure via the platform CLI
+5. **Report wave status:**
    - How many issues completed vs. deferred
    - PR/MR URLs for the record
    - Flight breakdown (how many flights, what was sequenced and why)
@@ -518,7 +571,7 @@ For each deferred item:
 
 Do NOT let deferred items disappear into the void. Every deferral must be tracked.
 
-5. **Prompt:** "Wave N complete. Design review for Wave N+1 is done. Run `/nextwave` for Wave N+1, or `/cryo` to preserve state."
+6. **Prompt:** "Wave N complete. Design review for Wave N+1 is done. Run `/nextwave` for Wave N+1, or `/cryo` to preserve state."
 
 ---
 
@@ -533,6 +586,8 @@ Do NOT let deferred items disappear into the void. Every deferral must be tracke
 - **NEVER merge directly to main** — always go through a PR/MR for audit trail and CI
 - NEVER skip the pre-commit checklist — it exists because compaction has caused skipped reviews before
 - NEVER commit without user approval — even if the agent reports all green
+- When waiting on user input (approvals, decisions), update the dashboard: `wave-status waiting "<reason>"`
+- When deferring items, track them: `wave-status defer "<description>" "<risk>"` and `wave-status defer-accept <index>` after user approval
 - One wave per invocation — the user controls the pace
 - If compaction is imminent, run `/cryo` before it hits — the task list tracks wave progress
 - Pair with `/prepwaves` for planning: `/prepwaves` plans, `/nextwave` executes

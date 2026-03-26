@@ -12,6 +12,12 @@ Analyze a master issue and its sub-issues, validate they are ready for spec-driv
 - A "master issue" must exist — an epic or parent issue that references sub-issues
 - The user must provide the master issue number (or it must be identifiable from context)
 
+## Status Panel
+
+This skill drives the `wave-status` CLI to initialize `.status-panel.html`.
+The `init` command creates the state files and generates the first dashboard.
+If `wave-status` is not installed, skip these calls — the wave executes normally without them.
+
 ## Platform Detection
 
 Before starting, detect the platform from the git remote:
@@ -98,6 +104,52 @@ Once approved:
 2. **Do NOT create branches** — Branches are created by `/nextwave` at execution time, not at prep time. This ensures each branch starts from the current main/release branch with all prior waves' merged work included. Creating branches prematurely produces stale branches that require rebasing before every agent can start.
 3. **Capture in task list** — One task per wave with descriptions listing the issues and dependencies. Set up `blockedBy` relationships between wave tasks.
 4. **Update the plan file** — Write the wave execution plan to the active plan file so it survives compaction
+5. **Initialize wave-status** — Build a plan JSON from the approved wave plan and initialize the status dashboard:
+
+   Construct the plan JSON with this structure:
+   ```json
+   {
+     "project": "<Dev-Team from identity>",
+     "base_branch": "main",
+     "master_issue": <master-issue-number>,
+     "phases": [
+       {
+         "name": "Phase 1",
+         "waves": [
+           {
+             "id": "wave-1",
+             "issues": [
+               {"number": <issue-number>, "title": "<issue title>"},
+               {"number": <issue-number>, "title": "<issue title>"}
+             ]
+           },
+           {
+             "id": "wave-2",
+             "issues": [
+               {"number": <issue-number>, "title": "<issue title>"}
+             ]
+           }
+         ]
+       }
+     ]
+   }
+   ```
+
+   Write it to a temp file and initialize:
+   ```bash
+   cat > /tmp/wave-plan.json << 'PLAN'
+   <the JSON above>
+   PLAN
+   wave-status init /tmp/wave-plan.json
+   ```
+
+   Verify the initialization succeeded:
+   - `.claude/status/state.json` should exist
+   - `.claude/status/phases-waves.json` should exist
+   - `.claude/status/flights.json` should exist
+   - `.status-panel.html` should exist at the project root
+
+   If `wave-status` is not installed (command not found), skip this step and note it to the user.
 
 ## Step 6: Confirm
 
