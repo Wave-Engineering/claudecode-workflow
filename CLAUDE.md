@@ -105,8 +105,8 @@ This header is MANDATORY on every commit request. It orients the user across par
 - [ ] **TODOs Addressed** - I have SEARCHED the codebase for TODO/FIXME comments related to this work and either addressed them or confirmed none exist
 - [ ] **Documentation Updated** - I have REVIEWED docs and updated any that are impacted by this commit
 - [ ] **Pre-commit Passes** - I have RUN validation and it passes (not "it should pass" - I actually ran it)
-- [ ] **Unit Tests Created** - I have WRITTEN unit tests for all new functionality introduced in this commit
-- [ ] **All Tests Pass** - I have RUN the test suite and confirmed all tests pass (not "they should pass" - I actually ran them)
+- [ ] **New Tests Cover New Work** - I have WRITTEN tests (unit, integration, or E2E as appropriate) that fully cover all new functionality introduced in this commit. Every new function, module, or behavior has corresponding test coverage.
+- [ ] **All Tests Pass** - I have RUN the **entire** test suite and confirmed ALL tests pass — not just new tests, but every existing test. For `type::feature` work items, this is mandatory with zero exceptions. A new feature that breaks existing tests is not ready to merge.
 - [ ] **Scripts Actually Tested** - For any new scripts (shell, Python, etc.), I have EXECUTED them and verified they work. Linting is NOT testing. Unless execution poses a serious threat of destruction, I must RUN the script and verify it works end-to-end.
 - [ ] **Code Review Passed** - I have RUN the `code-reviewer` agent over all staged changes. Issues rated **high risk or above** have been fixed. All findings are listed in the "Review Findings" section below.
 
@@ -250,7 +250,28 @@ agent must be able to execute without design decisions. Include:]
 2. [Function signatures and key logic]
 3. [Data structures and schemas]
 4. [How to wire components together]
-5. [Test file locations and test case descriptions]
+
+Test specifications go in the Test Procedures section below — not here.
+
+## Test Procedures
+
+[Same granularity as implementation steps. Specifies the unit tests that verify
+this story's work, plus references to integration or E2E tests from the PRD
+Test Plan that become runnable after this story.
+
+Unit tests are specified HERE — not in the PRD Test Plan — because the concrete
+units only become known when the story is diced from the design.]
+
+### Unit Tests
+
+| Test Name | Purpose | File Location |
+|-----------|---------|---------------|
+| `test_function_name` | [what it verifies] | `tests/test_module.py` |
+
+### Integration/E2E Coverage
+
+- [IT-XX — now runnable (this story implements the relevant boundary)]
+- [E2E-XX — partially runnable (needs #NNN for completion)]
 
 ## Acceptance Criteria
 
