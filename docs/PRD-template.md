@@ -14,9 +14,10 @@
 3. [Requirements (EARS Format)](#3-requirements-ears-format)
 4. [Concept of Operations](#4-concept-of-operations)
 5. [Detailed Design](#5-detailed-design)
-6. [Definition of Done](#6-definition-of-done)
-7. [Phased Implementation Plan](#7-phased-implementation-plan)
-8. [Appendices](#8-appendices)
+6. [Test Plan](#6-test-plan)
+7. [Definition of Done](#7-definition-of-done)
+8. [Phased Implementation Plan](#8-phased-implementation-plan)
+9. [Appendices](#9-appendices)
 
 ---
 
@@ -82,7 +83,7 @@ Requirements follow the **EARS** (Easy Approach to Requirements Syntax) notation
 
 [[Create sections for requirements grouped by theme or topic, as many as are needed. Number requirements sequentially across all groups (R-01, R-02, ...).
 
-TRACEABILITY: Every requirement ID must appear in at least one Acceptance Criteria item in Section 7. If a requirement has no corresponding AC item, it is unverified — either add verification or question whether the requirement is real. After implementation, the VRTM (Section 8) provides the formal forward and backward trace.]]
+TRACEABILITY: Every requirement ID must appear in at least one Test Plan item (Section 6), Acceptance Criteria item (Section 8), or Phase DoD item (Section 8). If a requirement has no corresponding verification item, it is unverified — either add verification or question whether the requirement is real. After implementation, the VRTM (Section 9) provides the formal forward and backward trace.]]
 
 ### 3.1 [[Requirement Group A]]
 
@@ -150,21 +151,65 @@ Open questions should be resolved before or during implementation. When resolved
 
 ---
 
-## 6. Definition of Done
+## 6. Test Plan
 
-[[Section 6 defines the GLOBAL Definition of Done for the project as a whole. Phase-level DoDs live in Section 7 under each Phase header.
+[[This section is written during PRD creation while the agent has full design context. It specifies integration and end-to-end verification — NOT unit tests. Unit tests are specified at story level (Section 8) once the implementation is diced into concrete units.
 
-The Global DoD serves as the **project-level test plan**. Each item verifies one or more requirements from Section 3. Annotate each item with the requirement IDs it satisfies — e.g., `[R-01, R-02]`. If a requirement ID does not appear in any DoD or AC item across the document, it is unverified.
+Every test item is annotated with the requirement IDs it verifies. A single test can verify multiple requirements — use `[R-01, R-03, R-07]` when a test covers several. These annotations feed the VRTM (Section 9, Appendix V).]]
 
-After all phases are complete, the VRTM in Section 8 provides the formal proof that every requirement was verified.]]
+### 6.1 Test Strategy
+
+[[Brief overview of the verification approach:
+- What is tested automatically vs. manually
+- What integration boundaries exist (APIs, databases, external services)
+- What environments or fixtures are needed (local, staging, CI, test data)
+- Any tooling requirements (test frameworks, browser automation, etc.)]]
+
+### 6.2 Integration Tests (Automated)
+
+[[Tests that verify interactions between components or across module boundaries. Each test specifies the boundary under test, the setup, the action, and the expected outcome.]]
+
+| ID | Boundary | Description | Req IDs |
+|----|----------|-------------|---------|
+| IT-01 | [[e.g., API → Database]] | [[what the test verifies]] | [[R-XX, R-XX]] |
+| IT-02 | [[e.g., CLI → Core lib]] | [[what the test verifies]] | [[R-XX]] |
+
+### 6.3 End-to-End Tests (Automated)
+
+[[Tests that exercise complete user-facing flows from input to output. These validate that the system works as a whole, not just at component boundaries.]]
+
+| ID | Flow | Description | Req IDs |
+|----|------|-------------|---------|
+| E2E-01 | [[e.g., user submits form → receives confirmation]] | [[what the test verifies]] | [[R-XX, R-XX]] |
+
+### 6.4 Manual Verification Procedures
+
+[[Tests that require human judgment or cannot be automated — UX review, visual inspection, exploratory testing, environment-specific checks. Each procedure has numbered steps and explicit pass/fail criteria.
+
+One of the final stories in the implementation plan (Section 8) must be dedicated to executing these procedures. Manual verification is tracked work, not an afterthought.]]
+
+| ID | Procedure | Pass Criteria | Req IDs |
+|----|-----------|--------------|---------|
+| MV-01 | [[what to do, step by step]] | [[what "pass" looks like]] | [[R-XX]] |
+
+---
+
+## 7. Definition of Done
+
+[[Section 7 defines the GLOBAL Definition of Done for the project as a whole. Phase-level DoDs live in Section 8 under each Phase header.
+
+The Global DoD is the **project-level acceptance gate**. It references the Test Plan (Section 6) and verifies cross-cutting conditions from Section 3. Annotate each item with the requirement IDs it satisfies — e.g., `[R-01, R-02]`. If a requirement ID does not appear in any DoD, AC, or Test Plan item across the document, it is unverified.
+
+After all phases are complete, the VRTM in Section 9 provides the formal proof that every requirement was verified.]]
 
 - [ ] All Phase DoD checklists are satisfied
+- [ ] All Test Plan items (Section 6) executed and passed
 - [ ] [[cross-cutting condition — annotate with requirement IDs, e.g., [R-01, R-05] ]]
 - [ ] [[cross-cutting condition [R-XX] ]]
 
 ---
 
-## 7. Phased Implementation Plan
+## 8. Phased Implementation Plan
 
 ### How to read this section
 
@@ -174,7 +219,7 @@ After all phases are complete, the VRTM in Section 8 provides the formal proof t
 
 **Waves enable parallel development.** Stories are grouped into Waves — sets of stories with no inter-dependencies that can execute simultaneously (e.g., via parallel sub-agents). Each Wave has a Master Issue that orchestrates execution and lists its constituent stories.
 
-**Requirement traceability.** Each AC item is annotated with the requirement ID(s) it verifies — e.g., `[R-01]`. This creates forward traceability from requirements to verification. After implementation, the VRTM in Section 8 captures the complete trace.
+**Requirement traceability.** Each AC item is annotated with the requirement ID(s) it verifies — e.g., `[R-01]`. This creates forward traceability from requirements to verification. After implementation, the VRTM in Section 9 captures the complete trace.
 
 ### Foundation Story Checklist
 
@@ -187,6 +232,16 @@ Every project needs certain infrastructure before feature work begins. Wave 1 sh
 - [ ] **Makefile or task runner** — standard targets (`lint`, `test`, `ci`) so humans and agents use the same commands
 
 If any of these are missing from Wave 1, add a story. CI/CD in particular is easy to forget and painful to retrofit — every PR from Wave 2 onward should be validated automatically.
+
+### Closing Story Checklist
+
+The final wave must include a story that executes all manual verification procedures from the Test Plan (Section 6.4). This story:
+
+- [ ] Executes each MV-XX procedure and records pass/fail with evidence
+- [ ] Creates bug issues for any failures found during manual verification
+- [ ] Completes the VRTM (Section 9, Appendix V) with final status for all items
+
+Do not skip this story. Manual verification is tracked work with its own acceptance criteria, not a "someone will get to it" afterthought.
 
 ### Wave Map
 
@@ -220,11 +275,12 @@ Wave 3 ─── [X.X] Story D
 
 [[A checklist of conditions that must ALL be true before this Phase/Epic is closed. These are confirmed as a checkpoint before moving to the next Phase. Items should be concrete and verifiable — not "it works" but "command X produces output Y".
 
-Annotate each item with the requirement IDs it verifies. The Phase DoD functions as the acceptance test plan for the phase.]]
+Annotate each item with the requirement IDs it verifies. The Phase DoD gates the phase; the Test Plan (Section 6) provides the verification strategy.]]
 
 - [ ] [[verifiable condition [R-XX] ]]
 - [ ] [[verifiable condition [R-XX, R-XX] ]]
 - [ ] All Phase N unit tests pass
+- [ ] All integration/E2E tests applicable to Phase N pass
 
 ---
 
@@ -242,13 +298,32 @@ Annotate each item with the requirement IDs it verifies. The Phase DoD functions
 - Function signatures and key logic
 - Data structures and schemas
 - How to wire components together
-- Test file locations and test case descriptions
+
+Test specifications go in the Test Procedures section below — not here.
 
 Think "paint by numbers" — each step should be unambiguous. If a step requires judgment or exploration, say so explicitly rather than leaving it implicit.]]
 
 1. [[specific implementation step]]
 2. [[specific implementation step]]
 3. [[specific implementation step]]
+
+**Test Procedures:**
+
+[[Same granularity as implementation steps. Specifies the unit tests that verify this story's work, plus references to integration or E2E tests from the Test Plan (Section 6) that become runnable after this story.
+
+Unit tests are specified HERE — not in the Test Plan — because the concrete units only become known when the story is diced from the design. Each unit test entry documents the test's name, purpose, and location in the source tree.]]
+
+*Unit Tests:*
+
+| Test Name | Purpose | File Location |
+|-----------|---------|---------------|
+| `[[test_function_name]]` | [[what it verifies]] | `[[tests/test_module.py]]` |
+
+*Integration/E2E Coverage:*
+
+[[Which tests from the Test Plan (Section 6) become runnable or are advanced by this story:]]
+- [[IT-XX — now runnable (this story implements the relevant boundary)]]
+- [[E2E-XX — partially runnable (needs Story N.N for completion)]]
 
 **Acceptance Criteria:**
 
@@ -274,7 +349,7 @@ Do NOT include vague items like "code works" or "implementation is correct". Eve
 
 ---
 
-## 8. Appendices
+## 9. Appendices
 
 [[Use appendices for detailed reference material that supports the main document but would interrupt its flow. Common appendices:
 
@@ -291,13 +366,18 @@ Do NOT include vague items like "code works" or "implementation is correct". Eve
 
 [[This appendix is populated AFTER implementation is complete. It provides formal proof that every requirement in Section 3 was implemented and verified.
 
-The VRTM is generated by collecting all requirement ID annotations from Phase DoD items and Story AC items throughout Section 7. Any requirement ID that does not appear in this matrix represents a gap — either the requirement was not implemented, or the verification was not documented.
+The VRTM is generated by collecting all requirement ID annotations from:
+- **Test Plan items** (Section 6) — integration tests (IT-XX), E2E tests (E2E-XX), manual procedures (MV-XX)
+- **Phase DoD items** (Section 8) — phase-level acceptance gates
+- **Story AC items** (Section 8) — story-level acceptance criteria
+
+Any requirement ID that does not appear in this matrix represents a gap — either the requirement was not implemented, or the verification was not documented.
 
 Complete this matrix as each Phase is closed. By the time all Phases are done, every row should have a Status.]]
 
-| Req ID | Requirement (short) | Story | AC / DoD Item | Verification Method | Status |
-|--------|-------------------|-------|--------------|-------------------|--------|
-| R-01 | [[brief description]] | [[N.N]] | [[which AC or DoD item verifies this]] | [[unit test / integration test / manual / inspection]] | [[Pass / Fail / Pending]] |
-| R-02 | [[brief description]] | [[N.N]] | [[which AC or DoD item verifies this]] | [[unit test / integration test / manual / inspection]] | [[Pass / Fail / Pending]] |
+| Req ID | Requirement (short) | Source | Verification Item | Verification Method | Status |
+|--------|-------------------|--------|------------------|-------------------|--------|
+| R-01 | [[brief description]] | [[Story N.N / Test Plan / Phase DoD]] | [[AC item, test ID (IT-XX, E2E-XX, MV-XX), or DoD item]] | [[unit test / integration test / e2e test / manual / inspection]] | [[Pass / Fail / Pending]] |
+| R-02 | [[brief description]] | [[Story N.N / Test Plan / Phase DoD]] | [[AC item, test ID (IT-XX, E2E-XX, MV-XX), or DoD item]] | [[unit test / integration test / e2e test / manual / inspection]] | [[Pass / Fail / Pending]] |
 
-[[If a requirement is verified by multiple AC items across different stories, include one row per verification (a requirement may have multiple rows). This captures defense-in-depth verification.]]
+[[If a requirement is verified by multiple items across different stories or the Test Plan, include one row per verification (a requirement may have multiple rows). This captures defense-in-depth verification.]]
