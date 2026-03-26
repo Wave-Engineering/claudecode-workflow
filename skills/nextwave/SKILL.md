@@ -47,10 +47,15 @@ Before launching any agents:
    wave-status preflight
    ```
 2. **Identify the next pending wave** — Read the task list, find the first wave task that is not completed
-3. **Verify the main branch is clean** — `git status` shows no uncommitted changes, `git log` confirms previous wave's commits are present
-4. **Verify previous wave is merged** — If this is not Wave 1, confirm that all issues from the prior wave have their code on the main branch
-5. **Verify issue specs** — For each issue in this wave, read it via the platform CLI and confirm it has: Changes, Tests, Acceptance Criteria
-6. **Create feature branches** — For each issue in this wave, create a branch from the current main/release branch. This ensures each branch includes all prior waves' merged work.
+3. **Auto-open status panel (Wave 1 only)** — If the wave identified in step 2 is the lowest-numbered wave in the plan (i.e., this is the first wave execution, not a continuation), open the status panel in the user's browser so they can monitor progress:
+   ```bash
+   xdg-open .status-panel.html 2>/dev/null || open .status-panel.html 2>/dev/null || true
+   ```
+   Skip this step for subsequent waves — the panel is already open from Wave 1.
+4. **Verify the main branch is clean** — `git status` shows no uncommitted changes, `git log` confirms previous wave's commits are present
+5. **Verify previous wave is merged** — If this is not Wave 1, confirm that all issues from the prior wave have their code on the main branch
+6. **Verify issue specs** — For each issue in this wave, read it via the platform CLI and confirm it has: Changes, Tests, Acceptance Criteria
+7. **Create feature branches** — For each issue in this wave, create a branch from the current main/release branch. This ensures each branch includes all prior waves' merged work.
    ```bash
    git checkout main && git pull
    git checkout -b feature/<issue-number>-<description>
