@@ -18,5 +18,9 @@ Thumbs.db
 # Generated files
 .status-panel.html
 
+# Python bytecode
+__pycache__/
+*.pyc
+
 # Build output
 dist/
