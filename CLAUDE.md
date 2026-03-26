@@ -194,6 +194,217 @@ After merge:
 
 ---
 
+## MANDATORY: Work Item Standards
+
+**Every issue MUST follow these templates and labeling rules.** Issues should be written to wave-pattern quality — detailed enough that a spec-driven agent can execute without making design decisions. This applies even if the work is not part of a wave.
+
+### Label Taxonomy
+
+Labels use a namespaced `group::value` convention. Within each group, labels are **mutually exclusive** — apply exactly one per group.
+
+**No status labels.** Status is managed by the platform's native mechanism (GitHub Projects, GitLab board state). See `.claude-project.md` for this project's status SOP.
+
+#### Priority vs Urgency: Two-Axis Model
+
+Priority and Urgency are **orthogonal**:
+
+- **Priority** = business value importance. How much does this matter to the product?
+- **Urgency** = temporal significance. How soon must it be addressed?
+
+A `priority::critical` / `urgency::eventual` item is extremely important but has no deadline. A `priority::low` / `urgency::immediate` item is low-value but time-sensitive. Treat them as independent axes.
+
+#### Label Groups
+
+| Group | Values | Required On | Rule |
+|-------|--------|-------------|------|
+| **Type** | `type::feature`, `type::bug`, `type::chore`, `type::docs`, `type::epic` | All issues | Exactly one |
+| **Priority** | `priority::critical`, `priority::high`, `priority::medium`, `priority::low` | All issues | Exactly one |
+| **Urgency** | `urgency::immediate`, `urgency::soon`, `urgency::normal`, `urgency::eventual` | All issues | Exactly one |
+| **Size** | `size::S`, `size::M`, `size::L`, `size::XL` | Features, chores, docs | Optional on bugs |
+| **Severity** | `severity::critical`, `severity::major`, `severity::minor`, `severity::cosmetic` | Bugs only | Exactly one on bugs, omit on others |
+| **Wave** | `wave::1`, `wave::2`, etc. | Wave-planned issues only | Omit if not wave-planned |
+
+### Work Item Templates
+
+When creating issues, follow the template for the issue's type. Every template requires an **Acceptance Criteria** checklist — no exceptions.
+
+#### Feature
+
+Structure lifted from `docs/PRD-template.md` Story format.
+
+```markdown
+## Summary
+
+[1-2 sentences: what this feature delivers and why]
+
+## Context
+
+[Background, motivation, link to Epic or PRD if applicable]
+
+## Implementation Steps
+
+[Paint-by-numbers instructions. Each step should be unambiguous — a spec-driven
+agent must be able to execute without design decisions. Include:]
+
+1. [Exact file paths to create or modify]
+2. [Function signatures and key logic]
+3. [Data structures and schemas]
+4. [How to wire components together]
+5. [Test file locations and test case descriptions]
+
+## Acceptance Criteria
+
+- [ ] [Testable condition — names exact files, functions, commands, or behaviors]
+- [ ] [Testable condition]
+- [ ] [Testable condition]
+
+## Dependencies
+
+- #NNN — [description of dependency]
+- None (if no dependencies)
+```
+
+#### Bug
+
+```markdown
+## Summary
+
+[Concise description of the defect]
+
+## Environment
+
+- **Where observed:** [page, component, CLI command, API endpoint]
+- **Version/commit:** [git SHA or release tag where defect exists]
+- **Frequency:** intermittent | consistent
+
+## Steps to Reproduce
+
+1. [Step one]
+2. [Step two]
+3. [Step three]
+
+## Expected Behavior
+
+[What should happen]
+
+## Actual Behavior
+
+[What actually happens]
+
+## Severity
+
+[`severity::critical` | `severity::major` | `severity::minor` | `severity::cosmetic`]
+
+## Artifacts
+
+- [Links to logs, screenshots, error traces, or other evidence]
+
+## Workaround
+
+[Describe workaround if known, or "None known"]
+```
+
+#### Docs
+
+```markdown
+## Summary
+
+[Which document(s) to create or update, and why]
+
+## Target Audience
+
+[Who will read this — developers, operators, end users, agents]
+
+## What's Missing, Outdated, or Incorrect
+
+[Specific gaps or inaccuracies in current documentation]
+
+## Source Material
+
+- [Pointers to code, PRDs, conversations, or other references]
+
+## Acceptance Criteria
+
+- [ ] Content is accurate against current codebase
+- [ ] Coverage is complete for the stated scope
+- [ ] No broken links
+- [ ] [Additional testable conditions]
+```
+
+#### Chore
+
+```markdown
+## Summary
+
+[Description of the maintenance task and its rationale]
+
+## Implementation Steps
+
+[Mandatory if the chore touches >1 file or has ordering constraints.
+Optional for trivial single-file changes.]
+
+1. [Step]
+2. [Step]
+
+## Acceptance Criteria
+
+- [ ] [Testable condition — always mandatory for chores]
+- [ ] [Testable condition]
+```
+
+#### Epic
+
+Structure lifted from `docs/PRD-template.md` Phase format.
+
+```markdown
+## Goal
+
+[One sentence: what this epic proves or delivers]
+
+## Scope
+
+**In scope:**
+- [What is included]
+
+**Out of scope:**
+- [What is explicitly excluded and why]
+
+## Definition of Done
+
+- [ ] [Verifiable condition — concrete and testable, not vague]
+- [ ] [Verifiable condition]
+- [ ] All sub-issue AC checklists are satisfied
+
+## Sub-Issues
+
+[Listed with dependency order]
+
+| Order | Issue | Title | Dependencies |
+|-------|-------|-------|-------------|
+| 1 | #NNN | [title] | None |
+| 2 | #NNN | [title] | #NNN |
+| 3 | #NNN | [title] | #NNN, #NNN |
+
+## Wave Map
+
+[If applicable — which sub-issues can run in parallel]
+
+| Wave | Issues | Parallel? |
+|------|--------|-----------|
+| 1 | #NNN | Single |
+| 2 | #NNN, #NNN | Yes |
+
+## Success Metrics
+
+[If applicable — quantitative or qualitative measures of success]
+```
+
+### Quality Standard
+
+Every issue — regardless of type — must be written to **wave-pattern quality**: detailed enough that a spec-driven agent can pick it up and execute without making design decisions. Implementation steps should read like paint-by-numbers. Acceptance criteria should be evaluable before PR/MR merge. If an issue requires the implementer to make architectural or design choices, it is underspecified.
+
+---
+
 ## Branching Strategy
 
 **Trunk-Based Flow with Main Branch**
