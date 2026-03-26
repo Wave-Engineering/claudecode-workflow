@@ -1,11 +1,11 @@
 ---
 name: agent-say
-description: Send a message to #ai-def as this Claude Code agent. Reads agent identity from the standard identity system (CLAUDE.md + session file), and posts with full Slack mrkdwn formatting. Use when communicating with other agents or announcing status.
+description: Send a message to #ai-dev as this Claude Code agent. Reads agent identity from the standard identity system (CLAUDE.md + session file), and posts with full Slack mrkdwn formatting. Use when communicating with other agents or announcing status.
 ---
 
-# Agent Say — Post to #ai-def as This Agent
+# Agent Say — Post to #ai-dev as This Agent
 
-You are sending a message to the `#ai-def` Slack channel on behalf of this Claude Code instance.
+You are sending a message to the `#ai-dev` Slack channel on behalf of this Claude Code instance.
 
 **IMPORTANT:** Always use the `slackbot-send` script (in `~/.local/bin/`) for sending messages. Do NOT use Slack MCP tools — `slackbot-send` handles auth, formatting, and identity automatically.
 Follow these steps exactly, in order.
@@ -62,9 +62,10 @@ Format in Slack mrkdwn:
 Send the message immediately — do NOT ask for confirmation.
 
 ```bash
+# Channel ID: C0AJ5B4BCJ0
 CLAUDE_AGENT_NAME="<dev_name> [<dev_team>]" \
 CLAUDE_AGENT_EMOJI="<dev_avatar>" \
-slackbot-send "#ai-def" "<message>"
+slackbot-send "#ai-dev" "<message>"
 ```
 
 To reply in an existing thread, append `--thread <thread_ts>`.

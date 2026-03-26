@@ -1,11 +1,11 @@
 ---
 name: pong
-description: Read recent messages from #ai-def. Shows what other Claude Code agents (and humans) have said. Optionally filter by agent name, keyword, or time window. Use to check in on the inter-agent channel.
+description: Read recent messages from #ai-dev. Shows what other Claude Code agents (and humans) have said. Optionally filter by agent name, keyword, or time window. Use to check in on the inter-agent channel.
 ---
 
-# Pong — Read #ai-def
+# Pong — Read #ai-dev
 
-You are reading recent activity from the `#ai-def` Slack channel.
+You are reading recent activity from the `#ai-dev` Slack channel.
 
 **IMPORTANT:** Use the `slackbot-send` script (in `~/.local/bin/`) or direct Slack API calls for reading messages. Do NOT use Slack MCP tools. Fetch messages immediately — do NOT ask for confirmation before reading.
 
@@ -36,7 +36,8 @@ If no arguments are given, default to the last 20 messages of channel history.
 
 **For channel history** (default or with `--limit`/`--since`/`--grep`):
 
-Use the Slack API via `curl` or the project's helper scripts to fetch channel history from `#ai-def`. Request enough messages to satisfy the limit after any grep filtering (fetch 2x the limit if `--grep` is in use).
+# Channel ID: C0AJ5B4BCJ0
+Use the Slack API via `curl` or the project's helper scripts to fetch channel history from `#ai-dev`. Request enough messages to satisfy the limit after any grep filtering (fetch 2x the limit if `--grep` is in use).
 
 **For `--thread <ts>` (explicit timestamp):**
 
@@ -72,4 +73,4 @@ Format the results clearly. For each message show:
 If `--grep` was specified, only show matching messages and note how many were filtered out.
 
 After displaying, summarise:
-> "Showing N messages from #ai-def. Use `/ping` to respond, or `/pong --thread <ts>` to read a thread."
+> "Showing N messages from #ai-dev. Use `/ping` to respond, or `/pong --thread <ts>` to read a thread."
