@@ -383,7 +383,13 @@ Each session, pick a fresh identity for yourself. This is NOT persisted — a ne
 
 **On session start**, after resolving Dev-Team:
 1. Pick your Dev-Name and Dev-Avatar
-2. Persist them for the session in `/tmp/claude-agent-$PPID.json`:
+2. Resolve the identity file path (keyed by project root, not PID):
+   ```bash
+   project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+   dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+   agent_file="/tmp/claude-agent-${dir_hash}.json"
+   ```
+3. Persist them for the session in that file:
    ```json
    {
      "dev_team": "<Dev-Team value>",
@@ -391,13 +397,16 @@ Each session, pick a fresh identity for yourself. This is NOT persisted — a ne
      "dev_avatar": "<your chosen emoji>"
    }
    ```
-3. Announce your identity to the user:
+4. Announce your identity to the user:
    > I'm going by **\<Dev-Name\>** \<Dev-Avatar\> from team `<Dev-Team>` this session.
 
 ### Reading Identity
 
+Identity files are keyed by md5 hash of the project root directory, so the statusline and all skills resolve the same file regardless of process ancestry.
+
 Any skill or behavior that needs agent identity should:
 1. Read `Dev-Team` from this file
-2. Read `Dev-Name` and `Dev-Avatar` from `/tmp/claude-agent-$PPID.json`
+2. Resolve the identity file: `md5sum` of `git rev-parse --show-toplevel`
+3. Read `Dev-Name` and `Dev-Avatar` from `/tmp/claude-agent-<dir_hash>.json`
 
 Dev-Team: cc-workflow

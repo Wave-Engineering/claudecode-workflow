@@ -90,17 +90,22 @@ if [ -n "$model" ]; then
 	model_str="  $(printf '%b' "${c_purple}")${model}$(printf '%b' "${c_reset}")"
 fi
 
-# Agent dev-name (from CLAUDE.md agent identity — written to /tmp/claude-agent-$PPID.json)
+# Agent dev-name (from CLAUDE.md agent identity)
+# Identity files are keyed by md5 of the project root so the statusline
+# resolves the correct agent regardless of process ancestry.
 agent_str=""
-agent_file="/tmp/claude-agent-${PPID}.json"
-[ -f "$agent_file" ] || agent_file=""
-if [ -n "$agent_file" ]; then
-	dev_name=$(jq -r '.dev_name // empty' "$agent_file" 2>/dev/null)
-	dev_avatar=$(jq -r '.dev_avatar // empty' "$agent_file" 2>/dev/null)
-	if [ -n "$dev_name" ]; then
-		agent_str="  $(printf '%b' "${c_green}")${dev_name}$(printf '%b' "${c_reset}")"
-		if [ -n "$dev_avatar" ]; then
-			agent_str="${agent_str} ${dev_avatar}"
+if [ -n "$cwd" ]; then
+	project_root=$(GIT_OPTIONAL_LOCKS=0 git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || echo "$cwd")
+	dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+	agent_file="/tmp/claude-agent-${dir_hash}.json"
+	if [ -f "$agent_file" ]; then
+		dev_name=$(jq -r '.dev_name // empty' "$agent_file" 2>/dev/null)
+		dev_avatar=$(jq -r '.dev_avatar // empty' "$agent_file" 2>/dev/null)
+		if [ -n "$dev_name" ]; then
+			agent_str="  $(printf '%b' "${c_green}")${dev_name}$(printf '%b' "${c_reset}")"
+			if [ -n "$dev_avatar" ]; then
+				agent_str="${agent_str} ${dev_avatar}"
+			fi
 		fi
 	fi
 fi
