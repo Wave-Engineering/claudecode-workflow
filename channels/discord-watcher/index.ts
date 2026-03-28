@@ -118,6 +118,11 @@ export interface DiscordMessage {
 
 // --- Voice message STT -------------------------------------------------------
 
+/** Strip punctuation from a lowercased token, keeping only routing-key chars. */
+export function stripTokenPunctuation(token: string): string {
+  return token.replace(/[^a-z0-9@_-]/g, "");
+}
+
 const STT_ENDPOINT = process.env.STT_ENDPOINT ?? "http://archer:8300/v1/audio/transcriptions";
 const STT_MODEL = process.env.STT_MODEL ?? "deepdml/faster-whisper-large-v3-turbo-ct2";
 
@@ -307,7 +312,7 @@ async function checkForNewMessages(
             // No identity resolved yet — deliver all messages until agent sets up
           } else {
             const contentLower = msg.content.toLowerCase();
-            const tokens = contentLower.split(/\s+/);
+            const tokens = contentLower.split(/\s+/).map(stripTokenPunctuation);
             const isAddressedToAll = tokens.includes("@all");
             const isAddressedToTeam = cachedIdentity.devTeam
               ? tokens.includes(`@${cachedIdentity.devTeam.toLowerCase()}`)
