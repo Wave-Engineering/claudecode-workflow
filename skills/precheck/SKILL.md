@@ -79,9 +79,19 @@ Results from the `code-reviewer` agent:
 
 If no findings in either category, state "(none)".
 
-## Step 5: STOP and Wait
+## Step 5: Voice Announcement
 
-**After presenting the checklist, STOP.** Do not commit, push, or create a PR/MR.
+After presenting the checklist, announce completion via `vox` (best-effort — never block on audio):
+
+```bash
+vox "Hey BJ, precheck is done for issue <NUMBER>. <SUMMARY>. Ready for your call." 2>/dev/null || true
+```
+
+The announcement should be 1-2 sentences: mention the issue number, a brief summary of what was built, and the checklist status. Write for the ear — conversational, not robotic.
+
+## Step 6: STOP and Wait
+
+**After presenting the checklist and announcing, STOP.** Do not commit, push, or create a PR/MR.
 
 The user will respond with one of:
 

@@ -50,6 +50,7 @@ Key features:
 | scpmr | `/scpmr` | Stage, commit, push, and create PR/MR |
 | scpmmr | `/scpmmr` | Stage, commit, push, create PR/MR, and merge |
 | view | `/view` | Open file/URL in GUI viewer (read-only) |
+| vox | `/vox` | Text-to-speech voice announcements for status updates and alerts |
 
 ### Scripts
 
@@ -60,6 +61,7 @@ Key features:
 | `slackbot-send` | `curl`, `jq`, Slack bot token | Send Slack messages as a named Claude Code agent |
 | `job-fetch` | `glab`, `python3` | Fetch GitLab CI job traces for analysis |
 | `file-opener` | `xdg-open` / `open` | Cross-platform file/URL opener for `/view` and `/edit` |
+| `vox` | `curl`, audio player (`aplay`/`afplay`) | Text-to-speech via Chatterbox API, with local fallback (espeak/piper/say) |
 | `statusline-command.sh` | `jq`, `git` | Custom status line: git branch, dirty state, context window remaining, model |
 
 ### Channel Servers
