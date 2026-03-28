@@ -42,14 +42,15 @@ function loadToken(): string {
 
 // --- Agent identity (self-echo filtering + targeted routing) -----------------
 
-interface AgentIdentity {
+export interface AgentIdentity {
   devName: string | null;
   devTeam: string | null;
+  threadId: string | null;
 }
 
-let cachedIdentity: AgentIdentity = { devName: null, devTeam: null };
+let cachedIdentity: AgentIdentity = { devName: null, devTeam: null, threadId: null };
 
-function resolveIdentity(): AgentIdentity {
+export function resolveIdentity(): AgentIdentity {
   try {
     // Match the agent's identity resolution: git rev-parse, fallback to cwd
     let projectRoot: string;
@@ -67,9 +68,10 @@ function resolveIdentity(): AgentIdentity {
     return {
       devName: data.dev_name || null,
       devTeam: data.dev_team || null,
+      threadId: data.thread_id || null,
     };
   } catch {
-    return { devName: null, devTeam: null };
+    return { devName: null, devTeam: null, threadId: null };
   }
 }
 
@@ -98,11 +100,78 @@ interface DiscordChannel {
   type: number;
 }
 
-interface DiscordMessage {
+export interface DiscordAttachment {
+  id: string;
+  filename: string;
+  content_type?: string;
+  url: string;
+  size: number;
+}
+
+export interface DiscordMessage {
   id: string;
   author: { id: string; username: string };
   content: string;
   timestamp: string;
+  attachments?: DiscordAttachment[];
+}
+
+// --- Voice message STT -------------------------------------------------------
+
+const STT_ENDPOINT = process.env.STT_ENDPOINT ?? "http://archer:8300/v1/audio/transcriptions";
+const STT_MODEL = process.env.STT_MODEL ?? "deepdml/faster-whisper-large-v3-turbo-ct2";
+
+export async function transcribeAudioAttachments(
+  msg: DiscordMessage,
+  _authHeader: string
+): Promise<string | null> {
+  if (!msg.attachments?.length) return null;
+
+  const audioAttachments = msg.attachments.filter(
+    (a) => a.content_type?.startsWith("audio/")
+  );
+  if (audioAttachments.length === 0) return null;
+
+  const transcriptions: string[] = [];
+
+  for (const attachment of audioAttachments) {
+    try {
+      // Download audio
+      const audioResp = await fetch(attachment.url);
+      if (!audioResp.ok) {
+        console.error(`[discord-watcher] Failed to download audio: HTTP ${audioResp.status}`);
+        transcriptions.push(`[voice memo attached — download failed]`);
+        continue;
+      }
+      const audioBuffer = await audioResp.arrayBuffer();
+
+      // Transcribe via Whisper
+      const form = new FormData();
+      form.append("file", new Blob([audioBuffer]), attachment.filename);
+      form.append("model", STT_MODEL);
+
+      const sttResp = await fetch(STT_ENDPOINT, {
+        method: "POST",
+        body: form,
+      });
+
+      if (!sttResp.ok) {
+        console.error(`[discord-watcher] STT failed: HTTP ${sttResp.status}`);
+        transcriptions.push(`[voice memo attached — transcription failed]`);
+        continue;
+      }
+
+      const result = (await sttResp.json()) as { text: string };
+      if (result.text?.trim()) {
+        transcriptions.push(`[voice memo from ${msg.author.username}: "${result.text.trim()}"]`);
+      }
+    } catch (err) {
+      console.error(`[discord-watcher] STT error: ${err}`);
+      transcriptions.push(`[voice memo attached — transcription failed]`);
+    }
+  }
+
+  return transcriptions.length > 0 ? transcriptions.join("\n") : null;
 }
 
 // --- State -------------------------------------------------------------------
@@ -220,8 +289,8 @@ async function checkForNewMessages(
 
       // Push a wake-up notification for each new message (oldest first)
       for (const msg of messages.reverse()) {
-        // Skip empty-content messages (e.g. bot embeds) — no useful preview
-        if (!msg.content.trim()) {
+        // Skip messages with no text and no attachments (e.g. bot embeds)
+        if (!msg.content.trim() && !msg.attachments?.length) {
           continue;
         }
 
@@ -253,10 +322,16 @@ async function checkForNewMessages(
           }
         }
 
+        // Transcribe audio attachments if present
+        const audioTranscription = await transcribeAudioAttachments(msg, authHeader);
+        const fullContent = audioTranscription
+          ? audioTranscription + (msg.content.trim() ? "\n" + msg.content : "")
+          : msg.content;
+
         const preview =
-          msg.content.length > 100
-            ? msg.content.slice(0, 100) + "…"
-            : msg.content;
+          fullContent.length > 100
+            ? fullContent.slice(0, 100) + "…"
+            : fullContent;
 
         console.error(
           `[discord-watcher] New message in #${channel.name} from ${msg.author.username}: ${preview}`
@@ -279,6 +354,77 @@ async function checkForNewMessages(
       console.error(
         `[discord-watcher] Error polling #${channel.name}: ${err}`
       );
+    }
+  }
+
+  // --- Poll agent's session thread (if one exists) ---
+  if (cachedIdentity.threadId) {
+    try {
+      const threadId = cachedIdentity.threadId;
+      const lastId = lastSeenMessageId.get(threadId);
+
+      if (!lastId) {
+        // First poll — set baseline
+        const result = await apiGet(
+          `/channels/${threadId}/messages?limit=1`,
+          authHeader
+        );
+        if (result.ok) {
+          const msgs = result.data as DiscordMessage[];
+          if (msgs.length > 0) {
+            lastSeenMessageId.set(threadId, msgs[0].id);
+          }
+        }
+      } else {
+        const messages = await fetchAllNewMessages(threadId, lastId, authHeader);
+        if (messages.length > 0) {
+          lastSeenMessageId.set(threadId, messages[0].id);
+
+          for (const msg of messages.reverse()) {
+            if (!msg.content.trim() && !msg.attachments?.length) continue;
+
+            // Self-echo filter
+            if (
+              cachedIdentity.devName &&
+              msg.content.toLowerCase().includes(`— **${cachedIdentity.devName.toLowerCase()}**`)
+            ) {
+              continue;
+            }
+
+            // NO @-addressing filter for thread messages — everything in
+            // the agent's thread is addressed to this agent by definition
+
+            let content = msg.content;
+
+            // Transcribe audio attachments
+            const audioTranscription = await transcribeAudioAttachments(msg, authHeader);
+            if (audioTranscription) {
+              content = audioTranscription + (content ? "\n" + content : "");
+            }
+
+            const preview = content.length > 100 ? content.slice(0, 100) + "…" : content;
+
+            console.error(
+              `[discord-watcher] Thread message from ${msg.author.username}: ${preview}`
+            );
+
+            await server.notification({
+              method: "notifications/claude/channel" as any,
+              params: {
+                content: `New message from ${msg.author.username} in remote-session thread: ${preview}`,
+                meta: {
+                  channel_name: "remote-session",
+                  channel_id: threadId,
+                  author: msg.author.username,
+                  message_id: msg.id,
+                },
+              },
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[discord-watcher] Error polling session thread: ${err}`);
     }
   }
 }
