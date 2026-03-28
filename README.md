@@ -30,26 +30,43 @@ Key features:
 
 | Skill | Command | What it does |
 |-------|---------|-------------|
+| assesswaves | `/assesswaves` | Quick assessment of wave-pattern suitability |
 | ccfold | `/ccfold` | Merge upstream CLAUDE.md template updates into local project |
 | cryo | `/cryo` | Preserve session state before context compaction |
+| disc | `/disc` | Discord integration — send, read, list, resolve channels |
+| edit | `/edit` | Open file/URL in GUI editor |
 | engage | `/engage` | Load CLAUDE.md, confirm rules of engagement |
 | ibm | `/ibm` | Issue-Branch-PR/MR workflow reminder |
 | jfail | `/jfail` | CI job/workflow failure analysis |
 | mmr | `/mmr` | Merge a PR/MR with squash |
+| name | `/name` | Report or pick agent session identity |
 | nextwave | `/nextwave` | Execute parallel spec-driven sub-agents |
 | ping | `/ping` | Post to #ai-dev Slack channel |
 | pong | `/pong` | Read #ai-dev Slack channel |
 | prepwaves | `/prepwaves` | Analyze issues and compute dependency waves |
 | review | `/review` | Code review on staged/branch changes |
 | scp | `/scp` | Stage, commit, and push workflow |
+| scpmr | `/scpmr` | Stage, commit, push, and create PR/MR |
+| scpmmr | `/scpmmr` | Stage, commit, push, create PR/MR, and merge |
+| view | `/view` | Open file/URL in GUI viewer (read-only) |
 
 ### Scripts
 
 | Script | Dependencies | What it does |
 |--------|-------------|-------------|
+| `discord-bot` | `curl`, `jq`, Discord bot token | Discord REST API client — send, read, create channels, resolve names |
 | `slackbot-send` | `curl`, `jq`, Slack bot token | Send Slack messages as a named Claude Code agent |
 | `job-fetch` | `glab`, `python3` | Fetch GitLab CI job traces for analysis |
+| `file-opener` | `xdg-open` / `open` | Cross-platform file/URL opener for `/view` and `/edit` |
 | `statusline-command.sh` | `jq`, `git` | Custom status line: git branch, dirty state, context window remaining, model |
+
+### Channel Servers
+
+| Server | Directory | What it does |
+|--------|-----------|-------------|
+| `discord-watcher` | `channels/discord-watcher/` | MCP channel server that watches Discord and pushes wake-up notifications into Claude Code sessions |
+
+The discord-watcher enables real-time inter-agent communication. Multiple Claude Code agents can send and receive messages through Discord, with signature-based echo filtering to prevent loops. See [Discord Setup](#discord-setup) below.
 
 ### Settings Template
 
@@ -181,14 +198,72 @@ chmod 600 ~/secrets/slack-bot-token
 
 This is separate from the Slack MCP plugin OAuth — `slackbot-send` posts as a custom bot identity (with Dev-Name and Dev-Avatar), while the MCP plugin uses your Slack user identity.
 
+## Discord Setup
+
+The `/disc` skill and discord-watcher channel server require a Discord bot token and server (guild).
+
+### 1. Bot Token
+
+```bash
+mkdir -p ~/secrets
+echo "your-bot-token" > ~/secrets/discord-bot-token
+chmod 600 ~/secrets/discord-bot-token
+```
+
+The bot needs these permissions in your Discord server:
+- **Send Messages** and **Read Message History** in target channels
+- **Message Content Intent** enabled in the [Discord Developer Portal](https://discord.com/developers/applications) (Settings → Bot → Privileged Gateway Intents)
+
+### 2. Discord-Watcher Channel Server
+
+The discord-watcher is an MCP channel server that polls Discord and pushes real-time notifications into Claude Code sessions. It requires [Bun](https://bun.sh).
+
+```bash
+# Install bun (if not already installed)
+curl -fsSL https://bun.sh/install | bash
+
+# Install dependencies
+cd channels/discord-watcher
+bun install
+
+# Register at user scope (available from any project directory)
+claude mcp add --scope user --transport stdio discord-watcher -- \
+  bun /path/to/claudecode-workflow/channels/discord-watcher/index.ts
+```
+
+### 3. Start with Channels
+
+```bash
+claude --dangerously-load-development-channels server:discord-watcher
+```
+
+Or set up an alias:
+
+```bash
+alias ccode='claude --dangerously-load-development-channels server:discord-watcher'
+```
+
+The watcher will monitor all text channels on the configured Discord server and push notifications when new messages arrive. Agents sign their messages and the watcher filters self-echoes, enabling multiple agents to communicate through Discord without loops.
+
+### Inter-Agent Communication
+
+With the discord-watcher running in multiple Claude Code sessions, agents can talk to each other:
+
+- **Address a specific agent:** `@cc-workflow check the build status`
+- **Address all agents:** `@all report your current status`
+- **Informational (no action expected):** Post without an `@` prefix
+
+Each agent signs messages with its Dev-Name signature (e.g., `— **Beacon** :satellite: (cc-workflow)`), which the watcher uses to filter self-echoes while allowing messages from other agents through.
+
 ## Dependencies
 
 | Tool | Required by | Install |
 |------|------------|---------|
+| `bun` | discord-watcher | [bun.sh](https://bun.sh) |
 | `gh` | GitHub skills | [cli.github.com](https://cli.github.com) |
 | `glab` | GitLab skills | [gitlab.com/gitlab-org/cli](https://gitlab.com/gitlab-org/cli) |
-| `curl` | slackbot-send | Usually pre-installed |
-| `jq` | slackbot-send, statusline | `apt install jq` / `brew install jq` |
+| `curl` | slackbot-send, discord-bot | Usually pre-installed |
+| `jq` | slackbot-send, discord-bot, statusline | `apt install jq` / `brew install jq` |
 | `python3` | job-fetch | Usually pre-installed |
 | `shellcheck` | Validation | `apt install shellcheck` / `brew install shellcheck` |
 | `shfmt` | Validation | `go install mvdan.cc/sh/v3/cmd/shfmt@latest` |
