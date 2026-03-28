@@ -61,6 +61,7 @@ Key features:
 | `slackbot-send` | `curl`, `jq`, Slack bot token | Send Slack messages as a named Claude Code agent |
 | `job-fetch` | `glab`, `python3` | Fetch GitLab CI job traces for analysis |
 | `file-opener` | `xdg-open` / `open` | Cross-platform file/URL opener for `/view` and `/edit` |
+| `afk-notify` | `jq`, `loginctl`, `claude` CLI, `vox`, `discord-bot` | Stop hook — relays agent output to Discord when desktop locked |
 | `vox` | `curl`, audio player (`aplay`/`afplay`) | Text-to-speech via Chatterbox API, with local fallback (espeak/piper/say) |
 | `statusline-command.sh` | `jq`, `git` | Custom status line: git branch, dirty state, context window remaining, model |
 
@@ -266,6 +267,22 @@ Each agent signs messages with its Dev-Name signature (e.g., `— **beacon** :sa
 The `discord-status-post` script posts a rich embed to `#wave-status` whenever the wave state machine transitions. One message per project, edited in place — no spam.
 
 The embed includes phase, wave, action, flight, a Unicode progress bar, and deferrals, with a color-coded sidebar that maps to the current action state. It's invoked automatically by `wave-status` after every state change (best-effort — skipped silently if not installed or Discord is unreachable).
+
+### Remote Sessions
+
+When the desktop is locked, agents automatically relay output to Discord
+via per-session threads in `#remote-sessions`. The user can reply with
+text or voice messages from their phone.
+
+**Setup:**
+1. Run `install.sh` to install the `afk-notify` hook script
+2. Add the Stop hook to your Claude Code settings (see `config/settings.template.json`)
+3. Ensure `claude` CLI is available on PATH (for Haiku summarization)
+4. Ensure `vox` is installed (for voice memo rendering)
+
+**STT Configuration:**
+- `STT_ENDPOINT` — Whisper-compatible endpoint (default: `http://archer:8300/v1/audio/transcriptions`)
+- `STT_MODEL` — Model name (default: `deepdml/faster-whisper-large-v3-turbo-ct2`)
 
 ### Verbose Mode
 
