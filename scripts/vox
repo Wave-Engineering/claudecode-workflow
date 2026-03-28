@@ -147,6 +147,33 @@ detect_player() {
 	fi
 }
 
+# --- Wake noise (Bluetooth A2DP preamble) ------------------------------------
+
+# Prepend ~500ms of low-amplitude white noise to a WAV file. This wakes up
+# Bluetooth audio sinks that sleep when idle, preventing the first syllable
+# from being clipped. Only applied to playback paths — --output stays clean.
+prepend_wake_noise() {
+	local wavfile="$1"
+	python3 -c '
+import wave, random, sys
+with wave.open(sys.argv[1], "rb") as w:
+    p = w.getparams()
+    frames = w.readframes(w.getnframes())
+sw = p.sampwidth
+n = int(p.framerate * 0.5) * p.nchannels
+max_amp = (1 << (8 * sw - 1)) - 1
+scale = max(1, max_amp // 55)  # ~-35 dB below full scale
+bias = 128 if sw == 1 else 0  # 8-bit WAV is unsigned (silence=128)
+raw = b"".join(
+    ((random.randint(-scale, scale) + bias) & ((1 << (8 * sw)) - 1))
+    .to_bytes(sw, "little") for _ in range(n)
+)
+with wave.open(sys.argv[1], "wb") as w:
+    w.setparams(p)
+    w.writeframes(raw + frames)
+' "$wavfile" 2>/dev/null || true # best-effort — play unmodified if python3 fails
+}
+
 # --- Backend 1: VOX_COMMAND ---------------------------------------------------
 
 if [[ -n "${VOX_COMMAND:-}" ]]; then
@@ -229,6 +256,9 @@ if [[ -n "$endpoint" ]]; then
 		cp "$tmpfile" "$OUTPUT_FILE"
 		exit 0
 	fi
+
+	# Wake Bluetooth A2DP sinks before real audio starts
+	prepend_wake_noise "$tmpfile"
 
 	PLAYER=$(detect_player)
 	if [[ -z "$PLAYER" ]]; then
