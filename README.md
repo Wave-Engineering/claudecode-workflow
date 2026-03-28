@@ -221,12 +221,11 @@ The discord-watcher is an MCP channel server that polls Discord and pushes real-
 ```bash
 # Install bun (if not already installed)
 curl -fsSL https://bun.sh/install | bash
+```
 
-# Install dependencies
-cd channels/discord-watcher
-bun install
+`./install.sh` automatically runs `bun install` and registers the channel server at user scope via `claude mcp add`. If automatic registration fails, you can register manually:
 
-# Register at user scope (available from any project directory)
+```bash
 claude mcp add --scope user --transport stdio discord-watcher -- \
   bun /path/to/claudecode-workflow/channels/discord-watcher/index.ts
 ```

@@ -335,9 +335,13 @@ if [[ "$INSTALL_CHANNELS" == true && -d "$REPO_DIR/channels" ]]; then
 				fi
 
 				# Register at user scope (idempotent — overwrites existing)
-				claude mcp add --scope user --transport stdio \
-					"$channel_name" -- bun "$entry_file" 2>/dev/null
-				info "Registered MCP server: $channel_name (user scope)"
+				if claude mcp add --scope user --transport stdio \
+					"$channel_name" -- bun "$entry_file" 2>/dev/null; then
+					info "Registered MCP server: $channel_name (user scope)"
+				else
+					warn "Failed to register MCP server: $channel_name"
+					warn "Run manually: claude mcp add --scope user --transport stdio $channel_name -- bun $entry_file"
+				fi
 			fi
 		done
 	fi
