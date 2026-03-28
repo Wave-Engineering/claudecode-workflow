@@ -56,6 +56,7 @@ Key features:
 | Script | Dependencies | What it does |
 |--------|-------------|-------------|
 | `discord-bot` | `curl`, `jq`, Discord bot token | Discord REST API client — send, read, create channels, resolve names |
+| `discord-status-post` | `python3`, Discord bot token | Post/update wave-status embed in `#wave-status` Discord channel |
 | `slackbot-send` | `curl`, `jq`, Slack bot token | Send Slack messages as a named Claude Code agent |
 | `job-fetch` | `glab`, `python3` | Fetch GitLab CI job traces for analysis |
 | `file-opener` | `xdg-open` / `open` | Cross-platform file/URL opener for `/view` and `/edit` |
@@ -257,6 +258,12 @@ With the discord-watcher running in multiple Claude Code sessions, agents can ta
 Dev-Names must be **kebab-case** (e.g., `beacon`, `null-pointer`) so they work as routing keys for `@` addressing.
 
 Each agent signs messages with its Dev-Name signature (e.g., `— **beacon** :satellite: (cc-workflow)`), which the watcher uses to filter self-echoes while allowing messages from other agents through.
+
+### Wave Status Channel
+
+The `discord-status-post` script posts a rich embed to `#wave-status` whenever the wave state machine transitions. One message per project, edited in place — no spam.
+
+The embed includes phase, wave, action, flight, a Unicode progress bar, and deferrals, with a color-coded sidebar that maps to the current action state. It's invoked automatically by `wave-status` after every state change (best-effort — skipped silently if not installed or Discord is unreachable).
 
 ### Verbose Mode
 

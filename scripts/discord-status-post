@@ -1,0 +1,438 @@
+#!/usr/bin/env python3
+"""discord-status-post — Post wave-status embed to Discord.
+
+Reads state.json, phases-waves.json, and flights.json from the project's
+.claude/status/ directory, builds a Discord rich embed, and posts (or edits)
+a message in the #wave-status channel.
+
+One message per project — subsequent calls PATCH in place.  If the cached
+message is gone (deleted, channel cleared), a new one is created.
+
+Usage:
+    discord-status-post [--channel-id ID] [--state-dir DIR] [--dev-team NAME]
+
+Environment:
+    DISCORD_BOT_TOKEN   Bot token (fallback: ~/secrets/discord-bot-token)
+
+Requires Python 3.10+ stdlib only — no external dependencies [CT-01].
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.request
+from datetime import UTC, datetime
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+WAVE_STATUS_CHANNEL_ID = "1487386934094462986"
+API_BASE = "https://discord.com/api/v10"
+
+# Action → embed sidebar color (decimal)
+COLOR_MAP: dict[str, int] = {
+    "idle":               9807270,   # #95a5a6 — gray
+    "planning":           3447003,   # #3498db — blue
+    "pre-flight":         1752220,   # #1abc9c — cyan
+    "in-flight":          3066993,   # #2ecc71 — green
+    "merging":            15844367,  # #f1c40f — yellow
+    "post-wave-review":   15105570,  # #e67e22 — orange
+    "waiting-on-meatbag": 15158332,  # #e74c3c — red
+}
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def load_json(path: Path) -> dict:
+    """Load a JSON file, returning an empty dict if missing."""
+    if not path.exists():
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
+def save_json(path: Path, data: dict) -> None:
+    """Write JSON atomically via tempfile + os.replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        os.unlink(tmp)
+        raise
+
+
+def get_project_root() -> Path:
+    """Discover the git repository root from the current working directory."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, check=True,
+        )
+        return Path(result.stdout.strip())
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return Path.cwd()
+
+
+def get_token() -> str:
+    """Resolve the Discord bot token from env or file."""
+    token = os.environ.get("DISCORD_BOT_TOKEN", "")
+    if token:
+        return token.strip()
+    token_file = Path.home() / "secrets" / "discord-bot-token"
+    if token_file.exists():
+        return token_file.read_text().strip()
+    raise RuntimeError(
+        "DISCORD_BOT_TOKEN not set and ~/secrets/discord-bot-token not found"
+    )
+
+
+def progress_bar(pct: int) -> str:
+    """Render a 20-char Unicode block progress bar with cyber styling."""
+    filled = int(pct / 5)
+    bar = "\u2588" * filled + "\u2591" * (20 - filled)
+    return f"\u27e8{bar}\u27e9 {pct}%"
+
+
+# Action → emoji for visual flair
+ACTION_EMOJI: dict[str, str] = {
+    "idle":               "\u23f8\ufe0f",      # ⏸️
+    "planning":           "\U0001f9e0",         # 🧠
+    "pre-flight":         "\U0001f6f0\ufe0f",   # 🛰️
+    "in-flight":          "\u26a1",             # ⚡
+    "merging":            "\U0001f500",         # 🔀
+    "post-wave-review":   "\U0001f50d",         # 🔍
+    "waiting-on-meatbag": "\U0001f6a8",         # 🚨
+}
+
+
+# ---------------------------------------------------------------------------
+# State → summary (mirrors state.show() logic)
+# ---------------------------------------------------------------------------
+
+def compute_summary(state_dir: Path) -> dict:
+    """Read the three JSON files and compute embed-ready summary fields."""
+    state_data = load_json(state_dir / "state.json")
+    plan_data = load_json(state_dir / "phases-waves.json")
+    flights_data = load_json(state_dir / "flights.json")
+
+    current_wave = state_data.get("current_wave")
+
+    # Phase info
+    current_phase_name = ""
+    current_phase_idx = 0
+    total_phases = len(plan_data.get("phases", []))
+    wave_in_phase = 0
+    waves_in_current_phase = 0
+
+    if current_wave is None:
+        # All waves complete
+        current_phase_name = "Complete"
+        current_phase_idx = total_phases
+    else:
+        for pi, phase in enumerate(plan_data.get("phases", [])):
+            phase_wave_ids = [w["id"] for w in phase.get("waves", [])]
+            if current_wave in phase_wave_ids:
+                current_phase_name = phase.get("name", "")
+                current_phase_idx = pi + 1
+                waves_in_current_phase = len(phase_wave_ids)
+                wave_in_phase = phase_wave_ids.index(current_wave) + 1
+                break
+
+    # Flight info
+    wave_flights = flights_data.get("flights", {}).get(current_wave or "", [])
+    total_flights = len(wave_flights)
+    running_flight = None
+    for fi, fl in enumerate(wave_flights):
+        if fl.get("status") == "running":
+            running_flight = fi + 1
+            break
+
+    # Issue counts
+    total_issues = 0
+    closed_issues = 0
+    for phase in plan_data.get("phases", []):
+        for wave in phase.get("waves", []):
+            for issue in wave.get("issues", []):
+                total_issues += 1
+                istate = state_data.get("issues", {}).get(
+                    str(issue["number"]), {}
+                )
+                if istate.get("status") == "closed":
+                    closed_issues += 1
+    pct = round(100 * closed_issues / total_issues) if total_issues else 0
+
+    # Deferrals
+    deferrals_list = state_data.get("deferrals", [])
+    pending_count = sum(1 for d in deferrals_list if d.get("status") == "pending")
+    accepted_count = sum(1 for d in deferrals_list if d.get("status") == "accepted")
+
+    # Action
+    action_obj = state_data.get("current_action", {})
+    action_str = action_obj.get("action", "idle")
+    detail = action_obj.get("detail", "")
+    action_display = f"{action_str} \u2014 {detail}" if detail else action_str
+
+    # Flight display
+    if total_flights == 0:
+        flight_display = "\u2014"
+    elif running_flight is not None:
+        flight_display = f"{running_flight}/{total_flights}"
+    else:
+        flight_display = f"\u2014/{total_flights}"
+
+    return {
+        "project": plan_data.get("project", "unknown"),
+        "phase": f"{current_phase_idx}/{total_phases}",
+        "phase_name": current_phase_name,
+        "wave": f"{wave_in_phase}/{waves_in_current_phase} in phase {current_phase_idx}",
+        "flight": flight_display,
+        "action": action_display,
+        "action_raw": action_str,
+        "progress": f"{closed_issues}/{total_issues} issues",
+        "progress_pct": pct,
+        "deferrals": f"{pending_count} pending, {accepted_count} accepted",
+        "last_updated": state_data.get("last_updated", ""),
+    }
+
+
+def build_embed(summary: dict, dev_team: str) -> dict:
+    """Build a Discord embed payload with cyber-styled fields."""
+    action_raw = summary["action_raw"]
+    color = COLOR_MAP.get(action_raw, COLOR_MAP["idle"])
+    bar = progress_bar(summary["progress_pct"])
+    emoji = ACTION_EMOJI.get(action_raw, "\u2b24")  # ⬤ fallback
+
+    # ANSI escape helpers for ```ansi code blocks
+    # 30=black 31=red 32=green 33=yellow 34=blue 35=magenta 36=cyan 37=white
+    # 1;XX = bold/bright variant
+    cyan = "\033[1;36m"
+    green = "\033[1;32m"
+    magenta = "\033[1;35m"
+    reset = "\033[0m"
+
+    action_display = summary["action"]
+    phase_val = f"{summary['phase']} \u2014 {summary['phase_name']}"
+
+    fields = [
+        {
+            "name": "\U0001f310 Phase",
+            "value": f"```ansi\n{cyan}{phase_val}{reset}\n```",
+            "inline": True,
+        },
+        {
+            "name": "\U0001f30a Wave",
+            "value": f"```ansi\n{cyan}{summary['wave']}{reset}\n```",
+            "inline": True,
+        },
+        {
+            "name": f"{emoji} Action",
+            "value": f"```ansi\n{magenta}{action_display}{reset}\n```",
+            "inline": False,
+        },
+        {
+            "name": "\U0001f680 Flight",
+            "value": f"```ansi\n{green}{summary['flight']}{reset}\n```",
+            "inline": True,
+        },
+        {
+            "name": "\U0001f4ca Progress",
+            "value": f"```ansi\n{green}{bar}{reset}\n```{summary['progress']}",
+            "inline": False,
+        },
+        {
+            "name": "\u23f3 Deferrals",
+            "value": f"```ansi\n{cyan}{summary['deferrals']}{reset}\n```",
+            "inline": True,
+        },
+    ]
+
+    timestamp = summary["last_updated"] or datetime.now(UTC).isoformat()
+
+    return {
+        "title": f"\u25c8 {dev_team} \u2014 Wave Status",
+        "color": color,
+        "fields": fields,
+        "timestamp": timestamp,
+        "footer": {"text": f"\u25b8 {dev_team}"},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Discord API
+# ---------------------------------------------------------------------------
+
+def discord_request(
+    method: str,
+    endpoint: str,
+    token: str,
+    payload: dict | None = None,
+) -> tuple[int, dict]:
+    """Make a Discord API request.  Returns (status_code, response_body)."""
+    url = f"{API_BASE}{endpoint}"
+    headers = {
+        "Authorization": f"Bot {token}",
+        "Content-Type": "application/json",
+        "User-Agent": "DiscordBot (https://github.com/Wave-Engineering/claudecode-workflow, 1.0)",
+    }
+    data = json.dumps(payload).encode() if payload else None
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            body = json.loads(resp.read().decode())
+            return resp.status, body
+    except urllib.error.HTTPError as e:
+        body: dict = {}
+        try:
+            body = json.loads(e.read().decode())
+        except Exception:
+            pass
+        return e.code, body
+    except (urllib.error.URLError, OSError):
+        # Network-level failure (DNS, connection refused, timeout)
+        return 0, {}
+
+
+def post_or_edit(
+    channel_id: str, embed: dict, token: str, cache_file: Path,
+) -> None:
+    """POST a new message or PATCH an existing one.  Caches the message ID."""
+    payload = {"embeds": [embed]}
+
+    # Try to edit an existing message
+    if cache_file.exists():
+        cache = load_json(cache_file)
+        message_id = cache.get("message_id", "")
+        if message_id:
+            status, _resp = discord_request(
+                "PATCH",
+                f"/channels/{channel_id}/messages/{message_id}",
+                token,
+                payload,
+            )
+            if status == 200:
+                cache["updated_at"] = datetime.now(UTC).isoformat()
+                save_json(cache_file, cache)
+                return
+            # 404 or other error — fall through to POST
+
+    # POST a new message
+    status, resp = discord_request(
+        "POST",
+        f"/channels/{channel_id}/messages",
+        token,
+        payload,
+    )
+    if status not in (200, 201):
+        msg = resp.get("message", "unknown error")
+        raise RuntimeError(f"Discord API error {status}: {msg}")
+
+    # Cache the message ID for future edits
+    cache = {
+        "channel_id": channel_id,
+        "message_id": resp["id"],
+        "updated_at": datetime.now(UTC).isoformat(),
+    }
+    save_json(cache_file, cache)
+
+
+# ---------------------------------------------------------------------------
+# Identity resolution
+# ---------------------------------------------------------------------------
+
+def resolve_dev_team() -> str:
+    """Resolve dev-team from the agent identity file."""
+    try:
+        root = get_project_root()
+        dir_hash = hashlib.md5(str(root).encode()).hexdigest()
+        agent_file = Path(f"/tmp/claude-agent-{dir_hash}.json")
+        if agent_file.exists():
+            data = load_json(agent_file)
+            return data.get("dev_team", "unknown")
+    except Exception:
+        pass
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="discord-status-post",
+        description="Post wave-status embed to Discord",
+    )
+    parser.add_argument(
+        "--channel-id",
+        default=WAVE_STATUS_CHANNEL_ID,
+        help=f"Discord channel ID (default: {WAVE_STATUS_CHANNEL_ID})",
+    )
+    parser.add_argument(
+        "--state-dir",
+        default=None,
+        help="Path to status directory (default: <git-root>/.claude/status/)",
+    )
+    parser.add_argument(
+        "--dev-team",
+        default=None,
+        help="Dev-Team name for embed title (default: resolve from agent identity)",
+    )
+    return parser
+
+
+def main() -> None:
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    # Resolve state directory
+    if args.state_dir:
+        state_dir = Path(args.state_dir)
+    else:
+        root = get_project_root()
+        state_dir = root / ".claude" / "status"
+
+    # Verify state.json exists — exit cleanly if not
+    if not (state_dir / "state.json").exists():
+        sys.exit(0)
+
+    # Resolve dev-team
+    dev_team = args.dev_team or resolve_dev_team()
+
+    # Get token — exit 1 if missing
+    try:
+        token = get_token()
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
+
+    # Compute summary and build embed
+    summary = compute_summary(state_dir)
+    embed = build_embed(summary, dev_team)
+
+    # Post or edit — failures are non-fatal
+    cache_file = state_dir / "discord-status.json"
+    try:
+        post_or_edit(args.channel_id, embed, token, cache_file)
+    except Exception as e:
+        print(f"discord-status-post: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

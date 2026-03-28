@@ -220,6 +220,11 @@ async function checkForNewMessages(
 
       // Push a wake-up notification for each new message (oldest first)
       for (const msg of messages.reverse()) {
+        // Skip empty-content messages (e.g. bot embeds) — no useful preview
+        if (!msg.content.trim()) {
+          continue;
+        }
+
         // Self-echo filter: skip messages containing our own signature (case-insensitive)
         if (cachedIdentity.devName &&
             msg.content.toLowerCase().includes(`— **${cachedIdentity.devName.toLowerCase()}**`)) {
