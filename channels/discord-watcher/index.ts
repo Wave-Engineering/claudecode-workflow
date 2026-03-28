@@ -22,6 +22,7 @@ const API_BASE = "https://discord.com/api/v10";
 const POLL_INTERVAL_MS = 15_000;
 const CHANNEL_REFRESH_MS = 5 * 60_000;
 const MESSAGES_PER_PAGE = 50;
+const VERBOSE = process.env.DISCORD_WATCHER_VERBOSE === "1";
 
 // --- Auth --------------------------------------------------------------------
 
@@ -39,11 +40,16 @@ function loadToken(): string {
   }
 }
 
-// --- Agent identity (self-echo filtering) ------------------------------------
+// --- Agent identity (self-echo filtering + targeted routing) -----------------
 
-let cachedDevName: string | null = null;
+interface AgentIdentity {
+  devName: string | null;
+  devTeam: string | null;
+}
 
-function resolveDevName(): string | null {
+let cachedIdentity: AgentIdentity = { devName: null, devTeam: null };
+
+function resolveIdentity(): AgentIdentity {
   try {
     // Match the agent's identity resolution: git rev-parse, fallback to cwd
     let projectRoot: string;
@@ -58,9 +64,12 @@ function resolveDevName(): string | null {
     const dirHash = createHash("md5").update(projectRoot).digest("hex");
     const agentFile = `/tmp/claude-agent-${dirHash}.json`;
     const data = JSON.parse(readFileSync(agentFile, "utf-8"));
-    return data.dev_name || null;
+    return {
+      devName: data.dev_name || null,
+      devTeam: data.dev_team || null,
+    };
   } catch {
-    return null;
+    return { devName: null, devTeam: null };
   }
 }
 
@@ -177,8 +186,8 @@ async function checkForNewMessages(
   server: Server,
   authHeader: string
 ): Promise<void> {
-  // Refresh Dev-Name each cycle (agent may pick name after server starts)
-  cachedDevName = resolveDevName();
+  // Refresh identity each cycle (agent may pick name after server starts)
+  cachedIdentity = resolveIdentity();
 
   for (const channel of watchedChannels) {
     try {
@@ -210,10 +219,33 @@ async function checkForNewMessages(
       lastSeenMessageId.set(channel.id, messages[0].id);
 
       // Push a wake-up notification for each new message (oldest first)
-      // Filter own messages by Dev-Name prefix; pass through other agents' messages
       for (const msg of messages.reverse()) {
-        if (cachedDevName && msg.content.includes(`— **${cachedDevName}**`)) {
+        // Self-echo filter: skip messages containing our own signature (case-insensitive)
+        if (cachedIdentity.devName &&
+            msg.content.toLowerCase().includes(`— **${cachedIdentity.devName.toLowerCase()}**`)) {
           continue;
+        }
+
+        // Targeted filtering (unless VERBOSE mode bypasses it)
+        if (!VERBOSE) {
+          // If identity hasn't been set yet, fail open — deliver the message
+          if (!cachedIdentity.devName && !cachedIdentity.devTeam) {
+            // No identity resolved yet — deliver all messages until agent sets up
+          } else {
+            const contentLower = msg.content.toLowerCase();
+            const tokens = contentLower.split(/\s+/);
+            const isAddressedToAll = tokens.includes("@all");
+            const isAddressedToTeam = cachedIdentity.devTeam
+              ? tokens.includes(`@${cachedIdentity.devTeam.toLowerCase()}`)
+              : false;
+            const isAddressedToMe = cachedIdentity.devName
+              ? tokens.includes(`@${cachedIdentity.devName.toLowerCase()}`)
+              : false;
+
+            if (!isAddressedToAll && !isAddressedToTeam && !isAddressedToMe) {
+              continue;
+            }
+          }
         }
 
         const preview =
@@ -250,11 +282,11 @@ async function checkForNewMessages(
 
 const INSTRUCTIONS = [
   'Discord messages arrive as <channel source="discord_watcher" channel_name="..." channel_id="..." author="...">.',
+  "Messages are pre-filtered: you only receive messages addressed to @all, @<Dev-Team>, or @<Dev-Name>.",
   "When you see a notification:",
   "1. Run: discord-bot read <channel_id> --limit 10",
-  "2. If a message is addressed to your team (@<Dev-Team> or @all), process and respond via discord-bot send.",
-  "3. If not addressed to you, note it but do not act unless relevant.",
-  '4. Sign every message with: — **<Dev-Name>** <Dev-Avatar> (<Dev-Team>). The watcher filters your own echoes by this signature.',
+  "2. Process the message and respond via discord-bot send if action is needed.",
+  '3. Sign every message with: — **<dev-name>** <dev-avatar> (<dev-team>). The watcher filters your own echoes by this signature.',
 ].join("\n");
 
 async function main(): Promise<void> {
