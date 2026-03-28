@@ -7,7 +7,7 @@ description: Open a file or URL in a GUI viewer (read-only intent, async)
 
 Open a file or URL in a GUI application for read-only viewing. The application launches asynchronously in a separate window so the chat can continue.
 
-## Parse Target
+## Resolve Target
 
 {{#if args}}
 The target is: `{{args}}`
@@ -15,9 +15,15 @@ The target is: `{{args}}`
 No target provided. Ask the user what file or URL they want to view.
 {{/if}}
 
-1. Determine if the target is a **URL** (`https://`, `http://`, `ftp://`) or a **file path**.
-2. If file path, resolve to an absolute path and confirm it exists.
-3. Determine the file extension (e.g., `.pdf`, `.png`, `.html`).
+The target may be an exact path, a URL, or a **natural language description**. Resolve it:
+
+1. **URL** (`https://`, `http://`, `ftp://`) — use as-is.
+2. **Exact file path** (starts with `/`, `./`, `../`, `~`, or looks like a relative path with an extension) — resolve to absolute path and confirm it exists.
+3. **Description** (e.g., "the install script", "the system hosts file", "the main CLI entry point") — search the codebase or filesystem to find the intended file:
+   - Use context clues: "install script" → `install.sh`, "hosts file" → `/etc/hosts`, "the PRD" → `docs/prd-wave-status-cli.md`
+   - Use `Glob` or `Grep` to locate candidates if the intent isn't immediately obvious
+   - If multiple candidates match, pick the most likely one or ask the user to clarify
+4. Determine the file extension (e.g., `.pdf`, `.png`, `.html`).
 
 ## Look Up Preference
 
