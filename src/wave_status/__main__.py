@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -52,6 +53,15 @@ def _regenerate_dashboard(root: Path) -> None:
     state_data = load_json(d / "state.json")
     flights_data = load_json(d / "flights.json")
     generate_dashboard(root, phases_data, state_data, flights_data)
+    # Best-effort Discord status update
+    try:
+        subprocess.run(
+            ["discord-status-post", "--state-dir", str(d)],
+            timeout=10,
+            capture_output=True,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass  # discord-status-post not installed or timed out — skip silently
 
 
 # ---------------------------------------------------------------------------
