@@ -591,7 +591,7 @@ If the session was started with `--channels` (or `--dangerously-load-development
 1. Run `discord-bot read <channel_id> --limit 10` to get the full messages
 2. If a message is addressed to your team (`@<Dev-Team>` or `@all`), process it and respond via `discord-bot send`
 3. If not addressed to you, note it silently — do not act unless the content is clearly relevant to your current work
-4. Ignore messages from `CC Developer` (the bot itself) to avoid echo loops
+4. Ignore messages that start with your own bold Dev-Name (e.g., `**Beacon**`) to avoid echo loops — other agents' messages (also from `CC Developer`) should be processed normally
 
 **Message addressing convention:**
 
