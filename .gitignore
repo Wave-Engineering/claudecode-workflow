@@ -22,5 +22,9 @@ Thumbs.db
 __pycache__/
 *.pyc
 
+# Node/Bun dependencies
+node_modules/
+bun.lock
+
 # Build output
 dist/
