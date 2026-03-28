@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# file-opener — Cross-platform async file/URL opener
+#
+# Usage:
+#   file-opener [--mode view|edit] [--app APP] TARGET
+#
+# Opens a file or URL in a GUI application asynchronously (fire-and-forget).
+# The process detaches from the terminal so the calling shell can continue.
+#
+# Options:
+#   --mode view|edit   Intent hint (default: view). Currently informational;
+#                      app selection is driven by --app or system defaults.
+#   --app APP          Use this application instead of the system default.
+#   TARGET             File path or URL to open.
+#
+# Platform support:
+#   Linux   — xdg-open (requires xdg-utils)
+#   macOS   — open
+#   WSL     — wslview (from wslu), fallback to explorer.exe
+
+set -euo pipefail
+
+# --- Defaults -----------------------------------------------------------------
+MODE="view"
+APP=""
+TARGET=""
+
+# --- Parse args ---------------------------------------------------------------
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--mode)
+		[[ -z "${2:-}" ]] && {
+			echo "Error: --mode requires an argument (view or edit). Usage: file-opener [--mode view|edit] [--app APP] TARGET" >&2
+			exit 1
+		}
+		MODE="$2"
+		shift 2
+		;;
+	--app)
+		[[ -z "${2:-}" ]] && {
+			echo "Error: --app requires an application name. Usage: file-opener [--mode view|edit] [--app APP] TARGET" >&2
+			exit 1
+		}
+		APP="$2"
+		shift 2
+		;;
+	--help | -h)
+		sed -n '2,/^[^#]/{ /^#/s/^# \?//p; }' "$0"
+		exit 0
+		;;
+	-*)
+		echo "Error: unknown option '$1'. Usage: file-opener [--mode view|edit] [--app APP] TARGET" >&2
+		exit 1
+		;;
+	*)
+		if [[ -z "$TARGET" ]]; then
+			TARGET="$1"
+		else
+			echo "Error: unexpected argument '$1'. Only one target is allowed." >&2
+			exit 1
+		fi
+		shift
+		;;
+	esac
+done
+
+# --- Validate -----------------------------------------------------------------
+if [[ -z "$TARGET" ]]; then
+	echo "Error: no target specified. Usage: file-opener [--mode view|edit] [--app APP] TARGET" >&2
+	exit 1
+fi
+
+is_url() {
+	[[ "$1" =~ ^https?:// || "$1" =~ ^ftp:// ]]
+}
+
+if ! is_url "$TARGET" && [[ ! -e "$TARGET" ]]; then
+	echo "Error: '$TARGET' not found. Check the path and try again." >&2
+	exit 1
+fi
+
+if [[ "$MODE" != "view" && "$MODE" != "edit" ]]; then
+	echo "Error: --mode must be 'view' or 'edit', got '$MODE'." >&2
+	exit 1
+fi
+
+# --- Platform detection -------------------------------------------------------
+detect_platform() {
+	if [[ -n "${WSL_DISTRO_NAME:-}" ]] || grep -qi microsoft /proc/version 2>/dev/null; then
+		echo "wsl"
+	elif [[ "$(uname -s)" == "Darwin" ]]; then
+		echo "macos"
+	else
+		echo "linux"
+	fi
+}
+
+PLATFORM="$(detect_platform)"
+
+# --- Open target --------------------------------------------------------------
+open_with_app() {
+	local app="$1" target="$2"
+	case "$PLATFORM" in
+	macos)
+		open --background -a "$app" "$target"
+		;;
+	*)
+		nohup "$app" "$target" >/dev/null 2>&1 &
+		disown
+		;;
+	esac
+}
+
+open_with_default() {
+	local target="$1"
+	case "$PLATFORM" in
+	macos)
+		open "$target"
+		;;
+	wsl)
+		local win_target="$target"
+		if ! is_url "$target"; then
+			win_target=$(wslpath -w "$target" 2>/dev/null || echo "$target")
+		fi
+		if command -v wslview &>/dev/null; then
+			wslview "$win_target"
+		else
+			explorer.exe "$win_target" 2>/dev/null
+		fi
+		;;
+	linux)
+		if command -v xdg-open &>/dev/null; then
+			nohup xdg-open "$target" >/dev/null 2>&1 &
+			disown
+		else
+			echo "Error: xdg-open not found. Install xdg-utils or specify --app." >&2
+			exit 1
+		fi
+		;;
+	esac
+}
+
+if [[ -n "$APP" ]]; then
+	if [[ "$PLATFORM" != "macos" ]] && ! command -v "$APP" &>/dev/null; then
+		echo "Error: '$APP' is not installed or not on PATH." >&2
+		exit 1
+	fi
+	open_with_app "$APP" "$TARGET"
+else
+	open_with_default "$TARGET"
+fi
+
+echo "Opened ($MODE): $TARGET"
