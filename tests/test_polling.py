@@ -126,6 +126,13 @@ class TestRenderPollingScript:
         for action in expected_actions:
             assert action in self.script, f"Missing action name {action!r} in script"
 
+    def test_action_lookup_uses_action_field(self) -> None:
+        """The action banner must dereference .action, not the whole object."""
+        assert "current_action.action" in self.script, (
+            "actionMap lookup must use state.current_action.action, "
+            "not state.current_action (which is an object, not a string)"
+        )
+
     # --- Nested state value resolution ---
 
     def test_supports_dotted_paths(self) -> None:

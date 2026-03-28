@@ -133,28 +133,44 @@ fi
 echo ""
 echo "Python syntax (py_compile)"
 echo "──────────────────────────────────────────"
+is_python_script() {
+	local f="$1"
+	[[ "$f" == *.py ]] && return 0
+	local shebang
+	shebang=$(head -1 "$f" 2>/dev/null)
+	[[ "$shebang" =~ ^#!.*/python ]] && return 0
+	[[ "$shebang" =~ ^#!.*env[[:space:]]+python ]] && return 0
+	return 1
+}
+
+PY_FILES=()
+# Python files in src/
 if [[ -d "$REPO_DIR/src" ]]; then
-	PY_FILES=()
 	while IFS= read -r f; do
 		PY_FILES+=("$f")
 	done < <(find "$REPO_DIR/src" -name "*.py" -type f 2>/dev/null)
+fi
+# Python scripts in scripts/ (by extension or shebang)
+if [[ -d "$REPO_DIR/scripts" ]]; then
+	while IFS= read -r f; do
+		[[ -f "$f" ]] || continue
+		is_python_script "$f" && PY_FILES+=("$f")
+	done < <(find "$REPO_DIR/scripts" -type f -not -path "*/ci/*" 2>/dev/null)
+fi
 
-	if [[ ${#PY_FILES[@]} -eq 0 ]]; then
-		info "no Python files found in src/"
-	else
-		for py_file in "${PY_FILES[@]}"; do
-			rel="${py_file#"$REPO_DIR/"}"
-			if python3 -m py_compile "$py_file" 2>&1; then
-				info "$rel"
-				PASS=$((PASS + 1))
-			else
-				err "$rel"
-				FAIL=$((FAIL + 1))
-			fi
-		done
-	fi
+if [[ ${#PY_FILES[@]} -eq 0 ]]; then
+	info "no Python files found"
 else
-	info "no src/ directory — skipping"
+	for py_file in "${PY_FILES[@]}"; do
+		rel="${py_file#"$REPO_DIR/"}"
+		if python3 -m py_compile "$py_file" 2>&1; then
+			info "$rel"
+			PASS=$((PASS + 1))
+		else
+			err "$rel"
+			FAIL=$((FAIL + 1))
+		fi
+	done
 fi
 
 # --- SKILL.md frontmatter validation -----------------------------------------

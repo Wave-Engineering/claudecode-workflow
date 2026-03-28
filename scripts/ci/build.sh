@@ -42,6 +42,9 @@ mkdir -p "$DIST_DIR"
 built=0
 failed=0
 
+cleanup_dirs=()
+trap 'rm -rf "${cleanup_dirs[@]+"${cleanup_dirs[@]}"}"' EXIT
+
 for pkg_dir in "${packages[@]}"; do
 	pkg_name="$(basename "$pkg_dir")"
 	# Convert underscores to hyphens for the output name
@@ -56,7 +59,7 @@ for pkg_dir in "${packages[@]}"; do
 	# and a top-level __main__.py that imports it. This ensures
 	# intra-package imports (e.g. "from wave_status import ...") work.
 	staging="$(mktemp -d)"
-	trap 'rm -rf "$staging"' EXIT
+	cleanup_dirs+=("$staging")
 	cp -r "$pkg_dir" "$staging/$pkg_name"
 	cat >"$staging/__main__.py" <<ENTRY
 from ${pkg_name}.__main__ import main
@@ -72,7 +75,6 @@ ENTRY
 		err "Failed to build $pkg_name"
 		failed=$((failed + 1))
 	fi
-	rm -rf "$staging"
 done
 
 # --- Summary ------------------------------------------------------------------

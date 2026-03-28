@@ -418,6 +418,20 @@ class TestCmdDefer:
         assert state["deferrals"][0]["status"] == "pending"
         assert state["deferrals"][0]["wave"] == "wave-1"
 
+    def test_defer_no_active_wave_exits_1(self, project_root: Path) -> None:
+        """Deferring after all waves are complete should fail."""
+        # Complete all three waves to reach current_wave=None
+        planning(project_root)
+        _run_cli(["complete"], project_root)  # wave-1 → wave-2
+        planning(project_root)
+        _run_cli(["complete"], project_root)  # wave-2 → wave-3
+        planning(project_root)
+        _run_cli(["complete"], project_root)  # wave-3 → None
+        state = load_json(status_dir(project_root) / "state.json")
+        assert state["current_wave"] is None
+        code = _run_cli(["defer", "late item", "low"], project_root)
+        assert code == 1
+
     def test_defer_invalid_risk_exits_1(self, project_root: Path) -> None:
         """ValueError for invalid risk level -> exit 1."""
         code = _run_cli(["defer", "desc", "critical"], project_root)

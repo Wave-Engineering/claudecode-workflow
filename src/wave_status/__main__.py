@@ -145,6 +145,8 @@ def _cmd_defer(args: argparse.Namespace) -> None:
     root = get_project_root()
     d = status_dir(root)
     state_data = load_json(d / "state.json")
+    if state_data.get("current_wave") is None:
+        raise ValueError("no active wave — all waves are complete")
     deferrals.defer(state_data, args.desc, args.risk, state_data["current_wave"])
     save_json(d / "state.json", state_data)
     _regenerate_dashboard(root)
