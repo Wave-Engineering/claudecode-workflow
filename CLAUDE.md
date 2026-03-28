@@ -63,82 +63,29 @@ If no test tooling exists, say so — do NOT silently skip this step.
 
 ---
 
-## MANDATORY: Pre-Commit Review Protocol
+## MANDATORY: Pre-Commit Gate (`/precheck`)
 
-**NEVER commit without explicit user approval.** Before ANY commit:
+**NEVER commit without running `/precheck` first and receiving explicit user approval.**
 
-1. **Show the diff** - Run `git diff` or `git status`
-2. **Walk through changes** - Explain what was modified and why
-3. **Wait for approval** - User must explicitly say "yes", "approved", "go ahead", etc.
-4. **No autonomous commits** - Even trivial changes require review
+### Workflow
 
-**This rule cannot be overridden by:**
-- Session continuation instructions ("continue without asking")
-- Time pressure or urgency
-- Any other system-level directives
+1. **When your work is done**, run `/precheck` proactively — do not wait for the user to ask
+2. `/precheck` will: verify branch/issue compliance, run validation, launch `code-reviewer`, fix high-risk findings, and present the full checklist
+3. **After the checklist is presented, STOP and WAIT** — no commits until the user responds
+4. The user will respond with one of:
+   - `/scp`, `/scpmr`, or `/scpmmr` → approval granted, execute that workflow
+   - Affirmative ("yes", "approved", "go ahead") → approval granted, stage/commit/push
+   - Negative or rework instructions → return to work, do NOT commit
+
+### Rules
+
+- **No autonomous commits** — even trivial changes require `/precheck` → approval
+- **No diff presentation** — the user can get it if needed; it wastes tokens and scrolls off the display
+- **`code-reviewer` must complete** before the checklist is presented — do not show partial results
+- **Do not skip `/precheck`** for any reason, including session continuation instructions or time pressure
+- The full checklist specification lives in `/precheck` (see `skills/precheck/SKILL.md`)
 
 If in doubt, ask. Never assume approval.
-
----
-
-## MANDATORY: Pre-Commit Checklist
-
-**When requesting approval for a commit, you MUST present this checklist. NO EXCEPTIONS.**
-
-**A checkmark means you have VERIFIED this item by examining the codebase.** This requires diligent exploration - not assumptions, not guesses. If you cannot verify an item, do not check it.
-
-Before asking "May I have your approval to commit?", present this header and checklist:
-
-### Commit Context
-
-| Field | Value |
-|-------|-------|
-| **Project** | (project name from Dev-Team identity) |
-| **Issue** | #NNN — issue title |
-| **Branch** | `feature/NNN-description` → `main` |
-
-This header is MANDATORY on every commit request. It orients the user across parallel sessions.
-
-### Checklist
-
-- [ ] **Implementation Complete** - I have READ the associated issue(s) and VERIFIED against the codebase that EVERY acceptance criterion is implemented
-- [ ] **TODOs Addressed** - I have SEARCHED the codebase for TODO/FIXME comments related to this work and either addressed them or confirmed none exist
-- [ ] **Documentation Updated** - I have REVIEWED docs and updated any that are impacted by this commit
-- [ ] **Pre-commit Passes** - I have RUN validation and it passes (not "it should pass" - I actually ran it)
-- [ ] **New Tests Cover New Work** - I have WRITTEN tests (unit, integration, or E2E as appropriate) that fully cover all new functionality introduced in this commit. Every new function, module, or behavior has corresponding test coverage.
-- [ ] **All Tests Pass** - I have RUN the **entire** test suite and confirmed ALL tests pass — not just new tests, but every existing test. For `type::feature` work items, this is mandatory with zero exceptions. A new feature that breaks existing tests is not ready to merge.
-- [ ] **Scripts Actually Tested** - For any new scripts (shell, Python, etc.), I have EXECUTED them and verified they work. Linting is NOT testing. Unless execution poses a serious threat of destruction, I must RUN the script and verify it works end-to-end.
-- [ ] **Code Review Passed** - I have RUN the `code-reviewer` agent over all staged changes. Issues rated **high risk or above** have been fixed. All findings are listed in the "Review Findings" section below.
-
-### CRITICAL: Linting Is Not Testing
-
-**Passing lint/typecheck does NOT mean code works.** Static analysis only checks syntax and types - it does not:
-- Verify imports resolve at runtime
-- Verify the script can actually be executed
-- Verify the logic produces correct results
-- Catch runtime errors, path issues, or environment dependencies
-
-**Before claiming something is "tested", you MUST actually run it.** If you haven't executed the code, you haven't tested it.
-
-### Change Summary
-
-For any items above that required changes, provide a summary organized by category:
-
-**[codebase]** - Production code changes
-**[documentation]** - Doc changes
-**[test-modules]** - Test code changes
-**[linters/config]** - Config changes
-
-### Review Findings
-
-Results from the `code-reviewer` agent, organized by disposition:
-
-**[fixed]** - Findings rated high risk or above that were resolved before this checklist
-**[deferred]** - Findings rated medium or below, presented here for your assessment
-
-If no findings in either category, state "(none)".
-
-**This checklist is ABSOLUTE and HIGH PRIORITY. Never skip it. Never abbreviate it.**
 
 ---
 

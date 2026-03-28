@@ -7,27 +7,14 @@ description: Approve and execute pending commit, or run full stage/commit/push w
 
 This skill handles the git commit workflow with context awareness.
 
-## Check Context First
+## Pre-Commit Gate
 
-Determine if a commit approval is already pending in this conversation:
-- Was a pre-commit checklist just presented?
-- Was approval requested with a proposed commit message?
+**Before executing, verify that `/precheck` has been run in this conversation.**
 
-## If Commit Approval is Pending
+- If `/precheck` was run and the user approved (via `/scp`, `/scpmr`, `/scpmmr`, or an affirmative like "yes", "approved", "go ahead") → proceed to execution.
+- If `/precheck` has NOT been run → run it first and wait for approval before proceeding.
 
-The user invoking `/scp` is granting approval. Proceed immediately:
-
-1. Stage the files that were discussed (use specific filenames, not `git add -A`)
-2. Commit with the proposed message, appending:
-   ```
-   Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
-   ```
-3. Push to the remote branch
-4. Report success and include any pipeline/CI or PR/MR URL from the push output
-
-## If No Commit is Pending (Cold Start)
-
-Run the full workflow:
+## Execution
 
 ### Step 0: Branch Safety Check (CRITICAL)
 
@@ -58,21 +45,12 @@ Run the full workflow:
 ### Step 2: Validate
 
 Run the repo's validation script (`./scripts/ci/validate.sh`, `npm test`, `pytest`, etc.)
+- If arriving from an approved `/precheck` run and no files have changed since, skip this step
 - If validation fails, stop and report errors
 
-### Step 3: Show Changes
+### Step 3: Commit Message
 
-Run `git status` and `git diff` to display pending changes
-
-### Step 4: Checklist
-
-Present the pre-commit checklist if the project's CLAUDE.md defines one
-- Mark items as verified based on work done this session
-- Be honest - only check items you actually verified
-
-### Step 5: Propose Message
-
-Generate a conventional commit message based on the changes
+Generate a conventional commit message:
 {{#if message}}
 - Use the provided message: "{{message}}"
 {{else}}
@@ -80,15 +58,9 @@ Generate a conventional commit message based on the changes
 - Include `Closes #XXX` if an issue is being resolved
 {{/if}}
 
-### Step 6: Request Approval
+### Step 4: Commit, Push, PR/MR
 
-Ask "May I commit and push?" and WAIT for explicit approval
-- Do NOT proceed without approval
-- If user responds with `/scp` again, treat as approval
-
-### Step 7: Commit, Push, MR
-
-After approval:
+Execute:
 1. Stage specific files (never `git add -A`)
 2. Commit with the approved message + Co-Authored-By line
 3. Push to the feature branch (with `-u` if new)
