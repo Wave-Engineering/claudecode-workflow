@@ -30,6 +30,7 @@ Determine what the user wants from the phrasing:
 | Quoted text, or starts with "say", "tell", "post", "send", "announce" | **send** | `"build complete"`, `tell #dev "ready"`, `post "deployed v1.2"` |
 | Starts with "check", "read", "what's", contains `?`, or describes wanting to see messages | **read** | `what's new?`, `check #general`, `read #agent-ops` |
 | Starts with "create", "make", "new" + channel name | **create** | `create #wave-3-status`, `new channel test` |
+| Starts with "thread", "create thread", "new thread" + thread name | **create-thread** | `thread "session-123" in #remote-sessions`, `create thread "daily"` |
 | Starts with "list", "show", "channels" | **list** | `list channels`, `show channels` |
 | No args at all | **read** | (reads default channel) |
 
@@ -65,6 +66,11 @@ discord-bot resolve 1486516321385578576 <channel-name>
    ```bash
    discord-bot send <channel-id> "<formatted message>"
    ```
+   To attach a file (e.g., a voice memo WAV):
+   ```bash
+   discord-bot send <channel-id> "<formatted message>" --attach /path/to/file.wav
+   ```
+   The `--attach` flag uploads the file as a Discord attachment using multipart/form-data. It works with or without `--embed`.
 5. Confirm: `Sent to #<channel-name>.`
 
 ## Read Flow
@@ -85,6 +91,18 @@ discord-bot resolve 1486516321385578576 <channel-name>
    discord-bot create-channel 1486516321385578576 <name> --topic "<topic>"
    ```
 4. Confirm: `Created #<name> (<id>).`
+
+## Create Thread Flow
+
+1. Parse the parent channel ID and thread name from args
+2. Optionally parse `--auto-archive` duration (default: 1440 = 24 hours)
+3. Create:
+   ```bash
+   discord-bot create-thread <channel-id> <name> [--auto-archive 60|1440|4320|10080]
+   ```
+4. Confirm: `Created thread #<name> (<id>).`
+
+Note: Thread IDs work with `discord-bot read <thread-id>` for reading thread messages.
 
 ## List Channels Flow
 

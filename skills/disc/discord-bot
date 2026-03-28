@@ -2,9 +2,10 @@
 # discord-bot — Discord REST API client for Claude Code agents
 #
 # Usage:
-#   discord-bot send <channel-id> <message> [--embed title:text]
+#   discord-bot send <channel-id> <message> [--embed title:text] [--attach FILE]
 #   discord-bot read <channel-id> [--limit N] [--after ID]
 #   discord-bot create-channel <guild-id> <name> [--topic TOPIC] [--category ID]
+#   discord-bot create-thread <channel-id> <name> [--auto-archive 60|1440|4320|10080]
 #   discord-bot list-channels <guild-id> [--type text|voice|category]
 #   discord-bot resolve <guild-id> <channel-name>
 #
@@ -77,7 +78,7 @@ api_post() {
 
 # --- Subcommand: send ---------------------------------------------------------
 cmd_send() {
-	local channel_id="" message="" embed_title="" embed_text=""
+	local channel_id="" message="" embed_title="" embed_text="" attach_file=""
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -88,6 +89,18 @@ cmd_send() {
 			}
 			embed_title="${2%%:*}"
 			embed_text="${2#*:}"
+			shift 2
+			;;
+		--attach)
+			[[ -z "${2:-}" ]] && {
+				echo "Error: --attach requires a file path." >&2
+				exit 1
+			}
+			attach_file="$2"
+			[[ ! -f "$attach_file" ]] && {
+				echo "Error: attachment file not found: $attach_file" >&2
+				exit 1
+			}
 			shift 2
 			;;
 		*)
@@ -111,18 +124,35 @@ cmd_send() {
 
 	local payload
 	if [[ -n "$embed_title" ]]; then
-		payload=$(jq -n \
+		payload=$(jq -c -n \
 			--arg content "$message" \
 			--arg title "$embed_title" \
 			--arg desc "$embed_text" \
 			'{content: $content, embeds: [{title: $title, description: $desc}]}')
 	else
-		payload=$(jq -n --arg content "$message" '{content: $content}')
+		payload=$(jq -c -n --arg content "$message" '{content: $content}')
 	fi
 
-	local response
-	response=$(api_post "/channels/$channel_id/messages" "$payload")
-	jq -r '.id' <<<"$response"
+	if [[ -n "$attach_file" ]]; then
+		local http_code body
+		body=$(curl -sS -w '\n%{http_code}' -X POST \
+			--config <(echo "$_curl_auth_cfg") \
+			-F "payload_json=$payload" \
+			-F "files[0]=@${attach_file}" \
+			"$API_BASE/channels/$channel_id/messages")
+		http_code=$(tail -1 <<<"$body")
+		body=$(sed '$d' <<<"$body")
+		if [[ "$http_code" -ge 400 ]]; then
+			echo "Error: Discord API returned HTTP $http_code on multipart POST" >&2
+			[[ -n "$body" ]] && echo "$body" | jq -r '.message // empty' 2>/dev/null >&2
+			return 1
+		fi
+		jq -r '.id' <<<"$body"
+	else
+		local response
+		response=$(api_post "/channels/$channel_id/messages" "$payload")
+		jq -r '.id' <<<"$response"
+	fi
 }
 
 # --- Subcommand: read ---------------------------------------------------------
@@ -230,6 +260,52 @@ cmd_create_channel() {
 	echo "#$ch_name ($ch_id)"
 }
 
+# --- Subcommand: create-thread ------------------------------------------------
+cmd_create_thread() {
+	local channel_id="" name="" auto_archive="1440"
+
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--auto-archive)
+			[[ -z "${2:-}" ]] && {
+				echo "Error: --auto-archive requires a value (60, 1440, 4320, 10080)." >&2
+				exit 1
+			}
+			auto_archive="$2"
+			shift 2
+			;;
+		*)
+			if [[ -z "$channel_id" ]]; then
+				channel_id="$1"
+			elif [[ -z "$name" ]]; then
+				name="$1"
+			else
+				echo "Error: unexpected argument '$1'." >&2
+				exit 1
+			fi
+			shift
+			;;
+		esac
+	done
+
+	[[ -z "$channel_id" || -z "$name" ]] && {
+		echo "Error: create-thread requires <channel-id> and <name>." >&2
+		exit 1
+	}
+
+	local payload
+	payload=$(jq -n --arg name "$name" --argjson archive "$auto_archive" \
+		'{name: $name, type: 11, auto_archive_duration: $archive}')
+
+	local response
+	response=$(api_post "/channels/$channel_id/threads" "$payload")
+
+	local th_name th_id
+	th_name=$(jq -r '.name' <<<"$response")
+	th_id=$(jq -r '.id' <<<"$response")
+	echo "#$th_name ($th_id)"
+}
+
 # --- Subcommand: list-channels ------------------------------------------------
 cmd_list_channels() {
 	local guild_id="" filter_type=""
@@ -317,6 +393,7 @@ case "$1" in
 send) shift && cmd_send "$@" ;;
 read) shift && cmd_read "$@" ;;
 create-channel) shift && cmd_create_channel "$@" ;;
+create-thread) shift && cmd_create_thread "$@" ;;
 list-channels) shift && cmd_list_channels "$@" ;;
 resolve) shift && cmd_resolve "$@" ;;
 --help | -h) usage ;;
