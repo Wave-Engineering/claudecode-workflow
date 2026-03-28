@@ -71,7 +71,7 @@ def render_polling_script() -> str:
       for (var c = 0; c < classes.length; c++) {
         banner.classList.remove(classes[c]);
       }
-      var newClass = actionMap[state.current_action];
+      var newClass = actionMap[state.current_action.action];
       if (newClass) {
         banner.classList.add(newClass);
       }
