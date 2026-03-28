@@ -7,11 +7,13 @@ description: Stage, commit, push, create PR/MR, then merge it — full pipeline 
 
 This is a combo skill that chains `/scp` and `/mmr` into a single invocation.
 
+## Pre-Commit Gate
+
+If `/precheck` has not been run in this conversation, run it first and wait for approval before proceeding. Invoking `/scpmmr` after `/precheck` is approval to execute.
+
 ## Workflow
 
 1. **Run `/scp`** — Execute the full scp workflow (stage, commit, push, create PR/MR)
-   - If a commit approval is pending, treat this invocation as approval
-   - If no commit is pending, run the full cold-start workflow
    - The scp skill will create a PR/MR if one doesn't exist
 
 2. **Run `/mmr`** — Immediately after scp completes, merge the PR/MR
@@ -22,7 +24,6 @@ This is a combo skill that chains `/scp` and `/mmr` into a single invocation.
 ## Important
 
 - This is a **convenience shortcut** — it does NOT skip any safety checks
-- The pre-commit checklist from CLAUDE.md is still mandatory
-- User approval is still required for the commit (invoking `/scpmmr` IS the approval)
+- `/precheck` must have been run and the checklist presented before execution
 - CI verification before merge still applies
 - If any step fails, stop and report — do NOT continue to the next step
