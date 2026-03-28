@@ -619,6 +619,17 @@ Each session, pick a fresh identity for yourself. This is NOT persisted — a ne
    ```
 4. Announce your identity to the user:
    > I'm going by **\<Dev-Name\>** \<Dev-Avatar\> from team `<Dev-Team>` this session.
+5. **Check in via Discord** — If `discord-bot` is available on PATH, announce yourself in `#roll-call`:
+   ```bash
+   discord-bot send 1487382005036617851 "<message>"
+   ```
+   Message format:
+   ```
+   **<dev-name>** <dev-avatar> online — team `<dev-team>` @ <project-root>
+
+   — **<dev-name>** <dev-avatar> (<dev-team>)
+   ```
+   If `discord-bot` is not available or the send fails, skip silently — check-in is best-effort, not a blocker.
 
 ### Reading Identity
 
