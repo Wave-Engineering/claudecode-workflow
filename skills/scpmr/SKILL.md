@@ -20,6 +20,16 @@ If `/precheck` has not been run in this conversation, run it first and wait for 
    - The user wants to review the PR/MR before merging
    - They can later run `/mmr` to merge when ready
 
+## Voice Announcement
+
+After the PR/MR is created and pushed, announce via `vox` (best-effort):
+
+```bash
+vox "Hey BJ, PR <NUMBER> is up for issue <NUMBER>. Pushed and CI is running." 2>/dev/null || true
+```
+
+Keep it brief — issue number, PR number, status. Write for the ear.
+
 ## Important
 
 - This is a **convenience shortcut** — it does NOT skip any safety checks

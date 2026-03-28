@@ -576,7 +576,13 @@ For each deferred item:
 
 Do NOT let deferred items disappear into the void. Every deferral must be tracked.
 
-6. **Prompt:** "Wave N complete. Design review for Wave N+1 is done. Run `/nextwave` for Wave N+1, or `/cryo` to preserve state."
+6. **Voice announcement** — Announce wave completion via `vox` (best-effort):
+   ```bash
+   vox "Hey BJ, wave <N> is complete. <X> issues closed, <Y> flights, all merged to main. Ready for wave <N+1> when you are." 2>/dev/null || true
+   ```
+   Keep it conversational — summarize the wave outcome in 1-2 sentences for the ear.
+
+7. **Prompt:** "Wave N complete. Design review for Wave N+1 is done. Run `/nextwave` for Wave N+1, or `/cryo` to preserve state."
 
 ---
 
