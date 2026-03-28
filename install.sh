@@ -11,11 +11,13 @@
 #   ./install.sh --skills     Install skills only
 #   ./install.sh --scripts    Install scripts only
 #   ./install.sh --config     Install config files only (statusline, settings template)
+#   ./install.sh --channels   Install channel servers only (bun install + MCP registration)
 #
 # Targets:
 #   Skills     → ~/.claude/skills/<name>/SKILL.md
 #   Scripts    → ~/.local/bin/<name>
 #   Statusline → ~/.claude/statusline-command.sh
+#   Channels   → user-scope MCP servers (claude mcp add --scope user)
 #
 # Existing files are backed up to <file>.bak before overwriting.
 
@@ -30,6 +32,7 @@ CHECK_MODE=false
 INSTALL_SKILLS=true
 INSTALL_SCRIPTS=true
 INSTALL_CONFIG=true
+INSTALL_CHANNELS=true
 
 # --- Parse args ---------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -45,16 +48,25 @@ while [[ $# -gt 0 ]]; do
 	--skills)
 		INSTALL_SCRIPTS=false
 		INSTALL_CONFIG=false
+		INSTALL_CHANNELS=false
 		shift
 		;;
 	--scripts)
 		INSTALL_SKILLS=false
 		INSTALL_CONFIG=false
+		INSTALL_CHANNELS=false
 		shift
 		;;
 	--config)
 		INSTALL_SKILLS=false
 		INSTALL_SCRIPTS=false
+		INSTALL_CHANNELS=false
+		shift
+		;;
+	--channels)
+		INSTALL_SKILLS=false
+		INSTALL_SCRIPTS=false
+		INSTALL_CONFIG=false
 		shift
 		;;
 	--help | -h)
@@ -243,6 +255,19 @@ if [[ "$INSTALL_CONFIG" == true ]]; then
 	if [[ -f "$REPO_DIR/config/settings.template.json" ]]; then
 		if [[ -f "$CLAUDE_DIR/settings.json" ]]; then
 			skip "settings.json already exists (won't overwrite — use settings.template.json as reference)"
+			# Merge statusLine config into existing settings.json if missing
+			if [[ "$DRY_RUN" != true ]] && command -v jq &>/dev/null; then
+				if ! jq -e '.statusLine' "$CLAUDE_DIR/settings.json" &>/dev/null; then
+					cp "$CLAUDE_DIR/settings.json" "$CLAUDE_DIR/settings.json.bak"
+					jq '.statusLine = {"type": "command", "command": "bash ~/.claude/statusline-command.sh"}' \
+						"$CLAUDE_DIR/settings.json.bak" >"$CLAUDE_DIR/settings.json"
+					info "Merged statusLine config into existing settings.json"
+				else
+					skip "statusLine already configured in settings.json"
+				fi
+			elif [[ "$DRY_RUN" == true ]]; then
+				info "(dry-run) Would merge statusLine config into settings.json if missing"
+			fi
 		else
 			do_copy "$REPO_DIR/config/settings.template.json" "$CLAUDE_DIR/settings.json"
 		fi
@@ -280,6 +305,44 @@ if [[ "$INSTALL_SCRIPTS" == true && -d "$REPO_DIR/src" ]]; then
 	done
 fi
 
+# --- Install channel servers --------------------------------------------------
+if [[ "$INSTALL_CHANNELS" == true && -d "$REPO_DIR/channels" ]]; then
+	echo ""
+	echo "Channel servers"
+	echo "──────────────────────────────────────────"
+	if ! command -v bun &>/dev/null; then
+		warn "bun not found — skipping channel server setup"
+		warn "Install bun (https://bun.sh) and re-run to enable channel servers"
+	elif ! command -v claude &>/dev/null; then
+		warn "claude CLI not found — skipping MCP registration"
+	else
+		for channel_dir in "$REPO_DIR"/channels/*/; do
+			[[ -f "$channel_dir/package.json" ]] || continue
+			channel_name="$(basename "$channel_dir")"
+			entry_file="$channel_dir/index.ts"
+			[[ -f "$entry_file" ]] || continue
+
+			# Install dependencies
+			if [[ "$DRY_RUN" == true ]]; then
+				info "(dry-run) bun install in $channel_dir"
+				info "(dry-run) claude mcp add --scope user $channel_name"
+			else
+				if [[ ! -d "$channel_dir/node_modules" ]]; then
+					info "Installing dependencies for $channel_name..."
+					(cd "$channel_dir" && bun install --silent)
+				else
+					skip "$channel_name dependencies (already installed)"
+				fi
+
+				# Register at user scope (idempotent — overwrites existing)
+				claude mcp add --scope user --transport stdio \
+					"$channel_name" -- bun "$entry_file" 2>/dev/null
+				info "Registered MCP server: $channel_name (user scope)"
+			fi
+		done
+	fi
+fi
+
 # --- Summary ------------------------------------------------------------------
 echo ""
 echo "──────────────────────────────────────────"
@@ -293,7 +356,7 @@ fi
 echo ""
 echo "Dependency check:"
 missing=()
-for cmd in curl jq glab gh python3 shellcheck shfmt; do
+for cmd in curl jq bun glab gh python3 shellcheck shfmt; do
 	if command -v "$cmd" &>/dev/null; then
 		info "$cmd $(command -v "$cmd")"
 	else
@@ -306,6 +369,12 @@ if [[ -f "$HOME/secrets/slack-bot-token" ]]; then
 	info "slack-bot-token found"
 else
 	warn "$HOME/secrets/slack-bot-token — NOT FOUND (needed for /ping)"
+fi
+
+if [[ -f "$HOME/secrets/discord-bot-token" ]]; then
+	info "discord-bot-token found"
+else
+	warn "$HOME/secrets/discord-bot-token — NOT FOUND (needed for /disc and discord-watcher)"
 fi
 
 if [[ ${#missing[@]} -gt 0 ]]; then
