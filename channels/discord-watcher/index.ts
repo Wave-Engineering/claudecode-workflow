@@ -12,6 +12,8 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 // --- Configuration -----------------------------------------------------------
 
@@ -34,6 +36,31 @@ function loadToken(): string {
     throw new Error(
       `DISCORD_BOT_TOKEN not set and ${tokenPath} not found. Save your bot token there.`
     );
+  }
+}
+
+// --- Agent identity (self-echo filtering) ------------------------------------
+
+let cachedDevName: string | null = null;
+
+function resolveDevName(): string | null {
+  try {
+    // Match the agent's identity resolution: git rev-parse, fallback to cwd
+    let projectRoot: string;
+    try {
+      projectRoot = execSync("git rev-parse --show-toplevel", {
+        encoding: "utf-8",
+        stdio: ["pipe", "pipe", "pipe"],
+      }).trim();
+    } catch {
+      projectRoot = process.cwd();
+    }
+    const dirHash = createHash("md5").update(projectRoot).digest("hex");
+    const agentFile = `/tmp/claude-agent-${dirHash}.json`;
+    const data = JSON.parse(readFileSync(agentFile, "utf-8"));
+    return data.dev_name || null;
+  } catch {
+    return null;
   }
 }
 
@@ -150,6 +177,9 @@ async function checkForNewMessages(
   server: Server,
   authHeader: string
 ): Promise<void> {
+  // Refresh Dev-Name each cycle (agent may pick name after server starts)
+  cachedDevName = resolveDevName();
+
   for (const channel of watchedChannels) {
     try {
       const lastId = lastSeenMessageId.get(channel.id);
@@ -180,8 +210,12 @@ async function checkForNewMessages(
       lastSeenMessageId.set(channel.id, messages[0].id);
 
       // Push a wake-up notification for each new message (oldest first)
-      // No bot-level filtering — agents self-filter by Dev-Name prefix
+      // Filter own messages by Dev-Name prefix; pass through other agents' messages
       for (const msg of messages.reverse()) {
+        if (cachedDevName && msg.content.includes(`— **${cachedDevName}**`)) {
+          continue;
+        }
+
         const preview =
           msg.content.length > 100
             ? msg.content.slice(0, 100) + "…"
@@ -220,7 +254,7 @@ const INSTRUCTIONS = [
   "1. Run: discord-bot read <channel_id> --limit 10",
   "2. If a message is addressed to your team (@<Dev-Team> or @all), process and respond via discord-bot send.",
   "3. If not addressed to you, note it but do not act unless relevant.",
-  "4. Ignore messages that start with your own bold Dev-Name (e.g. **YourName**) to avoid echo loops.",
+  '4. Sign every message with: — **<Dev-Name>** <Dev-Avatar> (<Dev-Team>). The watcher filters your own echoes by this signature.',
 ].join("\n");
 
 async function main(): Promise<void> {
