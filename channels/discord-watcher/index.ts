@@ -71,7 +71,6 @@ interface DiscordMessage {
 
 // --- State -------------------------------------------------------------------
 
-let botUserId = "";
 let watchedChannels: DiscordChannel[] = [];
 const lastSeenMessageId = new Map<string, string>();
 
@@ -83,14 +82,6 @@ async function fetchTextChannels(authHeader: string): Promise<DiscordChannel[]> 
     throw new Error(`Failed to fetch channels: HTTP ${result.status}`);
   }
   return (result.data as DiscordChannel[]).filter((c) => c.type === 0);
-}
-
-async function fetchBotUserId(authHeader: string): Promise<string> {
-  const result = await apiGet("/users/@me", authHeader);
-  if (!result.ok) {
-    throw new Error(`Failed to fetch bot identity: HTTP ${result.status}`);
-  }
-  return (result.data as { id: string }).id;
 }
 
 async function initializeBaselines(authHeader: string): Promise<void> {
@@ -188,12 +179,9 @@ async function checkForNewMessages(
       // Update baseline to the newest message (messages are newest-first)
       lastSeenMessageId.set(channel.id, messages[0].id);
 
-      // Filter out bot's own messages to avoid echo loops
-      const newMessages = messages.filter((m) => m.author.id !== botUserId);
-      if (newMessages.length === 0) continue;
-
       // Push a wake-up notification for each new message (oldest first)
-      for (const msg of newMessages.reverse()) {
+      // No bot-level filtering — agents self-filter by Dev-Name prefix
+      for (const msg of messages.reverse()) {
         const preview =
           msg.content.length > 100
             ? msg.content.slice(0, 100) + "…"
@@ -232,7 +220,7 @@ const INSTRUCTIONS = [
   "1. Run: discord-bot read <channel_id> --limit 10",
   "2. If a message is addressed to your team (@<Dev-Team> or @all), process and respond via discord-bot send.",
   "3. If not addressed to you, note it but do not act unless relevant.",
-  '4. Ignore messages from "CC Developer" (the bot itself) to avoid loops.',
+  "4. Ignore messages that start with your own bold Dev-Name (e.g. **YourName**) to avoid echo loops.",
 ].join("\n");
 
 async function main(): Promise<void> {
@@ -253,27 +241,18 @@ async function main(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  // Resolve bot identity and discover channels — fail hard if these fail
+  // Discover channels — fail hard if this fails
   try {
-    botUserId = await fetchBotUserId(authHeader);
     watchedChannels = await fetchTextChannels(authHeader);
     await initializeBaselines(authHeader);
   } catch (err) {
     console.error(`[discord-watcher] Initialization failed: ${err}`);
     console.error(
-      "[discord-watcher] Cannot watch channels without bot identity and channel list. Exiting."
+      "[discord-watcher] Cannot watch channels without channel list. Exiting."
     );
     process.exit(1);
   }
 
-  if (!botUserId) {
-    console.error("[discord-watcher] Failed to resolve bot user ID. Exiting.");
-    process.exit(1);
-  }
-
-  console.error(
-    `[discord-watcher] Bot ID: ${botUserId}`
-  );
   console.error(
     `[discord-watcher] Watching ${watchedChannels.length} channels: ${watchedChannels.map((c) => `#${c.name}`).join(", ")}`
   );
