@@ -582,6 +582,26 @@ When starting a session:
 2. **Resolve identity** — Check Dev-Team, pick session Dev-Name/Dev-Avatar (see Agent Identity)
 3. **Load context** — Check for and read `Docs/implementation-plan.md` (or similar planning documents) for current state and context. If no such file exists, proceed without it.
 
+### Discord Watcher (Channels)
+
+If the session was started with `--channels` (or `--dangerously-load-development-channels`), a Discord watcher channel server pushes notifications when new messages arrive in any Oak and Wave text channel.
+
+**When you receive a `<channel source="discord_watcher">` notification:**
+
+1. Run `discord-bot read <channel_id> --limit 10` to get the full messages
+2. If a message is addressed to your team (`@<Dev-Team>` or `@all`), process it and respond via `discord-bot send`
+3. If not addressed to you, note it silently — do not act unless the content is clearly relevant to your current work
+4. Ignore messages from `CC Developer` (the bot itself) to avoid echo loops
+
+**Message addressing convention:**
+
+| Pattern | Meaning |
+|---------|---------|
+| `@<Dev-Team>` (e.g., `@cc-workflow`) | Addressed to a specific agent/project |
+| `@all` | Addressed to all listening agents |
+| No `@` prefix | Informational — read but do not act unless relevant |
+| Human Discord user message | Treat as a request from the user |
+
 ---
 
 ## MANDATORY: Post-Compaction Rules Confirmation
