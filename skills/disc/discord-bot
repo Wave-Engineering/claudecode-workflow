@@ -1,0 +1,327 @@
+#!/usr/bin/env bash
+# discord-bot — Discord REST API client for Claude Code agents
+#
+# Usage:
+#   discord-bot send <channel-id> <message> [--embed title:text]
+#   discord-bot read <channel-id> [--limit N] [--after ID]
+#   discord-bot create-channel <guild-id> <name> [--topic TOPIC] [--category ID]
+#   discord-bot list-channels <guild-id> [--type text|voice|category]
+#   discord-bot resolve <guild-id> <channel-name>
+#
+# Environment:
+#   DISCORD_BOT_TOKEN   Bot token (fallback: ~/secrets/discord-bot-token)
+
+set -euo pipefail
+
+API_BASE="https://discord.com/api/v10"
+
+# --- Usage --------------------------------------------------------------------
+usage() {
+	sed -n '2,/^[^#]/{ /^#/s/^# \?//p; }' "$0"
+	exit 1
+}
+
+# --- Deps check ---------------------------------------------------------------
+for cmd in curl jq; do
+	command -v "$cmd" &>/dev/null || {
+		echo "Error: '$cmd' is required but not found. Install it and try again." >&2
+		exit 1
+	}
+done
+
+# --- Auth ---------------------------------------------------------------------
+if [[ -z "${DISCORD_BOT_TOKEN:-}" ]]; then
+	TOKEN_FILE="$HOME/secrets/discord-bot-token"
+	[[ -f "$TOKEN_FILE" ]] || {
+		echo "Error: DISCORD_BOT_TOKEN not set and $TOKEN_FILE not found. Save your bot token there." >&2
+		exit 1
+	}
+	DISCORD_BOT_TOKEN=$(tr -d '\r' <"$TOKEN_FILE")
+fi
+
+# Auth header passed via --config to keep token out of /proc/*/cmdline
+_curl_auth_cfg="header = \"Authorization: Bot $DISCORD_BOT_TOKEN\""
+
+# --- Helpers ------------------------------------------------------------------
+api_get() {
+	local endpoint="$1"
+	local http_code body
+	body=$(curl -sS -w '\n%{http_code}' \
+		--config <(echo "$_curl_auth_cfg") \
+		"$API_BASE$endpoint")
+	http_code=$(tail -1 <<<"$body")
+	body=$(sed '$d' <<<"$body")
+	if [[ "$http_code" -ge 400 ]]; then
+		echo "Error: Discord API returned HTTP $http_code on GET $endpoint" >&2
+		[[ -n "$body" ]] && echo "$body" | jq -r '.message // empty' 2>/dev/null >&2
+		return 1
+	fi
+	echo "$body"
+}
+
+api_post() {
+	local endpoint="$1" payload="$2"
+	local http_code body
+	body=$(curl -sS -w '\n%{http_code}' -X POST \
+		--config <(printf '%s\n%s' "$_curl_auth_cfg" 'header = "Content-Type: application/json"') \
+		--data @- "$API_BASE$endpoint" <<<"$payload")
+	http_code=$(tail -1 <<<"$body")
+	body=$(sed '$d' <<<"$body")
+	if [[ "$http_code" -ge 400 ]]; then
+		echo "Error: Discord API returned HTTP $http_code on POST $endpoint" >&2
+		[[ -n "$body" ]] && echo "$body" | jq -r '.message // empty' 2>/dev/null >&2
+		return 1
+	fi
+	echo "$body"
+}
+
+# --- Subcommand: send ---------------------------------------------------------
+cmd_send() {
+	local channel_id="" message="" embed_title="" embed_text=""
+
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--embed)
+			[[ -z "${2:-}" ]] && {
+				echo "Error: --embed requires title:text argument." >&2
+				exit 1
+			}
+			embed_title="${2%%:*}"
+			embed_text="${2#*:}"
+			shift 2
+			;;
+		*)
+			if [[ -z "$channel_id" ]]; then
+				channel_id="$1"
+			elif [[ -z "$message" ]]; then
+				message="$1"
+			else
+				echo "Error: unexpected argument '$1'." >&2
+				exit 1
+			fi
+			shift
+			;;
+		esac
+	done
+
+	[[ -z "$channel_id" || -z "$message" ]] && {
+		echo "Error: send requires <channel-id> and <message>. Usage: discord-bot send <channel-id> <message>" >&2
+		exit 1
+	}
+
+	local payload
+	if [[ -n "$embed_title" ]]; then
+		payload=$(jq -n \
+			--arg content "$message" \
+			--arg title "$embed_title" \
+			--arg desc "$embed_text" \
+			'{content: $content, embeds: [{title: $title, description: $desc}]}')
+	else
+		payload=$(jq -n --arg content "$message" '{content: $content}')
+	fi
+
+	local response
+	response=$(api_post "/channels/$channel_id/messages" "$payload")
+	jq -r '.id' <<<"$response"
+}
+
+# --- Subcommand: read ---------------------------------------------------------
+cmd_read() {
+	local channel_id="" limit=20 after=""
+
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--limit)
+			[[ -z "${2:-}" ]] && {
+				echo "Error: --limit requires a value." >&2
+				exit 1
+			}
+			limit="$2"
+			shift 2
+			;;
+		--after)
+			[[ -z "${2:-}" ]] && {
+				echo "Error: --after requires a value." >&2
+				exit 1
+			}
+			after="$2"
+			shift 2
+			;;
+		*)
+			if [[ -z "$channel_id" ]]; then
+				channel_id="$1"
+			else
+				echo "Error: unexpected argument '$1'." >&2
+				exit 1
+			fi
+			shift
+			;;
+		esac
+	done
+
+	[[ -z "$channel_id" ]] && {
+		echo "Error: read requires <channel-id>. Usage: discord-bot read <channel-id> [--limit N] [--after ID]" >&2
+		exit 1
+	}
+
+	local query="?limit=$limit"
+	[[ -n "$after" ]] && query="${query}&after=$after"
+
+	local response
+	response=$(api_get "/channels/$channel_id/messages$query")
+
+	# Format: reverse to chronological order, then print each message
+	jq -r 'reverse | .[] | "[" + .timestamp + "] " + .author.username + ": " + .content' <<<"$response"
+}
+
+# --- Subcommand: create-channel -----------------------------------------------
+cmd_create_channel() {
+	local guild_id="" name="" topic="" category=""
+
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--topic)
+			[[ -z "${2:-}" ]] && {
+				echo "Error: --topic requires a value." >&2
+				exit 1
+			}
+			topic="$2"
+			shift 2
+			;;
+		--category)
+			[[ -z "${2:-}" ]] && {
+				echo "Error: --category requires a value." >&2
+				exit 1
+			}
+			category="$2"
+			shift 2
+			;;
+		*)
+			if [[ -z "$guild_id" ]]; then
+				guild_id="$1"
+			elif [[ -z "$name" ]]; then
+				# Strip leading # if present
+				name="${1#\#}"
+			else
+				echo "Error: unexpected argument '$1'." >&2
+				exit 1
+			fi
+			shift
+			;;
+		esac
+	done
+
+	[[ -z "$guild_id" || -z "$name" ]] && {
+		echo "Error: create-channel requires <guild-id> and <name>. Usage: discord-bot create-channel <guild-id> <name> [--topic TOPIC]" >&2
+		exit 1
+	}
+
+	local payload
+	payload=$(jq -n --arg name "$name" '{name: $name, type: 0}')
+	[[ -n "$topic" ]] && payload=$(jq --arg t "$topic" '. + {topic: $t}' <<<"$payload")
+	[[ -n "$category" ]] && payload=$(jq --arg c "$category" '. + {parent_id: $c}' <<<"$payload")
+
+	local response
+	response=$(api_post "/guilds/$guild_id/channels" "$payload")
+
+	local ch_name ch_id
+	ch_name=$(jq -r '.name' <<<"$response")
+	ch_id=$(jq -r '.id' <<<"$response")
+	echo "#$ch_name ($ch_id)"
+}
+
+# --- Subcommand: list-channels ------------------------------------------------
+cmd_list_channels() {
+	local guild_id="" filter_type=""
+
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--type)
+			case "${2:-}" in
+			text) filter_type="0" ;;
+			voice) filter_type="2" ;;
+			category) filter_type="4" ;;
+			*)
+				echo "Error: --type must be text, voice, or category." >&2
+				exit 1
+				;;
+			esac
+			shift 2
+			;;
+		*)
+			if [[ -z "$guild_id" ]]; then
+				guild_id="$1"
+			else
+				echo "Error: unexpected argument '$1'." >&2
+				exit 1
+			fi
+			shift
+			;;
+		esac
+	done
+
+	[[ -z "$guild_id" ]] && {
+		echo "Error: list-channels requires <guild-id>. Usage: discord-bot list-channels <guild-id> [--type text|voice|category]" >&2
+		exit 1
+	}
+
+	local response
+	response=$(api_get "/guilds/$guild_id/channels")
+
+	if [[ -n "$filter_type" ]]; then
+		jq -r --arg t "$filter_type" '.[] | select(.type == ($t | tonumber)) | "#" + .name + " (" + .id + ")"' <<<"$response"
+	else
+		jq -r '.[] | "#" + .name + " (" + .id + ") [type:" + (.type | tostring) + "]"' <<<"$response"
+	fi
+}
+
+# --- Subcommand: resolve ------------------------------------------------------
+cmd_resolve() {
+	local guild_id="" channel_name=""
+
+	[[ $# -ge 2 ]] || {
+		echo "Error: resolve requires <guild-id> and <channel-name>. Usage: discord-bot resolve <guild-id> <channel-name>" >&2
+		exit 1
+	}
+
+	guild_id="$1"
+	# Strip leading # if present, lowercase
+	channel_name="${2#\#}"
+	channel_name=$(echo "$channel_name" | tr '[:upper:]' '[:lower:]')
+
+	local response
+	response=$(api_get "/guilds/$guild_id/channels")
+
+	local match
+	match=$(jq -r --arg name "$channel_name" '.[] | select(.type == 0) | select((.name | ascii_downcase) == $name) | .id' <<<"$response")
+
+	if [[ -z "$match" ]]; then
+		echo "Error: channel '#$channel_name' not found in guild $guild_id. Run 'discord-bot list-channels $guild_id --type text' to see available channels." >&2
+		exit 1
+	fi
+
+	local count
+	count=$(grep -c . <<<"$match")
+	if [[ "$count" -gt 1 ]]; then
+		echo "Error: multiple channels match '#$channel_name'. Use a channel ID instead." >&2
+		exit 1
+	fi
+
+	echo "$match"
+}
+
+# --- Dispatch -----------------------------------------------------------------
+[[ $# -lt 1 ]] && usage
+
+case "$1" in
+send) shift && cmd_send "$@" ;;
+read) shift && cmd_read "$@" ;;
+create-channel) shift && cmd_create_channel "$@" ;;
+list-channels) shift && cmd_list_channels "$@" ;;
+resolve) shift && cmd_resolve "$@" ;;
+--help | -h) usage ;;
+*)
+	echo "Error: unknown subcommand '$1'. Run 'discord-bot --help' for usage." >&2
+	exit 1
+	;;
+esac
