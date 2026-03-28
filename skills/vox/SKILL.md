@@ -30,6 +30,7 @@ vox "Hey BJ, tests are green and the PR is ready for review"
 Options:
 - `--voice NAME` — pick a voice (default: Taylor.wav)
 - `--bg` — background playback so it doesn't block your work
+- `--output FILE` / `-o FILE` — write audio to a file instead of playing it (useful for attachments)
 - `--list-voices` — show available voices
 
 ## Tone

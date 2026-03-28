@@ -5,6 +5,7 @@
 #   vox "Hey BJ, deployment is done"
 #   echo "Build failed on line 42" | vox
 #   vox --voice Jade "Tests are passing"
+#   vox --output /tmp/memo.wav "Voice memo for Discord"
 #   vox --list-voices
 #
 # TTS backend resolution (first match wins):
@@ -40,6 +41,7 @@ usage() {
 		  --voice NAME    Voice to use (default: \$VOX_VOICE or ${DEFAULT_VOICE})
 		  --list-voices   List available voices from the TTS endpoint
 		  --bg            Background playback (don't wait for audio to finish)
+		  --output FILE   Write audio to FILE instead of playing (-o for short)
 		  -h, --help      Show this help
 
 		Message can be passed as arguments or piped via stdin.
@@ -51,6 +53,7 @@ usage() {
 
 VOICE="${VOX_VOICE:-$DEFAULT_VOICE}"
 BACKGROUND=false
+OUTPUT_FILE=""
 
 args=()
 while [[ $# -gt 0 ]]; do
@@ -84,6 +87,14 @@ while [[ $# -gt 0 ]]; do
 	--bg)
 		BACKGROUND=true
 		shift
+		;;
+	--output | -o)
+		OUTPUT_FILE="${2:-}"
+		[[ -z "$OUTPUT_FILE" ]] && {
+			echo "Error: --output requires a file path" >&2
+			exit 1
+		}
+		shift 2
 		;;
 	-h | --help)
 		usage
@@ -139,7 +150,9 @@ detect_player() {
 # --- Backend 1: VOX_COMMAND ---------------------------------------------------
 
 if [[ -n "${VOX_COMMAND:-}" ]]; then
-	if $BACKGROUND; then
+	if [[ -n "$OUTPUT_FILE" ]]; then
+		echo "$TEXT" | bash -c "$VOX_COMMAND" >"$OUTPUT_FILE"
+	elif $BACKGROUND; then
 		echo "$TEXT" | bash -c "$VOX_COMMAND" &>/dev/null &
 		disown
 	else
@@ -164,12 +177,6 @@ fi
 if [[ -n "$endpoint" ]]; then
 	if ! command -v curl &>/dev/null; then
 		echo "Error: curl required for HTTP TTS endpoint" >&2
-		exit 1
-	fi
-
-	PLAYER=$(detect_player)
-	if [[ -z "$PLAYER" ]]; then
-		echo "Error: no audio player found (need aplay, paplay, afplay, or ffplay)" >&2
 		exit 1
 	fi
 
@@ -218,6 +225,17 @@ if [[ -n "$endpoint" ]]; then
 		exit 1
 	fi
 
+	if [[ -n "$OUTPUT_FILE" ]]; then
+		cp "$tmpfile" "$OUTPUT_FILE"
+		exit 0
+	fi
+
+	PLAYER=$(detect_player)
+	if [[ -z "$PLAYER" ]]; then
+		echo "Error: no audio player found (need aplay, paplay, afplay, or ffplay)" >&2
+		exit 1
+	fi
+
 	if $BACKGROUND; then
 		# Detach playback — copy tmpfile since trap will clean it up
 		bgfile="$(mktemp --suffix=.wav)"
@@ -238,7 +256,9 @@ fi
 # --- Backend 3: Local fallback ------------------------------------------------
 
 if command -v espeak &>/dev/null; then
-	if $BACKGROUND; then
+	if [[ -n "$OUTPUT_FILE" ]]; then
+		espeak --stdout "$TEXT" >"$OUTPUT_FILE"
+	elif $BACKGROUND; then
 		espeak "$TEXT" &>/dev/null &
 		disown
 	else
@@ -248,7 +268,9 @@ if command -v espeak &>/dev/null; then
 fi
 
 if command -v espeak-ng &>/dev/null; then
-	if $BACKGROUND; then
+	if [[ -n "$OUTPUT_FILE" ]]; then
+		espeak-ng --stdout "$TEXT" >"$OUTPUT_FILE"
+	elif $BACKGROUND; then
 		espeak-ng "$TEXT" &>/dev/null &
 		disown
 	else
@@ -258,6 +280,10 @@ if command -v espeak-ng &>/dev/null; then
 fi
 
 if command -v piper &>/dev/null; then
+	if [[ -n "$OUTPUT_FILE" ]]; then
+		echo "$TEXT" | piper --output-file "$OUTPUT_FILE"
+		exit 0
+	fi
 	PLAYER=$(detect_player)
 	if [[ -n "$PLAYER" ]]; then
 		if $BACKGROUND; then
@@ -273,7 +299,9 @@ if command -v piper &>/dev/null; then
 fi
 
 if [[ "$(uname -s)" == "Darwin" ]] && command -v say &>/dev/null; then
-	if $BACKGROUND; then
+	if [[ -n "$OUTPUT_FILE" ]]; then
+		say -o "$OUTPUT_FILE" "$TEXT"
+	elif $BACKGROUND; then
 		say "$TEXT" &
 		disown
 	else
