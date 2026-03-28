@@ -8,6 +8,7 @@
 
 import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
 import type { DiscordMessage, DiscordAttachment } from "./index";
+import { stripTokenPunctuation } from "./index";
 
 // We need to mock fetch and fs before importing the module under test.
 // Bun's mock system lets us intercept global fetch.
@@ -439,6 +440,30 @@ describe("thread polling structure", () => {
     const matches = src.match(echoPattern);
     // Should appear at least twice: once in channel loop, once in thread loop
     expect(matches!.length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("@-addressing matches when followed by punctuation", async () => {
+    // The watcher tokenizes on whitespace then strips non-routing chars.
+    // "@echo-chamber," should match dev_name "echo-chamber".
+    const tokens = "@echo-chamber, hello @all. @cc-workflow:"
+      .toLowerCase()
+      .split(/\s+/)
+      .map(stripTokenPunctuation);
+
+    expect(tokens).toContain("@echo-chamber");
+    expect(tokens).toContain("@all");
+    expect(tokens).toContain("@cc-workflow");
+  });
+
+  test("@-addressing matches clean tokens without punctuation", async () => {
+    const tokens = "@echo-chamber hello @all @cc-workflow"
+      .toLowerCase()
+      .split(/\s+/)
+      .map(stripTokenPunctuation);
+
+    expect(tokens).toContain("@echo-chamber");
+    expect(tokens).toContain("@all");
+    expect(tokens).toContain("@cc-workflow");
   });
 
   test("thread messages include audio transcription", async () => {
