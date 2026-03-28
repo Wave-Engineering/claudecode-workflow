@@ -536,9 +536,9 @@ If the session was started with `--channels` (or `--dangerously-load-development
 **When you receive a `<channel source="discord_watcher">` notification:**
 
 1. Run `discord-bot read <channel_id> --limit 10` to get the full messages
-2. If a message is addressed to your team (`@<Dev-Team>` or `@all`), process it and respond via `discord-bot send`
+2. If a message is addressed to you (`@<dev-team>`, `@<dev-name>`, or `@all`), process it and respond via `discord-bot send`
 3. If not addressed to you, note it silently — do not act unless the content is clearly relevant to your current work
-4. Ignore messages that contain your own signature (e.g., `— **Beacon**`) to avoid echo loops — other agents' messages (also from `CC Developer`) should be processed normally
+4. Ignore messages that contain your own signature (e.g., `— **beacon**`) to avoid echo loops — other agents' messages (also from `CC Developer`) should be processed normally
 
 **Discord message format — sign every message:**
 
@@ -548,7 +548,7 @@ Your message content here.
 — **<Dev-Name>** <Dev-Avatar> (<Dev-Team>)
 ```
 
-Example: `— **Beacon** :satellite: (cc-workflow)`
+Example: `— **beacon** :satellite: (cc-workflow)`
 
 The signature is used by the watcher to filter your own echoes. Messages without your signature will echo back to you.
 
@@ -556,10 +556,13 @@ The signature is used by the watcher to filter your own echoes. Messages without
 
 | Pattern | Meaning |
 |---------|---------|
-| `@<Dev-Team>` (e.g., `@cc-workflow`) | Addressed to a specific agent/project |
+| `@<dev-team>` (e.g., `@cc-workflow`) | Addressed to a specific agent/project |
+| `@<dev-name>` (e.g., `@beacon`) | Addressed to a specific agent by session name |
 | `@all` | Addressed to all listening agents |
-| No `@` prefix | Informational — read but do not act unless relevant |
-| Human Discord user message | Treat as a request from the user |
+| No `@` prefix | Dropped by the watcher — agents do not receive unaddressed messages |
+| Human Discord user message | Must include `@` addressing to reach agents |
+
+The watcher pre-filters messages: only `@all`, `@<dev-team>`, and `@<dev-name>` notifications are delivered. Set `DISCORD_WATCHER_VERBOSE=1` to bypass filtering and receive all messages.
 
 ---
 
@@ -595,7 +598,7 @@ Agent identity has two layers: **project identity** (persisted here) and **sessi
 Each session, pick a fresh identity for yourself. This is NOT persisted — a new Claude Code window means a new identity.
 
 **Naming rules:**
-- `Dev-Name`: A single memorable name or short phrase (max 3 words). Draw from nerdcore canon — sci-fi, fantasy, comics, gaming, mythology, tech puns, wordplay. The wittier and more specific the reference, the better. Generic names are boring.
+- `Dev-Name`: A single memorable word or hyphenated phrase in **kebab-case** (e.g., `beacon`, `null-pointer`, `mother`). Draw from nerdcore canon — sci-fi, fantasy, comics, gaming, mythology, tech puns, wordplay. The wittier and more specific the reference, the better. Generic names are boring. Kebab-case is required so the name works as a routing key for `@<dev-name>` addressing.
 - `Dev-Avatar`: A Slack emoji string with colons (e.g., `:smiling_imp:`, `:space_invader:`). Should feel like it belongs with the name.
 
 **On session start**, after resolving Dev-Team:

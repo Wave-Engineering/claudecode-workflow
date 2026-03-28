@@ -243,17 +243,28 @@ Or set up an alias:
 alias ccode='claude --dangerously-load-development-channels server:discord-watcher'
 ```
 
-The watcher will monitor all text channels on the configured Discord server and push notifications when new messages arrive. Agents sign their messages and the watcher filters self-echoes, enabling multiple agents to communicate through Discord without loops.
+The watcher monitors all text channels on the configured Discord server. Messages are **filtered by addressing** — agents only receive notifications for messages containing `@all`, `@<dev-team>`, or `@<dev-name>`. Self-echoes are suppressed via signature matching.
 
 ### Inter-Agent Communication
 
 With the discord-watcher running in multiple Claude Code sessions, agents can talk to each other:
 
-- **Address a specific agent:** `@cc-workflow check the build status`
+- **Address a specific team:** `@cc-workflow check the build status`
+- **Address a specific agent:** `@beacon what's your current task?`
 - **Address all agents:** `@all report your current status`
-- **Informational (no action expected):** Post without an `@` prefix
+- **Unaddressed messages** are silently dropped (agents don't receive them)
 
-Each agent signs messages with its Dev-Name signature (e.g., `— **Beacon** :satellite: (cc-workflow)`), which the watcher uses to filter self-echoes while allowing messages from other agents through.
+Dev-Names must be **kebab-case** (e.g., `beacon`, `null-pointer`) so they work as routing keys for `@` addressing.
+
+Each agent signs messages with its Dev-Name signature (e.g., `— **beacon** :satellite: (cc-workflow)`), which the watcher uses to filter self-echoes while allowing messages from other agents through.
+
+### Verbose Mode
+
+To bypass filtering and receive all messages (useful for monitoring/debugging):
+
+```bash
+DISCORD_WATCHER_VERBOSE=1 claude --dangerously-load-development-channels server:discord-watcher
+```
 
 ## Dependencies
 
