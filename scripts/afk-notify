@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# afk-notify — Stop hook that relays agent output to Discord when the desktop is locked
+#
+# Receives the Stop hook JSON payload on stdin. When the user's desktop is
+# locked (AFK), it summarizes the last assistant message via Haiku, renders
+# a voice memo with vox, and posts both to a per-session Discord thread in
+# #remote-sessions.
+#
+# Usage (as a Claude Code Stop hook):
+#   Configured in settings.json hooks.Stop — receives JSON on stdin.
+#
+# Exit codes:
+#   0  Always (best-effort — never blocks the Stop event)
+
+set -euo pipefail
+
+# 1. Read JSON from stdin
+input=$(cat)
+
+# 2. Loop guard — exit if this is a continuation from a prior Stop hook
+stop_active=$(echo "$input" | jq -r '.stop_hook_active // false')
+if [[ "$stop_active" == "true" ]]; then
+	exit 0
+fi
+
+# 3. Check desktop lock state
+session_id=$(loginctl | grep "$USER" | awk '{print $1}' | head -1)
+if [[ -z "$session_id" ]]; then
+	exit 0 # no session found, can't check lock state
+fi
+locked=$(loginctl show-session "$session_id" -p LockedHint --value 2>/dev/null || echo "no")
+if [[ "$locked" != "yes" ]]; then
+	exit 0 # user is at keyboard
+fi
+
+# 4. Resolve agent identity
+cwd=$(echo "$input" | jq -r '.cwd // empty')
+if [[ -z "$cwd" ]]; then
+	exit 0
+fi
+project_root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || echo "$cwd")
+dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+agent_file="/tmp/claude-agent-${dir_hash}.json"
+
+if [[ ! -f "$agent_file" ]]; then
+	exit 0 # no agent identity — can't create thread
+fi
+
+dev_name=$(jq -r '.dev_name // "agent"' "$agent_file")
+dev_team=$(jq -r '.dev_team // "unknown"' "$agent_file")
+dev_avatar=$(jq -r '.dev_avatar // ":robot_face:"' "$agent_file")
+
+# 5. Resolve or create Discord thread
+REMOTE_SESSIONS_CHANNEL="1487462945972682763"
+
+thread_id=$(jq -r '.thread_id // empty' "$agent_file")
+if [[ -z "$thread_id" ]]; then
+	# Create new thread
+	thread_output=$(discord-bot create-thread "$REMOTE_SESSIONS_CHANNEL" "${dev_name} — ${dev_team}")
+	thread_id=$(echo "$thread_output" | grep -oP '\(\K[0-9]+(?=\))')
+	# Write thread_id back to identity file
+	tmp=$(mktemp)
+	jq --arg tid "$thread_id" '. + {thread_id: $tid}' "$agent_file" >"$tmp" && mv "$tmp" "$agent_file"
+fi
+
+# 6. Summarize via Haiku
+last_msg=$(echo "$input" | jq -r '.last_assistant_message // empty')
+if [[ -z "$last_msg" ]]; then
+	exit 0
+fi
+
+summary=$(echo "$last_msg" | claude -p --model haiku \
+	"Summarize this agent output in 2-3 sentences for a Discord notification to the user. Be concise and conversational. Do not include code blocks or technical formatting — plain text only." 2>/dev/null) || {
+	# Haiku unavailable — use first 200 chars as fallback
+	summary="${last_msg:0:200}"
+	[[ ${#last_msg} -gt 200 ]] && summary="${summary}..."
+}
+
+# 7. Render voice memo (best-effort)
+memo_file="/tmp/afk-memo-${dir_hash}.wav"
+vox --output "$memo_file" "$summary" 2>/dev/null || memo_file=""
+
+# 8. Post to Discord thread
+signed_summary="${summary}
+
+— **${dev_name}** ${dev_avatar} (${dev_team})"
+
+if [[ -n "$memo_file" && -f "$memo_file" ]]; then
+	discord-bot send "$thread_id" "$signed_summary" --attach "$memo_file" 2>/dev/null ||
+		discord-bot send "$thread_id" "$signed_summary" 2>/dev/null || true
+	rm -f "$memo_file"
+else
+	discord-bot send "$thread_id" "$signed_summary" 2>/dev/null || true
+fi
