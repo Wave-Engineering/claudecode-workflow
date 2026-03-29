@@ -11,7 +11,7 @@
 # TTS backend resolution (first match wins):
 #   1. VOX_COMMAND env var   — custom command that accepts text on stdin
 #   2. VOX_ENDPOINT env var  — HTTP endpoint (OpenAI-compatible TTS API)
-#   3. Local fallback        — espeak / piper / say (macOS)
+#   3. Local fallback        — espeak / espeak-ng / piper / say (macOS)
 #
 # Environment:
 #   VOX_COMMAND    Custom TTS command (text on stdin, audio on stdout)
@@ -41,7 +41,7 @@ usage() {
 		  --voice NAME    Voice to use (default: \$VOX_VOICE or ${DEFAULT_VOICE})
 		  --list-voices   List available voices from the TTS endpoint
 		  --bg            Background playback (don't wait for audio to finish)
-		  --output FILE   Write audio to FILE instead of playing (-o for short)
+		  --output, -o FILE  Write audio to FILE instead of playing
 		  -h, --help      Show this help
 
 		Message can be passed as arguments or piped via stdin.
@@ -343,5 +343,5 @@ fi
 # --- No backend available -----------------------------------------------------
 
 echo "Error: no TTS backend available." >&2
-echo "Set VOX_ENDPOINT or VOX_COMMAND, or install espeak/piper/say." >&2
+echo "Set VOX_ENDPOINT or VOX_COMMAND, or install espeak/espeak-ng/piper/say." >&2
 exit 1
