@@ -431,7 +431,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--state-dir",
         default=None,
-        help="Path to status directory (default: <git-root>/.claude/status/)",
+        help=(
+            "Path to status directory containing state.json, phases-waves.json, "
+            "and flights.json (default: discovered via "
+            "'git rev-parse --show-toplevel', then <repo>/.claude/status/)"
+        ),
     )
     parser.add_argument(
         "--dev-team",
@@ -454,6 +458,10 @@ def main() -> None:
 
     # Verify state.json exists — exit cleanly if not
     if not (state_dir / "state.json").exists():
+        print(
+            f"discord-status-post: {state_dir / 'state.json'} not found, nothing to post",
+            file=sys.stderr,
+        )
         sys.exit(0)
 
     # Resolve dev-team
