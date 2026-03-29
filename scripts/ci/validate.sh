@@ -4,8 +4,18 @@
 # Checks:
 #   1. shellcheck on all shell scripts
 #   2. shfmt formatting check on all shell scripts
-#   3. Python syntax check (py_compile) on src/ files
+#   3. Python syntax check (py_compile) on Python files in src/ and scripts/
 #   4. SKILL.md frontmatter validation (name + description present)
+#
+# File discovery:
+#   Shell scripts are identified by .sh extension or #!/…sh shebang.
+#   Python files are identified by .py extension or #!/…python shebang.
+#
+#   Note: the shellcheck pass scans executable files in scripts/ (excluding
+#   ci/) plus *.sh files in ci/, while shfmt scans all executable-or-*.sh
+#   files in scripts/ (including ci/). Both scan skill helpers and config/.
+#   The slight asymmetry means a non-.sh executable in ci/ is checked by
+#   shfmt but not by the shellcheck pass.
 
 set -euo pipefail
 
