@@ -237,6 +237,17 @@ if [[ "$CHECK_MODE" == true ]]; then
 			total=$((total + 1))
 			do_check "$helper" "$SCRIPTS_DIR/$helper_name" "$skill_name/$helper_name" || drifted=$((drifted + 1))
 		done
+		# Check content subdirectories (e.g., tours/)
+		for subdir in "$skill_dir"*/; do
+			[[ -d "$subdir" ]] || continue
+			subdir_name="$(basename "$subdir")"
+			for content_file in "$subdir"*; do
+				[[ -f "$content_file" ]] || continue
+				content_name="$(basename "$content_file")"
+				total=$((total + 1))
+				do_check "$content_file" "$SKILLS_DIR/$skill_name/$subdir_name/$content_name" "$skill_name/$subdir_name/$content_name" || drifted=$((drifted + 1))
+			done
+		done
 	done
 
 	echo ""
@@ -358,6 +369,16 @@ if [[ "$INSTALL_SKILLS" == true ]]; then
 			if [[ "$DRY_RUN" != true ]]; then
 				chmod +x "$SCRIPTS_DIR/$helper_name"
 			fi
+		done
+		# Install content subdirectories (e.g., tours/) into the skill dir
+		for subdir in "$skill_dir"*/; do
+			[[ -d "$subdir" ]] || continue
+			subdir_name="$(basename "$subdir")"
+			for content_file in "$subdir"*; do
+				[[ -f "$content_file" ]] || continue
+				content_name="$(basename "$content_file")"
+				do_copy "$content_file" "$SKILLS_DIR/$skill_name/$subdir_name/$content_name"
+			done
 		done
 	done
 fi

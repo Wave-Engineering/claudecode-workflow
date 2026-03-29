@@ -34,6 +34,7 @@ Key features:
 |-------|---------|-------------|
 | assesswaves | `/assesswaves` | Quick assessment of wave-pattern suitability |
 | ccfold | `/ccfold` | Merge upstream CLAUDE.md template updates into local project |
+| ccwork | `/ccwork` | Onboarding hub — tour the kit, run labs, configure integrations |
 | cryo | `/cryo` | Preserve session state before context compaction |
 | disc | `/disc` | Discord integration — check-in, send, read, list, resolve channels |
 | edit | `/edit` | Open file/URL in GUI editor |
