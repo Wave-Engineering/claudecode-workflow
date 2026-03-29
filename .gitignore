@@ -26,6 +26,7 @@ __pycache__/
 node_modules/
 bun.lock
 .install-stamp
+.buildinfo
 
 # Build output
 dist/
