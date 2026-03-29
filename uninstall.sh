@@ -1,14 +1,27 @@
 #!/usr/bin/env bash
 # uninstall.sh — Remove Claude Code workflow environment
 #
-# Removes skills and scripts installed by install.sh.
+# Removes skills, scripts, config, and channel servers installed by install.sh.
 # Does NOT remove settings.json or credentials.
 #
 # Usage:
-#   ./uninstall.sh              Remove everything
+#   ./uninstall.sh              Remove everything (skills, scripts, config, channels)
 #   ./uninstall.sh --dry-run    Show what would be removed without doing it
 #   ./uninstall.sh --skills     Remove skills only
-#   ./uninstall.sh --scripts    Remove scripts only
+#   ./uninstall.sh --scripts    Remove scripts and packages only
+#   ./uninstall.sh --config     Remove config files only (statusline-command.sh)
+#   ./uninstall.sh --channels   Remove MCP server registrations only
+#
+# What full uninstall removes:
+#   Skills      → ~/.claude/skills/<name>/
+#   Scripts     → ~/.local/bin/<name>
+#   Packages    → ~/.local/bin/<name> (built artifacts)
+#   Config      → ~/.claude/statusline-command.sh
+#   Channels    → MCP server registrations (claude mcp remove)
+#
+# What full uninstall preserves:
+#   Settings    → ~/.claude/settings.json (user-customized)
+#   Credentials → ~/secrets/ (not managed by install.sh)
 
 set -euo pipefail
 
@@ -20,6 +33,7 @@ DRY_RUN=false
 REMOVE_SKILLS=true
 REMOVE_SCRIPTS=true
 REMOVE_CONFIG=true
+REMOVE_CHANNELS=true
 
 # --- Parse args ---------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -31,10 +45,24 @@ while [[ $# -gt 0 ]]; do
 	--skills)
 		REMOVE_SCRIPTS=false
 		REMOVE_CONFIG=false
+		REMOVE_CHANNELS=false
 		shift
 		;;
 	--scripts)
 		REMOVE_SKILLS=false
+		REMOVE_CONFIG=false
+		REMOVE_CHANNELS=false
+		shift
+		;;
+	--config)
+		REMOVE_SKILLS=false
+		REMOVE_SCRIPTS=false
+		REMOVE_CHANNELS=false
+		shift
+		;;
+	--channels)
+		REMOVE_SKILLS=false
+		REMOVE_SCRIPTS=false
 		REMOVE_CONFIG=false
 		shift
 		;;
@@ -121,6 +149,35 @@ if [[ "$REMOVE_CONFIG" == true ]]; then
 		do_remove "$CLAUDE_DIR/statusline-command.sh"
 	fi
 	echo "  [-] settings.json — preserved (not managed by uninstall)"
+fi
+
+# --- Remove channel servers ---------------------------------------------------
+if [[ "$REMOVE_CHANNELS" == true ]]; then
+	echo ""
+	echo "Removing channel servers"
+	echo "──────────────────────────────────────────"
+	if command -v claude &>/dev/null; then
+		mcp_list=$(claude mcp list 2>/dev/null || true)
+		for channel_dir in "$REPO_DIR"/channels/*/; do
+			[[ -f "$channel_dir/package.json" ]] || continue
+			channel_name="$(basename "$channel_dir")"
+			if echo "$mcp_list" | grep -q "$channel_name"; then
+				if [[ "$DRY_RUN" == true ]]; then
+					echo "  [+] (dry-run) Would remove MCP server: $channel_name"
+				else
+					if claude mcp remove --scope user "$channel_name" 2>/dev/null; then
+						info "$channel_name (MCP server)"
+					else
+						echo "  [!] Failed to remove MCP server: $channel_name"
+					fi
+				fi
+			else
+				skip "$channel_name (MCP server not registered)"
+			fi
+		done
+	else
+		echo "  [!] claude CLI not found — cannot remove MCP servers"
+	fi
 fi
 
 # --- Summary ------------------------------------------------------------------
