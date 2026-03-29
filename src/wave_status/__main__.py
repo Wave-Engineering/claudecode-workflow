@@ -206,8 +206,13 @@ def _read_json_source(source: str) -> str:
 def _build_parser() -> argparse.ArgumentParser:
     """Construct the argparse parser with all 14 subcommands."""
     parser = argparse.ArgumentParser(
-        prog="wave_status",
+        prog="wave-status",
         description="Wave execution lifecycle CLI",
+        epilog=(
+            "Side effects: the 'flight-done' and 'complete' subcommands "
+            "trigger a best-effort call to discord-status-post to update "
+            "the Discord status embed."
+        ),
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -266,7 +271,8 @@ def _build_parser() -> argparse.ArgumentParser:
     # defer
     p_df = sub.add_parser("defer", help="Append a pending deferral")
     p_df.add_argument("desc", help="Description of the deferred item")
-    p_df.add_argument("risk", help="Risk level: low, medium, high")
+    p_df.add_argument("risk", choices=["low", "medium", "high"],
+                       help="Risk level: low, medium, high")
     p_df.set_defaults(func=_cmd_defer)
 
     # defer-accept

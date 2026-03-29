@@ -4,11 +4,16 @@
 Reads three JSON config files from <repo>/.claude/status/ and produces a single
 self-contained HTML file with inline CSS/JS, no external dependencies.
 
+Required input files (in --status-dir):
+    - phases-waves.json   Phase/wave/issue plan
+    - state.json          Current execution state
+    - flights.json        Flight assignments per wave
+
 Discovers the project root via `git rev-parse --show-toplevel`, so it works
 from any directory within a git repository.
 
 Usage:
-    generate-status-panel [--output .status-panel.html] [--status-dir .claude/status]
+    generate-status-panel [--output <repo>/.status-panel.html] [--status-dir <repo>/.claude/status]
 """
 
 from __future__ import annotations
@@ -530,7 +535,13 @@ def main() -> None:
     default_status_dir = project_root / ".claude" / "status"
     default_output = project_root / ".status-panel.html"
 
-    parser = argparse.ArgumentParser(description="Generate wave execution status panel")
+    parser = argparse.ArgumentParser(
+        description="Generate wave execution status panel",
+        epilog=(
+            "Required input files in --status-dir: "
+            "phases-waves.json, state.json, flights.json"
+        ),
+    )
     parser.add_argument(
         "--output",
         default=str(default_output),
