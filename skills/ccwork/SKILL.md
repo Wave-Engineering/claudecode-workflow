@@ -29,7 +29,7 @@ Determine the subcommand from the phrasing:
 | `tour workflow` | **tour-workflow** | `/ccwork tour workflow` |
 | `tour foundations` | **tour-foundations** | `/ccwork tour foundations` |
 | `lab` (alone) | **lab-list** | `/ccwork lab` |
-| `lab "<name>"` or `lab <name>` | **lab-run** | `/ccwork lab "First Workflow"` |
+| `lab "<name>"`, `lab <name>`, or `lab #N` | **lab-run** | `/ccwork lab "First Workflow"`, `/ccwork lab #3` |
 | `setup discord` | **setup-discord** | `/ccwork setup discord` |
 | `setup` (alone) | **setup-list** | `/ccwork setup` |
 
@@ -105,8 +105,8 @@ Read and execute `tours/foundations.md` using the same resolution logic as above
 Check whether the current repo is a lab repo:
 
 ```bash
-# Look for lab indicators
-ls LAB.md .github/ISSUE_TEMPLATE/lab-*.md 2>/dev/null
+# Look for lab indicators — LAB.md is the marker file
+ls LAB.md .github/ISSUE_TEMPLATE/lab-*.yml 2>/dev/null
 ```
 
 ### If in a lab repo
@@ -114,10 +114,21 @@ ls LAB.md .github/ISSUE_TEMPLATE/lab-*.md 2>/dev/null
 List available labs from issue templates:
 
 ```bash
-ls .github/ISSUE_TEMPLATE/lab-*.md 2>/dev/null
+ls .github/ISSUE_TEMPLATE/lab-*.yml 2>/dev/null
 ```
 
-Present them as a numbered list with their titles (read the first `name:` line from each template's frontmatter).
+For each template file found:
+1. Read the file and extract the `name:` field from the YAML frontmatter
+2. Check `LAB.md` for the lab's completion status (`[x]` = done, `[ ]` = not done)
+
+Present them as a numbered list:
+
+```
+Available labs:
+
+  01  Your First Workflow          [ ]
+  02  Identity and Check-In        [ ]
+```
 
 Tell the user: *"Run `/ccwork lab \"<name>\"` to start a lab exercise."*
 
@@ -137,21 +148,134 @@ Tell the user:
 
 ## Lab: Run
 
-**Trigger:** `lab "<name>"`
+**Trigger:** `lab "<name>"` or `lab #N` (where N is an existing issue number)
 
-1. **Verify lab repo** — same check as lab-list. If not a lab repo, show the fork instructions and stop.
+### Step 1: Verify lab repo
 
-2. **Find the template** — match the name against `.github/ISSUE_TEMPLATE/lab-*.md` files (case-insensitive, partial match OK):
-   ```bash
-   ls .github/ISSUE_TEMPLATE/lab-*.md 2>/dev/null
-   ```
+Same check as lab-list. If `LAB.md` does not exist, show the fork instructions and stop.
 
-3. **Create the issue** — read the template and create a GitHub issue from it:
-   ```bash
-   gh issue create --title "<lab title>" --body "$(cat <template-file>)"
-   ```
+### Step 2: Find the template
 
-4. **Guide the exercise** — read the created issue and walk the user through it step by step. Each step should be explained, then executed (or the user is prompted to execute it). This is a guided exercise, not a lecture — the user should be doing things, not just reading.
+Match the name against `.github/ISSUE_TEMPLATE/lab-*.yml` files (case-insensitive, partial match OK):
+
+```bash
+ls .github/ISSUE_TEMPLATE/lab-*.yml 2>/dev/null
+```
+
+Read each template's `name:` field to find the match. If the argument is `#N` (an issue number), read that issue directly and skip to Step 4.
+
+### Step 3: Create the issue
+
+**Skip this step if the argument was `#N`** — the issue already exists; proceed directly to Step 4.
+
+If no existing issue was referenced, create one from the template. Extract the markdown content from the template's `body` section (the `value:` field under `type: markdown`):
+
+```bash
+gh issue create --title "<lab name from template>" --body "<extracted markdown body>" --label "lab"
+```
+
+Record the created issue number for later reference.
+
+### Step 4: Parse lab metadata
+
+Read the issue body (either the newly created issue or the referenced `#N`) and extract metadata from the first lines:
+
+- **Start branch** — look for `` **Start branch:** `lab/NN-start` `` and extract the branch name
+- **Solution tag** — look for `` **Solution tag:** `lab/NN-solution` `` and extract the tag name
+- **Session replay** — look for `` **Session replay:** `labs/NN/session.jsonl` `` and extract the file path
+
+```bash
+# Read the issue body
+gh issue view <issue-number> --json body --jq '.body'
+```
+
+Parse these three values. If any are missing, warn the user and attempt to continue with what's available.
+
+### Step 5: Check out the starting branch
+
+Create a fresh working branch from the lab's start branch:
+
+```bash
+git fetch origin lab/<NN>-start
+git checkout -b feature/<issue-number>-lab-<NN> origin/lab/<NN>-start
+```
+
+This gives the user a clean working branch with the lab's starting state (planted bugs, missing features, etc.).
+
+### Step 6: Guide the exercise
+
+Read the issue body and parse the **Steps** section. Each step has three parts:
+
+- **Do:** — what the user should do (explain it, then let them do it or help them)
+- **Verify:** — a concrete check to run (execute it to confirm the step is complete)
+- **Learn:** — the concept this step teaches (explain it briefly after verification)
+
+Walk through each step sequentially:
+
+1. **Announce the step** — show the step number, title, and the "Do" instruction
+2. **Coach, don't lecture** — the user does the work. Offer guidance if they ask, but don't just do it for them. If they're stuck, offer progressively more specific hints.
+3. **Verify completion** — run the verification command or check. If it fails, explain what went wrong and let the user try again.
+4. **Teach the concept** — after verification passes, briefly explain the "Learn" point
+5. **Advance** — move to the next step
+
+Do NOT dump the entire issue text at once. This is a guided exercise — one step at a time.
+
+### Step 7: Solution verification
+
+After all steps are complete, verify the user's work against the solution:
+
+```bash
+git diff <solution-tag> -- src/
+```
+
+Where `<solution-tag>` is the value parsed in Step 4 (e.g., `lab/01-solution`).
+
+- **If the diff is empty** (or contains only non-functional differences like whitespace): the lab passes perfectly. Congratulate the user.
+- **If differences are only in personalized values** (e.g., Lab 02 where the learner's agent identity will differ from the solution author's): explain that the diff is expected — the learner's values are correct for their session.
+- **If there are meaningful functional differences**: show the diff and explain what's different. Note that multiple valid solutions are possible — if the tests pass and the approach is sound, the difference may be acceptable.
+
+### Step 8: Check off "You Learned" items
+
+Read the "You Learned" checklist from the issue body. For each item, check it off in the issue:
+
+```bash
+# Update the issue body with checked items
+gh issue edit <issue-number> --body "<updated body with [x] items>"
+```
+
+### Step 9: Update LAB.md completion tracking
+
+Mark the lab as completed in `LAB.md`:
+
+Read `LAB.md`, find the row for this lab number, and change `[ ]` to `[x]`. Write the updated file.
+
+### Step 10: Offer Clawback replay and next lab
+
+Present the completion message:
+
+> Lab complete! Here's what you can do next:
+>
+> **Review the solution:**
+> Load `<session-replay-path>` into [Clawback](https://github.com/bakeb7j0/clawback) to watch how this lab was solved step by step.
+>
+> **Next lab:**
+> Run `/ccwork lab "<next lab name>"` to continue learning.
+
+If the user is stuck at any point during the exercise (not just at the end), also offer the replay:
+
+> *Stuck? Load `<session-replay-path>` into [Clawback](https://github.com/bakeb7j0/clawback) to see how this step was solved.*
+
+### Adding New Labs
+
+New labs are added by pushing content to the **ccwork-lab** repo — no changes to this skill are needed:
+
+1. Create `.github/ISSUE_TEMPLATE/lab-NN-name.yml` with the standard format (metadata line, steps with Do/Verify/Learn, "You Learned" checklist)
+2. Create `lab/<NN>-start` branch with the starting state
+3. Solve the exercise, tag as `lab/<NN>-solution`
+4. Place the sanitized session replay at `labs/<NN>/session.jsonl`
+5. Update `LAB.md` with the new lab entry
+
+The `/ccwork lab` handler reads templates dynamically — it will pick up new labs automatically.
 
 ---
 
