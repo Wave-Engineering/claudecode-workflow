@@ -192,7 +192,7 @@ Read [Concepts](concepts.md) to understand how the three layers (settings, scrip
 
 ### Learn the Skills
 
-The full skill reference is in the [README skills table](../README.md#skills). The most commonly used skills beyond the core workflow:
+The full skill reference is in [Skill Reference](skill-reference.md) with detailed documentation, examples, and common options for every skill. The most commonly used skills beyond the core workflow:
 
 | Skill | When to use it |
 |-------|---------------|
@@ -211,7 +211,7 @@ For large features that decompose into independent sub-issues, the wave system l
 2. `/prepwaves` -- full planning: validate sub-issue specs, compute dependency waves, partition into flights
 3. `/nextwave` -- execute one wave at a time with isolated worktrees and conflict avoidance
 
-See the [skill SKILL.md files](../skills/) for detailed documentation on each.
+See the [Skill Reference](skill-reference.md) for detailed documentation on each, or the [skill SKILL.md files](../skills/) for the raw agent prompts.
 
 ### Keep Your Install in Sync
 
@@ -248,3 +248,5 @@ This merges new sections and updates while preserving your project-specific cont
 | Restore state | `/engage` |
 | Update kit | `git pull && ./install.sh` |
 | Sync CLAUDE.md | `/ccfold` |
+| Skill reference | [docs/skill-reference.md](skill-reference.md) |
+| Troubleshooting | [docs/troubleshooting.md](troubleshooting.md) |

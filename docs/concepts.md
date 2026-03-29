@@ -263,5 +263,7 @@ If you do not want the first-run intros, ask the agent to remove them: "get rid 
 ## What's Next
 
 - **[Getting Started](getting-started.md)** -- if you have not yet done the hands-on walkthrough
+- **[Skill Reference](skill-reference.md)** -- detailed documentation for every skill with examples and common options
+- **[Troubleshooting](troubleshooting.md)** -- common failure modes and fixes for vox, watcher, install, identity, and more
 - **[README](../README.md)** -- full component reference (skills table, scripts table, installation options)
-- **[Skill files](../skills/)** -- detailed documentation for each skill (`skills/<name>/SKILL.md`)
+- **[Skill files](../skills/)** -- raw agent prompts for each skill (`skills/<name>/SKILL.md`)

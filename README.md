@@ -12,7 +12,7 @@ cd claudecode-workflow
 ./install.sh
 ```
 
-**New here?** Read the [Getting Started guide](docs/getting-started.md) for a 15-minute walkthrough of your first session, then [Concepts](docs/concepts.md) for how the pieces fit together.
+**New here?** Read the [Getting Started guide](docs/getting-started.md) for a 15-minute walkthrough of your first session, then [Concepts](docs/concepts.md) for how the pieces fit together. See the [Skill Reference](docs/skill-reference.md) for detailed documentation on every skill, and [Troubleshooting](docs/troubleshooting.md) if something is not working as expected.
 
 ## What's Included
 
