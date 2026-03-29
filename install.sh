@@ -9,14 +9,17 @@
 #   ./install.sh --dry-run    Show what would be done without doing it
 #   ./install.sh --check      Show drift between repo and installed versions
 #   ./install.sh --skills     Install skills only
-#   ./install.sh --scripts    Install scripts only
-#   ./install.sh --config     Install config files only (statusline, settings template)
+#   ./install.sh --scripts    Install scripts only (also builds packages from src/)
+#   ./install.sh --config     Install config files only (smart-merges settings.json)
 #   ./install.sh --channels   Install channel servers only (bun install + MCP registration)
 #
 # Targets:
 #   Skills     → ~/.claude/skills/<name>/SKILL.md
 #   Scripts    → ~/.local/bin/<name>
+#   Packages   → ~/.local/bin/<name> (built from src/ via scripts/ci/build.sh)
 #   Statusline → ~/.claude/statusline-command.sh
+#   Settings   → ~/.claude/settings.json (smart-merged: missing keys added, your
+#                 customizations preserved — see merge_settings() for rules)
 #   Channels   → user-scope MCP servers (claude mcp add --scope user)
 #
 # Existing files are backed up to <file>.bak before overwriting.
@@ -309,22 +312,21 @@ if [[ "$CHECK_MODE" == true ]]; then
 		echo ""
 		echo "Packages"
 		echo "──────────────────────────────────────────"
-		# Rebuild to ensure fresh comparison
-		if ! "$REPO_DIR/scripts/ci/build.sh" >/dev/null 2>&1; then
-			warn "build.sh failed — package drift check may be inaccurate"
-			drifted=$((drifted + 1))
+		if [[ ! -d "$REPO_DIR/dist" ]] || [[ -z "$(ls -A "$REPO_DIR/dist" 2>/dev/null)" ]]; then
+			warn "dist/ is empty — run 'install.sh --scripts' to build packages before checking drift"
+		else
+			for pkg_dir in "$REPO_DIR"/src/*/; do
+				[[ -f "$pkg_dir/__main__.py" ]] || continue
+				pkg_name="$(basename "$pkg_dir")"
+				artifact_name="${pkg_name//_/-}"
+				src="$REPO_DIR/dist/$artifact_name"
+				dest="$SCRIPTS_DIR/$artifact_name"
+				if [[ -f "$src" ]]; then
+					total=$((total + 1))
+					do_check "$src" "$dest" "$artifact_name" || drifted=$((drifted + 1))
+				fi
+			done
 		fi
-		for pkg_dir in "$REPO_DIR"/src/*/; do
-			[[ -f "$pkg_dir/__main__.py" ]] || continue
-			pkg_name="$(basename "$pkg_dir")"
-			artifact_name="${pkg_name//_/-}"
-			src="$REPO_DIR/dist/$artifact_name"
-			dest="$SCRIPTS_DIR/$artifact_name"
-			if [[ -f "$src" ]]; then
-				total=$((total + 1))
-				do_check "$src" "$dest" "$artifact_name" || drifted=$((drifted + 1))
-			fi
-		done
 	fi
 
 	echo ""
