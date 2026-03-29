@@ -25,6 +25,7 @@ __pycache__/
 # Node/Bun dependencies
 node_modules/
 bun.lock
+.install-stamp
 
 # Build output
 dist/
