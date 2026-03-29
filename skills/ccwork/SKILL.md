@@ -301,7 +301,7 @@ Coming soon:
 
 **Trigger:** `setup discord`
 
-Guide the user through configuring Discord integration. This creates or updates `~/.claude/discord.json`.
+Guide the user through configuring Discord integration. This creates or updates `~/.claude/discord.json`. The flow is conversational — ask one question at a time, validate each answer before moving on.
 
 ### Step 1: Check Current State
 
@@ -309,25 +309,89 @@ Guide the user through configuring Discord integration. This creates or updates 
 cat ~/.claude/discord.json 2>/dev/null
 ```
 
-If the file exists, show the current configuration and ask if the user wants to reconfigure or update it.
+If the file exists, show the current configuration and ask if the user wants to reconfigure or update it. If the user wants to keep it, stop here.
 
-### Step 2: Gather Information
+### Step 2: Verify Bot Token
 
-Walk through each field, explaining what it is and where to find it:
+Check that the bot token file exists before proceeding:
 
-1. **Guild ID** — "What's your Discord server (guild) ID? You can find it by right-clicking the server name in Discord and selecting 'Copy Server ID'. (Requires Developer Mode enabled in Discord settings.)"
+```bash
+TOKEN_PATH="${DISCORD_TOKEN_PATH:-~/secrets/discord-bot-token}"
+ls -la "$TOKEN_PATH" 2>/dev/null
+```
 
-2. **Bot Token Path** — "Where is your Discord bot token stored? Default is `~/secrets/discord-bot-token`. If you haven't created a bot yet, see: https://discord.com/developers/applications"
+- **If the file exists:** Confirm to the user and move on. Ask if they want to use this path or specify a different one.
+- **If the file does NOT exist:** Guide the user through setup:
+  1. "You need a Discord bot token. If you haven't created a bot yet, visit: https://discord.com/developers/applications"
+  2. "Create the token file: `mkdir -p ~/secrets && echo 'YOUR_TOKEN' > ~/secrets/discord-bot-token && chmod 600 ~/secrets/discord-bot-token`"
+  3. Wait for the user to confirm the file is in place before continuing.
 
-3. **Channels** — For each channel role, ask for the channel ID:
-   - `default` (general agent communications)
-   - `roll-call` (agent check-in)
-   - `wave-status` (wave execution status posts)
-   - `remote-sessions` (AFK session relay threads)
+Record the token path for the final config.
 
-   For each: "What's the channel ID for **<role>**? Right-click the channel and 'Copy Channel ID'."
+### Step 3: Collect Guild ID and Discover Channels
 
-### Step 3: Write Config
+Ask: *"What's your Discord server (guild) ID? You can find it by right-clicking the server name in Discord and selecting 'Copy Server ID'. (Requires Developer Mode enabled in Discord settings.)"*
+
+After receiving the guild ID, verify bot access AND auto-discover channels in one step:
+
+```bash
+discord-bot list-channels <guild_id> --type text
+```
+
+- **If the command succeeds:** The bot has access. Display the discovered text channels as a numbered list for the user:
+
+  ```
+  Found N text channels in your server:
+
+    1. #general          (1234567890)
+    2. #agent-ops        (1234567891)
+    3. #roll-call        (1234567892)
+    4. #wave-status      (1234567893)
+    5. #remote-sessions  (1234567894)
+  ```
+
+  Proceed to Step 4.
+
+- **If the command fails:** The bot token is invalid or the bot hasn't been invited to this server. Help troubleshoot:
+  - "Make sure the bot has been invited to your server with the correct permissions."
+  - "Verify the guild ID is correct."
+  - "Check that your token file contains a valid bot token."
+  - Do NOT proceed until `list-channels` succeeds.
+
+### Step 4: Assign Channel Roles
+
+Using the discovered channel list from Step 3, ask the user to assign each role. Present all four roles, one at a time, with the channel list visible:
+
+1. **default** — "Which channel should be the **default** for agent messages? (e.g., `#agent-ops`). Enter the number from the list above, or a channel name."
+2. **roll-call** — "Which channel for **roll-call** check-ins? Enter a number or name."
+3. **wave-status** — "Which channel for **wave-status** updates? Enter a number or name, or type `skip` to omit."
+4. **remote-sessions** — "Which channel for **remote-sessions** relay threads? Enter a number or name, or type `skip` to omit."
+
+`wave-status` and `remote-sessions` are optional — if the user skips them, omit them from the config entirely.
+
+For each assignment, resolve the user's input (number or name) to the channel's name and ID from the discovered list. If the user types a name that isn't in the list, warn them and ask again.
+
+### Step 5: Create Missing Channels
+
+If any required role (`default`, `roll-call`) could not be filled from existing channels, or the user wants channels that don't exist yet, offer to create them:
+
+*"Your server doesn't have a channel for **<role>**. I can create one for you. Want me to create `#<suggested-name>`?"*
+
+Suggested default names per role:
+- `default` → `agent-ops`
+- `roll-call` → `roll-call`
+- `wave-status` → `wave-status`
+- `remote-sessions` → `remote-sessions`
+
+For each channel the user approves:
+
+```bash
+discord-bot create-channel <guild_id> <name>
+```
+
+Capture the channel ID from the command output and use it in the config. If the user declines creation for a required role, ask them to provide an existing channel instead — `default` and `roll-call` are mandatory.
+
+### Step 6: Write Config
 
 Write the collected values to `~/.claude/discord.json`:
 
@@ -347,17 +411,24 @@ cat > ~/.claude/discord.json << 'EOF'
 EOF
 ```
 
-### Step 4: Verify
+Only include `wave-status` and `remote-sessions` entries if the user assigned them. The config must match the schema in `docs/discord-config.md`.
 
-Test the configuration:
+### Step 7: Verify
+
+Send a test message to the default channel to confirm the full pipeline works:
 
 ```bash
-discord-bot read $(jq -r '.channels.default.id' ~/.claude/discord.json) --limit 1
+discord-bot send $(jq -r '.channels.default.id' ~/.claude/discord.json) "Discord integration configured successfully. This is a test message from /ccwork setup discord."
 ```
 
-If it works, confirm: *"Discord configuration complete. You can now use `/disc` to interact with your server."*
+Resolve the channel name for the confirmation:
 
-If it fails, help troubleshoot (missing token, wrong channel ID, bot not in server, etc.).
+```bash
+CHANNEL_NAME=$(jq -r '.channels.default.name' ~/.claude/discord.json)
+```
+
+- **If it works:** Confirm: *"Discord configuration complete. Test message sent to #<CHANNEL_NAME>. You can now use `/disc` to interact with your server."*
+- **If it fails:** Help troubleshoot (permissions, channel ID mismatch, token issues). The config file has been written — the user can fix the issue and retry with `/ccwork setup discord`.
 
 See [Discord Configuration](docs/discord-config.md) for the full schema reference and per-team scoping strategies.
 
