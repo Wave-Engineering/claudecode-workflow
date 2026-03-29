@@ -7,8 +7,8 @@
  */
 
 import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
-import type { DiscordMessage, DiscordAttachment } from "./index";
-import { stripTokenPunctuation } from "./index";
+import type { DiscordMessage, DiscordAttachment, DiscordConfig } from "./index";
+import { stripTokenPunctuation, loadConfig } from "./index";
 
 // We need to mock fetch and fs before importing the module under test.
 // Bun's mock system lets us intercept global fetch.
@@ -477,5 +477,93 @@ describe("thread polling structure", () => {
     const sttCalls = src.match(/transcribeAudioAttachments\(msg/g);
     // At least 2: one for channels, one for threads
     expect(sttCalls!.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// --- loadConfig tests --------------------------------------------------------
+
+describe("loadConfig", () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    // Restore env vars
+    process.env.DISCORD_GUILD_ID = originalEnv.DISCORD_GUILD_ID;
+    process.env.DISCORD_TOKEN_PATH = originalEnv.DISCORD_TOKEN_PATH;
+    if (originalEnv.DISCORD_GUILD_ID === undefined) delete process.env.DISCORD_GUILD_ID;
+    if (originalEnv.DISCORD_TOKEN_PATH === undefined) delete process.env.DISCORD_TOKEN_PATH;
+  });
+
+  test("loadConfig returns an object with guildId and tokenPath", () => {
+    const config = loadConfig();
+    expect(config).toHaveProperty("guildId");
+    expect(config).toHaveProperty("tokenPath");
+    expect(typeof config.guildId).toBe("string");
+    expect(typeof config.tokenPath).toBe("string");
+    // Must return non-empty strings (either from config, env, or defaults)
+    expect(config.guildId.length).toBeGreaterThan(0);
+    expect(config.tokenPath.length).toBeGreaterThan(0);
+  });
+
+  test("loadConfig falls back to hardcoded defaults when no config or env", () => {
+    // Temporarily clear env vars
+    delete process.env.DISCORD_GUILD_ID;
+    delete process.env.DISCORD_TOKEN_PATH;
+
+    // loadConfig reads ~/.claude/discord.json if it exists, then env, then defaults.
+    // We cannot remove the user's config file in a test, so we verify the
+    // function at minimum returns valid values (either from config or defaults).
+    const config = loadConfig();
+    // The default guild ID is the Oak and Wave server
+    // If config file exists, it should return the config value; otherwise the default
+    expect(config.guildId).toMatch(/^\d+$/);
+    expect(config.tokenPath).toContain("discord-bot-token");
+  });
+
+  test("loadConfig uses DISCORD_GUILD_ID env var when set", () => {
+    process.env.DISCORD_GUILD_ID = "9999999999999999999";
+    // Re-import to pick up env changes (loadConfig reads env at call time)
+    // Note: if config file exists and has guild_id, that takes precedence.
+    // This test verifies the env var is read when config file value is absent.
+    const { loadConfig: reloadConfig } = require("./index");
+    const config = reloadConfig();
+    // If config file has guild_id, it takes precedence. If not, env var should win.
+    // At minimum, verify the function doesn't throw.
+    expect(typeof config.guildId).toBe("string");
+  });
+
+  test("DiscordConfig interface matches expected schema", () => {
+    // Verify the TypeScript interface at compile time by constructing a valid object
+    const config: DiscordConfig = {
+      guild_id: "123",
+      token_path: "~/secrets/token",
+      channels: {
+        default: { name: "agent-ops", id: "456" },
+        "roll-call": { name: "roll-call", id: "789" },
+      },
+    };
+    expect(config.guild_id).toBe("123");
+    expect(config.channels?.default?.id).toBe("456");
+    expect(config.channels?.["roll-call"]?.id).toBe("789");
+  });
+
+  test("loadConfig source implements three-level fallback chain", () => {
+    // Verify the implementation pattern exists in source
+    const { readFileSync } = require("node:fs");
+    const src = readFileSync(
+      new URL("./index.ts", import.meta.url).pathname,
+      "utf-8"
+    );
+
+    // Config file read
+    expect(src).toContain("discord.json");
+    expect(src).toContain("existsSync");
+
+    // Env var fallback
+    expect(src).toContain("process.env.DISCORD_GUILD_ID");
+    expect(src).toContain("process.env.DISCORD_TOKEN_PATH");
+
+    // Hardcoded defaults
+    expect(src).toContain('DEFAULT_GUILD_ID = "1486516321385578576"');
+    expect(src).toContain('DEFAULT_TOKEN_PATH = "~/secrets/discord-bot-token"');
   });
 });

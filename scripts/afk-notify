@@ -14,6 +14,39 @@
 
 set -euo pipefail
 
+# --- Config loading -----------------------------------------------------------
+# Fallback chain: ~/.claude/discord.json → env vars → hardcoded defaults
+_DISCORD_CONFIG_FILE="$HOME/.claude/discord.json"
+_DISCORD_CONFIG=""
+
+load_discord_config() {
+	if [[ -z "$_DISCORD_CONFIG" && -f "$_DISCORD_CONFIG_FILE" ]]; then
+		_DISCORD_CONFIG=$(cat "$_DISCORD_CONFIG_FILE" 2>/dev/null) || _DISCORD_CONFIG=""
+		if [[ -n "$_DISCORD_CONFIG" ]] && ! jq -e . >/dev/null 2>&1 <<<"$_DISCORD_CONFIG"; then
+			_DISCORD_CONFIG=""
+		fi
+	fi
+}
+
+discord_config_get() {
+	local jq_path="$1" env_var="$2" default="$3"
+	load_discord_config
+	if [[ -n "$_DISCORD_CONFIG" ]]; then
+		local val
+		val=$(jq -r "$jq_path // empty" <<<"$_DISCORD_CONFIG" 2>/dev/null)
+		if [[ -n "$val" ]]; then
+			echo "$val"
+			return
+		fi
+	fi
+	local env_val="${!env_var:-}"
+	if [[ -n "$env_val" ]]; then
+		echo "$env_val"
+		return
+	fi
+	echo "$default"
+}
+
 # 1. Read JSON from stdin
 input=$(cat)
 
@@ -51,7 +84,7 @@ dev_team=$(jq -r '.dev_team // "unknown"' "$agent_file")
 dev_avatar=$(jq -r '.dev_avatar // ":robot_face:"' "$agent_file")
 
 # 5. Resolve or create Discord thread
-REMOTE_SESSIONS_CHANNEL="1487462945972682763"
+REMOTE_SESSIONS_CHANNEL=$(discord_config_get '.channels["remote-sessions"].id' 'DISCORD_REMOTE_SESSIONS_CHANNEL' '1487462945972682763')
 
 thread_id=$(jq -r '.thread_id // empty' "$agent_file")
 if [[ -z "$thread_id" ]]; then

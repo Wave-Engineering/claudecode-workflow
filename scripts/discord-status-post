@@ -35,8 +35,46 @@ from pathlib import Path
 # Constants
 # ---------------------------------------------------------------------------
 
-WAVE_STATUS_CHANNEL_ID = "1487386934094462986"
+_DEFAULT_WAVE_STATUS_CHANNEL_ID = "1487386934094462986"
+_DEFAULT_TOKEN_PATH = "~/secrets/discord-bot-token"
 API_BASE = "https://discord.com/api/v10"
+
+
+def load_discord_config() -> dict:
+    """Load Discord config using fallback chain: config file -> env -> defaults."""
+    config: dict = {}
+    config_path = Path.home() / ".claude" / "discord.json"
+    if config_path.exists():
+        try:
+            with open(config_path) as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            print(
+                f"Warning: {config_path} contains invalid JSON, falling back to defaults",
+                file=sys.stderr,
+            )
+    return config
+
+
+def get_discord_channel(role: str, env_var: str, default: str) -> str:
+    """Resolve a channel ID: config file -> env var -> hardcoded default."""
+    config = load_discord_config()
+    # 1. Config file
+    channels = config.get("channels", {})
+    ch = channels.get(role, {})
+    if ch.get("id"):
+        return ch["id"]
+    # 2. Environment variable
+    env_val = os.environ.get(env_var, "")
+    if env_val:
+        return env_val
+    # 3. Hardcoded default
+    return default
+
+
+WAVE_STATUS_CHANNEL_ID = get_discord_channel(
+    "wave-status", "DISCORD_WAVE_STATUS_CHANNEL", _DEFAULT_WAVE_STATUS_CHANNEL_ID
+)
 
 # Action → embed sidebar color (decimal)
 COLOR_MAP: dict[str, int] = {
@@ -89,15 +127,22 @@ def get_project_root() -> Path:
 
 
 def get_token() -> str:
-    """Resolve the Discord bot token from env or file."""
+    """Resolve the Discord bot token from env or file (config-driven)."""
     token = os.environ.get("DISCORD_BOT_TOKEN", "")
     if token:
         return token.strip()
-    token_file = Path.home() / "secrets" / "discord-bot-token"
+    # Resolve token path from config
+    config = load_discord_config()
+    token_path_str = (
+        config.get("token_path")
+        or os.environ.get("DISCORD_TOKEN_PATH")
+        or _DEFAULT_TOKEN_PATH
+    )
+    token_file = Path(os.path.expanduser(token_path_str))
     if token_file.exists():
         return token_file.read_text().strip()
     raise RuntimeError(
-        "DISCORD_BOT_TOKEN not set and ~/secrets/discord-bot-token not found"
+        f"DISCORD_BOT_TOKEN not set and {token_file} not found"
     )
 
 
