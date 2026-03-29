@@ -12,6 +12,8 @@ cd claudecode-workflow
 ./install.sh
 ```
 
+**New here?** Read the [Getting Started guide](docs/getting-started.md) for a 15-minute walkthrough of your first session, then [Concepts](docs/concepts.md) for how the pieces fit together.
+
 ## What's Included
 
 ### CLAUDE.md Template
