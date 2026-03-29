@@ -119,6 +119,96 @@ do_check() {
 	fi
 }
 
+merge_settings() {
+	local template="$1" target="$2"
+
+	# Requires jq
+	if ! command -v jq &>/dev/null; then
+		warn "jq not found — cannot merge settings.json"
+		return 1
+	fi
+
+	cp "$target" "${target}.bak"
+
+	# Deep merge: template into local, preserving user customizations
+	# Rules:
+	#   1. Top-level keys (scalars AND objects like statusLine): added only if ABSENT locally
+	#   2. hooks: add missing event keys from template; leave existing alone
+	#   3. permissions.allow: union of both arrays (deduplicated)
+	#   4. enabledPlugins: add missing keys from template; leave existing alone
+	#   5. _comment keys: stripped from result (template-only documentation)
+	#   6. Any key present locally but not in template: preserve as-is
+	local merged
+	merged=$(jq -s '
+		# .[0] = template, .[1] = local
+
+		# Top-level keys from template (excluding special-merge keys)
+		(.[0] | to_entries | map(
+			select(.key | IN("hooks", "permissions", "enabledPlugins", "_comment") | not)
+		)) as $tpl_defaults |
+
+		# Capture local keys before entering reduce
+		(.[1] | keys) as $local_keys |
+
+		# Merge hooks: add missing event keys
+		((.[0].hooks // {}) | to_entries | map(
+			select(.key != "_comment")
+		)) as $tpl_hooks |
+		((.[1].hooks // {}) | keys) as $local_hook_keys |
+		($tpl_hooks | map(select(.key | IN($local_hook_keys[]) | not))) as $new_hooks |
+
+		# Merge permissions.allow: union
+		((.[0].permissions.allow // []) + (.[1].permissions.allow // []) | unique) as $merged_perms |
+
+		# Merge enabledPlugins: add missing keys
+		((.[0].enabledPlugins // {}) | to_entries) as $tpl_plugins |
+		((.[1].enabledPlugins // {}) | keys) as $local_plugin_keys |
+		($tpl_plugins | map(select(.key | IN($local_plugin_keys[]) | not))) as $new_plugins |
+
+		# Build result: start with local, add missing pieces
+		.[1]
+		| .permissions.allow = $merged_perms
+		| .hooks = ((.hooks // {}) + ($new_hooks | from_entries))
+		| .enabledPlugins = ((.enabledPlugins // {}) + ($new_plugins | from_entries))
+		| reduce ($tpl_defaults[] | select(.key | IN($local_keys[]) | not)) as $s (.; .[$s.key] = $s.value)
+		| del(._comment)
+		| del(.hooks._comment)
+	' "$template" "$target")
+
+	echo "$merged" >"$target"
+
+	# Report what changed
+
+	# Report new hooks
+	for hook_event in $(jq -r '.hooks // {} | keys[] | select(. != "_comment")' "$template"); do
+		if jq -e ".hooks.\"${hook_event}\"" "${target}.bak" &>/dev/null; then
+			skip "hooks.$hook_event — already present (skipped)"
+		else
+			info "hooks.$hook_event — added"
+		fi
+	done
+
+	# Report new plugins
+	for plugin in $(jq -r '.enabledPlugins // {} | keys[]' "$template"); do
+		if jq -e ".enabledPlugins.\"${plugin}\"" "${target}.bak" &>/dev/null; then
+			skip "enabledPlugins.$plugin — already present (skipped)"
+		else
+			info "enabledPlugins.$plugin — added"
+		fi
+	done
+
+	# Report permissions
+	local old_perm_count new_perm_total
+	old_perm_count=$(jq '.permissions.allow | length' "${target}.bak")
+	new_perm_total=$(jq '.permissions.allow | length' "$target")
+	local perm_diff=$((new_perm_total - old_perm_count))
+	if [[ $perm_diff -gt 0 ]]; then
+		info "permissions — $perm_diff new entries merged"
+	else
+		skip "permissions — no new entries"
+	fi
+}
+
 # --- Check mode ---------------------------------------------------------------
 if [[ "$CHECK_MODE" == true ]]; then
 	echo ""
@@ -169,12 +259,61 @@ if [[ "$CHECK_MODE" == true ]]; then
 		do_check "$REPO_DIR/config/statusline-command.sh" "$CLAUDE_DIR/statusline-command.sh" "statusline-command.sh" || drifted=$((drifted + 1))
 	fi
 
+	# Settings.json drift: missing hooks and plugins
+	if [[ -f "$REPO_DIR/config/settings.template.json" && -f "$CLAUDE_DIR/settings.json" ]]; then
+		echo ""
+		echo "Settings"
+		echo "──────────────────────────────────────────"
+		# Check for missing hooks
+		for hook_event in $(jq -r '.hooks // {} | keys[] | select(. != "_comment")' "$REPO_DIR/config/settings.template.json"); do
+			total=$((total + 1))
+			if ! jq -e ".hooks.\"${hook_event}\"" "$CLAUDE_DIR/settings.json" &>/dev/null; then
+				drift "settings.json — missing hook: $hook_event"
+				drifted=$((drifted + 1))
+			else
+				info "settings.json hook $hook_event (present)"
+			fi
+		done
+		# Check for missing plugins
+		for plugin in $(jq -r '.enabledPlugins // {} | keys[]' "$REPO_DIR/config/settings.template.json"); do
+			total=$((total + 1))
+			if ! jq -e ".enabledPlugins.\"${plugin}\"" "$CLAUDE_DIR/settings.json" &>/dev/null; then
+				drift "settings.json — missing plugin: $plugin"
+				drifted=$((drifted + 1))
+			else
+				info "settings.json plugin $plugin (present)"
+			fi
+		done
+	fi
+
+	# Channels: MCP registration drift
+	if [[ -d "$REPO_DIR/channels" ]] && command -v claude &>/dev/null; then
+		echo ""
+		echo "Channels"
+		echo "──────────────────────────────────────────"
+		mcp_list=$(claude mcp list 2>/dev/null || true)
+		for channel_dir in "$REPO_DIR"/channels/*/; do
+			[[ -f "$channel_dir/package.json" ]] || continue
+			channel_name="$(basename "$channel_dir")"
+			total=$((total + 1))
+			if echo "$mcp_list" | grep -q "$channel_name"; then
+				info "MCP server $channel_name (registered)"
+			else
+				drift "MCP server $channel_name — NOT REGISTERED"
+				drifted=$((drifted + 1))
+			fi
+		done
+	fi
+
 	if [[ -d "$REPO_DIR/src" ]]; then
 		echo ""
 		echo "Packages"
 		echo "──────────────────────────────────────────"
 		# Rebuild to ensure fresh comparison
-		"$REPO_DIR/scripts/ci/build.sh" >/dev/null 2>&1 || true
+		if ! "$REPO_DIR/scripts/ci/build.sh" >/dev/null 2>&1; then
+			warn "build.sh failed — package drift check may be inaccurate"
+			drifted=$((drifted + 1))
+		fi
 		for pkg_dir in "$REPO_DIR"/src/*/; do
 			[[ -f "$pkg_dir/__main__.py" ]] || continue
 			pkg_name="$(basename "$pkg_dir")"
@@ -254,22 +393,21 @@ if [[ "$INSTALL_CONFIG" == true ]]; then
 
 	if [[ -f "$REPO_DIR/config/settings.template.json" ]]; then
 		if [[ -f "$CLAUDE_DIR/settings.json" ]]; then
-			skip "settings.json already exists (won't overwrite — use settings.template.json as reference)"
-			# Merge statusLine config into existing settings.json if missing
-			if [[ "$DRY_RUN" != true ]] && command -v jq &>/dev/null; then
-				if ! jq -e '.statusLine' "$CLAUDE_DIR/settings.json" &>/dev/null; then
-					cp "$CLAUDE_DIR/settings.json" "$CLAUDE_DIR/settings.json.bak"
-					jq '.statusLine = {"type": "command", "command": "bash ~/.claude/statusline-command.sh"}' \
-						"$CLAUDE_DIR/settings.json.bak" >"$CLAUDE_DIR/settings.json"
-					info "Merged statusLine config into existing settings.json"
-				else
-					skip "statusLine already configured in settings.json"
-				fi
-			elif [[ "$DRY_RUN" == true ]]; then
-				info "(dry-run) Would merge statusLine config into settings.json if missing"
+			if [[ "$DRY_RUN" == true ]]; then
+				info "(dry-run) Would merge missing config from settings.template.json into settings.json"
+			else
+				merge_settings "$REPO_DIR/config/settings.template.json" "$CLAUDE_DIR/settings.json"
 			fi
 		else
-			do_copy "$REPO_DIR/config/settings.template.json" "$CLAUDE_DIR/settings.json"
+			# Fresh install: copy template and strip _comment keys
+			if [[ "$DRY_RUN" == true ]]; then
+				info "(dry-run) $REPO_DIR/config/settings.template.json → $CLAUDE_DIR/settings.json"
+			else
+				mkdir -p "$(dirname "$CLAUDE_DIR/settings.json")"
+				jq 'del(._comment) | del(.hooks._comment)' \
+					"$REPO_DIR/config/settings.template.json" >"$CLAUDE_DIR/settings.json"
+				info "Installed settings.json (stripped _comment keys)"
+			fi
 		fi
 	fi
 fi
@@ -327,11 +465,25 @@ if [[ "$INSTALL_CHANNELS" == true && -d "$REPO_DIR/channels" ]]; then
 				info "(dry-run) bun install in $channel_dir"
 				info "(dry-run) claude mcp add --scope user $channel_name"
 			else
+				needs_install=false
+				stamp_file="$channel_dir/.install-stamp"
 				if [[ ! -d "$channel_dir/node_modules" ]]; then
+					needs_install=true
+				elif [[ -f "$stamp_file" ]]; then
+					# Reinstall if package.json or bun.lock is newer than stamp
+					for src_file in "$channel_dir/package.json" "$channel_dir/bun.lock" "$channel_dir/bun.lockb"; do
+						if [[ -f "$src_file" && "$src_file" -nt "$stamp_file" ]]; then
+							needs_install=true
+							break
+						fi
+					done
+				fi
+				if [[ "$needs_install" == true ]]; then
 					info "Installing dependencies for $channel_name..."
 					(cd "$channel_dir" && bun install --silent)
+					touch "$stamp_file"
 				else
-					skip "$channel_name dependencies (already installed)"
+					skip "$channel_name dependencies (up to date)"
 				fi
 
 				# Register at user scope (idempotent — overwrites existing)
