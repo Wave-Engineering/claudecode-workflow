@@ -9,6 +9,16 @@
 # Usage (as a Claude Code Stop hook):
 #   Configured in settings.json hooks.Stop — receives JSON on stdin.
 #
+# Dependencies:
+#   discord-bot   Required. Posts messages and creates threads.
+#   jq            Required. Parses JSON input and identity files.
+#   git           Required. Detects project root (git rev-parse --show-toplevel).
+#   loginctl      Required. Checks desktop lock state.
+#   claude        Optional. Summarizes output via --model haiku. If unavailable,
+#                 the first 200 characters of the message are used as fallback.
+#   vox           Optional. Renders a voice memo WAV file attached to the Discord
+#                 message. Skipped silently if vox is not installed or fails.
+#
 # Exit codes:
 #   0  Always (best-effort — never blocks the Stop event)
 

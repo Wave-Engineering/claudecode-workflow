@@ -4,10 +4,18 @@
 # Usage:
 #   slackbot-send <channel> <message> [--thread <thread_ts>]
 #
+# Authentication:
+#   SLACK_BOT_TOKEN env var takes precedence. If unset, falls back to reading
+#   the token from ~/secrets/slack-bot-token.
+#
 # Environment variables:
-#   SLACK_BOT_TOKEN     Required. The xoxb- bot token.
+#   SLACK_BOT_TOKEN     The xoxb- bot token (or use file fallback above).
 #   CLAUDE_AGENT_NAME   Display name for this agent (default: Claude)
 #   CLAUDE_AGENT_EMOJI  Icon emoji, with colons (default: :robot_face:)
+#
+# Output:
+#   On success, prints the Slack message timestamp (ts) to stdout. This can
+#   be passed to --thread on a subsequent call to create a threaded reply.
 
 set -euo pipefail
 

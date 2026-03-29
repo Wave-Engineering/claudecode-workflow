@@ -13,6 +13,9 @@
 #   --app APP          Use this application instead of the system default.
 #   TARGET             File path or URL to open.
 #
+# Output:
+#   On success, prints "Opened (view|edit): <TARGET>" to stdout.
+#
 # Platform support:
 #   Linux   — xdg-open (requires xdg-utils)
 #   macOS   — open
