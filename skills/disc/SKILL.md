@@ -20,7 +20,7 @@ Token: ~/secrets/discord-bot-token
 {{#if args}}
 Parse the argument: `{{args}}`
 {{else}}
-No argument — default to reading recent messages from `#agent-ops`.
+No argument — post a check-in to `#roll-call`.
 {{/if}}
 
 Determine what the user wants from the phrasing:
@@ -32,7 +32,8 @@ Determine what the user wants from the phrasing:
 | Starts with "create", "make", "new" + channel name | **create** | `create #wave-3-status`, `new channel test` |
 | Starts with "thread", "create thread", "new thread" + thread name | **create-thread** | `thread "session-123" in #remote-sessions`, `create thread "daily"` |
 | Starts with "list", "show", "channels" | **list** | `list channels`, `show channels` |
-| No args at all | **read** | (reads default channel) |
+| "roll-call", "check in", "sound off" | **check-in** | `roll-call`, `check in`, `sound off` |
+| No args at all | **check-in** | (posts check-in to `#roll-call`) |
 
 ## Resolve Agent Identity
 
@@ -111,3 +112,19 @@ Note: Thread IDs work with `discord-bot read <thread-id>` for reading thread mes
    discord-bot list-channels 1486516321385578576 --type text
    ```
 2. Format as a clean list for the user.
+
+## Check-In Flow
+
+1. Resolve agent identity (Dev-Name, Dev-Avatar, Dev-Team)
+2. Resolve the project root path
+3. Post to `#roll-call` (`1487382005036617851`):
+   ```bash
+   discord-bot send 1487382005036617851 "<message>"
+   ```
+   Message format:
+   ```
+   **<Dev-Name>** <Dev-Avatar> online — team `<Dev-Team>` @ <project-root>
+
+   — **<Dev-Name>** <Dev-Avatar> (<Dev-Team>)
+   ```
+4. Confirm: `Checked in to #roll-call as <Dev-Name> <Dev-Avatar>.`

@@ -33,7 +33,7 @@ Key features:
 | assesswaves | `/assesswaves` | Quick assessment of wave-pattern suitability |
 | ccfold | `/ccfold` | Merge upstream CLAUDE.md template updates into local project |
 | cryo | `/cryo` | Preserve session state before context compaction |
-| disc | `/disc` | Discord integration — send, read, list, resolve channels |
+| disc | `/disc` | Discord integration — check-in, send, read, list, resolve channels |
 | edit | `/edit` | Open file/URL in GUI editor |
 | engage | `/engage` | Load CLAUDE.md, confirm rules of engagement |
 | ibm | `/ibm` | Issue-Branch-PR/MR workflow reminder |
