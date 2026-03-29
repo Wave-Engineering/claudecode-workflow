@@ -3,6 +3,10 @@ name: nextwave
 description: Execute the next pending wave of parallel spec-driven sub-agents on isolated worktrees, using flight-based conflict avoidance
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # NextWave: Execute One Wave with Flight-Based Conflict Avoidance
 
 Execute the next pending wave from a plan created by `/prepwaves`. Uses a two-phase approach: **planning agents** identify file targets, then issues are partitioned into **flights** (conflict-free groups) for safe parallel execution. Merges via PR/MR — never directly to main.

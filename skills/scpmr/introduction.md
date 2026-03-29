@@ -1,0 +1,1 @@
+`/scpmr` chains stage, commit, push, and PR/MR creation into a single invocation -- but stops before merging. Use it when you want to get your changes up for review without auto-merging. It runs `/scp` under the hood and then ensures a PR/MR exists. Like all commit skills, it requires `/precheck` approval first. For the full commit workflow, run `/ccwork tour workflow`.

@@ -233,6 +233,33 @@ All of these can be customized per project. The mandatory rules are written as h
 
 ---
 
+## Skill Introductions
+
+Each skill directory contains an optional `introduction.md` file that provides a brief first-run welcome when the skill is invoked.
+
+### How It Works
+
+Every SKILL.md contains a preamble instruction (an HTML comment near the top) that tells Claude to check for `introduction.md` in the skill's directory before executing. If the file exists, Claude reads it, presents the contents to the user as a brief welcome, and then deletes the file. On subsequent invocations, the file is gone and the skill executes immediately with no preamble.
+
+### What Introductions Contain
+
+Each introduction is 3-5 sentences covering:
+
+- **What the skill does** -- one sentence summary
+- **When you would use it** -- the trigger or use case
+- **A practical tip** -- a "did you know" or best-practice note
+- **Where to learn more** -- pointer to a tour, lab, or doc
+
+### Reinstalling Introductions
+
+Running `install.sh` copies the introduction files back from the repo, so a fresh install (or reinstall after a kit update) restores all introductions. This is intentional -- new versions may include updated or expanded introductions.
+
+### Dismissing Introductions
+
+If you do not want the first-run intros, ask the agent to remove them: "get rid of the intros" or "delete all introduction files." The agent will glob and delete `~/.claude/skills/*/introduction.md`. They will not come back until the next `install.sh` run.
+
+---
+
 ## What's Next
 
 - **[Getting Started](getting-started.md)** -- if you have not yet done the hands-on walkthrough

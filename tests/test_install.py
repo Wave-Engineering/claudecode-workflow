@@ -133,15 +133,38 @@ def _expected_skill_dirs() -> list[str]:
 
 
 def _expected_helper_scripts() -> list[str]:
-    """Return helper script basenames installed to ~/.local/bin/ from skills."""
+    """Return helper script basenames installed to ~/.local/bin/ from skills.
+
+    Only non-.md files qualify — .md files are installed into the skill
+    directory, not the scripts directory.
+    """
     helpers = []
     for skill_dir in (_REPO_DIR / "skills").iterdir():
         if not skill_dir.is_dir():
             continue
         for f in skill_dir.iterdir():
-            if f.is_file() and f.name != "SKILL.md":
+            if f.is_file() and f.name != "SKILL.md" and not f.name.endswith(".md"):
                 helpers.append(f.name)
     return sorted(helpers)
+
+
+def _expected_skill_content_md() -> dict[str, list[str]]:
+    """Return a mapping of skill_name -> list of .md filenames (excluding SKILL.md).
+
+    These files are installed into ~/.claude/skills/<skill_name>/ rather than
+    ~/.local/bin/.
+    """
+    result: dict[str, list[str]] = {}
+    for skill_dir in (_REPO_DIR / "skills").iterdir():
+        if not skill_dir.is_dir():
+            continue
+        md_files = []
+        for f in skill_dir.iterdir():
+            if f.is_file() and f.name.endswith(".md") and f.name != "SKILL.md":
+                md_files.append(f.name)
+        if md_files:
+            result[skill_dir.name] = sorted(md_files)
+    return result
 
 
 def _expected_standalone_scripts() -> list[str]:
@@ -188,6 +211,18 @@ class TestInstallCreatesArtifacts:
         bin_dir = sandbox_home / ".local" / "bin"
         for helper in _expected_helper_scripts():
             assert (bin_dir / helper).exists(), f"Missing helper script: {helper}"
+
+        # --- Skill content .md files (e.g. introduction.md) ---
+        for skill_name, md_files in _expected_skill_content_md().items():
+            for md_file in md_files:
+                md_path = skills_dir / skill_name / md_file
+                assert md_path.exists(), (
+                    f"Missing skill content file: {skill_name}/{md_file}"
+                )
+                # .md files must NOT be executable
+                assert not os.access(str(md_path), os.X_OK), (
+                    f"Skill content file should not be executable: {md_path}"
+                )
 
         # --- Standalone scripts ---
         for script_name in _expected_standalone_scripts():

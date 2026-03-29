@@ -3,6 +3,10 @@ name: review
 description: Run a code review on staged changes, branch diff, or a specific file
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # Code Review
 
 Run a targeted code review using the `feature-dev:code-reviewer` subagent.

@@ -1,0 +1,1 @@
+`/name` reports or picks the agent's session identity -- Dev-Name, Dev-Avatar, and Dev-Team. Use it to check who you are in the current session or to re-roll a new identity if you want a fresh name. Identity is used for Discord message signatures, Slack posts, and the statusline display. For more on the identity system, see `docs/concepts.md` or run `/ccwork tour foundations`.

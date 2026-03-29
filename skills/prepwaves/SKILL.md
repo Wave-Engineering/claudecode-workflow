@@ -3,6 +3,10 @@ name: prepwaves
 description: Analyze a master issue, validate sub-issue specs, compute dependency waves, and prepare for parallel agent execution
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # PrepWaves: Plan Parallel Execution Waves
 
 Analyze a master issue and its sub-issues, validate they are ready for spec-driven parallel agent execution, compute dependency-ordered waves, and prepare everything for `/nextwave` to execute.

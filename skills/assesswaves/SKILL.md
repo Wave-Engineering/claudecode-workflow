@@ -3,6 +3,10 @@ name: assesswaves
 description: Quick assessment of whether a piece of work is suitable for wave-pattern parallel execution. Lighter than /prepwaves — helps decide decomposition before (or after) issues are created.
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # AssessWaves: Is This Work Wave-Patternable?
 
 Quickly assess whether a set of work items can benefit from parallel agent execution via the wave pattern. This is a **decision tool**, not a planning tool — it recommends a decomposition and verdict, but does not create issues, flight plans, or execute anything.

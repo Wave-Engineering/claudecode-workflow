@@ -3,6 +3,10 @@ name: precheck
 description: Pre-commit gate — verify branch/issue, run code-reviewer, present checklist, then stop and wait for approval
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # Pre-Commit Gate
 
 This skill is the **mandatory verification step** before any commit. It checks compliance, runs code review, presents the checklist, and **stops**. It does NOT commit, push, or create a PR/MR.

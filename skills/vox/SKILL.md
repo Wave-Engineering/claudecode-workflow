@@ -3,6 +3,10 @@ name: vox
 description: Speak to the user via text-to-speech — one-way voice announcements for status updates, approvals, and alerts
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # Voice Announcements
 
 Use `vox` to speak to the user when they need to hear something. One-way audio — no mic input, just announcements.

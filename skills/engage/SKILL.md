@@ -3,6 +3,10 @@ name: engage
 description: Read CLAUDE.md, confirm development rules of engagement, and load current plan
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # Engage: Rules of Engagement + Current State
 
 This skill is the post-compaction (or session-start) ritual. It restores context and confirms operating rules.

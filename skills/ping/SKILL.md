@@ -3,6 +3,10 @@ name: agent-say
 description: Send a message to #ai-dev as this Claude Code agent. Reads agent identity from the standard identity system (CLAUDE.md + session file), and posts with full Slack mrkdwn formatting. Use when communicating with other agents or announcing status.
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # Agent Say — Post to #ai-dev as This Agent
 
 You are sending a message to the `#ai-dev` Slack channel on behalf of this Claude Code instance.
