@@ -80,7 +80,7 @@ The discord-watcher enables real-time inter-agent communication. Multiple Claude
 
 `settings.template.json` provides a starting point for `~/.claude/settings.json` with:
 - **Permissions** — Granular tool allowlists for common CLIs (git, gh, glab, docker, terraform, aws, etc.)
-- **Hooks** — PostToolUse, SessionStart, SubagentStop hook structure (requires [context-crystallizer](https://github.com/Wave-Engineering/context-crystallizer) or equivalent)
+- **Hooks** — PostToolUse, SessionStart, SubagentStop, and Stop hook structure (requires [context-crystallizer](https://github.com/Wave-Engineering/context-crystallizer) for crystallization hooks; Stop runs [afk-notify](#remote-sessions) for idle relay)
 - **Status line** — Points to the custom statusline script
 - **Plugins** — Full plugin list (see Plugins section below)
 - **Effort level** — Set to `high` for thorough responses
@@ -97,7 +97,7 @@ This will:
 - Copy skills to `~/.claude/skills/`
 - Copy scripts to `~/.local/bin/`
 - Install statusline to `~/.claude/statusline-command.sh`
-- Copy `settings.template.json` → `~/.claude/settings.json` (only if no settings exist yet)
+- Smart-merge `settings.template.json` into `~/.claude/settings.json` — missing hooks, plugins, and permissions are added while your existing customizations are preserved. If no settings file exists yet, the template is installed directly (with internal comment keys stripped).
 - Back up existing files before overwriting (`.bak`)
 - Skip unchanged files
 - Report missing dependencies
@@ -120,7 +120,9 @@ After making local changes to skills or scripts, see what's out of sync:
 ./install.sh --check
 ```
 
-This compares every installed file against the repo version and reports `in sync`, `DIFFERS`, or `NOT INSTALLED`.
+This compares every installed file against the repo version and reports `in sync`, `DIFFERS`, or `NOT INSTALLED`. It also checks:
+- **Settings** — reports any hooks or plugins present in the template but missing from your local `settings.json`
+- **Channels** — verifies that each channel server (e.g., discord-watcher) is registered as an MCP server via `claude mcp list`
 
 ### Sync Local Changes Back to Repo
 

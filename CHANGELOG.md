@@ -11,6 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `ccfold` skill — Merge upstream CLAUDE.md template changes into a project's local CLAUDE.md, preserving project-specific content (Dev-Team, custom sections)
 - `sync.sh` — Reverse-sync: pull local skill/script changes back into the repo
 
+### Changed
+
+- `install.sh --config` now smart-merges `settings.template.json` into existing `settings.json` — missing hooks, plugins, and permissions are added while user customizations are preserved
+- `install.sh --check` now reports missing hooks, plugins, and MCP server registrations in addition to file drift
+
 ## [0.1.0] - 2026-03-22
 
 ### Added
