@@ -139,11 +139,35 @@ api_post() {
 }
 
 # --- Subcommand: send ---------------------------------------------------------
+send_help() {
+	cat <<'HELPTEXT'
+Usage: discord-bot send <channel-id> <message> [OPTIONS]
+
+Send a message to a Discord channel.
+
+Arguments:
+  <channel-id>   The target channel's numeric ID
+  <message>      The message content to send (quote if it contains spaces)
+
+Options:
+  --embed TITLE:TEXT   Attach a rich embed with the given title and description
+  --attach FILE        Upload a file attachment alongside the message
+  -h, --help           Show this help message
+
+Examples:
+  discord-bot send 123456789 "Hello, world!"
+  discord-bot send 123456789 "Deploy report" --embed "Status:All green"
+  discord-bot send 123456789 "See attached" --attach ./report.txt
+HELPTEXT
+	exit 0
+}
+
 cmd_send() {
 	local channel_id="" message="" embed_title="" embed_text="" attach_file=""
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
+		--help | -h) send_help ;;
 		--embed)
 			[[ -z "${2:-}" ]] && {
 				echo "Error: --embed requires title:text argument." >&2
@@ -218,11 +242,34 @@ cmd_send() {
 }
 
 # --- Subcommand: read ---------------------------------------------------------
+read_help() {
+	cat <<'HELPTEXT'
+Usage: discord-bot read <channel-id> [OPTIONS]
+
+Read messages from a Discord channel, printed in chronological order.
+
+Arguments:
+  <channel-id>   The target channel's numeric ID
+
+Options:
+  --limit N      Maximum number of messages to fetch (default: 20)
+  --after ID     Only fetch messages after this message ID (for pagination)
+  -h, --help     Show this help message
+
+Examples:
+  discord-bot read 123456789
+  discord-bot read 123456789 --limit 5
+  discord-bot read 123456789 --after 111222333444555666
+HELPTEXT
+	exit 0
+}
+
 cmd_read() {
 	local channel_id="" limit=20 after=""
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
+		--help | -h) read_help ;;
 		--limit)
 			[[ -z "${2:-}" ]] && {
 				echo "Error: --limit requires a value." >&2
@@ -267,11 +314,35 @@ cmd_read() {
 }
 
 # --- Subcommand: create-channel -----------------------------------------------
+create_channel_help() {
+	cat <<'HELPTEXT'
+Usage: discord-bot create-channel <guild-id> <name> [OPTIONS]
+
+Create a new text channel in a Discord guild.
+
+Arguments:
+  <guild-id>   The guild (server) numeric ID
+  <name>       The channel name (leading # is stripped automatically)
+
+Options:
+  --topic TOPIC      Set the channel's topic/description
+  --category ID      Place the channel under a category by its numeric ID
+  -h, --help         Show this help message
+
+Examples:
+  discord-bot create-channel 987654321 wave-3-status
+  discord-bot create-channel 987654321 deployments --topic "CI/CD notifications"
+  discord-bot create-channel 987654321 dev-chat --category 111222333444555666
+HELPTEXT
+	exit 0
+}
+
 cmd_create_channel() {
 	local guild_id="" name="" topic="" category=""
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
+		--help | -h) create_channel_help ;;
 		--topic)
 			[[ -z "${2:-}" ]] && {
 				echo "Error: --topic requires a value." >&2
@@ -304,7 +375,7 @@ cmd_create_channel() {
 	done
 
 	[[ -z "$guild_id" || -z "$name" ]] && {
-		echo "Error: create-channel requires <guild-id> and <name>. Usage: discord-bot create-channel <guild-id> <name> [--topic TOPIC]" >&2
+		echo "Error: create-channel requires <guild-id> and <name>. Usage: discord-bot create-channel <guild-id> <name> [--topic TOPIC] [--category ID]" >&2
 		exit 1
 	}
 
@@ -323,11 +394,34 @@ cmd_create_channel() {
 }
 
 # --- Subcommand: create-thread ------------------------------------------------
+create_thread_help() {
+	cat <<'HELPTEXT'
+Usage: discord-bot create-thread <channel-id> <name> [OPTIONS]
+
+Create a new thread in a Discord channel.
+
+Arguments:
+  <channel-id>   The parent channel's numeric ID
+  <name>         The thread name
+
+Options:
+  --auto-archive MINUTES   Auto-archive after inactivity: 60, 1440, 4320, or
+                           10080 (default: 1440 = 24 hours)
+  -h, --help               Show this help message
+
+Examples:
+  discord-bot create-thread 123456789 "session-42"
+  discord-bot create-thread 123456789 "daily-standup" --auto-archive 4320
+HELPTEXT
+	exit 0
+}
+
 cmd_create_thread() {
 	local channel_id="" name="" auto_archive="1440"
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
+		--help | -h) create_thread_help ;;
 		--auto-archive)
 			[[ -z "${2:-}" ]] && {
 				echo "Error: --auto-archive requires a value (60, 1440, 4320, 10080)." >&2
@@ -369,11 +463,33 @@ cmd_create_thread() {
 }
 
 # --- Subcommand: list-channels ------------------------------------------------
+list_channels_help() {
+	cat <<'HELPTEXT'
+Usage: discord-bot list-channels <guild-id> [OPTIONS]
+
+List channels in a Discord guild.
+
+Arguments:
+  <guild-id>   The guild (server) numeric ID
+
+Options:
+  --type TYPE   Filter by channel type: text, voice, or category
+  -h, --help    Show this help message
+
+Examples:
+  discord-bot list-channels 987654321
+  discord-bot list-channels 987654321 --type text
+  discord-bot list-channels 987654321 --type voice
+HELPTEXT
+	exit 0
+}
+
 cmd_list_channels() {
 	local guild_id="" filter_type=""
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
+		--help | -h) list_channels_help ;;
 		--type)
 			case "${2:-}" in
 			text) filter_type="0" ;;
@@ -414,8 +530,35 @@ cmd_list_channels() {
 }
 
 # --- Subcommand: resolve ------------------------------------------------------
+resolve_help() {
+	cat <<'HELPTEXT'
+Usage: discord-bot resolve <guild-id> <channel-name>
+
+Resolve a channel name to its numeric ID. Returns text channels only.
+
+Arguments:
+  <guild-id>       The guild (server) numeric ID
+  <channel-name>   The channel name to look up (leading # is stripped, case-insensitive)
+
+Options:
+  -h, --help   Show this help message
+
+Note:
+  Only text channels (type 0) are searched. Voice channels, categories, and
+  other channel types will not be matched. Use 'list-channels --type text'
+  to see available text channels.
+
+Examples:
+  discord-bot resolve 987654321 general
+  discord-bot resolve 987654321 "#roll-call"
+HELPTEXT
+	exit 0
+}
+
 cmd_resolve() {
 	local guild_id="" channel_name=""
+
+	[[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && resolve_help
 
 	[[ $# -ge 2 ]] || {
 		echo "Error: resolve requires <guild-id> and <channel-name>. Usage: discord-bot resolve <guild-id> <channel-name>" >&2
