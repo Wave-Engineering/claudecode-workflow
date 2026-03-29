@@ -3,6 +3,10 @@ name: scpmmr
 description: Stage, commit, push, create PR/MR, then merge it — full pipeline in one command
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # Stage, Commit, Push, Create PR/MR, Merge
 
 This is a combo skill that chains `/scp` and `/mmr` into a single invocation.

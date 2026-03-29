@@ -103,11 +103,13 @@ if [[ "$REMOVE_SKILLS" == true ]]; then
 	for skill_dir in "$REPO_DIR"/skills/*/; do
 		skill_name="$(basename "$skill_dir")"
 		do_remove "$SKILLS_DIR/$skill_name"
-		# Remove helper scripts (non-SKILL.md files) from ~/.local/bin/
+		# Remove helper scripts (non-.md files) from ~/.local/bin/
+		# (.md files live in the skill dir and are removed with it above)
 		for helper in "$skill_dir"/*; do
 			[[ -f "$helper" ]] || continue
 			helper_name="$(basename "$helper")"
 			[[ "$helper_name" == "SKILL.md" ]] && continue
+			[[ "$helper_name" == *.md ]] && continue
 			do_remove "$SCRIPTS_DIR/$helper_name"
 		done
 	done

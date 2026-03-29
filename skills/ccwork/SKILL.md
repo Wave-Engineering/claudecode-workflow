@@ -3,6 +3,10 @@ name: ccwork
 description: Onboarding hub — tour the kit, run labs, configure integrations
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # CCWork: Onboarding, Education, and Configuration Hub
 
 Single entry point for discovering and learning the Claude Code workflow kit. Routes to tour, lab, and setup subcommands.

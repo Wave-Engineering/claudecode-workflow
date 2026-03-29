@@ -3,6 +3,10 @@ name: mmr
 description: Merge a PR/MR with squash and source branch deletion
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # Merge PR/MR
 
 Merge a pull request (GitHub) or merge request (GitLab) with squash commits, a detailed commit message, and source branch deletion.

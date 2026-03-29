@@ -3,6 +3,10 @@ name: name
 description: Report or pick the agent's session identity (Dev-Name, Dev-Avatar, Dev-Team)
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # Agent Identity
 
 Report the current session identity, or pick one if not yet established.

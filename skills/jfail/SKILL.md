@@ -3,6 +3,10 @@ name: jfail
 description: Fetch and analyze a failed CI job (GitLab) or workflow run (GitHub)
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # CI Job/Workflow Failure Analysis
 
 Fetch and summarize a failed CI job's output without flooding the parent context window.

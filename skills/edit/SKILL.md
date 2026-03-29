@@ -3,6 +3,10 @@ name: edit
 description: Open a file or URL in a GUI editor (modification intent, async)
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # Edit
 
 Open a file or URL in a GUI editor for modification. The application launches asynchronously in a separate window so the chat can continue.

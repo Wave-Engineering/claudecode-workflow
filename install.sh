@@ -232,13 +232,17 @@ if [[ "$CHECK_MODE" == true ]]; then
 			total=$((total + 1))
 			do_check "$src" "$dest" "$skill_name" || drifted=$((drifted + 1))
 		fi
-		# Check helper scripts (non-SKILL.md files)
+		# Check non-SKILL.md files: .md files in skill dir, others in scripts dir
 		for helper in "$skill_dir"/*; do
 			[[ -f "$helper" ]] || continue
 			helper_name="$(basename "$helper")"
 			[[ "$helper_name" == "SKILL.md" ]] && continue
 			total=$((total + 1))
-			do_check "$helper" "$SCRIPTS_DIR/$helper_name" "$skill_name/$helper_name" || drifted=$((drifted + 1))
+			if [[ "$helper_name" == *.md ]]; then
+				do_check "$helper" "$SKILLS_DIR/$skill_name/$helper_name" "$skill_name/$helper_name" || drifted=$((drifted + 1))
+			else
+				do_check "$helper" "$SCRIPTS_DIR/$helper_name" "$skill_name/$helper_name" || drifted=$((drifted + 1))
+			fi
 		done
 		# Check content subdirectories (e.g., tours/)
 		for subdir in "$skill_dir"*/; do
@@ -362,14 +366,19 @@ if [[ "$INSTALL_SKILLS" == true ]]; then
 		src="$skill_dir/SKILL.md"
 		dest="$SKILLS_DIR/$skill_name/SKILL.md"
 		[[ -f "$src" ]] && do_copy "$src" "$dest"
-		# Install helper scripts (non-SKILL.md files) to ~/.local/bin/
+		# Install non-SKILL.md files: .md files stay in the skill dir,
+		# everything else goes to ~/.local/bin/ as executable scripts
 		for helper in "$skill_dir"/*; do
 			[[ -f "$helper" ]] || continue
 			helper_name="$(basename "$helper")"
 			[[ "$helper_name" == "SKILL.md" ]] && continue
-			do_copy "$helper" "$SCRIPTS_DIR/$helper_name"
-			if [[ "$DRY_RUN" != true ]]; then
-				chmod +x "$SCRIPTS_DIR/$helper_name"
+			if [[ "$helper_name" == *.md ]]; then
+				do_copy "$helper" "$SKILLS_DIR/$skill_name/$helper_name"
+			else
+				do_copy "$helper" "$SCRIPTS_DIR/$helper_name"
+				if [[ "$DRY_RUN" != true ]]; then
+					chmod +x "$SCRIPTS_DIR/$helper_name"
+				fi
 			fi
 		done
 		# Install content subdirectories (e.g., tours/) into the skill dir

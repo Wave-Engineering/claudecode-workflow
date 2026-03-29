@@ -3,6 +3,10 @@ name: ccfold
 description: Merge upstream CLAUDE.md template changes into the current project's CLAUDE.md, preserving project-specific content like Dev-Team and custom sections. Fetches the latest template from GitHub.
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # CCFold — Merge Upstream CLAUDE.md Template
 
 You are merging the latest CLAUDE.md template from the `claudecode-workflow` repo into the current project's CLAUDE.md.

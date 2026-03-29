@@ -3,6 +3,10 @@ name: scpmr
 description: Stage, commit, push, and create PR/MR — but do not merge
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # Stage, Commit, Push, Create PR/MR (No Merge)
 
 This is a combo skill that runs `/scp` with an explicit instruction to create the PR/MR but stop before merging.

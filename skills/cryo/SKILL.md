@@ -3,6 +3,10 @@ name: cryo
 description: Cryogenically preserve session state before context compaction — curate plan file and task list
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # Cryo: Pre-Compaction State Preservation
 
 Compaction is coming. Freeze everything that matters into durable storage so `/engage` can thaw it later.

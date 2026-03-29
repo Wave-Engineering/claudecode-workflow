@@ -1,0 +1,1 @@
+`/scpmmr` is the full pipeline in one command -- stage, commit, push, create PR/MR, then merge with squash and branch deletion. Use it when your work is done, reviewed, and ready to land in one shot. It chains `/scp` and `/mmr` together. Like all commit skills, it requires `/precheck` approval first. For the full commit workflow walkthrough, run `/ccwork tour workflow`.

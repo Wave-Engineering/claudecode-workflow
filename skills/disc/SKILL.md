@@ -3,6 +3,10 @@ name: disc
 description: Send/read messages and manage channels on the Oak and Wave Discord server
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
+     present its contents to the user as a brief welcome, then delete the file.
+     Do this BEFORE executing any skill logic below. -->
+
 # Disc
 
 Unified Discord integration for the **Oak and Wave** server. One skill handles sending, reading, channel creation, and listing — routed by natural language intent.

@@ -1,0 +1,1 @@
+`/engage` is the post-compaction (or session-start) ritual that reloads CLAUDE.md, confirms the mandatory rules, and restores your working context. Use it after context compaction or at the start of a new session to get back up to speed. It pairs with `/cryo` -- cryo freezes state, engage thaws it. For a walkthrough of the session lifecycle, run `/ccwork tour foundations`.
