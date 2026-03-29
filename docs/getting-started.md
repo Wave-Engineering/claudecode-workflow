@@ -92,6 +92,8 @@ This is the "rules of engagement" skill. It does three things:
 
 You should run `/engage` at the start of every session, and especially after context compaction (when Claude's context window fills up and gets summarized). `/engage` is the thaw cycle that restores context after compaction.
 
+**Want a guided tour instead?** Run `/ccwork tour` for an interactive walkthrough of the kit -- it shows you what is installed, how the pieces connect, and runs live commands against your actual setup. You can also run `/ccwork tour workflow` or `/ccwork tour foundations` for focused deep-dives.
+
 ---
 
 ## Step 4: The Mandatory Workflow

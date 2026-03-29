@@ -2,6 +2,8 @@
 
 This document explains how the pieces of the ccwork kit fit together and why they are designed the way they are. Read this after completing the [Getting Started](getting-started.md) guide.
 
+**Prefer interactive walkthroughs?** Run `/ccwork tour` for a guided orientation, `/ccwork tour workflow` for the commit/PR loop, or `/ccwork tour foundations` for the session lifecycle skills. The tours cover the same material as this document but run live commands against your actual setup.
+
 ---
 
 ## The Three Layers
