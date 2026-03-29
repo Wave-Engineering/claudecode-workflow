@@ -15,7 +15,22 @@ import { readFileSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// --- Build-date query (early exit) ------------------------------------------
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const BUILDINFO_PATH = join(__dirname, ".buildinfo");
+
+if (process.argv.includes("--builddate")) {
+  if (existsSync(BUILDINFO_PATH)) {
+    process.stdout.write(readFileSync(BUILDINFO_PATH, "utf-8").trim() + "\n");
+  } else {
+    process.stdout.write("unknown\n");
+  }
+  process.exit(0);
+}
 
 // --- Configuration -----------------------------------------------------------
 
