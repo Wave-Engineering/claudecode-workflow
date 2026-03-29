@@ -11,13 +11,63 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 // --- Configuration -----------------------------------------------------------
 
-const GUILD_ID = "1486516321385578576";
+// Hardcoded defaults (Oak and Wave — last-resort fallback)
+const DEFAULT_GUILD_ID = "1486516321385578576";
+const DEFAULT_TOKEN_PATH = "~/secrets/discord-bot-token";
+
+/** Discord configuration schema as stored in ~/.claude/discord.json */
+export interface DiscordConfig {
+  guild_id?: string;
+  token_path?: string;
+  channels?: {
+    [role: string]: { name: string; id: string };
+  };
+}
+
+/**
+ * Load Discord config using the fallback chain:
+ * 1. ~/.claude/discord.json
+ * 2. Environment variables
+ * 3. Hardcoded defaults
+ */
+export function loadConfig(): { guildId: string; tokenPath: string } {
+  let config: DiscordConfig = {};
+  const configPath = join(homedir(), ".claude", "discord.json");
+
+  // 1. Try config file
+  if (existsSync(configPath)) {
+    try {
+      config = JSON.parse(readFileSync(configPath, "utf-8"));
+    } catch {
+      console.error(`[discord-watcher] Warning: ${configPath} contains invalid JSON, falling back to defaults`);
+    }
+  }
+
+  // 2. Guild ID: config → env → default
+  const guildId =
+    config.guild_id ||
+    process.env.DISCORD_GUILD_ID ||
+    DEFAULT_GUILD_ID;
+
+  // 3. Token path: config → env → default
+  const tokenPath =
+    config.token_path ||
+    process.env.DISCORD_TOKEN_PATH ||
+    DEFAULT_TOKEN_PATH;
+
+  return { guildId, tokenPath };
+}
+
+const { guildId: GUILD_ID, tokenPath: CONFIGURED_TOKEN_PATH } = loadConfig();
+
 const API_BASE = "https://discord.com/api/v10";
 const POLL_INTERVAL_MS = 15_000;
 const CHANNEL_REFRESH_MS = 5 * 60_000;
@@ -30,7 +80,8 @@ function loadToken(): string {
   const envToken = process.env.DISCORD_BOT_TOKEN;
   if (envToken) return envToken.trim();
 
-  const tokenPath = `${process.env.HOME}/secrets/discord-bot-token`;
+  // Expand ~ in configured token path
+  const tokenPath = CONFIGURED_TOKEN_PATH.replace(/^~/, homedir());
   try {
     return readFileSync(tokenPath, "utf-8").replace(/\r?\n/g, "").trim();
   } catch {

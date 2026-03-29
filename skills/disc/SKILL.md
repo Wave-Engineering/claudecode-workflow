@@ -9,10 +9,14 @@ Unified Discord integration for the **Oak and Wave** server. One skill handles s
 
 ## Configuration
 
-```
-Guild ID: 1486516321385578576
-Default channel: #agent-ops (1487288523638837268)
-Token: ~/secrets/discord-bot-token
+Read Discord config from `~/.claude/discord.json`. If the file is missing, fall back to
+environment variables, then to hardcoded defaults. See `docs/discord-config.md` for full schema.
+
+```bash
+# Resolve values at runtime:
+GUILD_ID=$(jq -r '.guild_id' ~/.claude/discord.json 2>/dev/null || echo "1486516321385578576")
+DEFAULT_CHANNEL=$(jq -r '.channels.default.id' ~/.claude/discord.json 2>/dev/null || echo "1487288523638837268")
+ROLL_CALL_CHANNEL=$(jq -r '.channels["roll-call"].id' ~/.claude/discord.json 2>/dev/null || echo "1487382005036617851")
 ```
 
 ## Resolve Intent
@@ -52,11 +56,15 @@ Read `dev_name`, `dev_avatar`, and `dev_team` from that file. If the file doesn'
 When a channel is mentioned by name (e.g., `#dev`, `agent-ops`, `general`):
 
 ```bash
-discord-bot resolve 1486516321385578576 <channel-name>
+GUILD_ID=$(jq -r '.guild_id' ~/.claude/discord.json 2>/dev/null || echo "1486516321385578576")
+discord-bot resolve "$GUILD_ID" <channel-name>
 ```
 
 - If not found, ask if the user wants to create it.
-- If no channel is specified, use the default: `#agent-ops` (`1487288523638837268`).
+- If no channel is specified, use the default channel from config:
+  ```bash
+  DEFAULT_CHANNEL=$(jq -r '.channels.default.id' ~/.claude/discord.json 2>/dev/null || echo "1487288523638837268")
+  ```
 
 ## Send Flow
 
@@ -89,7 +97,8 @@ discord-bot resolve 1486516321385578576 <channel-name>
 2. Optionally parse a topic from the args (e.g., "create #wave-3 for tracking wave 3 progress" → topic = "tracking wave 3 progress")
 3. Create:
    ```bash
-   discord-bot create-channel 1486516321385578576 <name> --topic "<topic>"
+   GUILD_ID=$(jq -r '.guild_id' ~/.claude/discord.json 2>/dev/null || echo "1486516321385578576")
+   discord-bot create-channel "$GUILD_ID" <name> --topic "<topic>"
    ```
 4. Confirm: `Created #<name> (<id>).`
 
@@ -109,7 +118,8 @@ Note: Thread IDs work with `discord-bot read <thread-id>` for reading thread mes
 
 1. List text channels:
    ```bash
-   discord-bot list-channels 1486516321385578576 --type text
+   GUILD_ID=$(jq -r '.guild_id' ~/.claude/discord.json 2>/dev/null || echo "1486516321385578576")
+   discord-bot list-channels "$GUILD_ID" --type text
    ```
 2. Format as a clean list for the user.
 
@@ -117,9 +127,10 @@ Note: Thread IDs work with `discord-bot read <thread-id>` for reading thread mes
 
 1. Resolve agent identity (Dev-Name, Dev-Avatar, Dev-Team)
 2. Resolve the project root path
-3. Post to `#roll-call` (`1487382005036617851`):
+3. Post to `#roll-call` (resolve from config):
    ```bash
-   discord-bot send 1487382005036617851 "<message>"
+   ROLL_CALL=$(jq -r '.channels["roll-call"].id' ~/.claude/discord.json 2>/dev/null || echo "1487382005036617851")
+   discord-bot send "$ROLL_CALL" "<message>"
    ```
    Message format:
    ```

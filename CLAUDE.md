@@ -630,9 +630,10 @@ Each session, pick a fresh identity for yourself. This is NOT persisted — a ne
    Note: `thread_id` is optional and only present when `afk-notify` has created a session thread.
 4. Announce your identity to the user:
    > I'm going by **\<Dev-Name\>** \<Dev-Avatar\> from team `<Dev-Team>` this session.
-5. **Check in via Discord** — If `discord-bot` is available on PATH, announce yourself in `#roll-call`:
+5. **Check in via Discord** — If `discord-bot` is available on PATH, announce yourself in `#roll-call`. Read the channel ID from config:
    ```bash
-   discord-bot send 1487382005036617851 "<message>"
+   ROLL_CALL=$(jq -r '.channels["roll-call"].id' ~/.claude/discord.json 2>/dev/null || echo "1487382005036617851")
+   discord-bot send "$ROLL_CALL" "<message>"
    ```
    Message format:
    ```
