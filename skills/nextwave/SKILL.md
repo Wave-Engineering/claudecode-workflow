@@ -580,11 +580,17 @@ For each deferred item:
 
 Do NOT let deferred items disappear into the void. Every deferral must be tracked.
 
-6. **Voice announcement** — Announce wave completion via `vox` (best-effort):
+6. **Voice announcement** — Resolve agent identity and announce wave completion via `vox` (best-effort):
    ```bash
-   vox "Hey BJ, wave <N> is complete. <X> issues closed, <Y> flights, all merged to main. Ready for wave <N+1> when you are." 2>/dev/null || true
+   project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+   dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+   DEV_NAME=$(jq -r '.dev_name // "agent"' "/tmp/claude-agent-${dir_hash}.json" 2>/dev/null)
+   DEV_TEAM=$(jq -r '.dev_team // "unknown"' "/tmp/claude-agent-${dir_hash}.json" 2>/dev/null)
+   PROJECT=$(basename "$project_root")
+
+   vox "Hey BJ, this is $DEV_NAME from $DEV_TEAM on $PROJECT. Wave <N> is complete. <X> issues closed, <Y> flights, all merged to main. Ready for wave <N+1> when you are." 2>/dev/null || true
    ```
-   Keep it conversational — summarize the wave outcome in 1-2 sentences for the ear.
+   Keep it conversational — identify yourself, summarize the wave outcome in 1-2 sentences for the ear.
 
 7. **Prompt:** "Wave N complete. Design review for Wave N+1 is done. Run `/nextwave` for Wave N+1, or `/cryo` to preserve state."
 
