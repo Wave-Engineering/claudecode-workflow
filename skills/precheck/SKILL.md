@@ -85,13 +85,26 @@ If no findings in either category, state "(none)".
 
 ## Step 5: Voice Announcement
 
-After presenting the checklist, announce completion via `vox` (best-effort — never block on audio):
+After presenting the checklist, announce completion via `vox` (best-effort — never block on audio).
+
+Before announcing, resolve agent identity for the greeting:
 
 ```bash
-vox "Hey BJ, precheck is done for issue <NUMBER>. <SUMMARY>. Ready for your call." 2>/dev/null || true
+project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+agent_file="/tmp/claude-agent-${dir_hash}.json"
+DEV_NAME=$(jq -r '.dev_name // "agent"' "$agent_file" 2>/dev/null)
+DEV_TEAM=$(jq -r '.dev_team // "unknown"' "$agent_file" 2>/dev/null)
+PROJECT=$(basename "$project_root")
 ```
 
-The announcement should be 1-2 sentences: mention the issue number, a brief summary of what was built, and the checklist status. Write for the ear — conversational, not robotic.
+Then announce:
+
+```bash
+vox "Hey BJ, this is $DEV_NAME from $DEV_TEAM on $PROJECT. Precheck is done for issue <NUMBER>. <SUMMARY>. Ready for your call." 2>/dev/null || true
+```
+
+The announcement should be 1-2 sentences: identify yourself (dev-name, dev-team, project), mention the issue number, a brief summary of what was built, and the checklist status. Write for the ear — conversational, not robotic.
 
 ## Step 6: STOP and Wait
 
