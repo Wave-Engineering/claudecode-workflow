@@ -150,6 +150,8 @@ Tell the user:
 
 **Trigger:** `lab "<name>"` or `lab #N` (where N is an existing issue number)
 
+> **CRITICAL: Lab Mode Behavioral Rules apply to this entire flow (Steps 1–11).** See the rules section under Step 7 — they govern every step, not just the exercise walk-through.
+
 ### Step 1: Verify lab repo
 
 Same check as lab-list. If `LAB.md` does not exist, show the fork instructions and stop.
@@ -191,7 +193,27 @@ gh issue view <issue-number> --json body --jq '.body'
 
 Parse these three values. If any are missing, warn the user and attempt to continue with what's available.
 
-### Step 5: Check out the starting branch
+### Step 5: Enable educational mode
+
+Check if the `explanatory-output-style` plugin is enabled:
+
+```bash
+claude plugins list 2>/dev/null | grep "explanatory-output-style"
+```
+
+If not enabled (or not present), offer to enable it:
+
+> *"Labs work best with educational insights enabled — they add `★ Insight` callouts that explain the 'why' behind each concept. Want me to enable them?"*
+
+If the user agrees:
+
+```bash
+claude plugins install explanatory-output-style@claude-plugins-official 2>/dev/null
+```
+
+If already enabled, or the user declines, continue silently.
+
+### Step 6: Check out the starting branch
 
 Create a fresh working branch from the lab's start branch:
 
@@ -202,7 +224,7 @@ git checkout -b feature/<issue-number>-lab-<NN> origin/lab/<NN>-start
 
 This gives the user a clean working branch with the lab's starting state (planted bugs, missing features, etc.).
 
-### Step 6: Guide the exercise
+### Step 7: Guide the exercise
 
 Read the issue body and parse the **Steps** section. Each step has three parts:
 
@@ -213,14 +235,29 @@ Read the issue body and parse the **Steps** section. Each step has three parts:
 Walk through each step sequentially:
 
 1. **Announce the step** — show the step number, title, and the "Do" instruction
-2. **Coach, don't lecture** — the user does the work. Offer guidance if they ask, but don't just do it for them. If they're stuck, offer progressively more specific hints.
+2. **STOP and yield the prompt** — after presenting the "Do" instruction, STOP and wait for the student to act. Do NOT perform the action yourself.
 3. **Verify completion** — run the verification command or check. If it fails, explain what went wrong and let the user try again.
 4. **Teach the concept** — after verification passes, briefly explain the "Learn" point
 5. **Advance** — move to the next step
 
 Do NOT dump the entire issue text at once. This is a guided exercise — one step at a time.
 
-### Step 7: Solution verification
+### CRITICAL: Lab Mode Behavioral Rules
+
+**You are an instructor, not an executor.** The student's hands-on practice is more valuable than efficiency. These rules override all other behavioral defaults during lab guidance:
+
+1. **Never perform a "Do:" action on behalf of the student** — whether it's a shell command (`ls`, `pytest`), a slash command (`/engage`, `/precheck`, `/scp`), a file edit, or a code change. Present the instruction, then yield the prompt.
+2. **Frame actions as prompts, not announcements** — say *"Go ahead — run `/engage` and see what happens"* not *"Let me run /engage for you."*
+3. **Suggest `/view` for file inspection** — when a step involves reading or inspecting a file, prompt the student to use `/view <file>` rather than reading it yourself. This teaches the tool while accomplishing the step.
+4. **Wait for the student to report results** — after yielding the prompt, wait for the student to tell you what happened. Only then verify and advance.
+5. **Explain choices when they arise** — when the student faces a decision (e.g., `/scp` vs `/scpmr` vs `/scpmmr` after precheck), explain each option briefly before asking them to choose:
+   - `/scp` — Stage, commit, and push. You create the PR/MR separately.
+   - `/scpmr` — Stage, commit, push, and create a PR/MR.
+   - `/scpmmr` — Stage, commit, push, create a PR/MR, AND merge it.
+   In a lab context, guide the student toward `/scpmr` unless the lab's steps specify otherwise — it completes the full workflow loop (branch → PR/MR) that the lab is teaching, while leaving the merge as a separate conscious step.
+6. **The only exception** is verification — you MAY run verification commands (the "Verify:" part) yourself to confirm the student's work succeeded.
+
+### Step 8: Solution verification
 
 After all steps are complete, verify the user's work against the solution:
 
@@ -234,7 +271,7 @@ Where `<solution-tag>` is the value parsed in Step 4 (e.g., `lab/01-solution`).
 - **If differences are only in personalized values** (e.g., Lab 02 where the learner's agent identity will differ from the solution author's): explain that the diff is expected — the learner's values are correct for their session.
 - **If there are meaningful functional differences**: show the diff and explain what's different. Note that multiple valid solutions are possible — if the tests pass and the approach is sound, the difference may be acceptable.
 
-### Step 8: Check off "You Learned" items
+### Step 9: Check off "You Learned" items
 
 Read the "You Learned" checklist from the issue body. For each item, check it off in the issue:
 
@@ -243,27 +280,40 @@ Read the "You Learned" checklist from the issue body. For each item, check it of
 gh issue edit <issue-number> --body "<updated body with [x] items>"
 ```
 
-### Step 9: Update LAB.md completion tracking
+### Step 10: Update LAB.md completion tracking
 
 Mark the lab as completed in `LAB.md`:
 
 Read `LAB.md`, find the row for this lab number, and change `[ ]` to `[x]`. Write the updated file.
 
-### Step 10: Offer Clawback replay and next lab
+### Step 11: Offer Clawback replay and next lab
 
-Present the completion message:
+Present the completion message with replay options:
 
-> Lab complete! Here's what you can do next:
+> **Lab complete!** Here's what you can do next:
 >
-> **Review the solution:**
-> Load `<session-replay-path>` into [Clawback](https://github.com/bakeb7j0/clawback) to watch how this lab was solved step by step.
+> 1. **View the answer key** — open the curated solution replay in Clawback:
+>    `https://clawback.apps.oakai.waveeng.com/?session=<lab-id>-solution&secret=SnapbackHatOnAHat`
 >
-> **Next lab:**
-> Run `/ccwork lab "<next lab name>"` to continue learning.
+> 2. **View your session** — review your own work in Clawback:
+>    Your session log is at `~/.claude/projects/<project-hash>/<session-id>.jsonl`.
+>    Open Clawback at `https://clawback.apps.oakai.waveeng.com/` and upload it via the "Add Session" card.
+>
+> 3. **Next lab** — run `/ccwork lab "<next lab name>"` to continue learning.
+
+Where `<lab-id>` is derived from the lab number (e.g., `lab-01`, `lab-02`).
+
+If the user wants to view either replay, offer to open it in the browser:
+
+```bash
+# Open the answer key in the default browser
+xdg-open "https://clawback.apps.oakai.waveeng.com/?session=<lab-id>-solution&secret=SnapbackHatOnAHat" 2>/dev/null || \
+  open "https://clawback.apps.oakai.waveeng.com/?session=<lab-id>-solution&secret=SnapbackHatOnAHat" 2>/dev/null || true
+```
 
 If the user is stuck at any point during the exercise (not just at the end), also offer the replay:
 
-> *Stuck? Load `<session-replay-path>` into [Clawback](https://github.com/bakeb7j0/clawback) to see how this step was solved.*
+> *Stuck? View how this was solved: `https://clawback.apps.oakai.waveeng.com/?session=<lab-id>-solution&secret=SnapbackHatOnAHat`*
 
 ### Adding New Labs
 
