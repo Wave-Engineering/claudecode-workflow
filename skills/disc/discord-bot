@@ -115,16 +115,94 @@ check_kill_switch() {
 	fi
 }
 
+# --- Logging ------------------------------------------------------------------
+DISCORD_LOG_FILE="$HOME/.claude/discord-bot.log"
+
+# Resolve agent identity for log entries (best-effort, cached)
+_log_agent_name=""
+_resolve_log_agent() {
+	if [[ -n "$_log_agent_name" ]]; then return; fi
+	local project_root dir_hash agent_file
+	project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+	dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+	agent_file="/tmp/claude-agent-${dir_hash}.json"
+	if [[ -f "$agent_file" ]]; then
+		local name team
+		name=$(jq -r '.dev_name // "unknown"' "$agent_file" 2>/dev/null)
+		team=$(jq -r '.dev_team // "unknown"' "$agent_file" 2>/dev/null)
+		_log_agent_name="${name} (${team})"
+	else
+		_log_agent_name="unknown"
+	fi
+}
+
+# Log an API call as a single JSONL line
+# Usage: log_api_call <method> <endpoint> <http_code> [retry_info]
+log_api_call() {
+	local method="$1" endpoint="$2" http_code="$3" retry_info="${4:-}"
+	_resolve_log_agent
+	local timestamp
+	timestamp=$(date -Iseconds)
+	local entry
+	entry=$(jq -c -n \
+		--arg ts "$timestamp" \
+		--arg method "$method" \
+		--arg endpoint "$endpoint" \
+		--arg status "$http_code" \
+		--arg agent "$_log_agent_name" \
+		--arg retry "$retry_info" \
+		'{timestamp: $ts, method: $method, endpoint: $endpoint, status: ($status | tonumber), agent: $agent, retry: (if $retry == "" then null else $retry end)}')
+	echo "$entry" >>"$DISCORD_LOG_FILE" 2>/dev/null || true
+}
+
 # --- Helpers ------------------------------------------------------------------
+
+# Internal: execute a curl GET and return body + http_code (newline-separated)
+_raw_get() {
+	local endpoint="$1"
+	curl -sS -w '\n%{http_code}' \
+		--config <(echo "$_curl_auth_cfg") \
+		"$API_BASE$endpoint"
+}
+
+# Internal: execute a curl POST and return body + http_code (newline-separated)
+_raw_post() {
+	local endpoint="$1" payload="$2"
+	curl -sS -w '\n%{http_code}' -X POST \
+		--config <(printf '%s\n%s' "$_curl_auth_cfg" 'header = "Content-Type: application/json"') \
+		--data @- "$API_BASE$endpoint" <<<"$payload"
+}
+
 api_get() {
 	check_kill_switch
 	local endpoint="$1"
-	local http_code body
-	body=$(curl -sS -w '\n%{http_code}' \
-		--config <(echo "$_curl_auth_cfg") \
-		"$API_BASE$endpoint")
-	http_code=$(tail -1 <<<"$body")
-	body=$(sed '$d' <<<"$body")
+	local http_code body result
+
+	result=$(_raw_get "$endpoint")
+	http_code=$(tail -1 <<<"$result")
+	body=$(sed '$d' <<<"$result")
+	log_api_call "GET" "$endpoint" "$http_code"
+
+	# 429 retry
+	if [[ "$http_code" == "429" ]]; then
+		local wait_time scope
+		wait_time=$(echo "$body" | jq -r '.retry_after // 1' 2>/dev/null)
+		scope=$(echo "$body" | jq -r 'if .global == true then "global" else "channel" end' 2>/dev/null)
+		echo "Rate limited (scope: $scope). Waiting ${wait_time}s..." >&2
+		sleep "$wait_time"
+		check_kill_switch
+		result=$(_raw_get "$endpoint")
+		http_code=$(tail -1 <<<"$result")
+		body=$(sed '$d' <<<"$result")
+		log_api_call "GET" "$endpoint" "$http_code" "retry=1 after ${wait_time}s"
+		if [[ "$http_code" == "429" ]]; then
+			local retry_after
+			retry_after=$(echo "$body" | jq -r '.retry_after // "unknown"' 2>/dev/null)
+			echo "Error: Rate limited after retry. retry_after=${retry_after}s, scope=$scope. Try again in a moment." >&2
+			return 1
+		fi
+	fi
+
 	if [[ "$http_code" -ge 400 ]]; then
 		echo "Error: Discord API returned HTTP $http_code on GET $endpoint" >&2
 		[[ -n "$body" ]] && echo "$body" | jq -r '.message // empty' 2>/dev/null >&2
@@ -136,12 +214,33 @@ api_get() {
 api_post() {
 	check_kill_switch
 	local endpoint="$1" payload="$2"
-	local http_code body
-	body=$(curl -sS -w '\n%{http_code}' -X POST \
-		--config <(printf '%s\n%s' "$_curl_auth_cfg" 'header = "Content-Type: application/json"') \
-		--data @- "$API_BASE$endpoint" <<<"$payload")
-	http_code=$(tail -1 <<<"$body")
-	body=$(sed '$d' <<<"$body")
+	local http_code body result
+
+	result=$(_raw_post "$endpoint" "$payload")
+	http_code=$(tail -1 <<<"$result")
+	body=$(sed '$d' <<<"$result")
+	log_api_call "POST" "$endpoint" "$http_code"
+
+	# 429 retry
+	if [[ "$http_code" == "429" ]]; then
+		local wait_time scope
+		wait_time=$(echo "$body" | jq -r '.retry_after // 1' 2>/dev/null)
+		scope=$(echo "$body" | jq -r 'if .global == true then "global" else "channel" end' 2>/dev/null)
+		echo "Rate limited (scope: $scope). Waiting ${wait_time}s..." >&2
+		sleep "$wait_time"
+		check_kill_switch
+		result=$(_raw_post "$endpoint" "$payload")
+		http_code=$(tail -1 <<<"$result")
+		body=$(sed '$d' <<<"$result")
+		log_api_call "POST" "$endpoint" "$http_code" "retry=1 after ${wait_time}s"
+		if [[ "$http_code" == "429" ]]; then
+			local retry_after
+			retry_after=$(echo "$body" | jq -r '.retry_after // "unknown"' 2>/dev/null)
+			echo "Error: Rate limited after retry. retry_after=${retry_after}s, scope=$scope. Try again in a moment." >&2
+			return 1
+		fi
+	fi
+
 	if [[ "$http_code" -ge 400 ]]; then
 		echo "Error: Discord API returned HTTP $http_code on POST $endpoint" >&2
 		[[ -n "$body" ]] && echo "$body" | jq -r '.message // empty' 2>/dev/null >&2
@@ -233,16 +332,36 @@ cmd_send() {
 
 	if [[ -n "$attach_file" ]]; then
 		check_kill_switch
-		local http_code body
+		local http_code body endpoint="/channels/$channel_id/messages"
 		body=$(curl -sS -w '\n%{http_code}' -X POST \
 			--config <(echo "$_curl_auth_cfg") \
 			-F "payload_json=$payload" \
 			-F "files[0]=@${attach_file}" \
-			"$API_BASE/channels/$channel_id/messages")
+			"$API_BASE$endpoint")
 		http_code=$(tail -1 <<<"$body")
 		body=$(sed '$d' <<<"$body")
+		log_api_call "POST(multipart)" "$endpoint" "$http_code"
+
+		# 429 retry for multipart
+		if [[ "$http_code" == "429" ]]; then
+			local wait_time scope
+			wait_time=$(echo "$body" | jq -r '.retry_after // 1' 2>/dev/null)
+			scope=$(echo "$body" | jq -r 'if .global == true then "global" else "channel" end' 2>/dev/null)
+			echo "Rate limited (scope: $scope). Waiting ${wait_time}s..." >&2
+			sleep "$wait_time"
+			check_kill_switch
+			body=$(curl -sS -w '\n%{http_code}' -X POST \
+				--config <(echo "$_curl_auth_cfg") \
+				-F "payload_json=$payload" \
+				-F "files[0]=@${attach_file}" \
+				"$API_BASE$endpoint")
+			http_code=$(tail -1 <<<"$body")
+			body=$(sed '$d' <<<"$body")
+			log_api_call "POST(multipart)" "$endpoint" "$http_code" "retry=1 after ${wait_time}s"
+		fi
+
 		if [[ "$http_code" -ge 400 ]]; then
-			echo "Error: Discord API returned HTTP $http_code on multipart POST" >&2
+			echo "Error: Discord API returned HTTP $http_code on multipart POST $endpoint" >&2
 			[[ -n "$body" ]] && echo "$body" | jq -r '.message // empty' 2>/dev/null >&2
 			return 1
 		fi
