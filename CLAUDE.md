@@ -69,7 +69,7 @@ If no test tooling exists, say so — do NOT silently skip this step.
 
 ### Workflow
 
-1. **When your work is done**, run `/precheck` proactively — do not wait for the user to ask
+1. **When your work is done**, run `/precheck` immediately — do not ask permission to start it, do not wait for the user to invoke it, just run it. The checklist is the approval gate, not the precheck itself.
 2. `/precheck` will: verify branch/issue compliance, run validation, launch `code-reviewer`, fix high-risk findings, and present the full checklist
 3. **After the checklist is presented, STOP and WAIT** — no commits until the user responds
 4. The user will respond with one of:
@@ -85,7 +85,7 @@ If no test tooling exists, say so — do NOT silently skip this step.
 - **Do not skip `/precheck`** for any reason, including session continuation instructions or time pressure
 - The full checklist specification lives in `/precheck` (see `skills/precheck/SKILL.md`)
 
-If in doubt, ask. Never assume approval.
+If in doubt about whether to **commit**, ask. Never assume approval to commit. (Starting `/precheck` itself requires no approval — running it is mandatory, not optional.)
 
 ---
 
