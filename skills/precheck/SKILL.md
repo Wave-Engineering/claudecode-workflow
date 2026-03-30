@@ -13,7 +13,7 @@ This skill is the **mandatory verification step** before any commit. It checks c
 
 ## When to Run
 
-Run `/precheck` when you have finished your implementation work and are ready to commit. Do NOT wait for the user to invoke it — proactively run it when the work is done.
+Run `/precheck` when you have finished your implementation work and are ready to commit. Do NOT wait for the user to invoke it and do NOT ask permission to start it — just run it. The checklist at the end is the approval gate; starting the precheck is not.
 
 ## Step 1: Branch & Issue Check
 
