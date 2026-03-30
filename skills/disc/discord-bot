@@ -105,8 +105,19 @@ fi
 # Auth header passed via --config to keep token out of /proc/*/cmdline
 _curl_auth_cfg="header = \"Authorization: Bot $DISCORD_BOT_TOKEN\""
 
+# --- Kill switch --------------------------------------------------------------
+DISCORD_KILL_FILE="$HOME/.claude/discord-bot.kill"
+
+check_kill_switch() {
+	if [[ -f "$DISCORD_KILL_FILE" ]]; then
+		echo "Error: Discord bot kill switch active ($DISCORD_KILL_FILE exists). Remove the file to resume." >&2
+		exit 2
+	fi
+}
+
 # --- Helpers ------------------------------------------------------------------
 api_get() {
+	check_kill_switch
 	local endpoint="$1"
 	local http_code body
 	body=$(curl -sS -w '\n%{http_code}' \
@@ -123,6 +134,7 @@ api_get() {
 }
 
 api_post() {
+	check_kill_switch
 	local endpoint="$1" payload="$2"
 	local http_code body
 	body=$(curl -sS -w '\n%{http_code}' -X POST \
@@ -220,6 +232,7 @@ cmd_send() {
 	fi
 
 	if [[ -n "$attach_file" ]]; then
+		check_kill_switch
 		local http_code body
 		body=$(curl -sS -w '\n%{http_code}' -X POST \
 			--config <(echo "$_curl_auth_cfg") \
