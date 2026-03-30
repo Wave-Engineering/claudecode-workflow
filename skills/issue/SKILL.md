@@ -41,7 +41,7 @@ Or read from `.claude-project.md` if it exists.
 {{#if args}}
 Parse: `{{args}}`
 {{else}}
-No arguments — infer the issue from the most recent topic of conversation. Determine the type and content from context, then confirm with the user before creating.
+No arguments — infer the issue from the most recent topic of conversation. Determine the type and content from context and create directly. State your interpretation in the report so the user can edit if the inference was wrong.
 {{/if}}
 
 Extract two things:
@@ -246,9 +246,9 @@ Labels use the `group::value` convention. Within each group, labels are mutually
 | docs | `type::docs` |
 | epic | `type::epic` |
 
-### Prompted Labels
+### Inferred Labels
 
-After drafting, assess and suggest values for these groups. Present your recommendation and let the user confirm or override:
+Assess and apply values for these groups using judgment. Do not pause to confirm — proceed directly to creation:
 
 | Group | Values | When Required |
 |-------|--------|---------------|
@@ -262,29 +262,11 @@ After drafting, assess and suggest values for these groups. Present your recomme
 - **Priority** = business value importance. How much does this matter?
 - **Urgency** = temporal significance. How soon must it be addressed?
 
-Present your assessment concisely:
+Assess labels based on the content — do not ask the user to confirm each one. Use your judgment.
 
-> **Labels:** `type::feature`, `priority::medium`, `urgency::normal`, `size::M`
-> Agree, or adjust?
+## Step 5: Create the Issue
 
-## Step 5: Present Draft for Approval
-
-Show the user:
-1. The issue title (following `type(scope): description` convention). Examples:
-   - Feature: `feat(auth): add OAuth2 login flow`
-   - Bug: `fix(search): results page crashes on empty query`
-   - Chore: `chore(deps): update ruff to 0.8.x`
-   - Docs: `docs(api): add endpoint reference for /users`
-   - Epic: `epic(onboarding): user registration and verification`
-2. The full body
-3. The proposed labels
-4. Ask for approval or edits
-
-Do NOT create the issue until the user approves. This is a gate — the user may want to refine the spec.
-
-## Step 6: Create the Issue
-
-After approval:
+Create immediately — do not ask for approval. Issues are cheap to edit and close. The user gave intent when they invoked `/issue`; the real review happens in the project board where the editing tools are better.
 
 Write the issue body to a temp file first, then create:
 
@@ -315,12 +297,22 @@ gh label create "type::feature" --description "Feature request" --color "0E8A16"
 glab label create "type::feature" --description "Feature request" --color "#0E8A16"
 ```
 
-## Step 7: Report
+## Step 6: Report
 
-Confirm creation with the issue number and URL:
+Confirm creation with the issue number, URL, and a nudge to review:
 
 > Created **#NNN** — `type(scope): description`
 > Labels: `type::feature`, `priority::medium`, `urgency::normal`, `size::M`
+> Review and edit: `<issue URL>`
+
+When creating multiple issues in a batch (e.g., epic decomposition), report all of them at the end in a table rather than one at a time:
+
+> | # | Title | Labels |
+> |---|-------|--------|
+> | #10 | feat(auth): OAuth2 login | type::feature, priority::high, size::M |
+> | #11 | feat(auth): session management | type::feature, priority::high, size::M |
+>
+> Review in your project board: `<project URL>`
 
 ## Label Color Reference
 
