@@ -288,32 +288,59 @@ Read `LAB.md`, find the row for this lab number, and change `[ ]` to `[x]`. Writ
 
 ### Step 11: Offer Clawback replay and next lab
 
-Present the completion message with replay options:
+At lab completion, upload the student's current session to Clawback as an ephemeral replay and present both links.
+
+**Upload the student's session:**
+
+```bash
+# Find the current session .jsonl
+SESSION_DIR=$(ls -td ~/.claude/projects/*/ 2>/dev/null | head -1)
+SESSION_FILE=$(ls -t "$SESSION_DIR"*.jsonl 2>/dev/null | head -1)
+
+# Upload ephemerally (memory-only, auto-expires after 4h)
+CLAWBACK_URL="https://clawback.apps.oakai.waveeng.com"
+UPLOAD_RESULT=$(curl -s -X POST "$CLAWBACK_URL/api/sessions/upload" \
+  -H "X-Clawback-Secret: SnapbackHatOnAHat" \
+  -F "file=@$SESSION_FILE" \
+  -F "title=Lab <NN>: <lab-title> — My Session" \
+  -F "ephemeral=true" 2>/dev/null)
+
+STUDENT_SESSION_ID=$(echo "$UPLOAD_RESULT" | jq -r '.session.id // empty' 2>/dev/null)
+```
+
+**Present the completion message:**
 
 > **Lab complete!** Here's what you can do next:
 >
-> 1. **View the answer key** — open the curated solution replay in Clawback:
->    `https://clawback.apps.oakai.waveeng.com/?session=<lab-id>-solution&secret=SnapbackHatOnAHat`
+> 1. **View your session** — replay what you just did in Clawback:
+>    `<CLAWBACK_URL>/?session=<student-session-id>&autoplay=true`
 >
-> 2. **View your session** — review your own work in Clawback:
->    Your session log is at `~/.claude/projects/<project-hash>/<session-id>.jsonl`.
->    Open Clawback at `https://clawback.apps.oakai.waveeng.com/` and upload it via the "Add Session" card.
+> 2. **View the example walkthrough** — watch how an instructor solved this lab:
+>    `<CLAWBACK_URL>/?session=<lab-id>-solution&autoplay=true`
 >
 > 3. **Next lab** — run `/ccwork lab "<next lab name>"` to continue learning.
 
 Where `<lab-id>` is derived from the lab number (e.g., `lab-01`, `lab-02`).
 
-If the user wants to view either replay, offer to open it in the browser:
+If the student's session upload fails (network error, Clawback unavailable), fall back to showing the file path:
+
+> Your session log is at `<SESSION_FILE>` — you can upload it to Clawback manually later.
+
+**Open links in the browser** when the user chooses an option:
 
 ```bash
-# Open the answer key in the default browser
-xdg-open "https://clawback.apps.oakai.waveeng.com/?session=<lab-id>-solution&secret=SnapbackHatOnAHat" 2>/dev/null || \
-  open "https://clawback.apps.oakai.waveeng.com/?session=<lab-id>-solution&secret=SnapbackHatOnAHat" 2>/dev/null || true
+# Student's session
+xdg-open "$CLAWBACK_URL/?session=$STUDENT_SESSION_ID&autoplay=true" 2>/dev/null || \
+  open "$CLAWBACK_URL/?session=$STUDENT_SESSION_ID&autoplay=true" 2>/dev/null || true
+
+# Example walkthrough
+xdg-open "$CLAWBACK_URL/?session=<lab-id>-solution&autoplay=true" 2>/dev/null || \
+  open "$CLAWBACK_URL/?session=<lab-id>-solution&autoplay=true" 2>/dev/null || true
 ```
 
-If the user is stuck at any point during the exercise (not just at the end), also offer the replay:
+**When the student is stuck** at any point during the exercise (not just at the end), offer the example walkthrough:
 
-> *Stuck? View how this was solved: `https://clawback.apps.oakai.waveeng.com/?session=<lab-id>-solution&secret=SnapbackHatOnAHat`*
+> *Stuck? Watch how this was solved: `<CLAWBACK_URL>/?session=<lab-id>-solution&autoplay=true`*
 
 ### Adding New Labs
 
