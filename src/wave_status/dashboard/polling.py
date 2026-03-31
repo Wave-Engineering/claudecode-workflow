@@ -115,6 +115,14 @@ def render_polling_script() -> str:
           clearInterval(timerId);
           timerId = null;
         }
+        /* Fall back to meta-refresh for file:// protocol */
+        if (window.location.protocol === "file:" &&
+            !document.querySelector('meta[http-equiv="refresh"]')) {
+          var meta = document.createElement("meta");
+          meta.httpEquiv = "refresh";
+          meta.content = "5";
+          document.head.appendChild(meta);
+        }
         var notice = document.querySelector("[data-fallback-notice]");
         if (notice) {
           notice.style.display = "block";
