@@ -11,6 +11,14 @@
 #
 # Environment:
 #   DISCORD_BOT_TOKEN   Bot token (fallback: ~/secrets/discord-bot-token)
+#
+# Kill switch:
+#   touch ~/.claude/discord-bot.kill               Manual kill (no expiry)
+#   echo "1711846591" > ~/.claude/discord-bot.kill  Timed kill (auto-lifts at timestamp)
+#   rm ~/.claude/discord-bot.kill                   Resume immediately
+#
+#   Global 429 bans auto-engage the kill switch with expiry.
+#   Messages during a kill are dropped, not buffered.
 
 set -euo pipefail
 
@@ -110,9 +118,43 @@ DISCORD_KILL_FILE="$HOME/.claude/discord-bot.kill"
 
 check_kill_switch() {
 	if [[ -f "$DISCORD_KILL_FILE" ]]; then
-		echo "Error: Discord bot kill switch active ($DISCORD_KILL_FILE exists). Remove the file to resume." >&2
-		exit 2
+		local content
+		content=$(cat "$DISCORD_KILL_FILE" 2>/dev/null)
+		if [[ -z "$content" || ! "$content" =~ ^[0-9]+$ ]]; then
+			# Manual kill — no expiry
+			echo "Error: Discord bot kill switch active ($DISCORD_KILL_FILE exists). Remove the file to resume." >&2
+			exit 2
+		fi
+		local now
+		now=$(date +%s)
+		if ((now >= content)); then
+			# Ban expired — auto-lift
+			rm -f "$DISCORD_KILL_FILE"
+			log_api_call "SYSTEM" "kill-switch" "0" "auto-lifted after global ban expiry"
+			return 0
+		else
+			local remaining=$((content - now))
+			local expires_at
+			expires_at=$(date -d "@$content" '+%H:%M:%S' 2>/dev/null || echo "unknown")
+			echo "Error: Global rate limit ban active. Expires at $expires_at (~${remaining}s remaining). Remove $DISCORD_KILL_FILE to override." >&2
+			exit 2
+		fi
 	fi
+}
+
+# Engage kill switch with expiry timestamp for global bans
+_engage_global_kill() {
+	local retry_after_secs="$1"
+	local expiry=$(($(date +%s) + retry_after_secs))
+	# Atomic write — temp file + rename prevents empty kill file on interrupted write
+	local tmp
+	tmp=$(mktemp "${DISCORD_KILL_FILE}.XXXXXX")
+	echo "$expiry" >"$tmp"
+	mv -f "$tmp" "$DISCORD_KILL_FILE"
+	local expires_at
+	expires_at=$(date -d "@$expiry" '+%H:%M:%S' 2>/dev/null || echo "unknown")
+	echo "GLOBAL rate limit detected. Kill switch engaged until $expires_at (~${retry_after_secs}s)." >&2
+	log_api_call "SYSTEM" "kill-switch" "429" "global ban, kill engaged until $expires_at (${retry_after_secs}s)"
 }
 
 # --- Logging ------------------------------------------------------------------
@@ -157,20 +199,35 @@ log_api_call() {
 
 # --- Helpers ------------------------------------------------------------------
 
+# Header capture file for extracting retry-after
+_DISCORD_HEADERS_FILE=$(mktemp -t discord-headers.XXXXXX 2>/dev/null || echo "/tmp/discord-headers-$$")
+trap 'rm -f "$_DISCORD_HEADERS_FILE"' EXIT
+
 # Internal: execute a curl GET and return body + http_code (newline-separated)
+# Response headers are written to $_DISCORD_HEADERS_FILE
 _raw_get() {
 	local endpoint="$1"
-	curl -sS -w '\n%{http_code}' \
+	curl -sS -D "$_DISCORD_HEADERS_FILE" -w '\n%{http_code}' \
 		--config <(echo "$_curl_auth_cfg") \
 		"$API_BASE$endpoint"
 }
 
 # Internal: execute a curl POST and return body + http_code (newline-separated)
+# Response headers are written to $_DISCORD_HEADERS_FILE
 _raw_post() {
 	local endpoint="$1" payload="$2"
-	curl -sS -w '\n%{http_code}' -X POST \
+	curl -sS -D "$_DISCORD_HEADERS_FILE" -w '\n%{http_code}' -X POST \
 		--config <(printf '%s\n%s' "$_curl_auth_cfg" 'header = "Content-Type: application/json"') \
 		--data @- "$API_BASE$endpoint" <<<"$payload"
+}
+
+# Extract retry-after from response headers (seconds, integer)
+# Extract retry-after from response headers (seconds, positive integer only)
+# Returns empty string if header is absent or non-positive, allowing fallback chain
+_get_retry_after_header() {
+	local val
+	val=$(grep -i '^retry-after:' "$_DISCORD_HEADERS_FILE" 2>/dev/null | awk '{print int($2)}' | head -1)
+	[[ "${val:-0}" -gt 0 ]] && echo "$val"
 }
 
 api_get() {
@@ -183,12 +240,23 @@ api_get() {
 	body=$(sed '$d' <<<"$result")
 	log_api_call "GET" "$endpoint" "$http_code"
 
-	# 429 retry
+	# 429 handling — global vs channel
 	if [[ "$http_code" == "429" ]]; then
-		local wait_time scope
-		wait_time=$(echo "$body" | jq -r '.retry_after // 1' 2>/dev/null)
-		scope=$(echo "$body" | jq -r 'if .global == true then "global" else "channel" end' 2>/dev/null)
-		echo "Rate limited (scope: $scope). Waiting ${wait_time}s..." >&2
+		local is_global header_retry body_retry wait_time
+		is_global=$(echo "$body" | jq -r '.global // false' 2>/dev/null)
+		header_retry=$(_get_retry_after_header)
+		body_retry=$(echo "$body" | jq -r '.retry_after // empty' 2>/dev/null)
+		wait_time="${header_retry:-${body_retry:-1}}"
+
+		if [[ "$is_global" == "true" ]]; then
+			# Global ban — kill switch, do NOT retry
+			_engage_global_kill "${wait_time%.*}"
+			log_api_call "GET" "$endpoint" "429" "global=true, retry_after=${wait_time}s, kill_engaged=true"
+			return 1
+		fi
+
+		# Per-channel limit — sleep and retry once
+		echo "Rate limited (scope: channel). Waiting ${wait_time}s..." >&2
 		sleep "$wait_time"
 		check_kill_switch
 		result=$(_raw_get "$endpoint")
@@ -196,9 +264,7 @@ api_get() {
 		body=$(sed '$d' <<<"$result")
 		log_api_call "GET" "$endpoint" "$http_code" "retry=1 after ${wait_time}s"
 		if [[ "$http_code" == "429" ]]; then
-			local retry_after
-			retry_after=$(echo "$body" | jq -r '.retry_after // "unknown"' 2>/dev/null)
-			echo "Error: Rate limited after retry. retry_after=${retry_after}s, scope=$scope. Try again in a moment." >&2
+			echo "Error: Rate limited after retry. Try again in a moment." >&2
 			return 1
 		fi
 	fi
@@ -221,12 +287,23 @@ api_post() {
 	body=$(sed '$d' <<<"$result")
 	log_api_call "POST" "$endpoint" "$http_code"
 
-	# 429 retry
+	# 429 handling — global vs channel
 	if [[ "$http_code" == "429" ]]; then
-		local wait_time scope
-		wait_time=$(echo "$body" | jq -r '.retry_after // 1' 2>/dev/null)
-		scope=$(echo "$body" | jq -r 'if .global == true then "global" else "channel" end' 2>/dev/null)
-		echo "Rate limited (scope: $scope). Waiting ${wait_time}s..." >&2
+		local is_global header_retry body_retry wait_time
+		is_global=$(echo "$body" | jq -r '.global // false' 2>/dev/null)
+		header_retry=$(_get_retry_after_header)
+		body_retry=$(echo "$body" | jq -r '.retry_after // empty' 2>/dev/null)
+		wait_time="${header_retry:-${body_retry:-1}}"
+
+		if [[ "$is_global" == "true" ]]; then
+			# Global ban — kill switch, do NOT retry
+			_engage_global_kill "${wait_time%.*}"
+			log_api_call "POST" "$endpoint" "429" "global=true, retry_after=${wait_time}s, kill_engaged=true"
+			return 1
+		fi
+
+		# Per-channel limit — sleep and retry once
+		echo "Rate limited (scope: channel). Waiting ${wait_time}s..." >&2
 		sleep "$wait_time"
 		check_kill_switch
 		result=$(_raw_post "$endpoint" "$payload")
@@ -234,9 +311,7 @@ api_post() {
 		body=$(sed '$d' <<<"$result")
 		log_api_call "POST" "$endpoint" "$http_code" "retry=1 after ${wait_time}s"
 		if [[ "$http_code" == "429" ]]; then
-			local retry_after
-			retry_after=$(echo "$body" | jq -r '.retry_after // "unknown"' 2>/dev/null)
-			echo "Error: Rate limited after retry. retry_after=${retry_after}s, scope=$scope. Try again in a moment." >&2
+			echo "Error: Rate limited after retry. Try again in a moment." >&2
 			return 1
 		fi
 	fi
@@ -333,7 +408,7 @@ cmd_send() {
 	if [[ -n "$attach_file" ]]; then
 		check_kill_switch
 		local http_code body endpoint="/channels/$channel_id/messages"
-		body=$(curl -sS -w '\n%{http_code}' -X POST \
+		body=$(curl -sS -D "$_DISCORD_HEADERS_FILE" -w '\n%{http_code}' -X POST \
 			--config <(echo "$_curl_auth_cfg") \
 			-F "payload_json=$payload" \
 			-F "files[0]=@${attach_file}" \
@@ -342,15 +417,24 @@ cmd_send() {
 		body=$(sed '$d' <<<"$body")
 		log_api_call "POST(multipart)" "$endpoint" "$http_code"
 
-		# 429 retry for multipart
+		# 429 handling — global vs channel
 		if [[ "$http_code" == "429" ]]; then
-			local wait_time scope
-			wait_time=$(echo "$body" | jq -r '.retry_after // 1' 2>/dev/null)
-			scope=$(echo "$body" | jq -r 'if .global == true then "global" else "channel" end' 2>/dev/null)
-			echo "Rate limited (scope: $scope). Waiting ${wait_time}s..." >&2
+			local is_global header_retry body_retry wait_time
+			is_global=$(echo "$body" | jq -r '.global // false' 2>/dev/null)
+			header_retry=$(_get_retry_after_header)
+			body_retry=$(echo "$body" | jq -r '.retry_after // empty' 2>/dev/null)
+			wait_time="${header_retry:-${body_retry:-1}}"
+
+			if [[ "$is_global" == "true" ]]; then
+				_engage_global_kill "${wait_time%.*}"
+				log_api_call "POST(multipart)" "$endpoint" "429" "global=true, retry_after=${wait_time}s, kill_engaged=true"
+				return 1
+			fi
+
+			echo "Rate limited (scope: channel). Waiting ${wait_time}s..." >&2
 			sleep "$wait_time"
 			check_kill_switch
-			body=$(curl -sS -w '\n%{http_code}' -X POST \
+			body=$(curl -sS -D "$_DISCORD_HEADERS_FILE" -w '\n%{http_code}' -X POST \
 				--config <(echo "$_curl_auth_cfg") \
 				-F "payload_json=$payload" \
 				-F "files[0]=@${attach_file}" \
