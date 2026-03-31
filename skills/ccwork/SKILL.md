@@ -185,13 +185,14 @@ Read the issue body (either the newly created issue or the referenced `#N`) and 
 - **Start branch** — look for `` **Start branch:** `lab/NN-start` `` and extract the branch name
 - **Solution tag** — look for `` **Solution tag:** `lab/NN-solution` `` and extract the tag name
 - **Session replay** — look for `` **Session replay:** `labs/NN/session.jsonl` `` and extract the file path
+- **Curated session** — look for `` **Curated session:** `lab-NN` `` and extract the Clawback session ID
 
 ```bash
 # Read the issue body
 gh issue view <issue-number> --json body --jq '.body'
 ```
 
-Parse these three values. If any are missing, warn the user and attempt to continue with what's available.
+Parse these values. Session replay and curated session are optional — if missing, the completion step will fall back gracefully.
 
 ### Step 5: Enable educational mode
 
@@ -290,6 +291,14 @@ Read `LAB.md`, find the row for this lab number, and change `[ ]` to `[x]`. Writ
 
 At lab completion, upload the student's current session to Clawback as an ephemeral replay and present both links.
 
+**Resolve the Clawback URL and curated session ID:**
+
+```bash
+CLAWBACK_URL="https://clawback.apps.oakai.waveeng.com"
+# Use the curated session ID parsed in Step 4 (e.g., "lab-01-project-setup", "lab-05b-build-and-ship-it")
+CURATED_SESSION_ID="<curated-session-id-from-step-4>"
+```
+
 **Upload the student's session:**
 
 ```bash
@@ -297,12 +306,14 @@ At lab completion, upload the student's current session to Clawback as an epheme
 SESSION_DIR=$(ls -td ~/.claude/projects/*/ 2>/dev/null | head -1)
 SESSION_FILE=$(ls -t "$SESSION_DIR"*.jsonl 2>/dev/null | head -1)
 
+# Timestamp suffix for uniqueness (allows re-running the same lab)
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
 # Upload ephemerally (memory-only, auto-expires after 4h)
-CLAWBACK_URL="https://clawback.apps.oakai.waveeng.com"
 UPLOAD_RESULT=$(curl -s -X POST "$CLAWBACK_URL/api/sessions/upload" \
   -H "X-Clawback-Secret: SnapbackHatOnAHat" \
   -F "file=@$SESSION_FILE" \
-  -F "title=Lab <NN>: <lab-title> — My Session" \
+  -F "title=Lab <NN>: <lab-title> $TIMESTAMP" \
   -F "ephemeral=true" 2>/dev/null)
 
 STUDENT_SESSION_ID=$(echo "$UPLOAD_RESULT" | jq -r '.session.id // empty' 2>/dev/null)
@@ -312,15 +323,15 @@ STUDENT_SESSION_ID=$(echo "$UPLOAD_RESULT" | jq -r '.session.id // empty' 2>/dev
 
 > **Lab complete!** Here's what you can do next:
 >
-> 1. **View your session** — replay what you just did in Clawback:
+> 1. **Watch your session** — replay what you just did in Clawback:
 >    `<CLAWBACK_URL>/?session=<student-session-id>&autoplay=true`
 >
-> 2. **View the example walkthrough** — watch how an instructor solved this lab:
->    `<CLAWBACK_URL>/?session=<lab-id>-solution&autoplay=true`
+> 2. **Watch the curated walkthrough** — see how an instructor solved this lab:
+>    `<CLAWBACK_URL>/?session=<curated-session-id>&autoplay=true`
 >
 > 3. **Next lab** — run `/ccwork lab "<next lab name>"` to continue learning.
 
-Where `<lab-id>` is derived from the lab number (e.g., `lab-01`, `lab-02`).
+The `<curated-session-id>` comes from the `**Curated session:**` metadata parsed in Step 4 (e.g., `lab-01`, `lab-05b`). If the metadata was missing, fall back to deriving the ID from the lab number: `lab-<NN>`.
 
 If the student's session upload fails (network error, Clawback unavailable), fall back to showing the file path:
 
@@ -333,14 +344,14 @@ If the student's session upload fails (network error, Clawback unavailable), fal
 xdg-open "$CLAWBACK_URL/?session=$STUDENT_SESSION_ID&autoplay=true" 2>/dev/null || \
   open "$CLAWBACK_URL/?session=$STUDENT_SESSION_ID&autoplay=true" 2>/dev/null || true
 
-# Example walkthrough
-xdg-open "$CLAWBACK_URL/?session=<lab-id>-solution&autoplay=true" 2>/dev/null || \
-  open "$CLAWBACK_URL/?session=<lab-id>-solution&autoplay=true" 2>/dev/null || true
+# Curated walkthrough
+xdg-open "$CLAWBACK_URL/?session=$CURATED_SESSION_ID&autoplay=true" 2>/dev/null || \
+  open "$CLAWBACK_URL/?session=$CURATED_SESSION_ID&autoplay=true" 2>/dev/null || true
 ```
 
-**When the student is stuck** at any point during the exercise (not just at the end), offer the example walkthrough:
+**When the student is stuck** at any point during the exercise (not just at the end), offer the curated walkthrough:
 
-> *Stuck? Watch how this was solved: `<CLAWBACK_URL>/?session=<lab-id>-solution&autoplay=true`*
+> *Stuck? Watch how this was solved: `<CLAWBACK_URL>/?session=<curated-session-id>&autoplay=true`*
 
 ### Adding New Labs
 
