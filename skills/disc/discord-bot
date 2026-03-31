@@ -324,6 +324,82 @@ api_post() {
 	echo "$body"
 }
 
+# --- Debounce (wave-status channel) -------------------------------------------
+# When multiple agents fire status updates in rapid succession, debounce
+# collapses them: hold for 15s, replace if a new message arrives, send only
+# the final message.
+
+DEBOUNCE_DELAY=15
+
+_should_debounce() {
+	local channel_id="$1"
+	local wave_status_id
+	wave_status_id=$(discord_channel_wave_status)
+	[[ "$channel_id" == "$wave_status_id" ]]
+}
+
+_debounce_send() {
+	local channel_id="$1" payload="$2"
+	local debounce_file="$HOME/.claude/discord-debounce-${channel_id}.payload"
+	local pid_file="$HOME/.claude/discord-debounce-${channel_id}.pid"
+
+	# Write latest payload atomically (printf avoids echo escape processing)
+	local tmp
+	tmp=$(mktemp "${debounce_file}.XXXXXX")
+	printf '%s\n' "$payload" >"$tmp"
+	mv -f "$tmp" "$debounce_file"
+
+	# If a timer is already running, it will pick up the new payload
+	if [[ -f "$pid_file" ]]; then
+		local existing_pid
+		existing_pid=$(cat "$pid_file" 2>/dev/null)
+		if kill -0 "$existing_pid" 2>/dev/null; then
+			# Staleness check: if payload is older than 2x delay, PID is likely reused
+			local payload_age
+			payload_age=$(($(date +%s) - $(stat -c %Y "$debounce_file" 2>/dev/null || echo 0)))
+			if ((payload_age < DEBOUNCE_DELAY * 2)); then
+				return 0
+			fi
+			# Stale — fall through to start a fresh timer
+		fi
+		rm -f "$pid_file"
+	fi
+
+	# Start background timer
+	(
+		# Own temp file for headers (parent's may be cleaned up)
+		# shellcheck disable=SC2030
+		_DISCORD_HEADERS_FILE=$(mktemp -t discord-debounce-headers.XXXXXX 2>/dev/null || echo "/tmp/discord-debounce-headers-$$")
+		trap 'rm -f "$_DISCORD_HEADERS_FILE"' EXIT
+
+		while true; do
+			local mtime_before mtime_after
+			mtime_before=$(stat -c %Y "$debounce_file" 2>/dev/null || echo 0)
+			sleep $DEBOUNCE_DELAY
+			mtime_after=$(stat -c %Y "$debounce_file" 2>/dev/null || echo 0)
+			if [[ "$mtime_before" == "$mtime_after" ]]; then
+				# No new message during sleep — send the final payload
+				local final_payload
+				final_payload=$(cat "$debounce_file" 2>/dev/null)
+				if [[ -n "$final_payload" ]]; then
+					if api_post "/channels/$channel_id/messages" "$final_payload" >/dev/null 2>&1; then
+						log_api_call "POST(debounced)" "/channels/$channel_id/messages" "sent" "debounce=${DEBOUNCE_DELAY}s"
+					else
+						log_api_call "POST(debounced)" "/channels/$channel_id/messages" "failed" "debounce=${DEBOUNCE_DELAY}s"
+					fi
+				fi
+				rm -f "$debounce_file" "$pid_file"
+				break
+			fi
+			# File was updated — restart the timer
+		done
+	) &
+	# Write PID in parent (using $!) to eliminate race with concurrent callers
+	echo "$!" >"$pid_file"
+	disown
+	return 0
+}
+
 # --- Subcommand: send ---------------------------------------------------------
 send_help() {
 	cat <<'HELPTEXT'
@@ -405,9 +481,17 @@ cmd_send() {
 		payload=$(jq -c -n --arg content "$message" '{content: $content}')
 	fi
 
+	# Debounce wave-status channel (no attachment support for debounced sends)
+	if [[ -z "$attach_file" ]] && _should_debounce "$channel_id"; then
+		_debounce_send "$channel_id" "$payload"
+		echo "debounced"
+		return 0
+	fi
+
 	if [[ -n "$attach_file" ]]; then
 		check_kill_switch
 		local http_code body endpoint="/channels/$channel_id/messages"
+		# shellcheck disable=SC2031
 		body=$(curl -sS -D "$_DISCORD_HEADERS_FILE" -w '\n%{http_code}' -X POST \
 			--config <(echo "$_curl_auth_cfg") \
 			-F "payload_json=$payload" \
@@ -434,6 +518,7 @@ cmd_send() {
 			echo "Rate limited (scope: channel). Waiting ${wait_time}s..." >&2
 			sleep "$wait_time"
 			check_kill_switch
+			# shellcheck disable=SC2031
 			body=$(curl -sS -D "$_DISCORD_HEADERS_FILE" -w '\n%{http_code}' -X POST \
 				--config <(echo "$_curl_auth_cfg") \
 				-F "payload_json=$payload" \
