@@ -432,10 +432,10 @@ class TestCmdDefer:
         code = _run_cli(["defer", "late item", "low"], project_root)
         assert code == 1
 
-    def test_defer_invalid_risk_exits_1(self, project_root: Path) -> None:
-        """ValueError for invalid risk level -> exit 1."""
+    def test_defer_invalid_risk_exits_2(self, project_root: Path) -> None:
+        """Invalid argparse choice for risk level -> exit 2 (usage error)."""
         code = _run_cli(["defer", "desc", "critical"], project_root)
-        assert code == 1
+        assert code == 2
 
     def test_defer_regenerates_dashboard(self, project_root: Path) -> None:
         code = _run_cli(["defer", "desc", "high"], project_root)

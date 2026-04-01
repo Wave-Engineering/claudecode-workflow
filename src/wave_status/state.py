@@ -147,6 +147,66 @@ def _find_next_pending_wave(state_data: dict, wave_ids: list[str]) -> str | None
     return None
 
 
+def current_phase_info(plan_data: dict, state_data: dict) -> dict:
+    """Return phase/wave position info, handling ``current_wave=None``.
+
+    When ``current_wave`` is set, locates it in the plan.  When it is
+    ``None``, infers position from wave completion status: finds the
+    first pending wave (next up) or reports all phases complete.
+
+    Returns::
+
+        {
+            "phase_idx": int,        # 1-based, 0 only if plan is empty
+            "total_phases": int,
+            "phase_name": str,
+            "wave_in_phase": int,    # 1-based
+            "waves_in_phase": int,
+        }
+    """
+    phases = plan_data.get("phases", [])
+    total_phases = len(phases)
+    current_wave = state_data.get("current_wave")
+    waves_state = state_data.get("waves", {})
+
+    # --- Active wave: locate it directly ---
+    if current_wave is not None:
+        for pi, phase in enumerate(phases):
+            phase_wave_ids = [w["id"] for w in phase.get("waves", [])]
+            if current_wave in phase_wave_ids:
+                return {
+                    "phase_idx": pi + 1,
+                    "total_phases": total_phases,
+                    "phase_name": phase.get("name", ""),
+                    "wave_in_phase": phase_wave_ids.index(current_wave) + 1,
+                    "waves_in_phase": len(phase_wave_ids),
+                }
+
+    # --- No active wave: infer from wave completion status ---
+    # Find the first phase with a pending wave — that's the next phase.
+    for pi, phase in enumerate(phases):
+        phase_wave_ids = [w["id"] for w in phase.get("waves", [])]
+        for wi, wid in enumerate(phase_wave_ids):
+            if waves_state.get(wid, {}).get("status") == "pending":
+                return {
+                    "phase_idx": pi + 1,
+                    "total_phases": total_phases,
+                    "phase_name": phase.get("name", ""),
+                    "wave_in_phase": wi + 1,
+                    "waves_in_phase": len(phase_wave_ids),
+                }
+
+    # All waves completed (or empty plan).
+    last_phase = phases[-1] if phases else None
+    return {
+        "phase_idx": total_phases,
+        "total_phases": total_phases,
+        "phase_name": last_phase.get("name", "Complete") if last_phase else "Complete",
+        "wave_in_phase": len(last_phase.get("waves", [])) if last_phase else 0,
+        "waves_in_phase": len(last_phase.get("waves", [])) if last_phase else 0,
+    }
+
+
 # ---------------------------------------------------------------------------
 # State-machine operations
 # ---------------------------------------------------------------------------
@@ -552,23 +612,13 @@ def show(root: Path) -> dict:
     flights_data = load_json(d / "flights.json")
 
     # Determine current phase info.
-    wave_ids = _all_wave_ids(plan_data)
     current_wave = state_data.get("current_wave")
-
-    current_phase_name = ""
-    current_phase_idx = 0
-    total_phases = len(plan_data.get("phases", []))
-    wave_in_phase = 0
-    waves_in_current_phase = 0
-
-    for pi, phase in enumerate(plan_data.get("phases", [])):
-        phase_wave_ids = [w["id"] for w in phase.get("waves", [])]
-        if current_wave in phase_wave_ids:
-            current_phase_name = phase.get("name", "")
-            current_phase_idx = pi + 1
-            waves_in_current_phase = len(phase_wave_ids)
-            wave_in_phase = phase_wave_ids.index(current_wave) + 1
-            break
+    phase_info = current_phase_info(plan_data, state_data)
+    current_phase_name = phase_info["phase_name"]
+    current_phase_idx = phase_info["phase_idx"]
+    total_phases = phase_info["total_phases"]
+    wave_in_phase = phase_info["wave_in_phase"]
+    waves_in_current_phase = phase_info["waves_in_phase"]
 
     # Flight info.
     wave_flights = flights_data.get("flights", {}).get(current_wave or "", [])

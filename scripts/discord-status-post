@@ -178,26 +178,51 @@ def compute_summary(state_dir: Path) -> dict:
 
     current_wave = state_data.get("current_wave")
 
-    # Phase info
+    # Phase info — infer from wave completion status when current_wave is null
+    phases = plan_data.get("phases", [])
+    total_phases = len(phases)
     current_phase_name = ""
     current_phase_idx = 0
-    total_phases = len(plan_data.get("phases", []))
     wave_in_phase = 0
     waves_in_current_phase = 0
+    waves_state = state_data.get("waves", {})
 
-    if current_wave is None:
-        # All waves complete
-        current_phase_name = "Complete"
-        current_phase_idx = total_phases
-    else:
-        for pi, phase in enumerate(plan_data.get("phases", [])):
+    found_in_plan = False
+    if current_wave is not None:
+        for pi, phase in enumerate(phases):
             phase_wave_ids = [w["id"] for w in phase.get("waves", [])]
             if current_wave in phase_wave_ids:
                 current_phase_name = phase.get("name", "")
                 current_phase_idx = pi + 1
                 waves_in_current_phase = len(phase_wave_ids)
                 wave_in_phase = phase_wave_ids.index(current_wave) + 1
+                found_in_plan = True
                 break
+
+    if not found_in_plan:
+        # No active wave or unknown wave — find first phase with a pending wave
+        found = False
+        for pi, phase in enumerate(phases):
+            phase_wave_ids = [w["id"] for w in phase.get("waves", [])]
+            for wi, wid in enumerate(phase_wave_ids):
+                if waves_state.get(wid, {}).get("status") == "pending":
+                    current_phase_name = phase.get("name", "")
+                    current_phase_idx = pi + 1
+                    waves_in_current_phase = len(phase_wave_ids)
+                    wave_in_phase = wi + 1
+                    found = True
+                    break
+            if found:
+                break
+        if not found:
+            # All waves completed
+            last_phase = phases[-1] if phases else None
+            current_phase_name = last_phase.get("name", "Complete") if last_phase else "Complete"
+            current_phase_idx = total_phases
+            if last_phase:
+                last_waves = last_phase.get("waves", [])
+                waves_in_current_phase = len(last_waves)
+                wave_in_phase = len(last_waves)
 
     # Flight info
     wave_flights = flights_data.get("flights", {}).get(current_wave or "", [])
