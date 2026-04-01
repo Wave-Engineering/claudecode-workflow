@@ -4,7 +4,7 @@
 # Usage:
 #   discord-bot send <channel-id> <message> [--embed title:text] [--attach FILE]
 #   discord-bot read <channel-id> [--limit N] [--after ID]
-#   discord-bot create-channel <guild-id> <name> [--topic TOPIC] [--category ID]
+#   discord-bot create-channel <guild-id> <name> [--topic TOPIC] [--category ID] [--type text|category]
 #   discord-bot create-thread <channel-id> <name> [--auto-archive 60|1440|4320|10080]
 #   discord-bot list-channels <guild-id> [--type text|voice|category]
 #   discord-bot resolve <guild-id> <channel-name>
@@ -534,7 +534,7 @@ create_channel_help() {
 	cat <<'HELPTEXT'
 Usage: discord-bot create-channel <guild-id> <name> [OPTIONS]
 
-Create a new text channel in a Discord guild.
+Create a new channel in a Discord guild.
 
 Arguments:
   <guild-id>   The guild (server) numeric ID
@@ -543,18 +543,20 @@ Arguments:
 Options:
   --topic TOPIC      Set the channel's topic/description
   --category ID      Place the channel under a category by its numeric ID
+  --type TYPE        Channel type: text (default) or category
   -h, --help         Show this help message
 
 Examples:
   discord-bot create-channel 987654321 wave-3-status
   discord-bot create-channel 987654321 deployments --topic "CI/CD notifications"
   discord-bot create-channel 987654321 dev-chat --category 111222333444555666
+  discord-bot create-channel 987654321 "Agent Comms" --type category
 HELPTEXT
 	exit 0
 }
 
 cmd_create_channel() {
-	local guild_id="" name="" topic="" category=""
+	local guild_id="" name="" topic="" category="" ch_type="text"
 
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
@@ -575,6 +577,14 @@ cmd_create_channel() {
 			category="$2"
 			shift 2
 			;;
+		--type)
+			[[ -z "${2:-}" ]] && {
+				echo "Error: --type requires a value (text or category)." >&2
+				exit 1
+			}
+			ch_type="$2"
+			shift 2
+			;;
 		*)
 			if [[ -z "$guild_id" ]]; then
 				guild_id="$1"
@@ -591,12 +601,23 @@ cmd_create_channel() {
 	done
 
 	[[ -z "$guild_id" || -z "$name" ]] && {
-		echo "Error: create-channel requires <guild-id> and <name>. Usage: discord-bot create-channel <guild-id> <name> [--topic TOPIC] [--category ID]" >&2
+		echo "Error: create-channel requires <guild-id> and <name>. Usage: discord-bot create-channel <guild-id> <name> [--topic TOPIC] [--category ID] [--type text|category]" >&2
 		exit 1
 	}
 
+	# Map type name to Discord channel type integer
+	local type_int=0
+	case "$ch_type" in
+	text) type_int=0 ;;
+	category) type_int=4 ;;
+	*)
+		echo "Error: --type must be 'text' or 'category', got '$ch_type'." >&2
+		exit 1
+		;;
+	esac
+
 	local payload
-	payload=$(jq -n --arg name "$name" '{name: $name, type: 0}')
+	payload=$(jq -n --arg name "$name" --argjson type "$type_int" '{name: $name, type: $type}')
 	[[ -n "$topic" ]] && payload=$(jq --arg t "$topic" '. + {topic: $t}' <<<"$payload")
 	[[ -n "$category" ]] && payload=$(jq --arg c "$category" '. + {parent_id: $c}' <<<"$payload")
 
