@@ -416,6 +416,28 @@ ls -la "$TOKEN_PATH" 2>/dev/null
 
 Record the token path for the final config.
 
+### Step 2b: Generate Bot Invite URL
+
+Ask: *"What's your bot's Application ID? You can find it on the Developer Portal under General Information."*
+
+After receiving the Application ID, compute and display the OAuth2 invite URL:
+
+```
+https://discord.com/oauth2/authorize?client_id=<APP_ID>&permissions=83984&scope=bot
+```
+
+Permissions included: Manage Channels (16), Send Messages (2048), Embed Links (16384), Read Message History (65536).
+
+Tell the user: *"Open this link in your browser to invite the bot to your server. Select the server you want and click 'Authorize'."*
+
+Wait for the user to confirm the bot has been invited before proceeding.
+
+### Step 2c: Server Creation Guidance
+
+If the user says they don't have a Discord server yet:
+
+*"Open Discord, click the **+** button in the server list, choose 'Create My Own', and name it whatever you like. Once created, right-click the server name → Copy Server ID. (You'll need Developer Mode enabled: Settings → Advanced → Developer Mode.)"*
+
 ### Step 3: Collect Guild ID and Discover Channels
 
 Ask: *"What's your Discord server (guild) ID? You can find it by right-clicking the server name in Discord and selecting 'Copy Server ID'. (Requires Developer Mode enabled in Discord settings.)"*
@@ -461,7 +483,17 @@ For each assignment, resolve the user's input (number or name) to the channel's 
 
 ### Step 5: Create Missing Channels
 
-If any required role (`default`, `roll-call`) could not be filled from existing channels, or the user wants channels that don't exist yet, offer to create them:
+If any required role (`default`, `roll-call`) could not be filled from existing channels, or the user wants channels that don't exist yet, offer to create them.
+
+**First, create an "Agent Comms" category** to group agent channels visually:
+
+```bash
+discord-bot create-channel <guild_id> "Agent Comms" --type category
+```
+
+Capture the category ID from the output.
+
+Then for each missing channel, ask:
 
 *"Your server doesn't have a channel for **<role>**. I can create one for you. Want me to create `#<suggested-name>`?"*
 
@@ -474,7 +506,7 @@ Suggested default names per role:
 For each channel the user approves:
 
 ```bash
-discord-bot create-channel <guild_id> <name>
+discord-bot create-channel <guild_id> <name> --category <category_id>
 ```
 
 Capture the channel ID from the command output and use it in the config. If the user declines creation for a required role, ask them to provide an existing channel instead — `default` and `roll-call` are mandatory.
@@ -514,6 +546,19 @@ Resolve the channel name for the confirmation:
 ```bash
 CHANNEL_NAME=$(jq -r '.channels.default.name' ~/.claude/discord.json)
 ```
+
+### Step 8: Verify Discord Watcher
+
+Check that the discord-watcher MCP server is registered so agents receive channel notifications:
+
+```bash
+claude mcp list 2>/dev/null | grep -q discord-watcher
+```
+
+- **If registered:** *"discord-watcher MCP server is registered. You'll receive channel notifications in your Claude Code sessions."*
+- **If not registered:** *"discord-watcher is not registered. To set it up, run the install script or manually add it: `claude mcp add --scope user --transport stdio discord-watcher -- bun <path>/index.ts`"*
+
+This is informational — the setup is complete regardless. The watcher is needed for agents to receive Discord messages during sessions but isn't required for outbound `/disc` calls.
 
 - **If it works:** Confirm: *"Discord configuration complete. Test message sent to #<CHANNEL_NAME>. You can now use `/disc` to interact with your server."*
 - **If it fails:** Help troubleshoot (permissions, channel ID mismatch, token issues). The config file has been written — the user can fix the issue and retry with `/ccwork setup discord`.
