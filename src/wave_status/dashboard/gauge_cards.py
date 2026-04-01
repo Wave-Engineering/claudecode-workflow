@@ -10,42 +10,7 @@ from __future__ import annotations
 
 import html as _html
 
-
-def _current_phase_info(phases_data: dict, state_data: dict) -> dict:
-    """Return a dict with phase index, total phases, phase name, and wave info.
-
-    Returns:
-        {
-            "phase_idx": int (1-based, 0 if not found),
-            "total_phases": int,
-            "phase_name": str,
-            "wave_in_phase": int (1-based, 0 if not found),
-            "waves_in_phase": int,
-        }
-    """
-    current_wave = state_data.get("current_wave")
-    phases = phases_data.get("phases", [])
-    total_phases = len(phases)
-
-    for pi, phase in enumerate(phases):
-        phase_wave_ids = [w["id"] for w in phase.get("waves", [])]
-        if current_wave in phase_wave_ids:
-            wave_in_phase = phase_wave_ids.index(current_wave) + 1
-            return {
-                "phase_idx": pi + 1,
-                "total_phases": total_phases,
-                "phase_name": phase.get("name", ""),
-                "wave_in_phase": wave_in_phase,
-                "waves_in_phase": len(phase_wave_ids),
-            }
-
-    return {
-        "phase_idx": 0,
-        "total_phases": total_phases,
-        "phase_name": "",
-        "wave_in_phase": 0,
-        "waves_in_phase": 0,
-    }
+from wave_status.state import current_phase_info
 
 
 def _flight_info(state_data: dict, flights_data: dict) -> dict:
@@ -170,7 +135,7 @@ def render_gauge_cards(
         An HTML ``<div class="gauge-grid">`` block containing four
         ``<div class="gauge-card">`` children.
     """
-    phase_info = _current_phase_info(phases_data, state_data)
+    phase_info = current_phase_info(phases_data, state_data)
     flight_info = _flight_info(state_data, flights_data)
     deferral_info = _deferral_info(state_data)
 

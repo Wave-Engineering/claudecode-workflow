@@ -13,12 +13,12 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from wave_status.dashboard.gauge_cards import (
-    _current_phase_info,
     _deferral_info,
     _flight_info,
     _render_card,
     render_gauge_cards,
 )
+from wave_status.state import current_phase_info
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +68,7 @@ FLIGHTS_DATA_WITH_FLIGHTS = {
 
 
 # ---------------------------------------------------------------------------
-# _current_phase_info() tests
+# current_phase_info() tests
 # ---------------------------------------------------------------------------
 
 
@@ -76,7 +76,7 @@ class TestCurrentPhaseInfo:
     """Computes phase index, name, and wave position."""
 
     def test_first_wave_first_phase(self) -> None:
-        info = _current_phase_info(PHASES_DATA_2_PHASES, STATE_DATA_WAVE1)
+        info = current_phase_info(PHASES_DATA_2_PHASES, STATE_DATA_WAVE1)
         assert info["phase_idx"] == 1
         assert info["total_phases"] == 2
         assert info["phase_name"] == "Foundation"
@@ -85,7 +85,7 @@ class TestCurrentPhaseInfo:
 
     def test_second_wave_first_phase(self) -> None:
         state = {**STATE_DATA_WAVE1, "current_wave": "wave-2"}
-        info = _current_phase_info(PHASES_DATA_2_PHASES, state)
+        info = current_phase_info(PHASES_DATA_2_PHASES, state)
         assert info["phase_idx"] == 1
         assert info["wave_in_phase"] == 2
         assert info["waves_in_phase"] == 2
@@ -93,27 +93,47 @@ class TestCurrentPhaseInfo:
 
     def test_wave_in_second_phase(self) -> None:
         state = {**STATE_DATA_WAVE1, "current_wave": "wave-3"}
-        info = _current_phase_info(PHASES_DATA_2_PHASES, state)
+        info = current_phase_info(PHASES_DATA_2_PHASES, state)
         assert info["phase_idx"] == 2
         assert info["phase_name"] == "Core"
         assert info["wave_in_phase"] == 1
         assert info["waves_in_phase"] == 1
 
-    def test_unknown_wave_returns_zeroes(self) -> None:
+    def test_unknown_wave_infers_from_pending(self) -> None:
         state = {**STATE_DATA_WAVE1, "current_wave": "wave-999"}
-        info = _current_phase_info(PHASES_DATA_2_PHASES, state)
-        assert info["phase_idx"] == 0
-        assert info["wave_in_phase"] == 0
-        assert info["phase_name"] == ""
+        info = current_phase_info(PHASES_DATA_2_PHASES, state)
+        # wave-999 not in plan, falls through to inference — wave-2 is pending
+        assert info["phase_idx"] == 1
+        assert info["wave_in_phase"] == 2
+        assert info["phase_name"] == "Foundation"
 
-    def test_no_current_wave(self) -> None:
+    def test_no_current_wave_infers_first_pending(self) -> None:
         state = {**STATE_DATA_WAVE1, "current_wave": None}
-        info = _current_phase_info(PHASES_DATA_2_PHASES, state)
-        assert info["phase_idx"] == 0
+        info = current_phase_info(PHASES_DATA_2_PHASES, state)
+        # wave-2 is the first pending wave, in phase 1
+        assert info["phase_idx"] == 1
         assert info["total_phases"] == 2
+        assert info["wave_in_phase"] == 2
+
+    def test_no_current_wave_all_complete(self) -> None:
+        state = {
+            "current_wave": None,
+            "waves": {
+                "wave-1": {"status": "completed"},
+                "wave-2": {"status": "completed"},
+                "wave-3": {"status": "completed"},
+            },
+            "issues": {},
+            "deferrals": [],
+        }
+        info = current_phase_info(PHASES_DATA_2_PHASES, state)
+        # All waves done — should report last phase
+        assert info["phase_idx"] == 2
+        assert info["total_phases"] == 2
+        assert info["phase_name"] == "Core"
 
     def test_empty_phases(self) -> None:
-        info = _current_phase_info({"phases": []}, STATE_DATA_WAVE1)
+        info = current_phase_info({"phases": []}, STATE_DATA_WAVE1)
         assert info["phase_idx"] == 0
         assert info["total_phases"] == 0
 
@@ -454,9 +474,10 @@ class TestRenderGaugeCardsSecondPhase:
 
 
 class TestRenderGaugeCardsNoneCurrentWave:
-    """Handles gracefully when current_wave is None (all waves complete)."""
+    """Handles gracefully when current_wave is None — infers from wave status."""
 
     def setup_method(self) -> None:
+        # wave-1 in_progress, wave-2 and wave-3 pending → should infer phase 1
         state = {**STATE_DATA_WAVE1, "current_wave": None}
         self.html = render_gauge_cards(
             PHASES_DATA_2_PHASES, state, FLIGHTS_DATA_EMPTY
@@ -465,11 +486,40 @@ class TestRenderGaugeCardsNoneCurrentWave:
     def test_returns_four_cards(self) -> None:
         assert self.html.count('class="gauge-card"') == 4
 
-    def test_phase_shows_0_of_total(self) -> None:
-        assert ">0/2<" in self.html
+    def test_phase_infers_from_pending_waves(self) -> None:
+        # First pending wave is wave-2 in phase 1 → shows 1/2
+        assert ">1/2<" in self.html
 
     def test_flight_shows_em_dash(self) -> None:
         assert "\u2014" in self.html
+
+
+class TestRenderGaugeCardsAllComplete:
+    """When all waves are completed and current_wave is None."""
+
+    def setup_method(self) -> None:
+        state = {
+            "current_wave": None,
+            "waves": {
+                "wave-1": {"status": "completed"},
+                "wave-2": {"status": "completed"},
+                "wave-3": {"status": "completed"},
+            },
+            "issues": {"1": {"status": "closed"}, "2": {"status": "closed"}, "3": {"status": "closed"}},
+            "deferrals": [],
+        }
+        self.html = render_gauge_cards(
+            PHASES_DATA_2_PHASES, state, FLIGHTS_DATA_EMPTY
+        )
+
+    def test_returns_four_cards(self) -> None:
+        assert self.html.count('class="gauge-card"') == 4
+
+    def test_phase_shows_last_phase(self) -> None:
+        assert ">2/2<" in self.html
+
+    def test_phase_name_is_last_phase(self) -> None:
+        assert ">Core<" in self.html
 
 
 class TestRenderGaugeCardsNoImportsOutsideStdlib:

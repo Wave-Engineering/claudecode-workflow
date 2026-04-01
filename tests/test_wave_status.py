@@ -342,17 +342,17 @@ class TestErrorOutputFormat:
         rc, out, err = run_cli([], repo)
         assert rc == 2
 
-    def test_invalid_risk_level_exits_1(
+    def test_invalid_risk_level_exits_2(
         self, temp_git_repo: Path, run_cli
     ) -> None:
-        """Invalid risk level on defer -> exit 1 with error on stderr."""
+        """Invalid argparse choice for risk level -> exit 2 (usage error)."""
         repo = temp_git_repo
         _write_plan(repo)
         run_cli(["init", "plan.json"], repo)
 
         rc, out, err = run_cli(["defer", "desc", "critical"], repo)
-        assert rc == 1
-        assert "Error:" in err
+        assert rc == 2
+        assert "invalid choice" in err
 
     def test_flight_nonexistent_exits_1(
         self, temp_git_repo: Path, run_cli

@@ -350,12 +350,20 @@ class TestEdgeCases:
         assert "\u2014" not in s["action"]
 
     def test_current_wave_none_all_complete(self, tmp_path: Path) -> None:
-        state = {**STATE_DATA, "current_wave": None}
+        state = {
+            **STATE_DATA,
+            "current_wave": None,
+            "waves": {
+                "p1w1": {"status": "completed"},
+                "p1w2": {"status": "completed"},
+                "p2w1": {"status": "completed"},
+            },
+        }
         (tmp_path / "phases-waves.json").write_text(json.dumps(PLAN_DATA))
         (tmp_path / "state.json").write_text(json.dumps(state))
         (tmp_path / "flights.json").write_text(json.dumps(FLIGHTS_DATA))
         s = dsp.compute_summary(tmp_path)
-        assert s["phase_name"] == "Complete"
+        assert s["phase_name"] == "Polish"  # last phase name
         assert "0/" not in s["phase"]
         assert s["phase"] == "2/2"
 
