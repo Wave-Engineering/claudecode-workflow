@@ -403,6 +403,7 @@ class TestNoDependencies:
             "import subprocess",
             "import sys",
             "import tempfile",
+            "import time",
             "import urllib",
             "from datetime",
             "from pathlib",

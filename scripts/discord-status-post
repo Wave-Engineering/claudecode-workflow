@@ -26,6 +26,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
@@ -400,15 +401,39 @@ def post_or_edit(
 # Identity resolution
 # ---------------------------------------------------------------------------
 
+def _read_dev_team_from_claude_md(root: Path) -> str | None:
+    """Parse Dev-Team from CLAUDE.md in the project root."""
+    claude_md = root / "CLAUDE.md"
+    if not claude_md.exists():
+        return None
+    try:
+        for line in claude_md.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("Dev-Team:"):
+                value = stripped[len("Dev-Team:"):].strip()
+                if value:
+                    return value
+    except OSError:
+        pass
+    return None
+
+
 def resolve_dev_team() -> str:
-    """Resolve dev-team from the agent identity file."""
+    """Resolve dev-team: agent identity file → CLAUDE.md → 'unknown'."""
     try:
         root = get_project_root()
+        # 1. Agent identity file
         dir_hash = hashlib.md5(str(root).encode()).hexdigest()
         agent_file = Path(f"/tmp/claude-agent-{dir_hash}.json")
         if agent_file.exists():
             data = load_json(agent_file)
-            return data.get("dev_team", "unknown")
+            team = data.get("dev_team")
+            if team and team != "unknown":
+                return team
+        # 2. CLAUDE.md Dev-Team field
+        from_md = _read_dev_team_from_claude_md(root)
+        if from_md:
+            return from_md
     except Exception:
         pass
     return "unknown"
@@ -442,12 +467,132 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Dev-Team name for embed title (default: resolve from agent identity)",
     )
+    parser.add_argument(
+        "--debounce-fire",
+        action="store_true",
+        default=False,
+        help=argparse.SUPPRESS,  # Internal: background timer entry point
+    )
     return parser
+
+
+_DEBOUNCE_DELAY = 15
+
+
+def _debounce_post(
+    channel_id: str, state_dir: Path, dev_team: str,
+) -> None:
+    """Debounce the Discord post: hold for 15s, last write wins.
+
+    Writes args to a payload file.  If a background timer is already running,
+    it will pick up the new payload.  Otherwise spawns a timer that sleeps
+    ``_DEBOUNCE_DELAY`` seconds then posts whatever is in the file.
+    """
+    debounce_dir = Path.home() / ".claude"
+    debounce_file = debounce_dir / "discord-debounce-status.json"
+    pid_file = debounce_dir / "discord-debounce-status.pid"
+
+    # Write latest call args atomically
+    call_args = {
+        "channel_id": channel_id,
+        "state_dir": str(state_dir),
+        "dev_team": dev_team,
+    }
+    fd = tempfile.NamedTemporaryFile(
+        mode="w", dir=str(debounce_dir), suffix=".tmp", delete=False,
+    )
+    try:
+        json.dump(call_args, fd)
+        fd.close()
+        os.replace(fd.name, str(debounce_file))
+    except BaseException:
+        fd.close()
+        try:
+            os.unlink(fd.name)
+        except OSError:
+            pass
+        raise
+
+    # If a timer is already running, it will pick up the new payload
+    if pid_file.exists():
+        try:
+            existing_pid = int(pid_file.read_text().strip())
+            # Process is alive — check payload freshness to rule out PID reuse
+            os.kill(existing_pid, 0)
+            mtime = debounce_file.stat().st_mtime
+            if (time.time() - mtime) < _DEBOUNCE_DELAY * 2:
+                return  # Recent payload + live PID = real timer, let it handle it
+            # Payload is stale despite live PID — likely PID reuse, start fresh
+        except (ValueError, OSError, ProcessLookupError):
+            pass
+        try:
+            pid_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    # Spawn background timer — re-exec ourselves with --debounce-fire
+    proc = subprocess.Popen(
+        [sys.executable, __file__, "--debounce-fire",
+         "--channel-id", channel_id],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    pid_file.write_text(str(proc.pid))
+
+
+def _debounce_fire(channel_id: str) -> None:
+    """Background timer: wait for quiet period, then post the final state."""
+
+    debounce_dir = Path.home() / ".claude"
+    debounce_file = debounce_dir / "discord-debounce-status.json"
+    pid_file = debounce_dir / "discord-debounce-status.pid"
+
+    while True:
+        mtime_before = debounce_file.stat().st_mtime if debounce_file.exists() else 0
+        time.sleep(_DEBOUNCE_DELAY)
+        mtime_after = debounce_file.stat().st_mtime if debounce_file.exists() else 0
+
+        if mtime_before == mtime_after:
+            # No new write during sleep — send the final payload
+            if not debounce_file.exists():
+                break
+            try:
+                with open(debounce_file) as f:
+                    call_args = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                break
+
+            state_dir = Path(call_args["state_dir"])
+            dev_team = call_args["dev_team"]
+
+            try:
+                token = get_token()
+                summary = compute_summary(state_dir)
+                embed = build_embed(summary, dev_team)
+                cache_file = state_dir / "discord-status.json"
+                post_or_edit(channel_id, embed, token, cache_file)
+            except Exception:
+                pass  # Best-effort
+
+            # Cleanup
+            try:
+                debounce_file.unlink(missing_ok=True)
+                pid_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+            break
+        # File was updated — restart the timer
 
 
 def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
+
+    # Internal: background timer fires this
+    if getattr(args, "debounce_fire", False):
+        _debounce_fire(args.channel_id)
+        return
 
     # Resolve state directory
     if args.state_dir:
@@ -467,24 +612,16 @@ def main() -> None:
     # Resolve dev-team
     dev_team = args.dev_team or resolve_dev_team()
 
-    # Get token — exit 1 if missing
+    # Verify token exists early (fail fast before debounce)
     try:
-        token = get_token()
+        get_token()
     except RuntimeError as e:
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
-    # Compute summary and build embed
-    summary = compute_summary(state_dir)
-    embed = build_embed(summary, dev_team)
-
-    # Post or edit — failures are non-fatal
-    cache_file = state_dir / "discord-status.json"
-    try:
-        post_or_edit(args.channel_id, embed, token, cache_file)
-    except Exception as e:
-        print(f"discord-status-post: {e}", file=sys.stderr)
-        sys.exit(1)
+    # Debounce: hold for 15s, last write wins
+    _debounce_post(args.channel_id, state_dir, dev_team)
+    return
 
 
 if __name__ == "__main__":
