@@ -294,6 +294,8 @@ Not every project needs all of these. But every project needs to explicitly deci
 
 **Requirement traceability.** Each AC item is annotated with the requirement ID(s) it verifies — e.g., `[R-01]`. This creates forward traceability from requirements to verification. After implementation, the VRTM in Section 9 captures the complete trace.
 
+**One story, one repo.** If the design spans multiple repositories, every story must be scoped to a single repo. A story is implemented as one PR/MR in one repo — it cannot span repos. When a feature requires coordinated changes across repos, split it into separate stories (one per repo) with explicit dependencies. Each story's header includes a **Repository** field identifying which repo it targets.
+
 ### Foundation Story Checklist
 
 Every project needs certain infrastructure before feature work begins. Wave 1 should include a foundation story that covers the items below. Not every project needs all of them — but each should be explicitly included or marked N/A.
@@ -362,6 +364,7 @@ Annotate each item with the requirement IDs it verifies. The Phase DoD gates the
 #### Story N.N: [[Story Title]]
 
 **Wave:** [[wave number]]
+**Repository:** [[repo name — e.g., `myorg/backend`. Omit if the project is a single repo.]]
 **Dependencies:** [[list of story IDs that must complete first, or "None"]]
 
 [[1-2 sentence description of what this story delivers and why]]
