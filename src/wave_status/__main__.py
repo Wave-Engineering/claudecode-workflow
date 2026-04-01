@@ -25,6 +25,7 @@ from wave_status.dashboard.generator import generate_dashboard
 from wave_status.state import (
     close_issue,
     complete,
+    extend_state,
     flight,
     flight_done,
     get_project_root,
@@ -70,10 +71,21 @@ def _regenerate_dashboard(root: Path) -> None:
 
 def _cmd_init(args: argparse.Namespace) -> None:
     """Handle ``init <file|->``."""
+    if args.extend and args.force:
+        print(
+            "Error: --extend and --force are mutually exclusive. "
+            "Use --extend to add phases, or --force to overwrite.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     root = get_project_root()
     raw = _read_json_source(args.file)
     plan_data = json.loads(raw)
-    init_state(plan_data, root)
+    if args.extend:
+        extend_state(plan_data, root)
+    else:
+        init_state(plan_data, root, force=args.force)
     _regenerate_dashboard(root)
 
 
@@ -219,6 +231,10 @@ def _build_parser() -> argparse.ArgumentParser:
     # init
     p_init = sub.add_parser("init", help="Initialize state from a plan JSON file")
     p_init.add_argument("file", help="Path to plan JSON file, or '-' for stdin")
+    p_init.add_argument("--extend", action="store_true",
+                        help="Add phases to an existing plan instead of overwriting")
+    p_init.add_argument("--force", action="store_true",
+                        help="Overwrite an existing plan (default: refuse)")
     p_init.set_defaults(func=_cmd_init)
 
     # flight-plan

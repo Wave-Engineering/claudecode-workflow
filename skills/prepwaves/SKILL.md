@@ -9,12 +9,21 @@ description: Analyze a master issue, validate sub-issue specs, compute dependenc
 
 # PrepWaves: Plan Parallel Execution Waves
 
-Analyze a master issue and its sub-issues, validate they are ready for spec-driven parallel agent execution, compute dependency-ordered waves, and prepare everything for `/nextwave` to execute.
+Analyze epic issues and their sub-issues, validate they are ready for spec-driven parallel agent execution, compute dependency-ordered waves, and prepare everything for `/nextwave` to execute.
 
 ## Prerequisites
 
-- A "master issue" must exist — an epic or parent issue that references sub-issues
-- The user must provide the master issue number (or it must be identifiable from context)
+- One or more **epic issues** must exist, each referencing its sub-issues (stories)
+- The user provides epic issue number(s): `/prepwaves #2` or `/prepwaves #2 #3 #4 #5 #6`
+- Each epic becomes one **phase** in the plan. Multiple epics = multi-phase plan.
+
+## Multi-Phase and Extend Mode
+
+**First run (no existing plan):** Pass one or more epics. Each epic becomes a phase. All phases are initialized together.
+
+**Adding phases later (existing plan):** If `.claude/status/phases-waves.json` already exists, `/prepwaves` automatically uses **extend mode** — new phases are appended to the existing plan without disturbing completed waves or issue state. The agent does NOT need to pass `--extend` manually; the skill detects the existing plan and does the right thing.
+
+**This means it is safe to run `/prepwaves` per-phase.** Run it for Phase 1's epic first, execute those waves, then run it again for Phase 2's epic — the plan grows incrementally.
 
 ## Status Panel
 
@@ -108,9 +117,9 @@ Once approved:
 2. **Do NOT create branches** — Branches are created by `/nextwave` at execution time, not at prep time. This ensures each branch starts from the current main/release branch with all prior waves' merged work included. Creating branches prematurely produces stale branches that require rebasing before every agent can start.
 3. **Capture in task list** — One task per wave with descriptions listing the issues and dependencies. Set up `blockedBy` relationships between wave tasks.
 4. **Update the plan file** — Write the wave execution plan to the active plan file so it survives compaction
-5. **Initialize wave-status** — Build a plan JSON from the approved wave plan and initialize the status dashboard:
+5. **Initialize wave-status** — Build a plan JSON from the approved wave plan and initialize the status dashboard.
 
-   Construct the plan JSON with this structure:
+   Construct the plan JSON with this structure (one phase per epic):
    ```json
    {
      "project": "<Dev-Team from identity>",
@@ -139,12 +148,15 @@ Once approved:
    }
    ```
 
-   Write it to a temp file and initialize:
+   **Check for an existing plan before initializing:**
    ```bash
-   cat > /tmp/wave-plan.json << 'PLAN'
-   <the JSON above>
-   PLAN
-   wave-status init /tmp/wave-plan.json
+   if [ -f .claude/status/phases-waves.json ]; then
+     # Existing plan — use --extend to add new phases
+     wave-status init --extend /tmp/wave-plan.json
+   else
+     # First run — initialize fresh
+     wave-status init /tmp/wave-plan.json
+   fi
    ```
 
    Verify the initialization succeeded:
@@ -154,6 +166,8 @@ Once approved:
    - `.status-panel.html` should exist at the project root
 
    If `wave-status` is not installed (command not found), skip this step and note it to the user.
+
+   **Wave ID uniqueness:** When extending, wave IDs must not collide with existing waves. Use phase-prefixed IDs (e.g., `wave-2a`, `wave-2b` for Phase 2) to avoid collisions with Phase 1's `wave-1a`, `wave-1b`.
 
 ## Step 6: Confirm
 
