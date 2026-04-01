@@ -18,7 +18,7 @@ Execute the next pending wave from a plan created by `/prepwaves`. Uses a two-ph
 - **Planning Agent**: A lightweight, read-only agent that reads an issue and the codebase, then reports which files/functions it would modify — without writing any code.
 - **Execution Agent**: A full agent that implements the issue on an isolated worktree.
 
-Flow: `Pre-Flight Checks → Planning Phase → Flight 1 (execute + merge) → Re-Validate → Flight 2 (execute + merge) → ... → Design Review → Wave Complete`
+Flow: `Pre-Flight Checks → Planning Phase → Flight 1 (execute + merge) → Re-Validate → Flight 2 (execute + merge) → ... → Drift Check → Wave Complete`
 
 ## Status Panel
 
@@ -469,13 +469,35 @@ Then return to Step 3 for the next flight.
 
 ---
 
-## Step 5: Wave-Boundary Design Review
+## CRITICAL: Create Between-Wave Lifecycle Tasks
+
+**After the last flight is merged, IMMEDIATELY create these tasks on the task list.** These are your persistent memory across conversational interruptions — if the user asks you a question between waves, these tasks ensure you resume the lifecycle correctly.
+
+Create these tasks in order, with `blockedBy` relationships:
+
+1. **"Wave N: Drift check — verify next-wave specs against merged code"** — Run Step 5 below
+2. **"Wave N: Close issues and record MRs"** — Verify all wave issues are closed, record MR URLs
+3. **"Wave N: Fire wave-status complete"** — `wave-status complete`
+4. **"Wave N: Report wave results and deferred items"** — Summary for the user
+5. **"Wave N: Fire wave-status waiting"** — `wave-status waiting "Awaiting review for Wave N+1"`
+6. **"Wave N: Announce completion via vox"** — Voice announcement
+7. **"Wave N+1: Awaiting user go-ahead"** — Blocked until user says to proceed
+
+Task 2 is blocked by 1. Tasks 3-6 are blocked by 2. Task 7 is blocked by 6.
+
+**Why this matters:** Without these tasks, you WILL lose your place when the user asks questions between waves. The task list is the one thing that survives conversational drift. @final-cut learned this the hard way — don't repeat it.
+
+Mark each task as `completed` as you finish it. If the user interrupts you with a question, answer it, then check your task list to see what's next.
+
+---
+
+## Step 5: Wave-Boundary Drift Check
 
 **This step runs after all flights are merged but BEFORE prompting for the next wave.** Its purpose is to catch spec drift — issue specs for later waves were written before earlier waves were implemented, so file paths, function signatures, and API surfaces may no longer match reality.
 
 This is NOT optional. It runs for every wave, regardless of size. Rules with exceptions get ignored.
 
-Signal the transition to design review:
+Signal the transition to drift check:
 ```bash
 wave-status review
 ```
@@ -484,12 +506,12 @@ wave-status review
 
 Identify the next wave from the task list. For each issue in that wave, read its full spec via the platform CLI.
 
-### 5b: Launch Design Review Agents
+### 5b: Launch Drift Check Agents
 
 For each issue in the NEXT wave, launch a lightweight review agent:
 
 ```
-You are a DESIGN REVIEW AGENT. The previous wave has just been merged. Your job is to check whether the spec for issue #N still matches the actual codebase.
+You are a DRIFT CHECK AGENT. The previous wave has just been merged. Your job is to check whether the spec for issue #N still matches the actual codebase.
 
 ## Your Task
 1. Read issue #N via the platform CLI
@@ -518,7 +540,7 @@ You are a DESIGN REVIEW AGENT. The previous wave has just been merged. Your job 
 - Are there new files, functions, or patterns that this issue should know about but its spec doesn't mention?
 
 ## Report Format
-### Design Review for Issue #N
+### Drift Check for Issue #N
 
 - **Status**: SPEC CURRENT | SPEC STALE | SPEC BROKEN
 - **File path checks**: list of paths checked and whether they're still accurate
@@ -528,7 +550,7 @@ You are a DESIGN REVIEW AGENT. The previous wave has just been merged. Your job 
 - **Recommended spec updates**: specific changes to make to the issue before execution (if any)
 ```
 
-### 5c: Process Design Review Results
+### 5c: Process Drift Check Results
 
 - **All SPEC CURRENT** → Report findings and proceed to Wave Complete (Step 6). No spec updates needed.
 - **SPEC STALE** → The spec references outdated file paths, function names, or APIs that have been renamed or restructured. **Update the issue on the platform** with corrected paths/names before proceeding. These are mechanical fixes — don't wait for user approval on each one, but report what was changed.
@@ -543,7 +565,7 @@ If `.claude/status/state.json` exists, update it to reflect any spec changes, ne
 
 ## Step 6: Wave Complete
 
-After ALL flights in the wave have been executed, merged, and the design review is done:
+After ALL flights in the wave have been executed, merged, and the drift check is done:
 
 1. **Mark the wave complete in status dashboard:**
    ```bash
@@ -557,7 +579,7 @@ After ALL flights in the wave have been executed, merged, and the design review 
    - PR/MR URLs for the record
    - Flight breakdown (how many flights, what was sequenced and why)
    - Any issues that need re-work
-   - Design review findings for the next wave
+   - Drift check findings for the next wave
    - What the next wave contains (with any spec updates noted)
 
 ### Deferred Items Report
@@ -592,7 +614,7 @@ Do NOT let deferred items disappear into the void. Every deferral must be tracke
    ```
    Keep it conversational — identify yourself, summarize the wave outcome in 1-2 sentences for the ear.
 
-7. **Prompt:** "Wave N complete. Design review for Wave N+1 is done. Run `/nextwave` for Wave N+1, or `/cryo` to preserve state."
+7. **Prompt:** "Wave N complete. Drift check for Wave N+1 is done. Run `/nextwave` for Wave N+1, or `/cryo` to preserve state."
 
 ---
 
