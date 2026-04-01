@@ -30,3 +30,6 @@ bun.lock
 
 # Build output
 dist/
+
+# Pre-created worktrees for parallel agent execution
+.worktrees/
