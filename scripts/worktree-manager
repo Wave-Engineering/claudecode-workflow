@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# worktree-manager — Manage git worktrees for parallel agent execution
+#
+# Usage:
+#   worktree-manager create <branch> [--base <base-branch>]
+#   worktree-manager cleanup <branch>
+#   worktree-manager cleanup-all
+#   worktree-manager list
+#   worktree-manager path <branch>
+#
+# Worktrees are created under .worktrees/ in the repo root.
+# Branch names should follow the pattern: flight/<issue>-<slug>
+#
+# Examples:
+#   worktree-manager create flight/42-add-notifications --base main
+#   worktree-manager path flight/42-add-notifications
+#   worktree-manager cleanup flight/42-add-notifications
+#   worktree-manager cleanup-all
+#   worktree-manager list
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Resolve repo root and worktree directory
+# ---------------------------------------------------------------------------
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+	echo "Error: not inside a git repository" >&2
+	exit 1
+}
+
+WORKTREE_DIR="${REPO_ROOT}/.worktrees"
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+info() { echo "  [+] $*"; }
+err() { echo "  [!] $*" >&2; }
+
+# Sanitize branch name for use as directory name (replace / with -).
+# NOTE: Only '/' → '-' substitution is performed. Branch names must use
+# 'flight/<N>-<desc>' format (with slash). Never use 'flight-<N>-<desc>'
+# (with dash) as a branch name — it would collide with the sanitized form.
+branch_to_dir() {
+	echo "$1" | tr '/' '-'
+}
+
+# ---------------------------------------------------------------------------
+# Subcommands
+# ---------------------------------------------------------------------------
+
+cmd_create() {
+	local branch=""
+	local base_branch="main"
+
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--base)
+			base_branch="$2"
+			shift 2
+			;;
+		*)
+			branch="$1"
+			shift
+			;;
+		esac
+	done
+
+	if [[ -z "$branch" ]]; then
+		err "Usage: worktree-manager create <branch> [--base <base-branch>]"
+		exit 1
+	fi
+
+	local dir_name
+	dir_name="$(branch_to_dir "$branch")"
+	local worktree_path="${WORKTREE_DIR}/${dir_name}"
+
+	# Idempotent: if worktree already exists AND git recognizes it, return its path.
+	# If the directory exists but git doesn't know about it (partial creation / crash),
+	# clean up the orphan and recreate.
+	if [[ -d "$worktree_path" ]]; then
+		if git worktree list --porcelain | grep -qF "worktree $worktree_path"; then
+			echo "$worktree_path"
+			return 0
+		else
+			rm -rf "$worktree_path"
+			git worktree prune 2>/dev/null || true
+			info "Removed stale worktree directory, recreating..." >&2
+		fi
+	fi
+
+	mkdir -p "$WORKTREE_DIR"
+
+	# Create branch from base if it doesn't exist
+	if ! git rev-parse --verify "$branch" >/dev/null 2>&1; then
+		git branch "$branch" "$base_branch" 2>/dev/null || {
+			err "Failed to create branch '$branch' from '$base_branch'"
+			exit 1
+		}
+	fi
+
+	# Create the worktree
+	git worktree add "$worktree_path" "$branch" 2>/dev/null || {
+		err "Failed to create worktree at '$worktree_path' for branch '$branch'"
+		exit 1
+	}
+
+	info "Created worktree: $worktree_path (branch: $branch)" >&2
+	echo "$worktree_path"
+}
+
+cmd_cleanup() {
+	local branch="$1"
+
+	if [[ -z "$branch" ]]; then
+		err "Usage: worktree-manager cleanup <branch>"
+		exit 1
+	fi
+
+	local dir_name
+	dir_name="$(branch_to_dir "$branch")"
+	local worktree_path="${WORKTREE_DIR}/${dir_name}"
+
+	if [[ ! -d "$worktree_path" ]]; then
+		info "Worktree not found: $worktree_path (already cleaned?)" >&2
+		return 0
+	fi
+
+	git worktree remove "$worktree_path" --force 2>/dev/null || {
+		# Fallback: manual removal + prune
+		rm -rf "$worktree_path"
+		git worktree prune 2>/dev/null || true
+	}
+
+	# Delete the local branch (may already be gone via --delete-branch on merge)
+	git branch -D "$branch" 2>/dev/null || true
+
+	info "Removed worktree and branch: $branch" >&2
+}
+
+cmd_cleanup_all() {
+	if [[ ! -d "$WORKTREE_DIR" ]]; then
+		info "No worktrees directory found" >&2
+		return 0
+	fi
+
+	local count=0
+	for wt_dir in "$WORKTREE_DIR"/*/; do
+		[[ -d "$wt_dir" ]] || continue
+		local branch
+		branch="$(git -C "$wt_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+		git worktree remove "$wt_dir" --force 2>/dev/null || {
+			rm -rf "$wt_dir"
+		}
+		if [[ -n "$branch" && "$branch" != "HEAD" ]]; then
+			git branch -D "$branch" 2>/dev/null || true
+		fi
+		count=$((count + 1))
+	done
+
+	git worktree prune 2>/dev/null || true
+
+	# Remove the .worktrees dir if empty
+	rmdir "$WORKTREE_DIR" 2>/dev/null || true
+
+	info "Cleaned up $count worktree(s)" >&2
+}
+
+cmd_list() {
+	if [[ ! -d "$WORKTREE_DIR" ]]; then
+		return 0
+	fi
+
+	for wt_dir in "$WORKTREE_DIR"/*/; do
+		[[ -d "$wt_dir" ]] || continue
+		local branch
+		branch="$(git -C "$wt_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")"
+		echo "$wt_dir	$branch"
+	done
+}
+
+cmd_path() {
+	local branch="$1"
+
+	if [[ -z "$branch" ]]; then
+		err "Usage: worktree-manager path <branch>"
+		exit 1
+	fi
+
+	local dir_name
+	dir_name="$(branch_to_dir "$branch")"
+	local worktree_path="${WORKTREE_DIR}/${dir_name}"
+
+	if [[ ! -d "$worktree_path" ]]; then
+		err "Worktree not found for branch '$branch'"
+		exit 1
+	fi
+
+	echo "$worktree_path"
+}
+
+# ---------------------------------------------------------------------------
+# Dispatch
+# ---------------------------------------------------------------------------
+
+if [[ $# -lt 1 ]]; then
+	echo "Usage: worktree-manager <create|cleanup|cleanup-all|list|path> [args]"
+	exit 1
+fi
+
+COMMAND="$1"
+shift
+
+case "$COMMAND" in
+create) cmd_create "$@" ;;
+cleanup) cmd_cleanup "${1:-}" ;;
+cleanup-all) cmd_cleanup_all ;;
+list) cmd_list ;;
+path) cmd_path "${1:-}" ;;
+*)
+	err "Unknown command: $COMMAND"
+	echo "Usage: worktree-manager <create|cleanup|cleanup-all|list|path> [args]" >&2
+	exit 1
+	;;
+esac
