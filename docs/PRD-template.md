@@ -14,8 +14,11 @@
 3. [Requirements (EARS Format)](#3-requirements-ears-format)
 4. [Concept of Operations](#4-concept-of-operations)
 5. [Detailed Design](#5-detailed-design)
+   - [5.A Artifact Manifest](#5a-artifact-manifest)
+   - [5.B Installation & Deployment](#5b-installation--deployment)
 6. [Test Plan](#6-test-plan)
 7. [Definition of Done](#7-definition-of-done)
+   - [7.1 Documentation Kit](#71-documentation-kit)
 8. [Phased Implementation Plan](#8-phased-implementation-plan)
 9. [Appendices](#9-appendices)
 
@@ -133,12 +136,60 @@ Not every project needs all of these. Include the flows that are necessary to gi
 - **Technology Choices** — table of components with chosen technology and rationale
 - **Deployment Architecture** — how the system is deployed and operated (if applicable)
 - **Security Model** — authentication, authorization, secrets handling (if applicable)
+- **Artifact Manifest** — every artifact the project produces, including test outputs (see 5.A below)
+- **Installation & Deployment** — how artifacts get from "built" to "running/available" (see 5.B below)
 
 Include diagrams where they add clarity. Prefer ASCII art or Mermaid for version-control-friendly diagrams.]]
+
+_Sections 5.1–5.N are project-specific design topics — add as many as needed. Sections 5.A and 5.B are fixed required sections that always appear last in Section 5._
 
 ### 5.1 [[Design Topic]]
 
 [[detailed design content]]
+
+### 5.A Artifact Manifest
+
+[[Every artifact this project produces — not just the primary deliverable, but test outputs, documentation, packages, and anything that leaves the build. This manifest is the single source of truth for "what does this project emit?" and directly informs CI/CD pipeline design and story acceptance criteria.
+
+Include test artifacts (JUnit XML, coverage reports, lint summaries) — these are first-class outputs that CI consumes.]]
+
+| ID | Artifact | Type | Build Command | Destination |
+|----|----------|------|---------------|-------------|
+| A-01 | [[e.g., `dist/my-tool`]] | [[binary / package / report / doc]] | [[e.g., `./scripts/ci/build.sh`]] | [[e.g., `~/.local/bin/`, PyPI, S3, GitLab Package Registry]] |
+| A-02 | [[e.g., `reports/junit.xml`]] | test report | [[e.g., `pytest --junitxml=reports/junit.xml`]] | [[e.g., CI artifact upload, GitLab test report parser]] |
+| A-03 | [[e.g., `reports/coverage.xml`]] | coverage report | [[e.g., `pytest --cov --cov-report=xml`]] | [[e.g., CI artifact upload, Codecov]] |
+| A-04 | [[e.g., `docs/api-reference.md`]] | documentation | [[e.g., `./scripts/ci/gen-docs.sh`]] | [[e.g., GitLab/GitHub Pages, S3 static site]] |
+
+### 5.B Installation & Deployment
+
+[[How each artifact gets from "built" to "running/available at its destination." This section directly impacts story acceptance criteria — if a story produces an artifact, the story must include the installation/deployment step.
+
+Define the procedure for each target environment (local dev, CI, staging, production). If the project has a single deployment target, a single procedure is fine.]]
+
+#### Local Installation
+
+[[Step-by-step procedure for installing artifacts locally. This is what developers and agents run after a build.]]
+
+1. [[e.g., `./scripts/ci/build.sh` — produces `dist/my-tool`]]
+2. [[e.g., `cp dist/my-tool ~/.local/bin/my-tool` — install to PATH]]
+3. [[e.g., `my-tool --version` — verify installation]]
+
+#### CI/CD Pipeline
+
+[[Define the pipeline stages, triggers, and gates. What happens on push, on PR/MR, on merge to main, on tag?
+
+Keep this section focused on the *what* and *when* — which stages run, what triggers them, what artifacts they produce, what gates block promotion. The *how* (specific CI config syntax) belongs in the implementation stories.]]
+
+| Stage | Trigger | Steps | Artifacts Produced | Gate |
+|-------|---------|-------|-------------------|------|
+| [[e.g., Validate]] | [[e.g., every push]] | [[e.g., lint, typecheck]] | [[e.g., none]] | [[e.g., must pass to merge]] |
+| [[e.g., Test]] | [[e.g., every push]] | [[e.g., pytest, coverage]] | [[A-02, A-03]] | [[e.g., must pass to merge]] |
+| [[e.g., Build]] | [[e.g., merge to main]] | [[e.g., build.sh]] | [[A-01]] | [[e.g., must succeed]] |
+| [[e.g., Publish]] | [[e.g., version tag]] | [[e.g., push to registry]] | [[none (promotes A-01)]] | [[e.g., manual approval]] |
+
+#### Production / Release Deployment
+
+[[If applicable — how the artifact gets deployed to a production or release environment. Omit if the project is a library or local tool with no deployed component.]]
 
 ### 5.N Open Questions
 
@@ -204,8 +255,30 @@ After all phases are complete, the VRTM in Section 9 provides the formal proof t
 
 - [ ] All Phase DoD checklists are satisfied
 - [ ] All Test Plan items (Section 6) executed and passed
+- [ ] All Documentation Kit items delivered (Section 7.1)
+- [ ] All artifacts from the Artifact Manifest (Section 5.A) build and install successfully
 - [ ] [[cross-cutting condition — annotate with requirement IDs, e.g., [R-01, R-05] ]]
 - [ ] [[cross-cutting condition [R-XX] ]]
+
+### 7.1 Documentation Kit
+
+[[Define the complete set of documentation artifacts the project must deliver. This is not "nice to have" — these are tracked deliverables with owners and deadlines (by phase). Each document should have a story in the implementation plan that produces it.
+
+Common documentation artifacts to consider:
+- **README** — project overview, quickstart, how to contribute
+- **API Reference** — auto-generated or hand-written endpoint/function docs
+- **Architecture / Design Doc** — high-level system design for maintainers
+- **Runbook / Operations Guide** — how to deploy, monitor, troubleshoot (if applicable)
+- **User Guide** — how end users interact with the system (if applicable)
+- **CHANGELOG** — release-by-release summary of changes
+
+Not every project needs all of these. But every project needs to explicitly decide which ones it needs and plan stories to produce them.]]
+
+| Document | Audience | Format | Produced In | Notes |
+|----------|----------|--------|-------------|-------|
+| [[e.g., README.md]] | [[e.g., developers, contributors]] | [[e.g., Markdown in repo root]] | [[e.g., Phase 1]] | [[e.g., must include quickstart and install instructions]] |
+| [[e.g., API Reference]] | [[e.g., integrators]] | [[e.g., auto-generated from docstrings]] | [[e.g., Phase 2]] | [[e.g., published to GitHub Pages]] |
+| [[e.g., Runbook]] | [[e.g., operators]] | [[e.g., Markdown in docs/]] | [[e.g., Phase 3]] | [[e.g., covers deploy, rollback, alerting]] |
 
 ---
 
@@ -226,10 +299,12 @@ After all phases are complete, the VRTM in Section 9 provides the formal proof t
 Every project needs certain infrastructure before feature work begins. Wave 1 should include a foundation story that covers the items below. Not every project needs all of them — but each should be explicitly included or marked N/A.
 
 - [ ] **Project scaffold** — dependency manifest (`pyproject.toml`, `package.json`, `pom.xml`, etc.), package/module structure, empty test directory
-- [ ] **CI/CD pipeline** — automated lint + test on every PR/MR. Keep workflow definitions thin (orchestration only) with logic in scripts.
+- [ ] **CI/CD pipeline** — implement the pipeline defined in Section 5.B. Automated lint + test on every PR/MR. Keep workflow definitions thin (orchestration only) with logic in scripts.
+- [ ] **Artifact build & install** — implement the build commands and installation procedures from the Artifact Manifest (Section 5.A) and Installation & Deployment (Section 5.B)
 - [ ] **Linting and formatting** — configured and enforced in CI from the first commit
-- [ ] **Test runner** — configured and passing (even if the only test is a smoke/import test)
+- [ ] **Test runner** — configured and passing (even if the only test is a smoke/import test). Test artifact outputs (JUnit XML, coverage) wired to CI as defined in the Artifact Manifest (Section 5.A).
 - [ ] **Makefile or task runner** — standard targets (`lint`, `test`, `ci`) so humans and agents use the same commands
+- [ ] **Initial documentation** — README and any Phase 1 items from the Documentation Kit (Section 7.1)
 
 If any of these are missing from Wave 1, add a story. CI/CD in particular is easy to forget and painful to retrofit — every PR from Wave 2 onward should be validated automatically.
 
