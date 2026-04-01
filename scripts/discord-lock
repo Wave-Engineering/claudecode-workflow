@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# discord-lock — Toggle the Discord bot kill switch
+#
+# Usage:
+#   discord-lock          Toggle on/off
+#   discord-lock on       Engage kill switch
+#   discord-lock off      Remove kill switch
+#   discord-lock status   Show current state
+#
+# The kill switch file is ~/.claude/discord-bot.kill
+# When active, all discord-bot send/read calls are dropped.
+
+KILL_FILE="$HOME/.claude/discord-bot.kill"
+
+case "${1:-toggle}" in
+on)
+	touch "$KILL_FILE"
+	echo "🔒 Discord LOCKED — all API calls dropped"
+	;;
+off)
+	rm -f "$KILL_FILE"
+	echo "🔓 Discord UNLOCKED — API calls resumed"
+	;;
+status)
+	if [[ -f "$KILL_FILE" ]]; then
+		content=$(cat "$KILL_FILE" 2>/dev/null)
+		if [[ -n "$content" && "$content" =~ ^[0-9]+$ ]]; then
+			expires=$(date -d "@$content" '+%H:%M:%S' 2>/dev/null ||
+				date -r "$content" '+%H:%M:%S' 2>/dev/null ||
+				echo "unknown")
+			echo "🔒 LOCKED (auto-ban, expires $expires)"
+		else
+			echo "🔒 LOCKED (manual)"
+		fi
+	else
+		echo "🔓 Unlocked"
+	fi
+	;;
+toggle)
+	if [[ -f "$KILL_FILE" ]]; then
+		rm -f "$KILL_FILE"
+		echo "🔓 Discord UNLOCKED — API calls resumed"
+	else
+		touch "$KILL_FILE"
+		echo "🔒 Discord LOCKED — all API calls dropped"
+	fi
+	;;
+*)
+	echo "Usage: discord-lock [on|off|status|toggle]"
+	exit 1
+	;;
+esac

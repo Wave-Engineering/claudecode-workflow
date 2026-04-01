@@ -151,12 +151,15 @@ def _find_next_pending_wave(state_data: dict, wave_ids: list[str]) -> str | None
 # State-machine operations
 # ---------------------------------------------------------------------------
 
-def init_state(plan_data: dict, root: Path) -> None:
+def init_state(plan_data: dict, root: Path, *, force: bool = False) -> None:
     """Validate *plan_data*, write ``phases-waves.json``, ``state.json``,
     and ``flights.json`` under ``<root>/.claude/status/`` [R-02].
 
     *plan_data* must contain ``project`` (str) and ``phases`` (list).
     Raises ``ValueError`` on validation failure [R-32].
+
+    If a plan already exists, raises ``ValueError`` unless *force* is True.
+    Use ``extend_state()`` to add phases to an existing plan.
     """
     # --- validation ---
     if "project" not in plan_data:
@@ -172,8 +175,16 @@ def init_state(plan_data: dict, root: Path) -> None:
 
     d = ensure_status_dir(root)
 
+    # --- overwrite guard ---
+    phases_path = d / "phases-waves.json"
+    if phases_path.exists() and not force:
+        raise ValueError(
+            "Error: plan already initialized. Use 'init --extend' to add "
+            "phases, or 'init --force' to overwrite the existing plan."
+        )
+
     # --- phases-waves.json (structure, written once) ---
-    save_json(d / "phases-waves.json", plan_data)
+    save_json(phases_path, plan_data)
 
     # --- state.json (dynamic runtime state) ---
     wave_ids = _all_wave_ids(plan_data)
@@ -201,6 +212,72 @@ def init_state(plan_data: dict, root: Path) -> None:
 
     # --- flights.json (empty initially) ---
     save_json(d / "flights.json", {"flights": {}})
+
+
+def extend_state(plan_data: dict, root: Path) -> None:
+    """Append new phases from *plan_data* to an existing plan.
+
+    Merges into ``phases-waves.json`` and ``state.json`` without disturbing
+    existing phase/wave/issue state.  Raises ``ValueError`` if no existing
+    plan is found or if wave IDs collide.
+    """
+    if "phases" not in plan_data or not isinstance(plan_data["phases"], list):
+        raise ValueError(
+            "Error: plan is missing required field 'phases'. "
+            "Provide a plan JSON with 'project' and 'phases' keys."
+        )
+
+    d = status_dir(root)
+    phases_path = d / "phases-waves.json"
+    state_path = d / "state.json"
+
+    if not phases_path.exists() or not state_path.exists():
+        raise ValueError(
+            "Error: no existing plan found (or state files incomplete). "
+            "Use 'init' first, then 'init --extend' to add phases."
+        )
+
+    existing_plan = load_json(phases_path)
+    existing_state = load_json(state_path)
+
+    # Check for wave ID collisions
+    existing_wave_ids = set(_all_wave_ids(existing_plan))
+    new_wave_ids = set(_all_wave_ids(plan_data))
+    wave_collisions = existing_wave_ids & new_wave_ids
+    if wave_collisions:
+        raise ValueError(
+            f"Error: wave ID collision — {wave_collisions} already exist in the plan. "
+            "Use unique wave IDs for new phases."
+        )
+
+    # Check for issue number collisions
+    existing_issue_nums = _all_issue_numbers(existing_plan)
+    new_issue_nums = _all_issue_numbers(plan_data)
+    issue_collisions = existing_issue_nums & new_issue_nums
+    if issue_collisions:
+        raise ValueError(
+            f"Error: issue number collision — {issue_collisions} already exist in the plan. "
+            "Each issue should belong to exactly one phase."
+        )
+
+    # Merge phases into plan
+    existing_plan["phases"].extend(plan_data["phases"])
+    save_json(phases_path, existing_plan)
+
+    # Add new waves and issues to state (preserve existing)
+    for wid in _all_wave_ids(plan_data):
+        if wid not in existing_state["waves"]:
+            existing_state["waves"][wid] = {"status": "pending", "mr_urls": {}}
+
+    for phase in plan_data["phases"]:
+        for wave in phase.get("waves", []):
+            for issue in wave.get("issues", []):
+                issue_key = str(issue["number"])
+                if issue_key not in existing_state["issues"]:
+                    existing_state["issues"][issue_key] = {"status": "open"}
+
+    existing_state["last_updated"] = _now_iso()
+    save_json(state_path, existing_state)
 
 
 def store_flight_plan(flights_data: list, root: Path) -> None:
