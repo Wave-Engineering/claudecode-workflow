@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "discord-watcher": {
-      "command": "bun",
-      "args": ["channels/discord-watcher/index.ts"]
-    }
-  }
-}
