@@ -4,6 +4,17 @@ Portable Claude Code workflow environment — skills, scripts, settings, and a d
 
 This repo packages the custom skills, utility scripts, and project instructions that make up a consistent Claude Code development environment. Clone it, run the installer, and you're set up on any machine.
 
+## Documentation
+
+| Guide | Description |
+|-------|-------------|
+| [Getting Started](docs/getting-started.md) | 15-minute walkthrough of your first session |
+| [Concepts](docs/concepts.md) | How the pieces fit together |
+| [Skill Reference](docs/skill-reference.md) | Detailed docs for every skill |
+| [Discord Setup](docs/discord-config.md) | Bot token, watcher, inter-agent messaging |
+| [Statusline Indicators](docs/statusline-indicators.md) | Per-session indicator interface for skills and scripts |
+| [Troubleshooting](docs/troubleshooting.md) | Common issues and fixes |
+
 ## Quick Start
 
 ```bash
@@ -12,7 +23,7 @@ cd claudecode-workflow
 ./install.sh
 ```
 
-**New here?** Read the [Getting Started guide](docs/getting-started.md) for a 15-minute walkthrough of your first session, then [Concepts](docs/concepts.md) for how the pieces fit together. See the [Skill Reference](docs/skill-reference.md) for detailed documentation on every skill, and [Troubleshooting](docs/troubleshooting.md) if something is not working as expected.
+**New here?** Start with [Getting Started](docs/getting-started.md), then [Concepts](docs/concepts.md).
 
 ## What's Included
 
