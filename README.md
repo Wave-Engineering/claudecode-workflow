@@ -264,7 +264,7 @@ With the discord-watcher running in multiple Claude Code sessions, agents can ta
 
 Dev-Names must be **kebab-case** (e.g., `beacon`, `null-pointer`) so they work as routing keys for `@` addressing.
 
-Each agent signs messages with its Dev-Name signature (e.g., `— **beacon** :satellite: (cc-workflow)`), which the watcher uses to filter self-echoes while allowing messages from other agents through.
+Each agent signs messages with its Dev-Name signature (e.g., `— **beacon** 📡 (cc-workflow)`), which the watcher uses to filter self-echoes while allowing messages from other agents through.
 
 ### Wave Status Channel
 

@@ -62,7 +62,7 @@ The identity system has two layers that mirror the distinction between project-l
 
 ### Dev-Name and Dev-Avatar (Ephemeral)
 
-**What:** A memorable name (e.g., `beacon`, `null-pointer`, `mother`) and a Slack-style emoji (e.g., `:satellite:`, `:skull:`, `:crystal_ball:`).
+**What:** A memorable name (e.g., `beacon`, `null-pointer`, `mother`) and a Unicode emoji (e.g., 📡, 💀, 🔮).
 
 **Where it lives:** Written to a temp file at `/tmp/claude-agent-<hash>.json`, where `<hash>` is the md5 of the project root path.
 
@@ -85,7 +85,7 @@ Session start: Claude picks Dev-Name + Dev-Avatar
   {
     "dev_team": "cc-workflow",
     "dev_name": "beacon",
-    "dev_avatar": ":satellite:"
+    "dev_avatar": "📡"
   }
         |
         v
