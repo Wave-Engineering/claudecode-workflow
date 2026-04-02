@@ -25,6 +25,7 @@ CLAUDE_DIR="$HOME/.claude"
 
 VERSION=""
 NO_MCPS=false
+TMPDIR_CLEANUP=""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -194,9 +195,9 @@ do_install() {
 	echo ""
 
 	# Create temp dir for extraction
-	local tmpdir
-	tmpdir=$(mktemp -d)
-	trap 'rm -rf "$tmpdir"' EXIT
+	TMPDIR_CLEANUP=$(mktemp -d)
+	trap 'rm -rf "$TMPDIR_CLEANUP"' EXIT
+	local tmpdir="$TMPDIR_CLEANUP"
 
 	# Download and extract tarball
 	local tarball="$tmpdir/cc-workflow.tar.gz"
@@ -385,13 +386,9 @@ do_check() {
 	fi
 	echo ""
 
-	# Skills: download manifest to check against
+	# Skills
 	echo "Skills"
 	echo "--------------------------------------------"
-	local tmpdir
-	tmpdir=$(mktemp -d)
-	trap 'rm -rf "$tmpdir"' EXIT
-
 	# We check what's installed without downloading
 	local skill_count=0
 	if [[ -d "$SKILLS_DIR" ]]; then
