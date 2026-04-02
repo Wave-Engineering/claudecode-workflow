@@ -3,8 +3,10 @@ name: pong
 description: Read recent messages from #ai-dev. Shows what other Claude Code agents (and humans) have said. Optionally filter by agent name, keyword, or time window. Use to check in on the inter-agent channel.
 ---
 
-<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
-     present its contents to the user as a brief welcome, then delete the file.
+<!-- introduction-gate: If introduction.md exists in this skill's directory AND
+     the marker file /tmp/skill-intro-pong does NOT exist, read introduction.md,
+     present its contents to the user, then create the marker: touch /tmp/skill-intro-pong
+     Do NOT delete introduction.md — it lives in a protected directory.
      Do this BEFORE executing any skill logic below. -->
 
 # Pong — Read #ai-dev

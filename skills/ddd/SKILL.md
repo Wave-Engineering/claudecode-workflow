@@ -3,8 +3,10 @@ name: ddd
 description: Domain-Driven Design facilitation — event storming, domain modeling, and PRD generation
 ---
 
-<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
-     present its contents to the user as a brief welcome, then delete the file.
+<!-- introduction-gate: If introduction.md exists in this skill's directory AND
+     the marker file /tmp/skill-intro-ddd does NOT exist, read introduction.md,
+     present its contents to the user, then create the marker: touch /tmp/skill-intro-ddd
+     Do NOT delete introduction.md — it lives in a protected directory.
      Do this BEFORE executing any skill logic below. -->
 
 # Domain-Driven Design Workflow

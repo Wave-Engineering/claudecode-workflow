@@ -3,8 +3,10 @@ name: issue
 description: Create structured issues (feature, bug, chore, docs, epic) with proper templates and labels. Supports both GitHub (gh) and GitLab (glab). Self-contained — does not depend on CLAUDE.md for templates.
 ---
 
-<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
-     present its contents to the user as a brief welcome, then delete the file.
+<!-- introduction-gate: If introduction.md exists in this skill's directory AND
+     the marker file /tmp/skill-intro-issue does NOT exist, read introduction.md,
+     present its contents to the user, then create the marker: touch /tmp/skill-intro-issue
+     Do NOT delete introduction.md — it lives in a protected directory.
      Do this BEFORE executing any skill logic below. -->
 
 # Issue — Structured Issue Creation
