@@ -29,7 +29,6 @@ _DEFAULT_GUILD_ID="1486516321385578576"
 _DEFAULT_CHANNEL_DEFAULT="1487288523638837268"
 _DEFAULT_CHANNEL_ROLL_CALL="1487382005036617851"
 _DEFAULT_CHANNEL_WAVE_STATUS="1487386934094462986"
-_DEFAULT_CHANNEL_REMOTE_SESSIONS="1487462945972682763"
 _DEFAULT_TOKEN_PATH="$HOME/secrets/discord-bot-token"
 
 # --- Config loading -----------------------------------------------------------
@@ -82,7 +81,6 @@ discord_token_path() { discord_config_get '.token_path' 'DISCORD_TOKEN_PATH' "$_
 discord_channel_default() { discord_config_get '.channels.default.id' 'DISCORD_DEFAULT_CHANNEL' "$_DEFAULT_CHANNEL_DEFAULT"; }
 discord_channel_roll_call() { discord_config_get '.channels["roll-call"].id' 'DISCORD_ROLL_CALL_CHANNEL' "$_DEFAULT_CHANNEL_ROLL_CALL"; }
 discord_channel_wave_status() { discord_config_get '.channels["wave-status"].id' 'DISCORD_WAVE_STATUS_CHANNEL' "$_DEFAULT_CHANNEL_WAVE_STATUS"; }
-discord_channel_remote_sessions() { discord_config_get '.channels["remote-sessions"].id' 'DISCORD_REMOTE_SESSIONS_CHANNEL' "$_DEFAULT_CHANNEL_REMOTE_SESSIONS"; }
 
 # --- Usage --------------------------------------------------------------------
 usage() {

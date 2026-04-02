@@ -17,8 +17,7 @@ their agents at their own Discord server without modifying source.
   "channels": {
     "default":         { "name": "agent-ops",        "id": "1234567890" },
     "roll-call":       { "name": "roll-call",        "id": "1234567890" },
-    "wave-status":     { "name": "wave-status",      "id": "1234567890" },
-    "remote-sessions": { "name": "remote-sessions",  "id": "1234567890" }
+    "wave-status":     { "name": "wave-status",      "id": "1234567890" }
   }
 }
 ```
@@ -40,7 +39,6 @@ their agents at their own Discord server without modifying source.
 | `default` | General agent communications | `discord-bot`, `disc` skill |
 | `roll-call` | Agent check-in on session start | `disc` skill, `CLAUDE.md` identity |
 | `wave-status` | Auto-updating wave execution status | `discord-status-post` |
-| `remote-sessions` | AFK session relay threads | `afk-notify` |
 
 ## Fallback Chain
 
@@ -58,7 +56,6 @@ Every component reads configuration using a three-level fallback:
 | `DISCORD_DEFAULT_CHANNEL` | `channels.default.id` | `1487288523638837268` |
 | `DISCORD_ROLL_CALL_CHANNEL` | `channels.roll-call.id` | `1487382005036617851` |
 | `DISCORD_WAVE_STATUS_CHANNEL` | `channels.wave-status.id` | `1487386934094462986` |
-| `DISCORD_REMOTE_SESSIONS_CHANNEL` | `channels.remote-sessions.id` | `1487462945972682763` |
 | `DISCORD_TOKEN_PATH` | `token_path` | `~/secrets/discord-bot-token` |
 
 ## Per-User Scoping Strategy

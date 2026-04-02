@@ -312,7 +312,7 @@ Unified Discord integration for the Oak and Wave server. Handles sending message
 /disc read #agent-ops         # Read recent messages from a channel
 /disc create #wave-3-status   # Create a new channel
 /disc list channels           # List all text channels
-/disc thread "session-42" in #remote-sessions  # Create a thread
+/disc thread "session-42" in #agent-ops  # Create a thread
 ```
 
 All messages are signed with the agent's Dev-Name, Dev-Avatar, and Dev-Team. Channel names are resolved via the `discord-bot resolve` command. Configuration is read from `~/.claude/discord.json` (see [Discord Configuration](discord-config.md)).

@@ -68,17 +68,6 @@
           }
         ]
       }
-    ],
-    "Stop": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "~/.local/bin/afk-notify"
-          }
-        ]
-      }
     ]
   },
   "statusLine": {

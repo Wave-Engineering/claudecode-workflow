@@ -457,7 +457,6 @@ discord-bot list-channels <guild_id> --type text
     2. #agent-ops        (1234567891)
     3. #roll-call        (1234567892)
     4. #wave-status      (1234567893)
-    5. #remote-sessions  (1234567894)
   ```
 
   Proceed to Step 4.
@@ -475,9 +474,8 @@ Using the discovered channel list from Step 3, ask the user to assign each role.
 1. **default** — "Which channel should be the **default** for agent messages? (e.g., `#agent-ops`). Enter the number from the list above, or a channel name."
 2. **roll-call** — "Which channel for **roll-call** check-ins? Enter a number or name."
 3. **wave-status** — "Which channel for **wave-status** updates? Enter a number or name, or type `skip` to omit."
-4. **remote-sessions** — "Which channel for **remote-sessions** relay threads? Enter a number or name, or type `skip` to omit."
 
-`wave-status` and `remote-sessions` are optional — if the user skips them, omit them from the config entirely.
+`wave-status` is optional — if the user skips it, omit it from the config entirely.
 
 For each assignment, resolve the user's input (number or name) to the channel's name and ID from the discovered list. If the user types a name that isn't in the list, warn them and ask again.
 
@@ -501,7 +499,6 @@ Suggested default names per role:
 - `default` → `agent-ops`
 - `roll-call` → `roll-call`
 - `wave-status` → `wave-status`
-- `remote-sessions` → `remote-sessions`
 
 For each channel the user approves:
 
@@ -524,14 +521,13 @@ cat > ~/.claude/discord.json << 'EOF'
   "channels": {
     "default":         { "name": "<name>", "id": "<id>" },
     "roll-call":       { "name": "<name>", "id": "<id>" },
-    "wave-status":     { "name": "<name>", "id": "<id>" },
-    "remote-sessions": { "name": "<name>", "id": "<id>" }
+    "wave-status":     { "name": "<name>", "id": "<id>" }
   }
 }
 EOF
 ```
 
-Only include `wave-status` and `remote-sessions` entries if the user assigned them. The config must match the schema in `docs/discord-config.md`.
+Only include `wave-status` if the user assigned it. The config must match the schema in `docs/discord-config.md`.
 
 ### Step 7: Verify
 
