@@ -3,8 +3,10 @@ name: jfail
 description: Fetch and analyze a failed CI job (GitLab) or workflow run (GitHub)
 ---
 
-<!-- introduction-gate: If introduction.md exists in this skill's directory, read it,
-     present its contents to the user as a brief welcome, then delete the file.
+<!-- introduction-gate: If introduction.md exists in this skill's directory AND
+     the marker file /tmp/skill-intro-jfail does NOT exist, read introduction.md,
+     present its contents to the user, then create the marker: touch /tmp/skill-intro-jfail
+     Do NOT delete introduction.md — it lives in a protected directory.
      Do this BEFORE executing any skill logic below. -->
 
 # CI Job/Workflow Failure Analysis
