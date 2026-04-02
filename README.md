@@ -17,6 +17,14 @@ This repo packages the custom skills, utility scripts, and project instructions 
 
 ## Quick Start
 
+**One-liner install (no clone needed):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Wave-Engineering/claudecode-workflow/main/scripts/install-remote.sh | bash
+```
+
+**Or clone and install locally:**
+
 ```bash
 git clone https://github.com/Wave-Engineering/claudecode-workflow.git
 cd claudecode-workflow
@@ -100,7 +108,26 @@ Each MCP has its own `install-remote.sh` for standalone installation. Running `.
 
 ## Installation
 
-### Full Install
+### Remote Install
+
+Install everything from a GitHub Release without cloning the repo:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Wave-Engineering/claudecode-workflow/main/scripts/install-remote.sh | bash
+```
+
+Options:
+
+```bash
+curl ... | bash -s -- --version v1.0.0   # Install a specific release
+curl ... | bash -s -- --no-mcps           # Skip MCP server installation
+curl ... | bash -s -- --check             # Verify installation status
+curl ... | bash -s -- --uninstall         # Remove everything
+```
+
+This downloads the release tarball, installs skills, scripts, config, pre-built packages, and MCP servers -- the same result as cloning and running `./install.sh`.
+
+### Full Install (from clone)
 
 ```bash
 ./install.sh
