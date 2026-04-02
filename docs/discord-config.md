@@ -14,6 +14,7 @@ their agents at their own Discord server without modifying source.
 {
   "guild_id": "1234567890",
   "token_path": "~/secrets/discord-bot-token",
+  "scream_hole_url": "http://scream-hole:3000",
   "channels": {
     "default":         { "name": "agent-ops",        "id": "1234567890" },
     "roll-call":       { "name": "roll-call",        "id": "1234567890" },
@@ -28,6 +29,7 @@ their agents at their own Discord server without modifying source.
 |-------|------|----------|-------------|
 | `guild_id` | string | Yes | Discord server (guild) ID |
 | `token_path` | string | No | Path to bot token file (default: `~/secrets/discord-bot-token`) |
+| `scream_hole_url` | string | No | Base URL of a [scream-hole](https://github.com/Wave-Engineering/scream-hole) proxy (e.g., `http://scream-hole:3000`). When set, `discord-bot` and `discord-watcher` route all Discord REST API calls through the proxy instead of hitting Discord directly. Omit to use direct Discord API. |
 | `channels` | object | Yes | Map of channel roles to channel info |
 | `channels.<role>.name` | string | Yes | Human-readable channel name (without `#`) |
 | `channels.<role>.id` | string | Yes | Discord channel snowflake ID |
@@ -57,6 +59,22 @@ Every component reads configuration using a three-level fallback:
 | `DISCORD_ROLL_CALL_CHANNEL` | `channels.roll-call.id` | `1487382005036617851` |
 | `DISCORD_WAVE_STATUS_CHANNEL` | `channels.wave-status.id` | `1487386934094462986` |
 | `DISCORD_TOKEN_PATH` | `token_path` | `~/secrets/discord-bot-token` |
+| `SCREAM_HOLE_URL` | `scream_hole_url` | *(disabled)* |
+
+## Scream-Hole Proxy
+
+[scream-hole](https://github.com/Wave-Engineering/scream-hole) is a Discord
+REST API caching proxy. A single scream-hole instance polls Discord once and
+serves cached responses to any number of consumers. This eliminates
+rate-limiting issues when multiple agents share the same bot token.
+
+When `scream_hole_url` is set:
+
+- **discord-bot** and **discord-watcher** route all Discord REST API calls
+  through the proxy (reads from cache, writes forwarded to Discord)
+- On startup, both hit `${scream_hole_url}/health` to verify reachability
+- If unreachable, they fall back to direct Discord API with a logged warning
+- No behavior change when the field is omitted (backwards compatible)
 
 ## Per-User Scoping Strategy
 

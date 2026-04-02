@@ -22,7 +22,8 @@
 
 set -euo pipefail
 
-API_BASE="https://discord.com/api/v10"
+DISCORD_API_BASE="https://discord.com/api/v10"
+API_BASE="$DISCORD_API_BASE"
 
 # --- Hardcoded defaults (Oak and Wave — last-resort fallback) -----------------
 _DEFAULT_GUILD_ID="1486516321385578576"
@@ -81,6 +82,34 @@ discord_token_path() { discord_config_get '.token_path' 'DISCORD_TOKEN_PATH' "$_
 discord_channel_default() { discord_config_get '.channels.default.id' 'DISCORD_DEFAULT_CHANNEL' "$_DEFAULT_CHANNEL_DEFAULT"; }
 discord_channel_roll_call() { discord_config_get '.channels["roll-call"].id' 'DISCORD_ROLL_CALL_CHANNEL' "$_DEFAULT_CHANNEL_ROLL_CALL"; }
 discord_channel_wave_status() { discord_config_get '.channels["wave-status"].id' 'DISCORD_WAVE_STATUS_CHANNEL' "$_DEFAULT_CHANNEL_WAVE_STATUS"; }
+
+# --- Scream-hole URL resolution -----------------------------------------------
+# Fallback chain: discord.json → SCREAM_HOLE_URL env → disabled (empty)
+discord_scream_hole_url() { discord_config_get '.scream_hole_url' 'SCREAM_HOLE_URL' ""; }
+
+_resolve_api_base() {
+	local scream_hole_url
+	scream_hole_url=$(discord_scream_hole_url)
+	if [[ -z "$scream_hole_url" ]]; then
+		return
+	fi
+
+	# Strip trailing slashes
+	scream_hole_url="${scream_hole_url%/}"
+
+	# Health check — 5s timeout
+	local health_status
+	health_status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "${scream_hole_url}/health" 2>/dev/null) || health_status="000"
+
+	if [[ "$health_status" =~ ^2 ]]; then
+		API_BASE="$scream_hole_url"
+		echo "[discord-bot] Mode: scream-hole proxy (${API_BASE})" >&2
+	else
+		echo "[discord-bot] Warning: scream-hole at ${scream_hole_url} is unreachable (HTTP ${health_status}), falling back to direct Discord API" >&2
+	fi
+}
+
+_resolve_api_base
 
 # --- Usage --------------------------------------------------------------------
 usage() {
