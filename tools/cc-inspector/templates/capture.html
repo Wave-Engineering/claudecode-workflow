@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}CC Inspector — Capture Detail{% endblock %}
+
+{% block header_extra %}
+<div class="ml-auto flex items-center gap-8">
+    <a href="/">&larr; Dashboard</a>
+    <a href="/api/captures/{{ capture.id }}/export">
+        <button>Export JSON</button>
+    </a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="grid-2">
+    <!-- Main content -->
+    <div>
+        <!-- System prompt -->
+        <div class="card">
+            <h2>System Prompt ({{ human_bytes(capture.system_bytes) }})</h2>
+            {% for block in capture.system_prompt %}
+            <div class="message-item">
+                <div class="message-header collapsible-toggle" onclick="toggleContent(this)">
+                    <span class="badge badge-system">system</span>
+                    {% if block.get('type') == 'text' %}
+                        <span class="text-muted mono">{{ block.get('text', '')[:80] }}{% if block.get('text', '')|length > 80 %}...{% endif %}</span>
+                    {% else %}
+                        <span class="text-muted mono">{{ block.get('type', 'block') }}</span>
+                    {% endif %}
+                    <span class="ml-auto mono text-muted">{{ human_bytes(block.get('text', '')|length) if block.get('text') else '' }}</span>
+                </div>
+                <div class="message-body">
+                    <pre>{{ block.get('text', block | tojson(indent=2)) }}</pre>
+                </div>
+            </div>
+            {% endfor %}
+            {% if not capture.system_prompt %}
+            <p class="text-muted">No system prompt.</p>
+            {% endif %}
+        </div>
+
+        <!-- Messages -->
+        <div class="card">
+            <h2>Messages ({{ capture.messages | length }})</h2>
+            {% for msg in capture.messages %}
+            <div class="message-item">
+                <div class="message-header collapsible-toggle" onclick="toggleContent(this)">
+                    <span class="badge badge-{{ msg.role }}">{{ msg.role }}</span>
+                    {% for ct in msg.content_types %}
+                        <span class="badge badge-{{ ct }}">{{ ct }}</span>
+                    {% endfor %}
+                    <span class="ml-auto mono text-muted">{{ human_bytes(msg.content_bytes) }} (~{{ msg.estimated_tokens }} tok)</span>
+                </div>
+                <div class="message-body">
+                    {% if msg.content is string %}
+                        <pre>{{ msg.content }}</pre>
+                    {% else %}
+                        {% for block in msg.content %}
+                            {% if block is mapping %}
+                                {% if block.get('type') == 'text' %}
+                                    <pre>{{ block.text }}</pre>
+                                {% elif block.get('type') == 'tool_use' %}
+                                    <div class="mb-8">
+                                        <span class="badge badge-tool_use">{{ block.get('name', 'tool_use') }}</span>
+                                        <span class="mono text-muted"> id={{ block.get('id', '') }}</span>
+                                    </div>
+                                    <pre>{{ block.get('input', '') | tojson(indent=2) if block.get('input') is mapping else block.get('input', '') }}</pre>
+                                {% elif block.get('type') == 'tool_result' %}
+                                    <div class="mb-8">
+                                        <span class="badge badge-tool_result">tool_result</span>
+                                        <span class="mono text-muted"> tool_use_id={{ block.get('tool_use_id', '') }}</span>
+                                    </div>
+                                    {% if block.get('content') is string %}
+                                        <pre>{{ block.content }}</pre>
+                                    {% else %}
+                                        <pre>{{ block.get('content', '') | tojson(indent=2) }}</pre>
+                                    {% endif %}
+                                {% elif block.get('type') == 'thinking' %}
+                                    <div class="mb-8"><span class="badge badge-thinking">thinking</span></div>
+                                    <pre>{{ block.get('thinking', '') }}</pre>
+                                {% else %}
+                                    <pre>{{ block | tojson(indent=2) }}</pre>
+                                {% endif %}
+                            {% else %}
+                                <pre>{{ block }}</pre>
+                            {% endif %}
+                        {% endfor %}
+                    {% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Stats sidebar -->
+    <div>
+        <div class="card sidebar">
+            <h2>Token Usage</h2>
+            {% if capture.usage %}
+            <div class="stat-row">
+                <span class="stat-label">Input</span>
+                <span class="stat-value">{{ capture.usage.get('input_tokens', 0) | string }}</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Cache Create</span>
+                <span class="stat-value">{{ capture.usage.get('cache_creation_input_tokens', 0) | string }}</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Cache Read</span>
+                <span class="stat-value">{{ capture.usage.get('cache_read_input_tokens', 0) | string }}</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Output</span>
+                <span class="stat-value">{{ capture.usage.get('output_tokens', 0) | string }}</span>
+            </div>
+            {% else %}
+            <p class="text-muted">No usage data (response not captured).</p>
+            {% endif %}
+
+            <h2 style="margin-top: 20px;">Payload Stats</h2>
+            <div class="stat-row">
+                <span class="stat-label">Model</span>
+                <span class="stat-value">{{ capture.model }}</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Messages</span>
+                <span class="stat-value">{{ capture.stats.message_count }}</span>
+            </div>
+            {% for role, count in capture.stats.role_counts.items() %}
+            <div class="stat-row">
+                <span class="stat-label">&nbsp;&nbsp;{{ role }}</span>
+                <span class="stat-value">{{ count }}</span>
+            </div>
+            {% endfor %}
+            <div class="stat-row">
+                <span class="stat-label">System Prompt</span>
+                <span class="stat-value">{{ human_bytes(capture.system_bytes) }}</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Messages Payload</span>
+                <span class="stat-value">{{ human_bytes(capture.message_bytes) }}</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">Total Payload</span>
+                <span class="stat-value">{{ human_bytes(capture.stats.total_payload_bytes) }}</span>
+            </div>
+            <div class="stat-row">
+                <span class="stat-label">System Ratio</span>
+                <span class="stat-value">{{ capture.stats.system_ratio_pct }}%</span>
+            </div>
+
+            {% if capture.stats.largest_messages %}
+            <h2 style="margin-top: 20px;">Largest Messages</h2>
+            {% for lm in capture.stats.largest_messages %}
+            <div class="stat-row">
+                <span class="stat-label">#{{ lm.index }} ({{ lm.role }})</span>
+                <span class="stat-value">{{ human_bytes(lm.content_bytes) }}</span>
+            </div>
+            {% endfor %}
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleContent(header) {
+    header.classList.toggle('open');
+    const body = header.nextElementSibling;
+    body.classList.toggle('open');
+}
+</script>
+{% endblock %}

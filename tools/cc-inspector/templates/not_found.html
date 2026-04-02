@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}CC Inspector — Not Found{% endblock %}
+
+{% block header_extra %}
+<div class="ml-auto">
+    <a href="/">&larr; Dashboard</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="empty-state">
+        <p>{{ message }}</p>
+        <p style="margin-top: 12px;"><a href="/">Return to dashboard</a></p>
+    </div>
+</div>
+{% endblock %}

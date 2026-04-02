@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}CC Inspector — Dashboard{% endblock %}
+
+{% block header_extra %}
+<div class="ml-auto flex items-center gap-8">
+    {% if connected %}
+        {% if status.get('armed') %}
+            <span class="status-badge status-armed">Armed ({{ status.get('remaining', 0) }} remaining)</span>
+        {% else %}
+            <span class="status-badge status-connected">Connected</span>
+        {% endif %}
+    {% else %}
+        <span class="status-badge status-disconnected">Disconnected</span>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block content %}
+<!-- Controls -->
+<div class="card">
+    <h2>Capture Controls</h2>
+    <div class="flex items-center gap-16">
+        <div class="flex items-center gap-8">
+            <label for="capture-count" class="text-muted" style="font-size: 13px;">Capture next</label>
+            <input type="number" id="capture-count" value="1" min="1" max="100">
+            <label class="text-muted" style="font-size: 13px;">payloads</label>
+        </div>
+        <button id="btn-arm" class="primary" onclick="armCapture()">Arm</button>
+        <button id="btn-disarm" onclick="disarmCapture()">Disarm</button>
+        <div class="ml-auto">
+            <button class="danger" onclick="clearCaptures()">Clear All</button>
+        </div>
+    </div>
+</div>
+
+<!-- Captures list -->
+<div class="card">
+    <h2>Captured Payloads</h2>
+    {% if captures %}
+    <table>
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Messages</th>
+                <th>System Blocks</th>
+                <th>Input Tokens</th>
+                <th>Cache Read</th>
+                <th>Output Tokens</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for cap in captures | reverse %}
+            <tr>
+                <td class="mono">{{ format_timestamp(cap.timestamp) }}</td>
+                <td>{{ cap.message_count }}</td>
+                <td>{{ cap.system_blocks }}</td>
+                <td class="mono">{{ cap.usage.get('input_tokens', '-') }}</td>
+                <td class="mono">{{ cap.usage.get('cache_read_input_tokens', '-') }}</td>
+                <td class="mono">{{ cap.usage.get('output_tokens', '-') }}</td>
+                <td><a href="/capture/{{ cap.id }}">Inspect</a></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>No captures yet.</p>
+        <p class="text-muted" style="margin-top: 8px;">Arm the inspector and send a message in Claude Code to capture a payload.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function armCapture() {
+    const count = parseInt(document.getElementById('capture-count').value) || 1;
+    fetch('/api/arm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ count: count })
+    }).then(() => location.reload());
+}
+
+function disarmCapture() {
+    fetch('/api/disarm', { method: 'POST' })
+        .then(() => location.reload());
+}
+
+function clearCaptures() {
+    if (confirm('Clear all captured payloads?')) {
+        fetch('/api/captures', { method: 'DELETE' })
+            .then(() => location.reload());
+    }
+}
+
+// Auto-refresh every 3 seconds
+setInterval(() => {
+    fetch('/api/status')
+        .then(r => r.json())
+        .then(data => {
+            if (data.armed || data.buffer_size !== {{ captures | length }}) {
+                location.reload();
+            }
+        })
+        .catch(() => {});
+}, 3000);
+</script>
+{% endblock %}
