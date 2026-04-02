@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}CC Inspector{% endblock %}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg: #1a1b26;
+            --bg-surface: #24283b;
+            --bg-raised: #2f3349;
+            --text: #c0caf5;
+            --text-muted: #565f89;
+            --text-bright: #e0e6ff;
+            --accent: #7aa2f7;
+            --accent-dim: #3d59a1;
+            --green: #9ece6a;
+            --red: #f7768e;
+            --orange: #e0af68;
+            --border: #3b4261;
+            --mono: 'Menlo', 'Consolas', 'Liberation Mono', monospace;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            min-height: 100vh;
+        }
+
+        header {
+            background: var(--bg-surface);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        header h1 {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-bright);
+        }
+
+        header h1 span {
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .status-badge::before {
+            content: '';
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+
+        .status-connected { background: rgba(158, 206, 106, 0.15); color: var(--green); }
+        .status-connected::before { background: var(--green); }
+        .status-disconnected { background: rgba(247, 118, 142, 0.15); color: var(--red); }
+        .status-disconnected::before { background: var(--red); }
+        .status-armed { background: rgba(224, 175, 104, 0.15); color: var(--orange); }
+        .status-armed::before { background: var(--orange); }
+
+        main {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        .card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 16px;
+        }
+
+        .card h2 {
+            font-size: 14px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 12px;
+        }
+
+        button {
+            font-family: inherit;
+            font-size: 13px;
+            padding: 6px 14px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            background: var(--bg-raised);
+            color: var(--text);
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+        }
+
+        button:hover {
+            background: var(--accent-dim);
+            border-color: var(--accent);
+        }
+
+        button.primary {
+            background: var(--accent-dim);
+            border-color: var(--accent);
+            color: var(--text-bright);
+        }
+
+        button.danger {
+            border-color: var(--red);
+            color: var(--red);
+        }
+
+        button.danger:hover {
+            background: rgba(247, 118, 142, 0.2);
+        }
+
+        input[type="number"] {
+            font-family: var(--mono);
+            font-size: 13px;
+            width: 60px;
+            padding: 5px 8px;
+            border-radius: 4px;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            color: var(--text);
+            text-align: center;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            text-align: left;
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+
+        tr:hover td {
+            background: var(--bg-raised);
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .mono {
+            font-family: var(--mono);
+            font-size: 12px;
+        }
+
+        .text-muted { color: var(--text-muted); }
+        .text-green { color: var(--green); }
+        .text-red { color: var(--red); }
+        .text-orange { color: var(--orange); }
+
+        .flex { display: flex; }
+        .items-center { align-items: center; }
+        .gap-8 { gap: 8px; }
+        .gap-16 { gap: 16px; }
+        .ml-auto { margin-left: auto; }
+        .mb-8 { margin-bottom: 8px; }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-muted);
+        }
+
+        /* Collapsible content */
+        .collapsible-toggle {
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .collapsible-toggle::before {
+            content: '\25B6';
+            display: inline-block;
+            margin-right: 6px;
+            font-size: 10px;
+            transition: transform 0.15s;
+        }
+
+        .collapsible-toggle.open::before {
+            transform: rotate(90deg);
+        }
+
+        .collapsible-content {
+            display: none;
+            margin-top: 8px;
+        }
+
+        .collapsible-content.open {
+            display: block;
+        }
+
+        pre {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 12px;
+            overflow-x: auto;
+            font-family: var(--mono);
+            font-size: 12px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .badge-user { background: rgba(122, 162, 247, 0.2); color: var(--accent); }
+        .badge-assistant { background: rgba(158, 206, 106, 0.2); color: var(--green); }
+        .badge-system { background: rgba(224, 175, 104, 0.2); color: var(--orange); }
+        .badge-text { background: rgba(192, 202, 245, 0.1); color: var(--text-muted); }
+        .badge-tool_use { background: rgba(187, 154, 247, 0.2); color: #bb9af7; }
+        .badge-tool_result { background: rgba(125, 207, 255, 0.2); color: #7dcfff; }
+        .badge-thinking { background: rgba(224, 175, 104, 0.2); color: var(--orange); }
+
+        .sidebar {
+            position: sticky;
+            top: 24px;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+
+        .stat-label { color: var(--text-muted); }
+        .stat-value { color: var(--text-bright); font-family: var(--mono); }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 300px;
+            gap: 16px;
+        }
+
+        @media (max-width: 900px) {
+            .grid-2 {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .message-item {
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 8px;
+            overflow: hidden;
+        }
+
+        .message-header {
+            padding: 8px 12px;
+            background: var(--bg-raised);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+        }
+
+        .message-body {
+            padding: 12px;
+            display: none;
+        }
+
+        .message-body.open {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>CC Inspector <span>/ context window inspector</span></h1>
+        {% block header_extra %}{% endblock %}
+    </header>
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

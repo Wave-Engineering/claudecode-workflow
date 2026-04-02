@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# cc-inspector — Launch the context window inspector (proxy + Flask UI)
+#
+# Starts mitmproxy with the inspector addon on port 8000 (reverse proxy to
+# Anthropic API) and the Flask web UI on port 8002. Ctrl+C kills both.
+#
+# Usage:
+#   scripts/cc-inspector
+#
+# Then launch Claude Code with:
+#   ANTHROPIC_BASE_URL=http://localhost:8000/ claude
+#
+# Open the inspector UI at:
+#   http://localhost:8002
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+INSPECTOR_DIR="$REPO_DIR/tools/cc-inspector"
+
+PROXY_PORT="${CC_INSPECTOR_PROXY_PORT:-8000}"
+CONTROL_PORT="${CC_INSPECTOR_CONTROL_PORT:-8001}"
+UI_PORT="${CC_INSPECTOR_UI_PORT:-8002}"
+ANTHROPIC_API="${CC_INSPECTOR_UPSTREAM:-https://api.anthropic.com}"
+
+# Track child PIDs for cleanup
+PIDS=()
+
+cleanup() {
+	echo ""
+	echo "Shutting down inspector..."
+	for pid in "${PIDS[@]}"; do
+		kill "$pid" 2>/dev/null || true
+	done
+	wait 2>/dev/null || true
+	echo "Done."
+}
+
+trap cleanup EXIT INT TERM
+
+# Check dependencies
+for cmd in mitmdump python3; do
+	if ! command -v "$cmd" &>/dev/null; then
+		echo "Error: $cmd not found. Install it first." >&2
+		echo "  pip install mitmproxy flask requests" >&2
+		exit 1
+	fi
+done
+
+echo "CC Inspector — Context Window Inspector"
+echo "========================================"
+echo ""
+
+# Start mitmproxy reverse proxy
+echo "Starting proxy on port $PROXY_PORT (upstream: $ANTHROPIC_API)..."
+mitmdump \
+	--mode "reverse:$ANTHROPIC_API" \
+	-p "$PROXY_PORT" \
+	-s "$INSPECTOR_DIR/proxy.py" \
+	--set "block_global=false" \
+	2>&1 | sed 's/^/[proxy] /' &
+PIDS+=($!)
+
+# Give the proxy a moment to start and bind the control port
+sleep 1
+
+# Start Flask UI
+echo "Starting UI on port $UI_PORT..."
+CC_INSPECTOR_CONTROL_URL="http://127.0.0.1:$CONTROL_PORT" \
+	CC_INSPECTOR_UI_PORT="$UI_PORT" \
+	python3 "$INSPECTOR_DIR/app.py" 2>&1 | sed 's/^/[ui] /' &
+PIDS+=($!)
+
+echo ""
+echo "Inspector running."
+echo "  Proxy:  http://localhost:$PROXY_PORT"
+echo "  UI:     http://localhost:$UI_PORT"
+echo ""
+echo "Launch Claude Code with:"
+echo "  ANTHROPIC_BASE_URL=http://localhost:$PROXY_PORT/ claude"
+echo ""
+echo "Press Ctrl+C to stop."
+
+# Wait for any child to exit
+wait
