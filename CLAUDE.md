@@ -564,12 +564,6 @@ The signature is used by the watcher to filter your own echoes. Messages without
 
 The watcher pre-filters messages: only `@all`, `@<dev-team>`, and `@<dev-name>` notifications are delivered. Set `DISCORD_WATCHER_VERBOSE=1` to bypass filtering and receive all messages.
 
-**Thread messages (remote sessions):**
-
-When the agent has a `thread_id` in its identity file (set by `afk-notify`),
-the watcher also polls that thread for replies. Thread messages skip the
-@-addressing filter — everything in the agent's thread is addressed to it.
-
 Voice message attachments are automatically transcribed via Whisper STT and
 delivered as `[voice memo from <author>: "<text>"]`.
 
@@ -623,11 +617,9 @@ Each session, pick a fresh identity for yourself. This is NOT persisted — a ne
    {
      "dev_team": "<Dev-Team value>",
      "dev_name": "<your chosen name>",
-     "dev_avatar": "<your chosen emoji>",
-     "thread_id": "<Discord thread ID, set by afk-notify>"
+     "dev_avatar": "<your chosen emoji>"
    }
    ```
-   Note: `thread_id` is optional and only present when `afk-notify` has created a session thread.
 4. Announce your identity to the user:
    > I'm going by **\<Dev-Name\>** \<Dev-Avatar\> from team `<Dev-Team>` this session.
 5. **Set session display name** — So the Remote Control UI shows your identity instead of a truncated prompt:

@@ -38,7 +38,7 @@ Determine what the user wants from the phrasing:
 | Quoted text, or starts with "say", "tell", "post", "send", "announce" | **send** | `"build complete"`, `tell #dev "ready"`, `post "deployed v1.2"` |
 | Starts with "check", "read", "what's", contains `?`, or describes wanting to see messages | **read** | `what's new?`, `check #general`, `read #agent-ops` |
 | Starts with "create", "make", "new" + channel name | **create** | `create #wave-3-status`, `new channel test` |
-| Starts with "thread", "create thread", "new thread" + thread name | **create-thread** | `thread "session-123" in #remote-sessions`, `create thread "daily"` |
+| Starts with "thread", "create thread", "new thread" + thread name | **create-thread** | `thread "session-123" in #agent-ops`, `create thread "daily"` |
 | Starts with "list", "show", "channels" | **list** | `list channels`, `show channels` |
 | "roll-call", "check in", "sound off" | **check-in** | `roll-call`, `check in`, `sound off` |
 | No args at all | **check-in** | (posts check-in to `#roll-call`) |

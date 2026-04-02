@@ -11,7 +11,7 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, existsSync, unlinkSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
@@ -89,6 +89,74 @@ const CHANNEL_REFRESH_MS = 5 * 60_000;
 const MESSAGES_PER_PAGE = 50;
 const VERBOSE = process.env.DISCORD_WATCHER_VERBOSE === "1";
 
+// --- Kill switch -------------------------------------------------------------
+
+const KILL_FILE = join(homedir(), ".claude", "discord-bot.kill");
+
+/**
+ * Check the kill switch file (~/.claude/discord-bot.kill).
+ *
+ * Returns:
+ *   "active"  — kill switch is active, skip the poll cycle
+ *   "clear"   — no kill switch or it was auto-lifted, proceed normally
+ *
+ * Kill file format (compatible with discord-bot shell script):
+ *   - Empty file: manual kill, no expiry — always active
+ *   - File containing a Unix timestamp: active until that time, auto-lifted when expired
+ */
+export function checkKillSwitch(): "active" | "clear" {
+  if (!existsSync(KILL_FILE)) return "clear";
+
+  const content = readFileSync(KILL_FILE, "utf-8").trim();
+
+  if (!content || !/^\d+$/.test(content)) {
+    // Manual kill — no expiry
+    console.error("[discord-watcher] Kill switch active (manual). Skipping poll cycle.");
+    return "active";
+  }
+
+  const expiryTimestamp = parseInt(content, 10);
+  const nowSeconds = Math.floor(Date.now() / 1000);
+
+  if (nowSeconds >= expiryTimestamp) {
+    // Ban expired — auto-lift
+    try {
+      unlinkSync(KILL_FILE);
+      console.error("[discord-watcher] Kill switch expired, auto-lifted.");
+    } catch {
+      // File may have been removed by another process
+    }
+    return "clear";
+  }
+
+  const remaining = expiryTimestamp - nowSeconds;
+  console.error(
+    `[discord-watcher] Kill switch active (expires in ~${remaining}s). Skipping poll cycle.`
+  );
+  return "active";
+}
+
+/**
+ * Engage the kill switch with an expiry timestamp.
+ * Called when a 429 (rate limit) response is received.
+ * Uses atomic write (write to temp + rename) to prevent empty kill files.
+ */
+export function engageKillSwitch(retryAfterSeconds: number): void {
+  const expiry = Math.floor(Date.now() / 1000) + Math.ceil(retryAfterSeconds);
+  const tmpFile = `${KILL_FILE}.${process.pid}`;
+  try {
+    writeFileSync(tmpFile, `${expiry}\n`);
+    renameSync(tmpFile, KILL_FILE);
+    console.error(
+      `[discord-watcher] 429 received. Kill switch engaged for ~${Math.ceil(retryAfterSeconds)}s.`
+    );
+  } catch (err) {
+    console.error(`[discord-watcher] Failed to write kill switch: ${err}`);
+    // Clean up temp file if rename failed
+    try { unlinkSync(tmpFile); } catch { /* ignore */ }
+  }
+}
+
 // --- Auth --------------------------------------------------------------------
 
 function loadToken(): string {
@@ -111,10 +179,9 @@ function loadToken(): string {
 export interface AgentIdentity {
   devName: string | null;
   devTeam: string | null;
-  threadId: string | null;
 }
 
-let cachedIdentity: AgentIdentity = { devName: null, devTeam: null, threadId: null };
+let cachedIdentity: AgentIdentity = { devName: null, devTeam: null };
 
 export function resolveIdentity(): AgentIdentity {
   try {
@@ -134,10 +201,9 @@ export function resolveIdentity(): AgentIdentity {
     return {
       devName: data.dev_name || null,
       devTeam: data.dev_team || null,
-      threadId: data.thread_id || null,
     };
   } catch {
-    return { devName: null, devTeam: null, threadId: null };
+    return { devName: null, devTeam: null };
   }
 }
 
@@ -152,6 +218,7 @@ async function apiGet(
   });
   if (res.status === 429) {
     const retryAfter = parseFloat(res.headers.get("Retry-After") ?? "5");
+    engageKillSwitch(retryAfter);
     return { ok: false, status: 429, retryAfter };
   }
   if (!res.ok) {
@@ -326,6 +393,9 @@ async function checkForNewMessages(
   server: Server,
   authHeader: string
 ): Promise<void> {
+  // Check kill switch before polling
+  if (checkKillSwitch() === "active") return;
+
   // Refresh identity each cycle (agent may pick name after server starts)
   cachedIdentity = resolveIdentity();
 
@@ -428,76 +498,6 @@ async function checkForNewMessages(
     }
   }
 
-  // --- Poll agent's session thread (if one exists) ---
-  if (cachedIdentity.threadId) {
-    try {
-      const threadId = cachedIdentity.threadId;
-      const lastId = lastSeenMessageId.get(threadId);
-
-      if (!lastId) {
-        // First poll — set baseline
-        const result = await apiGet(
-          `/channels/${threadId}/messages?limit=1`,
-          authHeader
-        );
-        if (result.ok) {
-          const msgs = result.data as DiscordMessage[];
-          if (msgs.length > 0) {
-            lastSeenMessageId.set(threadId, msgs[0].id);
-          }
-        }
-      } else {
-        const messages = await fetchAllNewMessages(threadId, lastId, authHeader);
-        if (messages.length > 0) {
-          lastSeenMessageId.set(threadId, messages[0].id);
-
-          for (const msg of messages.reverse()) {
-            if (!msg.content.trim() && !msg.attachments?.length) continue;
-
-            // Self-echo filter
-            if (
-              cachedIdentity.devName &&
-              msg.content.toLowerCase().includes(`— **${cachedIdentity.devName.toLowerCase()}**`)
-            ) {
-              continue;
-            }
-
-            // NO @-addressing filter for thread messages — everything in
-            // the agent's thread is addressed to this agent by definition
-
-            let content = msg.content;
-
-            // Transcribe audio attachments
-            const audioTranscription = await transcribeAudioAttachments(msg, authHeader);
-            if (audioTranscription) {
-              content = audioTranscription + (content ? "\n" + content : "");
-            }
-
-            const preview = content.length > 100 ? content.slice(0, 100) + "…" : content;
-
-            console.error(
-              `[discord-watcher] Thread message from ${msg.author.username}: ${preview}`
-            );
-
-            await server.notification({
-              method: "notifications/claude/channel" as any,
-              params: {
-                content: `New message from ${msg.author.username} in remote-session thread: ${preview}`,
-                meta: {
-                  channel_name: "remote-session",
-                  channel_id: threadId,
-                  author: msg.author.username,
-                  message_id: msg.id,
-                },
-              },
-            });
-          }
-        }
-      }
-    } catch (err) {
-      console.error(`[discord-watcher] Error polling session thread: ${err}`);
-    }
-  }
 }
 
 // --- Main --------------------------------------------------------------------

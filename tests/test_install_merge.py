@@ -166,21 +166,21 @@ class TestFreshInstallCopiesTemplate:
 @_SKIP_NO_BASH
 @_SKIP_NO_JQ
 class TestMergeAddsMissingHook:
-    """Existing settings.json without Stop hook -> Stop hook added."""
+    """Existing settings.json without SubagentStop hook -> SubagentStop hook added."""
 
     def test_merge_adds_missing_hook(self, sandbox_home: Path) -> None:
         settings_path = sandbox_home / ".claude" / "settings.json"
         local = _minimal_local_settings()
-        # Ensure Stop hook is absent
-        assert "Stop" not in local.get("hooks", {})
+        # Remove SubagentStop if present so the merge can add it
+        local.setdefault("hooks", {}).pop("SubagentStop", None)
         _write_json(settings_path, local)
 
         rc, out, err = _run_install(["--config"], sandbox_home)
         assert rc == 0, f"install failed (rc={rc}):\nstdout: {out}\nstderr: {err}"
 
         merged = _read_json(settings_path)
-        assert "Stop" in merged["hooks"], "Stop hook should have been added"
-        assert "hooks.Stop" in out, "Output should report Stop hook was added"
+        assert "SubagentStop" in merged["hooks"], "SubagentStop hook should have been added"
+        assert "hooks.SubagentStop" in out, "Output should report SubagentStop hook was added"
 
 
 @_SKIP_NO_BASH

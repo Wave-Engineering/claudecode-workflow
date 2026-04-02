@@ -22,7 +22,7 @@ The kit ships a `settings.template.json` that gets copied to `~/.claude/settings
 
 ### Layer 2: Scripts
 
-**What:** Shell scripts installed to `~/.local/bin/` -- things like `discord-bot`, `slackbot-send`, `vox`, `file-opener`, `afk-notify`, and `statusline-command.sh`.
+**What:** Shell scripts installed to `~/.local/bin/` -- things like `discord-bot`, `slackbot-send`, `vox`, `file-opener`, and `statusline-command.sh`.
 
 **What they do:** Provide capabilities that Claude Code does not have natively. `discord-bot` is a REST client for the Discord API. `vox` converts text to speech via a Chatterbox endpoint. `slackbot-send` posts Slack messages as a bot. These are standalone tools that work from the command line independent of Claude Code.
 

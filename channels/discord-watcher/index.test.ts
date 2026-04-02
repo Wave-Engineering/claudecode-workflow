@@ -1,14 +1,15 @@
 /**
- * Tests for discord-watcher thread polling and voice message STT features.
+ * Tests for discord-watcher voice message STT, kill switch, and config features.
  *
- * These tests exercise the real transcribeAudioAttachments and resolveIdentity
- * functions. Only `fetch` (network) and `readFileSync`/`execSync` (filesystem/
- * process) are mocked — those are true external boundaries.
+ * These tests exercise the real transcribeAudioAttachments, resolveIdentity,
+ * checkKillSwitch, and engageKillSwitch functions. Only `fetch` (network) and
+ * `readFileSync`/`execSync` (filesystem/process) are mocked — those are true
+ * external boundaries.
  */
 
 import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
 import type { DiscordMessage, DiscordAttachment, DiscordConfig } from "./index";
-import { stripTokenPunctuation, loadConfig } from "./index";
+import { stripTokenPunctuation, loadConfig, checkKillSwitch, engageKillSwitch } from "./index";
 
 // We need to mock fetch and fs before importing the module under test.
 // Bun's mock system lets us intercept global fetch.
@@ -273,82 +274,26 @@ describe("transcribeAudioAttachments", () => {
 // --- resolveIdentity tests ---------------------------------------------------
 
 describe("resolveIdentity", () => {
-  test("returns threadId when present in agent file", async () => {
-    // Write a temporary agent identity file
-    const { writeFileSync, unlinkSync } = await import("node:fs");
-    const testFile = "/tmp/claude-agent-test-resolve-identity.json";
-    writeFileSync(
-      testFile,
-      JSON.stringify({
-        dev_name: "test-agent",
-        dev_team: "test-team",
-        thread_id: "1234567890",
-      })
-    );
-
-    // Mock the identity resolution path to use our test file
-    // Since resolveIdentity uses execSync + createHash internally,
-    // we test the data structure directly
-    const { readFileSync } = await import("node:fs");
-    const data = JSON.parse(readFileSync(testFile, "utf-8"));
-
-    expect(data.thread_id).toBe("1234567890");
-    expect(data.dev_name).toBe("test-agent");
-    expect(data.dev_team).toBe("test-team");
-
-    unlinkSync(testFile);
-  });
-
-  test("returns null threadId when not present in agent file", async () => {
-    const { writeFileSync, unlinkSync } = await import("node:fs");
-    const testFile = "/tmp/claude-agent-test-resolve-no-thread.json";
-    writeFileSync(
-      testFile,
-      JSON.stringify({
-        dev_name: "test-agent",
-        dev_team: "test-team",
-      })
-    );
-
-    const { readFileSync } = await import("node:fs");
-    const data = JSON.parse(readFileSync(testFile, "utf-8"));
-
-    // The || null pattern in resolveIdentity handles undefined -> null
-    expect(data.thread_id || null).toBeNull();
-
-    unlinkSync(testFile);
-  });
-
-  test("resolveIdentity returns all nulls when agent file missing", async () => {
+  test("resolveIdentity returns devName and devTeam when agent file missing", async () => {
     const { resolveIdentity: resolveId } = await import("./index");
     // This calls the real function which may or may not find the agent file.
     // The important thing: it doesn't throw, and returns an AgentIdentity
     const identity = resolveId();
     expect(identity).toHaveProperty("devName");
     expect(identity).toHaveProperty("devTeam");
-    expect(identity).toHaveProperty("threadId");
   });
 });
 
 // --- AgentIdentity interface tests -------------------------------------------
 
 describe("AgentIdentity interface", () => {
-  test("includes threadId field", async () => {
+  test("has devName and devTeam fields", async () => {
     const identity: import("./index").AgentIdentity = {
       devName: "test",
       devTeam: "team",
-      threadId: "12345",
     };
-    expect(identity.threadId).toBe("12345");
-  });
-
-  test("threadId can be null", async () => {
-    const identity: import("./index").AgentIdentity = {
-      devName: "test",
-      devTeam: "team",
-      threadId: null,
-    };
-    expect(identity.threadId).toBeNull();
+    expect(identity.devName).toBe("test");
+    expect(identity.devTeam).toBe("team");
   });
 });
 
@@ -412,36 +357,9 @@ describe("STT configuration", () => {
   });
 });
 
-// --- Thread polling logic (structural tests) ---------------------------------
+// --- Addressing tests --------------------------------------------------------
 
-describe("thread polling structure", () => {
-  test("checkForNewMessages polls thread when threadId is set", async () => {
-    // Verify the code path exists by checking the source contains
-    // the thread polling block
-    const { readFileSync } = await import("node:fs");
-    const src = readFileSync(
-      new URL("./index.ts", import.meta.url).pathname,
-      "utf-8"
-    );
-
-    // Thread polling is conditioned on cachedIdentity.threadId
-    expect(src).toContain("cachedIdentity.threadId");
-    expect(src).toContain("Poll agent's session thread");
-
-    // Thread messages skip @-addressing filter
-    expect(src).toContain("NO @-addressing filter for thread messages");
-
-    // Thread notifications use "remote-session" channel name
-    expect(src).toContain('channel_name: "remote-session"');
-
-    // Self-echo filter still applies in thread context
-    // Count the occurrences of the self-echo pattern
-    const echoPattern = /cachedIdentity\.devName\.toLowerCase\(\)/g;
-    const matches = src.match(echoPattern);
-    // Should appear at least twice: once in channel loop, once in thread loop
-    expect(matches!.length).toBeGreaterThanOrEqual(2);
-  });
-
+describe("addressing", () => {
   test("@-addressing matches when followed by punctuation", async () => {
     // The watcher tokenizes on whitespace then strips non-routing chars.
     // "@echo-chamber," should match dev_name "echo-chamber".
@@ -465,18 +383,83 @@ describe("thread polling structure", () => {
     expect(tokens).toContain("@all");
     expect(tokens).toContain("@cc-workflow");
   });
+});
 
-  test("thread messages include audio transcription", async () => {
-    const { readFileSync } = await import("node:fs");
-    const src = readFileSync(
-      new URL("./index.ts", import.meta.url).pathname,
-      "utf-8"
-    );
+// --- Kill switch tests -------------------------------------------------------
 
-    // transcribeAudioAttachments is called in both channel and thread contexts
-    const sttCalls = src.match(/transcribeAudioAttachments\(msg/g);
-    // At least 2: one for channels, one for threads
-    expect(sttCalls!.length).toBeGreaterThanOrEqual(2);
+describe("kill switch", () => {
+  const KILL_FILE = `${process.env.HOME}/.claude/discord-bot.kill`;
+
+  afterEach(async () => {
+    // Clean up kill file after each test
+    const { unlinkSync: unlink } = await import("node:fs");
+    try { unlink(KILL_FILE); } catch { /* ignore if not exists */ }
+  });
+
+  test("checkKillSwitch returns clear when no kill file exists", () => {
+    // Ensure kill file doesn't exist
+    const { unlinkSync: unlink } = require("node:fs");
+    try { unlink(KILL_FILE); } catch { /* ignore */ }
+
+    const result = checkKillSwitch();
+    expect(result).toBe("clear");
+  });
+
+  test("checkKillSwitch returns active for empty kill file (manual kill)", async () => {
+    const { writeFileSync: write, mkdirSync } = await import("node:fs");
+    mkdirSync(`${process.env.HOME}/.claude`, { recursive: true });
+    write(KILL_FILE, "");
+
+    const result = checkKillSwitch();
+    expect(result).toBe("active");
+  });
+
+  test("checkKillSwitch returns active for future timestamp", async () => {
+    const { writeFileSync: write, mkdirSync } = await import("node:fs");
+    mkdirSync(`${process.env.HOME}/.claude`, { recursive: true });
+    const futureTs = Math.floor(Date.now() / 1000) + 3600; // 1 hour from now
+    write(KILL_FILE, `${futureTs}\n`);
+
+    const result = checkKillSwitch();
+    expect(result).toBe("active");
+  });
+
+  test("checkKillSwitch auto-lifts expired timestamp", async () => {
+    const { writeFileSync: write, existsSync: exists, mkdirSync } = await import("node:fs");
+    mkdirSync(`${process.env.HOME}/.claude`, { recursive: true });
+    const pastTs = Math.floor(Date.now() / 1000) - 60; // 1 minute ago
+    write(KILL_FILE, `${pastTs}\n`);
+
+    const result = checkKillSwitch();
+    expect(result).toBe("clear");
+    // Kill file should have been deleted
+    expect(exists(KILL_FILE)).toBe(false);
+  });
+
+  test("engageKillSwitch writes kill file with expiry timestamp", async () => {
+    const { readFileSync: read, existsSync: exists, mkdirSync } = await import("node:fs");
+    mkdirSync(`${process.env.HOME}/.claude`, { recursive: true });
+
+    engageKillSwitch(120); // 2 minutes
+
+    expect(exists(KILL_FILE)).toBe(true);
+    const content = read(KILL_FILE, "utf-8").trim();
+    const ts = parseInt(content, 10);
+    const now = Math.floor(Date.now() / 1000);
+    // Timestamp should be ~120 seconds in the future (allow 5s tolerance)
+    expect(ts).toBeGreaterThan(now);
+    expect(ts).toBeLessThanOrEqual(now + 125);
+  });
+
+  test("kill switch format is compatible with discord-bot shell script", async () => {
+    const { readFileSync: read, mkdirSync } = await import("node:fs");
+    mkdirSync(`${process.env.HOME}/.claude`, { recursive: true });
+
+    engageKillSwitch(60);
+
+    const content = read(KILL_FILE, "utf-8").trim();
+    // Must be a plain integer (Unix timestamp) — discord-bot checks with regex ^[0-9]+$
+    expect(content).toMatch(/^\d+$/);
   });
 });
 

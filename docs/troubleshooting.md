@@ -25,30 +25,7 @@ Common failure modes and their fixes. Each entry describes the symptom you see, 
 
 ---
 
-## 2. afk-notify did not fire
-
-**Symptom:** You locked your desktop and expected the agent to relay its output to Discord via the `#remote-sessions` thread, but nothing appeared. The session completed silently with no Discord notification.
-
-**Cause:** The `afk-notify` script runs as a **Stop hook** in Claude Code settings. If the hook is not configured, or is configured incorrectly, it never executes.
-
-Common causes:
-
-- **Missing Stop hook in settings.json.** The hook entry must be present in `~/.claude/settings.json` under the hooks section. The settings template includes it, but if you had an existing `settings.json` before installing, the smart merge may not have added it.
-- **afk-notify not on PATH.** The script must be at `~/.local/bin/afk-notify` and `~/.local/bin` must be in your PATH.
-- **Missing dependencies.** `afk-notify` requires `jq`, `loginctl` (for lock detection on Linux), the `claude` CLI (for Haiku summarization), `discord-bot`, and `vox`. If any are missing, the script exits early.
-- **Desktop not detected as locked.** `afk-notify` checks `loginctl show-session` on Linux or `ioreg` on macOS to determine lock state. If the detection fails (e.g., Wayland session, non-standard display manager), it may not trigger.
-
-**Fix:**
-
-1. Check that the Stop hook exists in your settings: look for `afk-notify` in `~/.claude/settings.json` under hooks.
-2. If missing, run `./install.sh` to smart-merge the settings template, or manually add the hook entry from `config/settings.template.json`.
-3. Verify the script is installed: `which afk-notify`.
-4. Test it manually: `afk-notify` -- it should detect the lock state and either relay or skip.
-5. Check dependencies: `which jq loginctl claude discord-bot vox`.
-
----
-
-## 3. Watcher dropping messages
+## 2. Watcher dropping messages
 
 **Symptom:** You send a message on Discord with `@cc-workflow` or `@beacon` addressing, but the agent does not receive the notification. Other messages get through fine.
 
@@ -72,7 +49,7 @@ Other causes:
 
 ---
 
-## 4. install.sh says "in sync" but feature does not work
+## 3. install.sh says "in sync" but feature does not work
 
 **Symptom:** You run `./install.sh --check` and everything shows "in sync", but a feature (e.g., a new hook, a new plugin, a new permission) is not working in your Claude Code sessions.
 
@@ -98,7 +75,7 @@ Specific scenarios:
 
 ---
 
-## 5. /precheck not running -- branch not tracking issue
+## 4. /precheck not running -- branch not tracking issue
 
 **Symptom:** You run `/precheck` and it stops at Step 1 with an error like "no issue number found in branch name" or "issue is closed or missing."
 
@@ -121,7 +98,7 @@ Common causes:
 
 ---
 
-## 6. Identity not persisting across sessions
+## 5. Identity not persisting across sessions
 
 **Symptom:** Every time you start a new Claude Code session, the agent picks a brand new Dev-Name and Dev-Avatar, even though you expected it to remember the previous one.
 
@@ -149,7 +126,7 @@ The identity file at `/tmp/claude-agent-<hash>.json` is keyed by the md5 hash of
 
 ---
 
-## 7. Discord bot commands failing with authentication errors
+## 6. Discord bot commands failing with authentication errors
 
 **Symptom:** Running `discord-bot send` or `discord-bot read` fails with a 401 Unauthorized or "Missing Access" error.
 
