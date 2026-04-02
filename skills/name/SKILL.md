@@ -29,7 +29,7 @@ Report the current session identity, or pick one if not yet established.
 
 4. **Pick identity (if needed)**
    - `Dev-Name`: A single memorable name or short phrase (max 3 words). Draw from nerdcore canon — sci-fi, fantasy, comics, gaming, mythology, tech puns, wordplay. The wittier and more specific the reference, the better.
-   - `Dev-Avatar`: A Slack emoji string with colons (e.g., `:smiling_imp:`, `:space_invader:`). Should feel like it belongs with the name.
+   - `Dev-Avatar`: A Unicode emoji character (e.g., 🧠, 👾). Should feel like it belongs with the name.
    - Persist to the resolved identity file:
      ```bash
      cat > "$agent_file" << 'EOF'

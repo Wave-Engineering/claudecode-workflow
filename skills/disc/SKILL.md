@@ -53,7 +53,7 @@ dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
 agent_file="/tmp/claude-agent-${dir_hash}.json"
 ```
 
-Read `dev_name`, `dev_avatar`, and `dev_team` from that file. If the file doesn't exist, use defaults: name=`Claude`, avatar=`:robot_face:`, team=`unknown`.
+Read `dev_name`, `dev_avatar`, and `dev_team` from that file. If the file doesn't exist, use defaults: name=`Claude`, avatar=`🤖`, team=`unknown`.
 
 ## Resolve Channel
 

@@ -36,7 +36,7 @@ For example, `@beacon,` (with a trailing comma) or `@cc-workflow:` (with a trail
 Other causes:
 
 - **Identity not set.** If the agent has not picked a Dev-Name yet (no identity file exists), the watcher has nothing to match against for `@<dev-name>` addressing. `@<dev-team>` and `@all` would still work.
-- **Echo filtering.** Messages that contain the agent's own signature (e.g., `-- **beacon** :satellite: (cc-workflow)`) are suppressed to prevent loops. If you are testing by manually posting a message that includes the agent's signature, it will be filtered.
+- **Echo filtering.** Messages that contain the agent's own signature (e.g., `-- **beacon** 📡 (cc-workflow)`) are suppressed to prevent loops. If you are testing by manually posting a message that includes the agent's signature, it will be filtered.
 - **Watcher not running.** The session must be started with `--dangerously-load-development-channels server:discord-watcher` (or the `--channels` alias) for the watcher to be active.
 
 **Fix:**

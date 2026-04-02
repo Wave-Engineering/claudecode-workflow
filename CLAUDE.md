@@ -548,7 +548,7 @@ Your message content here.
 — **<Dev-Name>** <Dev-Avatar> (<Dev-Team>)
 ```
 
-Example: `— **beacon** :satellite: (cc-workflow)`
+Example: `— **beacon** 📡 (cc-workflow)`
 
 The signature is used by the watcher to filter your own echoes. Messages without your signature will echo back to you.
 
@@ -602,7 +602,7 @@ Each session, pick a fresh identity for yourself. This is NOT persisted — a ne
 
 **Naming rules:**
 - `Dev-Name`: A single memorable word or hyphenated phrase in **kebab-case** (e.g., `beacon`, `null-pointer`, `mother`). Draw from nerdcore canon — sci-fi, fantasy, comics, gaming, mythology, tech puns, wordplay. The wittier and more specific the reference, the better. Generic names are boring. Kebab-case is required so the name works as a routing key for `@<dev-name>` addressing.
-- `Dev-Avatar`: A Slack emoji string with colons (e.g., `:smiling_imp:`, `:space_invader:`). Should feel like it belongs with the name.
+- `Dev-Avatar`: A Unicode emoji character (e.g., 🧠, 👾). Should feel like it belongs with the name.
 
 **On session start**, after resolving Dev-Team:
 1. Pick your Dev-Name and Dev-Avatar
@@ -617,7 +617,7 @@ Each session, pick a fresh identity for yourself. This is NOT persisted — a ne
    {
      "dev_team": "<Dev-Team value>",
      "dev_name": "<your chosen name>",
-     "dev_avatar": "<your chosen emoji>"
+     "dev_avatar": "🧠"
    }
    ```
 4. Announce your identity to the user:
@@ -626,7 +626,7 @@ Each session, pick a fresh identity for yourself. This is NOT persisted — a ne
    ```
    /rename <Dev-Name> <Dev-Avatar> (<Dev-Team>)
    ```
-   Example: `/rename neuron :zap: (cc-workflow)`. Skip silently if `/rename` is unavailable.
+   Example: `/rename neuron ⚡ (cc-workflow)`. Skip silently if `/rename` is unavailable.
 6. **Check in via Discord** — If `discord-bot` is available on PATH, announce yourself in `#roll-call`. Read the channel ID from config:
    ```bash
    ROLL_CALL=$(jq -r '.channels["roll-call"].id' ~/.claude/discord.json 2>/dev/null || echo "1487382005036617851")

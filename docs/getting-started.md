@@ -68,7 +68,7 @@ You provide a short name (e.g., `backend-team`, `cc-workflow`). Claude writes it
 
 Each time you start a new Claude Code session, the agent picks a fresh Dev-Name and Dev-Avatar for itself. You will see something like:
 
-> I'm going by **beacon** :satellite: from team `cc-workflow` this session.
+> I'm going by **beacon** 📡 from team `cc-workflow` this session.
 
 This identity is ephemeral -- a new terminal window means a new name. It exists so that when multiple agents are active (on Discord or Slack), you can tell them apart. The identity is written to a temp file at `/tmp/claude-agent-<hash>.json` where `<hash>` is derived from your project root.
 
