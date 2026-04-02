@@ -1,23 +1,23 @@
 #!/usr/bin/env bash
 # uninstall.sh — Remove Claude Code workflow environment
 #
-# Removes skills, scripts, config, and channel servers installed by install.sh.
+# Removes skills, scripts, config, and MCP servers installed by install.sh.
 # Does NOT remove settings.json or credentials.
 #
 # Usage:
-#   ./uninstall.sh              Remove everything (skills, scripts, config, channels)
+#   ./uninstall.sh              Remove everything (skills, scripts, config, mcps)
 #   ./uninstall.sh --dry-run    Show what would be removed without doing it
 #   ./uninstall.sh --skills     Remove skills only
 #   ./uninstall.sh --scripts    Remove scripts and packages only
 #   ./uninstall.sh --config     Remove config files only (statusline-command.sh)
-#   ./uninstall.sh --channels   Remove MCP server registrations only
+#   ./uninstall.sh --mcps       Remove MCP server registrations only
 #
 # What full uninstall removes:
 #   Skills      → ~/.claude/skills/<name>/
 #   Scripts     → ~/.local/bin/<name>
 #   Packages    → ~/.local/bin/<name> (built artifacts)
 #   Config      → ~/.claude/statusline-command.sh
-#   Channels    → MCP server registrations (claude mcp remove)
+#   MCPs        → MCP server registrations (via each MCP's --uninstall)
 #
 # What full uninstall preserves:
 #   Settings    → ~/.claude/settings.json (user-customized)
@@ -33,7 +33,7 @@ DRY_RUN=false
 REMOVE_SKILLS=true
 REMOVE_SCRIPTS=true
 REMOVE_CONFIG=true
-REMOVE_CHANNELS=true
+REMOVE_MCPS=true
 
 # --- Parse args ---------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -45,22 +45,22 @@ while [[ $# -gt 0 ]]; do
 	--skills)
 		REMOVE_SCRIPTS=false
 		REMOVE_CONFIG=false
-		REMOVE_CHANNELS=false
+		REMOVE_MCPS=false
 		shift
 		;;
 	--scripts)
 		REMOVE_SKILLS=false
 		REMOVE_CONFIG=false
-		REMOVE_CHANNELS=false
+		REMOVE_MCPS=false
 		shift
 		;;
 	--config)
 		REMOVE_SKILLS=false
 		REMOVE_SCRIPTS=false
-		REMOVE_CHANNELS=false
+		REMOVE_MCPS=false
 		shift
 		;;
-	--channels)
+	--mcps)
 		REMOVE_SKILLS=false
 		REMOVE_SCRIPTS=false
 		REMOVE_CONFIG=false
@@ -153,32 +153,29 @@ if [[ "$REMOVE_CONFIG" == true ]]; then
 	echo "  [-] settings.json — preserved (not managed by uninstall)"
 fi
 
-# --- Remove channel servers ---------------------------------------------------
-if [[ "$REMOVE_CHANNELS" == true ]]; then
+# --- Remove MCP servers -------------------------------------------------------
+if [[ "$REMOVE_MCPS" == true ]]; then
 	echo ""
-	echo "Removing channel servers"
+	echo "Removing MCP servers"
 	echo "──────────────────────────────────────────"
-	if command -v claude &>/dev/null; then
-		mcp_list=$(claude mcp list 2>/dev/null || true)
-		for channel_dir in "$REPO_DIR"/channels/*/; do
-			[[ -f "$channel_dir/package.json" ]] || continue
-			channel_name="$(basename "$channel_dir")"
-			if echo "$mcp_list" | grep -q "$channel_name"; then
-				if [[ "$DRY_RUN" == true ]]; then
-					echo "  [+] (dry-run) Would remove MCP server: $channel_name"
-				else
-					if claude mcp remove --scope user "$channel_name" 2>/dev/null; then
-						info "$channel_name (MCP server)"
-					else
-						echo "  [!] Failed to remove MCP server: $channel_name"
-					fi
-				fi
+	if [[ -f "$REPO_DIR/mcps.json" ]] && command -v jq &>/dev/null; then
+		for mcp_name in $(jq -r '.mcps | keys[]' "$REPO_DIR/mcps.json"); do
+			install_url=$(jq -r ".mcps[\"$mcp_name\"].install_url" "$REPO_DIR/mcps.json")
+			if [[ "$DRY_RUN" == true ]]; then
+				echo "  [+] (dry-run) Would uninstall MCP server: $mcp_name"
 			else
-				skip "$channel_name (MCP server not registered)"
+				info "Uninstalling $mcp_name..."
+				if curl -fsSL "$install_url" | bash -s -- --uninstall; then
+					info "$mcp_name removed"
+				else
+					echo "  [!] Failed to uninstall $mcp_name"
+				fi
 			fi
 		done
+	elif ! command -v jq &>/dev/null; then
+		echo "  [!] jq not found — cannot read mcps.json"
 	else
-		echo "  [!] claude CLI not found — cannot remove MCP servers"
+		echo "  [!] mcps.json not found — cannot determine MCP servers to remove"
 	fi
 fi
 

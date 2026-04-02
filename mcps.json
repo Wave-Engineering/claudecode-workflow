@@ -1,0 +1,14 @@
+{
+  "mcps": {
+    "wtf-server": {
+      "repo": "Wave-Engineering/mcp-server-wtf",
+      "install_url": "https://raw.githubusercontent.com/Wave-Engineering/mcp-server-wtf/main/scripts/install-remote.sh",
+      "description": "Flight recorder for incident troubleshooting"
+    },
+    "discord-watcher": {
+      "repo": "Wave-Engineering/mcp-server-discord-watcher",
+      "install_url": "https://raw.githubusercontent.com/Wave-Engineering/mcp-server-discord-watcher/main/scripts/install-remote.sh",
+      "description": "Discord channel notification server"
+    }
+  }
+}

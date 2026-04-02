@@ -78,13 +78,16 @@ Key features:
 | `vox` | `curl`, audio player (`aplay`/`afplay`) | Text-to-speech via Chatterbox API, with local fallback (espeak/piper/say) |
 | `statusline-command.sh` | `jq`, `git` | Custom status line: git branch, dirty state, context window remaining, model |
 
-### Channel Servers
+### MCP Servers
 
-| Server | Directory | What it does |
-|--------|-----------|-------------|
-| `discord-watcher` | `channels/discord-watcher/` | MCP channel server that watches Discord and pushes wake-up notifications into Claude Code sessions |
+MCP servers are managed via `mcps.json` and installed from their own repos:
 
-The discord-watcher enables real-time inter-agent communication. Multiple Claude Code agents can send and receive messages through Discord, with signature-based echo filtering to prevent loops. See [Discord Setup](#discord-setup) below.
+| Server | Repo | What it does |
+|--------|------|-------------|
+| `wtf-server` | [mcp-server-wtf](https://github.com/Wave-Engineering/mcp-server-wtf) | Flight recorder for incident troubleshooting |
+| `discord-watcher` | [mcp-server-discord-watcher](https://github.com/Wave-Engineering/mcp-server-discord-watcher) | Discord channel notification server for inter-agent communication |
+
+Each MCP has its own `install-remote.sh` for standalone installation. Running `./install.sh` installs all MCPs from the manifest automatically.
 
 ### Settings Template
 
@@ -120,6 +123,8 @@ This will:
 ./install.sh --skills      # Install skills only
 ./install.sh --scripts     # Install scripts only
 ./install.sh --config      # Install config files only
+./install.sh --mcps        # Install MCP servers only (via mcps.json manifest)
+./install.sh --no-mcps     # Install everything except MCP servers
 ```
 
 ### Check for Drift
@@ -132,7 +137,7 @@ After making local changes to skills or scripts, see what's out of sync:
 
 This compares every installed file against the repo version and reports `in sync`, `DIFFERS`, or `NOT INSTALLED`. It also checks:
 - **Settings** — reports any hooks or plugins present in the template but missing from your local `settings.json`
-- **Channels** — verifies that each channel server (e.g., discord-watcher) is registered as an MCP server via `claude mcp list`
+- **MCPs** — verifies that each MCP server from `mcps.json` is registered via `claude mcp list`
 
 ### Sync Local Changes Back to Repo
 
@@ -243,11 +248,10 @@ The discord-watcher is an MCP channel server that polls Discord and pushes real-
 curl -fsSL https://bun.sh/install | bash
 ```
 
-`./install.sh` automatically runs `bun install` and registers the channel server at user scope via `claude mcp add`. If automatic registration fails, you can register manually:
+`./install.sh` installs MCP servers from the `mcps.json` manifest via each server's `install-remote.sh`. You can also install them individually:
 
 ```bash
-claude mcp add --scope user --transport stdio discord-watcher -- \
-  bun /path/to/claudecode-workflow/channels/discord-watcher/index.ts
+curl -fsSL https://raw.githubusercontent.com/Wave-Engineering/mcp-server-discord-watcher/main/scripts/install-remote.sh | bash
 ```
 
 ### 3. Start with Channels

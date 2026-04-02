@@ -11,7 +11,8 @@
 #   ./install.sh --skills     Install skills only
 #   ./install.sh --scripts    Install scripts only (also builds packages from src/)
 #   ./install.sh --config     Install config files only (smart-merges settings.json)
-#   ./install.sh --channels   Install channel servers only (bun install + MCP registration)
+#   ./install.sh --mcps       Install MCP servers only (via mcps.json manifest)
+#   ./install.sh --no-mcps    Install everything except MCP servers
 #
 # Targets:
 #   Skills     → ~/.claude/skills/<name>/SKILL.md
@@ -20,7 +21,7 @@
 #   Statusline → ~/.claude/statusline-command.sh
 #   Settings   → ~/.claude/settings.json (smart-merged: missing keys added, your
 #                 customizations preserved — see merge_settings() for rules)
-#   Channels   → user-scope MCP servers (claude mcp add --scope user)
+#   MCPs       → user-scope MCP servers (installed via each MCP's install-remote.sh)
 #
 # Existing files are backed up to <file>.bak before overwriting.
 
@@ -35,7 +36,7 @@ CHECK_MODE=false
 INSTALL_SKILLS=true
 INSTALL_SCRIPTS=true
 INSTALL_CONFIG=true
-INSTALL_CHANNELS=true
+INSTALL_MCPS=true
 
 # --- Parse args ---------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -51,25 +52,29 @@ while [[ $# -gt 0 ]]; do
 	--skills)
 		INSTALL_SCRIPTS=false
 		INSTALL_CONFIG=false
-		INSTALL_CHANNELS=false
+		INSTALL_MCPS=false
 		shift
 		;;
 	--scripts)
 		INSTALL_SKILLS=false
 		INSTALL_CONFIG=false
-		INSTALL_CHANNELS=false
+		INSTALL_MCPS=false
 		shift
 		;;
 	--config)
 		INSTALL_SKILLS=false
 		INSTALL_SCRIPTS=false
-		INSTALL_CHANNELS=false
+		INSTALL_MCPS=false
 		shift
 		;;
-	--channels)
+	--mcps)
 		INSTALL_SKILLS=false
 		INSTALL_SCRIPTS=false
 		INSTALL_CONFIG=false
+		shift
+		;;
+	--no-mcps)
+		INSTALL_MCPS=false
 		shift
 		;;
 	--help | -h)
@@ -304,34 +309,19 @@ if [[ "$CHECK_MODE" == true ]]; then
 		done
 	fi
 
-	# Channels: MCP registration + build hash drift
-	if [[ -d "$REPO_DIR/channels" ]] && command -v claude &>/dev/null; then
+	# MCPs: check each MCP's install-remote.sh --check
+	if [[ -f "$REPO_DIR/mcps.json" ]] && command -v claude &>/dev/null; then
 		echo ""
-		echo "Channels"
+		echo "MCPs"
 		echo "──────────────────────────────────────────"
 		mcp_list=$(claude mcp list 2>/dev/null || true)
-		for channel_dir in "$REPO_DIR"/channels/*/; do
-			[[ -f "$channel_dir/package.json" ]] || continue
-			channel_name="$(basename "$channel_dir")"
-			entry_file="$channel_dir/index.ts"
+		for mcp_name in $(jq -r '.mcps | keys[]' "$REPO_DIR/mcps.json"); do
 			total=$((total + 1))
-			if ! echo "$mcp_list" | grep -qw "$channel_name"; then
-				drift "MCP server $channel_name — NOT REGISTERED"
-				drifted=$((drifted + 1))
-			elif [[ -f "$channel_dir/.buildinfo" ]]; then
-				# Compare installed hash against current source
-				installed_hash=$(awk '{print $2}' "$channel_dir/.buildinfo")
-				source_hash=$(find "$channel_dir" -maxdepth 1 \( -name '*.ts' -o -name 'package.json' \) | sort | xargs cat | sha256sum | cut -d' ' -f1)
-				if [[ "$installed_hash" == "$source_hash" ]]; then
-					info "MCP server $channel_name (in sync)"
-				else
-					installed_date=$(awk '{print $1}' "$channel_dir/.buildinfo")
-					drift "MCP server $channel_name — STALE (installed $installed_date, source changed)"
-					drifted=$((drifted + 1))
-				fi
+			if echo "$mcp_list" | grep -qw "$mcp_name"; then
+				info "MCP server $mcp_name (registered)"
 			else
-				# No .buildinfo — registered but never stamped, fall back to presence
-				info "MCP server $channel_name (registered, no build stamp — run install to stamp)"
+				drift "MCP server $mcp_name — NOT REGISTERED"
+				drifted=$((drifted + 1))
 			fi
 		done
 	fi
@@ -488,64 +478,32 @@ if [[ "$INSTALL_SCRIPTS" == true && -d "$REPO_DIR/src" ]]; then
 	done
 fi
 
-# --- Install channel servers --------------------------------------------------
-if [[ "$INSTALL_CHANNELS" == true && -d "$REPO_DIR/channels" ]]; then
+# --- Install MCP servers via manifest -----------------------------------------
+if [[ "$INSTALL_MCPS" == true && -f "$REPO_DIR/mcps.json" ]]; then
 	echo ""
-	echo "Channel servers"
+	echo "MCP servers (via mcps.json)"
 	echo "──────────────────────────────────────────"
-	if ! command -v bun &>/dev/null; then
-		warn "bun not found — skipping channel server setup"
-		warn "Install bun (https://bun.sh) and re-run to enable channel servers"
-	elif ! command -v claude &>/dev/null; then
-		warn "claude CLI not found — skipping MCP registration"
+	if ! command -v curl &>/dev/null && ! command -v wget &>/dev/null; then
+		warn "Neither curl nor wget found — skipping MCP server installation"
+	elif ! command -v jq &>/dev/null; then
+		warn "jq not found — skipping MCP server installation"
 	else
-		for channel_dir in "$REPO_DIR"/channels/*/; do
-			[[ -f "$channel_dir/package.json" ]] || continue
-			channel_name="$(basename "$channel_dir")"
-			entry_file="$channel_dir/index.ts"
-			[[ -f "$entry_file" ]] || continue
+		for mcp_name in $(jq -r '.mcps | keys[]' "$REPO_DIR/mcps.json"); do
+			install_url=$(jq -r ".mcps[\"$mcp_name\"].install_url" "$REPO_DIR/mcps.json")
+			description=$(jq -r ".mcps[\"$mcp_name\"].description" "$REPO_DIR/mcps.json")
 
-			# Install dependencies
 			if [[ "$DRY_RUN" == true ]]; then
-				info "(dry-run) bun install in $channel_dir"
-				info "(dry-run) claude mcp add --scope project $channel_name"
+				info "(dry-run) Would install $mcp_name — $description"
+				info "(dry-run) curl -fsSL $install_url | bash"
 			else
-				needs_install=false
-				stamp_file="$channel_dir/.install-stamp"
-				if [[ ! -d "$channel_dir/node_modules" ]]; then
-					needs_install=true
-				elif [[ -f "$stamp_file" ]]; then
-					# Reinstall if package.json or bun.lock is newer than stamp
-					for src_file in "$channel_dir/package.json" "$channel_dir/bun.lock" "$channel_dir/bun.lockb"; do
-						if [[ -f "$src_file" && "$src_file" -nt "$stamp_file" ]]; then
-							needs_install=true
-							break
-						fi
-					done
-				fi
-				if [[ "$needs_install" == true ]]; then
-					info "Installing dependencies for $channel_name..."
-					(cd "$channel_dir" && bun install --silent)
-					touch "$stamp_file"
+				info "Installing $mcp_name — $description"
+				if curl -fsSL "$install_url" | bash; then
+					info "$mcp_name installed"
 				else
-					skip "$channel_name dependencies (up to date)"
+					warn "Failed to install $mcp_name — run manually:"
+					warn "  curl -fsSL $install_url | bash"
 				fi
-
-				# Stamp .buildinfo with source hash for --check drift detection
-				source_hash=$(find "$channel_dir" -maxdepth 1 \( -name '*.ts' -o -name 'package.json' \) | sort | xargs cat | sha256sum | cut -d' ' -f1)
-				printf '%s %s\n' "$(date -Iseconds)" "$source_hash" >"$channel_dir/.buildinfo"
-
-				# Register at project scope (remove first if exists, then add)
-				mcp_list=$(claude mcp list 2>/dev/null || true)
-				if echo "$mcp_list" | grep -qw "$channel_name"; then
-					skip "$channel_name MCP registration (already registered)"
-				elif claude mcp add --scope project --transport stdio \
-					"$channel_name" -- bun "$entry_file" 2>/dev/null; then
-					info "Registered MCP server: $channel_name (project scope)"
-				else
-					warn "Failed to register MCP server: $channel_name"
-					warn "Run manually: claude mcp add --scope project --transport stdio $channel_name -- bun $entry_file"
-				fi
+				echo ""
 			fi
 		done
 	fi
