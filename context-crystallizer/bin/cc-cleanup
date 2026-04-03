@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# cc-cleanup - Clean up old crystallized state files
+# Usage: cc-cleanup [days] [--dry-run]
+#
+# Keeps the most recent state file and removes those older than N days (default: 7)
+
+set -uo pipefail
+
+DAYS="${1:-7}"
+DRY_RUN=false
+
+if [[ "${2:-}" == "--dry-run" ]] || [[ "${1:-}" == "--dry-run" ]]; then
+    DRY_RUN=true
+    [[ "${1:-}" == "--dry-run" ]] && DAYS=7
+fi
+
+CLAUDE_DIR="${HOME}/.claude"
+
+echo "Context Crystallizer Cleanup"
+echo "============================"
+echo "Retention: ${DAYS} days"
+echo "Dry run: ${DRY_RUN}"
+echo ""
+
+# Find all project directories
+PROJECTS=$(find "$CLAUDE_DIR/projects" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+
+TOTAL_REMOVED=0
+TOTAL_KEPT=0
+
+for PROJECT in $PROJECTS; do
+    STATES_DIR="${PROJECT}/.claude/context-states"
+    
+    if [[ ! -d "$STATES_DIR" ]]; then
+        continue
+    fi
+    
+    PROJECT_NAME=$(basename "$PROJECT")
+    echo "Project: ${PROJECT_NAME}"
+    
+    # Find old state files
+    OLD_FILES=$(find "$STATES_DIR" -name "context-state-*.md" -type f -mtime +${DAYS} 2>/dev/null)
+    CURRENT_FILES=$(find "$STATES_DIR" -name "context-state-*.md" -type f -mtime -${DAYS} 2>/dev/null | wc -l)
+    
+    if [[ -z "$OLD_FILES" ]]; then
+        echo "  No old files to remove (${CURRENT_FILES} current files)"
+        TOTAL_KEPT=$((TOTAL_KEPT + CURRENT_FILES))
+        continue
+    fi
+    
+    COUNT=0
+    while IFS= read -r FILE; do
+        if [[ -n "$FILE" ]]; then
+            if [[ "$DRY_RUN" == "true" ]]; then
+                echo "  Would remove: $(basename "$FILE")"
+            else
+                rm -f "$FILE"
+                echo "  Removed: $(basename "$FILE")"
+            fi
+            COUNT=$((COUNT + 1))
+        fi
+    done <<< "$OLD_FILES"
+    
+    TOTAL_REMOVED=$((TOTAL_REMOVED + COUNT))
+    TOTAL_KEPT=$((TOTAL_KEPT + CURRENT_FILES))
+    echo "  Removed: ${COUNT}, Kept: ${CURRENT_FILES}"
+done
+
+echo ""
+echo "Summary"
+echo "-------"
+echo "Total removed: ${TOTAL_REMOVED}"
+echo "Total kept: ${TOTAL_KEPT}"
+
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo ""
+    echo "(Dry run - no files were actually removed)"
+fi
