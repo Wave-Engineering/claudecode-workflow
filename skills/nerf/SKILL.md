@@ -1,6 +1,15 @@
 ---
 name: nerf
 description: Context budget system with soft limits, doom modes, and scope monitor
+usage: |
+  /nerf                          Show status (mode, darts, context usage)
+  /nerf status                   Same as /nerf
+  /nerf mode                     Show current behavior mode
+  /nerf mode <mode>              Set mode: not-too-rough | hurt-me-plenty | ultraviolence
+  /nerf darts                    Show current dart thresholds
+  /nerf darts <soft> <hard> <o>  Set all three dart thresholds (e.g. 150k 180k 200k)
+  /nerf <limit>                  Set ouch dart, scale soft/hard proportionally
+  /nerf scope                    Launch context monitor in new terminal
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
