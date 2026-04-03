@@ -36,13 +36,21 @@ Parse the user's input and call the corresponding MCP tool:
 | `/nerf darts` | `nerf_darts` | *(none — returns current)* |
 | `/nerf darts <s> <h> <o>` | `nerf_darts` | `{ "soft": <s>, "hard": <h>, "ouch": <o> }` |
 | `/nerf <limit>` | `nerf_budget` | `{ "ouch": <limit> }` |
-| `/nerf scope` | `nerf_scope` | *(none)* |
+| `/nerf scope` | `nerf_scope` | `{ "session_id": "<current session ID>" }` |
 
 ## Parsing Rules
 
 - Accept `k` suffix: `200k` → `200000`, `1.5m` → `1500000`
 - A bare number (e.g., `/nerf 200k`) routes to `nerf_budget`, not `nerf_darts`
 - Mode names are exact: `not-too-rough`, `hurt-me-plenty`, `ultraviolence`
+
+## Session ID for Scope
+
+When calling `nerf_scope`, you MUST pass the real Claude Code session ID.
+The MCP server cannot discover it automatically in multi-session environments.
+
+Find it from: the transcript path in conversation context, the crystallizer
+state, or `tail -1 ~/.claude/history.jsonl | jq -r '.sessionId'` as a last resort.
 
 ## Important
 
