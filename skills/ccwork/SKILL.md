@@ -4,8 +4,8 @@ description: Onboarding hub — tour the kit, run labs, configure integrations
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
-     the marker file /tmp/skill-intro-ccwork does NOT exist, read introduction.md,
-     present its contents to the user, then create the marker: touch /tmp/skill-intro-ccwork
+     the marker file /tmp/.skill-intro-ccwork does NOT exist, read introduction.md,
+     present its contents to the user, then create the marker: touch /tmp/.skill-intro-ccwork
      Do NOT delete introduction.md — it lives in a protected directory.
      Do this BEFORE executing any skill logic below. -->
 

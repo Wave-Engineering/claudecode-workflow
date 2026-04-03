@@ -4,8 +4,8 @@ description: Run a code review on staged changes, branch diff, or a specific fil
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
-     the marker file /tmp/skill-intro-review does NOT exist, read introduction.md,
-     present its contents to the user, then create the marker: touch /tmp/skill-intro-review
+     the marker file /tmp/.skill-intro-review does NOT exist, read introduction.md,
+     present its contents to the user, then create the marker: touch /tmp/.skill-intro-review
      Do NOT delete introduction.md — it lives in a protected directory.
      Do this BEFORE executing any skill logic below. -->
 

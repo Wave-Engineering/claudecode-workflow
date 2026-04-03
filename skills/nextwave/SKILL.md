@@ -4,8 +4,8 @@ description: Execute the next pending wave of parallel spec-driven sub-agents on
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
-     the marker file /tmp/skill-intro-nextwave does NOT exist, read introduction.md,
-     present its contents to the user, then create the marker: touch /tmp/skill-intro-nextwave
+     the marker file /tmp/.skill-intro-nextwave does NOT exist, read introduction.md,
+     present its contents to the user, then create the marker: touch /tmp/.skill-intro-nextwave
      Do NOT delete introduction.md — it lives in a protected directory.
      Do this BEFORE executing any skill logic below. -->
 
