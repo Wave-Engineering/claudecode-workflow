@@ -4,8 +4,8 @@ description: Read CLAUDE.md, confirm development rules of engagement, and load c
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
-     the marker file /tmp/skill-intro-engage does NOT exist, read introduction.md,
-     present its contents to the user, then create the marker: touch /tmp/skill-intro-engage
+     the marker file /tmp/.skill-intro-engage does NOT exist, read introduction.md,
+     present its contents to the user, then create the marker: touch /tmp/.skill-intro-engage
      Do NOT delete introduction.md — it lives in a protected directory.
      Do this BEFORE executing any skill logic below. -->
 

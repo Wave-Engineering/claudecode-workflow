@@ -4,8 +4,8 @@ description: Quick assessment of whether a piece of work is suitable for wave-pa
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
-     the marker file /tmp/skill-intro-assesswaves does NOT exist, read introduction.md,
-     present its contents to the user, then create the marker: touch /tmp/skill-intro-assesswaves
+     the marker file /tmp/.skill-intro-assesswaves does NOT exist, read introduction.md,
+     present its contents to the user, then create the marker: touch /tmp/.skill-intro-assesswaves
      Do NOT delete introduction.md — it lives in a protected directory.
      Do this BEFORE executing any skill logic below. -->
 
