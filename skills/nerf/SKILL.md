@@ -49,8 +49,8 @@ Three named thresholds, expressed as absolute token counts:
 
 | Dart | Meaning | Default |
 |------|---------|---------|
-| **soft** | Warning -- heads up, you're getting there | 150k |
-| **hard** | Crystallize -- save state now | 180k |
+| **soft** | Warning -- heads up, you're getting there | 120k |
+| **hard** | Crystallize -- save state now | 150k |
 | **ouch** | Critical -- compact or die | 200k |
 
 These map to the existing crystallizer thresholds:
@@ -61,10 +61,10 @@ These map to the existing crystallizer thresholds:
 ### Scaling shortcut
 
 `/nerf <limit>` sets the ouch dart and scales the others proportionally:
-- **soft** = 75% of ouch
-- **hard** = 90% of ouch
+- **soft** = 60% of ouch
+- **hard** = 75% of ouch
 
-Example: `/nerf 500k` sets soft=375k, hard=450k, ouch=500k.
+Example: `/nerf 500k` sets soft=300k, hard=375k, ouch=500k.
 
 ## Session Config
 
@@ -99,8 +99,8 @@ Nerf Status
   Budget:  200k tokens (real window: 1M)
 
   Darts:
-    soft   150k  ---- warning
-    hard   180k  ---- crystallize
+    soft   120k  ---- warning
+    hard   150k  ---- crystallize
     ouch   200k  ---- compact or die
 
   Current: 87k tokens (43%)
