@@ -9,6 +9,11 @@
       "repo": "Wave-Engineering/mcp-server-discord-watcher",
       "install_url": "https://raw.githubusercontent.com/Wave-Engineering/mcp-server-discord-watcher/main/scripts/install-remote.sh",
       "description": "Discord channel notification server"
+    },
+    "nerf-server": {
+      "repo": "Wave-Engineering/mcp-server-nerf",
+      "install_url": "https://raw.githubusercontent.com/Wave-Engineering/mcp-server-nerf/main/scripts/install-remote.sh",
+      "description": "Deterministic context budget management (nerf darts, modes, statusline)"
     }
   }
 }
