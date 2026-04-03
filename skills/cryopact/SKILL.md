@@ -26,20 +26,26 @@ with the following brief:
 2. **Pass it a session summary** — a concise brief of what happened this
    session: what was built, key decisions, current branch/issue, what's
    pending. This is the subagent's only window into conversation context.
-3. **Instruct it to**:
+3. **Resolve the project root** for the subagent — run
+   `git rev-parse --show-toplevel` and substitute `<PROJECT_ROOT>` in the
+   prompt template.
+4. **Instruct it to**:
    - Create a temp file: `mktemp /tmp/cryo-XXXXXX.md`
-   - Audit git state (`git status`, `git log --oneline -10`, `git branch`)
-   - Read the existing plan file (if any) for structure/context
-   - Write the full cryo plan to the temp file following the template below
+   - Read `skills/cryo/SKILL.md` for the plan template and writing rules
+   - Follow cryo's Step 1 (Audit Current State) and Step 2 (Curate the Plan
+     File) — but **skip Step 3** (task curation is not delegable)
+   - Use the plan file path you provided (not discover it from system context)
+   - Write the result to the temp file
    - **Return the temp file path** in its response
 
-4. **When the subagent returns**, note the temp file path it gives you. You
+5. **When the subagent returns**, note the temp file path it gives you. You
    will need this path in Phase 3. Remember it — shell variables do not
    survive across Bash calls.
 
 **Subagent prompt template:**
 
-Before spawning, substitute `<PLAN_PATH>` and `<YOUR_BRIEF>` with real values.
+Before spawning, substitute `<PLAN_PATH>`, `<YOUR_BRIEF>`, and `<PROJECT_ROOT>`
+with real values.
 
 ```
 You are performing a cryo (context preservation) for the main agent.
@@ -49,52 +55,14 @@ Session summary: <YOUR_BRIEF>
 
 Instructions:
 1. Run: CRYO_TMP=$(mktemp /tmp/cryo-XXXXXX.md) && echo "$CRYO_TMP"
-2. Audit: git status, git log --oneline -10, git branch --show-current
-3. Read the existing plan file at <PLAN_PATH> if it exists
-4. Write a complete session state document to $CRYO_TMP using this structure:
-
-# Session State — [project/feature name]
-
-## Working Directory
-[path]
-
-## Current Branch
-[branch name and repo]
-
-## Git Config
-[any repo-local config that matters — user.name, user.email]
-
-## Commits (pushed)
-[numbered list of commits on this branch, with SHAs and messages]
-
-## MR / PR
-[URL, source→target, pipeline status]
-
-## What Was Built
-[Organized by component — what exists in the codebase NOW, not what's planned]
-
-## Key Design Decisions
-[Numbered list of non-obvious choices and WHY they were made]
-
-## Validation Results
-[What passed, what failed, what was verified]
-
-## PENDING
-[What still needs to happen — be specific]
-
-## Related Projects
-[Paths, branches, cross-references]
-
-## Lessons Learned
-[Anything that caused pain — CI quirks, API gotchas, workarounds]
-
-5. Return the temp file path so I can deploy it.
-
-Writing rules:
-- Be factual, not aspirational — document what IS
-- Include file paths, SHAs, URLs
-- Prune stale content from old plan
-- The audience is a future agent with zero context
+2. Read the skill file at <PROJECT_ROOT>/skills/cryo/SKILL.md — it contains
+   the plan template structure and writing rules.
+3. Follow cryo's Step 1 (Audit Current State) and Step 2 (Curate the Plan
+   File). SKIP Step 3 (task curation) — you don't have access to TaskList.
+   Use the plan file path above when cryo references "the existing plan file."
+4. Write the result to $CRYO_TMP — do NOT deploy to the plan path. The main
+   agent handles deployment.
+5. Return the temp file path so the main agent can deploy it.
 ```
 
 ## Phase 2: Keep Working
@@ -146,25 +114,44 @@ When it's time:
    cp "/tmp/cryo-XXXXXX.md" "<plan-file-path>" && rm -f "/tmp/cryo-XXXXXX.md" || echo "Deploy failed — temp file preserved at /tmp/cryo-XXXXXX.md"
    ```
    Substitute the actual temp file path from Phase 1. If deploy fails, report
-   the temp file path to the user and do NOT `/clear`.
+   the temp file path to the user — do not proceed.
 4. **Announce** (best-effort):
    ```bash
-   vox "Cryopact complete. State is frozen, clearing context now." 2>/dev/null || true
+   vox "Cryopact complete. State frozen. Ready for compaction." 2>/dev/null || true
    ```
-5. **Run `/clear`** — do not ask for confirmation. `/cryopact` IS the
-   confirmation.
+5. **Confirm to the user:**
+   > Cryopact complete. State frozen at `<plan-file-path>`. Context will
+   > compact naturally, or `/clear` manually when ready.
+
+   **Do NOT run `/clear` automatically.** Compaction is coming anyway — that's
+   why cryo was invoked. Let the user or the system decide when to compact.
 
 ## Immediate Mode
 
-If the user needs to compact NOW (no time to keep working), skip Phase 2:
+When autocompact is imminent (context pressure warning fired, or the user says
+"now"):
 
-1. Launch the subagent in **foreground** (not background)
-2. Curate the task list while waiting
-3. When the subagent returns, deploy and `/clear` immediately — no delta needed
-   since no work happened in between
+1. Launch the cryo subagent in **background** (same as normal mode — NOT
+   foreground). Foreground cryo burns main context with every tool call,
+   accelerating the very compaction you're trying to outrun.
+2. Main agent writes **minimal breadcrumbs** directly to the plan file — ~5
+   lines, no template, no research:
+   ```markdown
+   # Breadcrumbs — [project name]
+   - **Branch:** <branch>
+   - **Last commit:** <SHA> <message>
+   - **Issue:** #NNN
+   - **Cryo temp file:** /tmp/cryo-XXXXXX.md (subagent writing in background)
+   - **Status:** <one-line: "mid-implementation" / "tests passing" / etc.>
+   ```
+   Deploy via `cp` through Bash (same `/tmp` staging pattern).
+3. Curate the task list (delete completed, update surviving descriptions).
+4. Let compaction happen naturally. The subagent's temp file survives in `/tmp`
+   regardless — next session's `/engage` can pick it up even if the main agent
+   was compacted before the subagent finished.
 
-This is equivalent to the old `/cryopact` behavior: cryo + compact in one
-blocking operation.
+This costs ~200 tokens of main context instead of the 2000+ a foreground cryo
+would burn.
 
 ## Important
 
@@ -174,10 +161,13 @@ blocking operation.
   via `cp` through Bash.
 - **The delta is short.** A few bullet points covering what changed. Don't
   re-summarize the whole session — the subagent already did that.
-- **If the subagent hasn't finished when you need to compact**, wait for it
-  (it should be fast — mostly git commands and file reads). If it never
-  returns or the temp file is missing, fall back to foreground `/cryo`.
+- **Never auto-clear.** The agent preserves state; the user or system decides
+  when to compact. Compaction is coming anyway — that's the whole reason cryo
+  was invoked.
+- **If the subagent hasn't finished when you need to compact**, write minimal
+  breadcrumbs (see Immediate Mode) and let compaction happen. The subagent's
+  temp file survives in `/tmp` for the next session.
 - **Task curation is not delegable.** TaskList is per-conversation. Only the
   main agent can prune and update tasks. Confirm it's done before Phase 3.
-- **If deploy (`cp`) fails**, do NOT `/clear`. Report the temp file path to
-  the user so state is not lost.
+- **If deploy (`cp`) fails**, report the temp file path to the user so state
+  is not lost. Do not proceed with compaction.
