@@ -20,148 +20,33 @@ usage: |
 
 # Nerf: Context Budget Control
 
-Enforce a configurable soft context limit on the 1M window. Defaults to a 200k
-budget with three escalating thresholds ("darts") and Doom-inspired behavior
-modes.
+This skill routes to the `nerf-server` MCP. All operations are handled by
+deterministic MCP tool calls — do NOT implement any logic in this skill file.
 
-## Subcommands
+## Routing
 
-| Command | Behavior |
-|---------|----------|
-| `/nerf` | Alias for `/nerf status` |
-| `/nerf status` | Display current mode, dart positions, and context usage |
-| `/nerf mode` | Echo current mode |
-| `/nerf mode <mode>` | Set behavior mode (see Doom modes below) |
-| `/nerf darts` | Echo current dart thresholds |
-| `/nerf darts <soft> <hard> <ouch>` | Set all three dart thresholds (absolute values, e.g., `150k 180k 200k`) |
-| `/nerf <limit>` | Set ouch dart and scale soft/hard proportionally (e.g., `/nerf 200k`) |
-| `/nerf scope` | Spawn `cc-context watch` in a new terminal window, session-aware |
+Parse the user's input and call the corresponding MCP tool:
 
-## Doom Difficulty Modes
+| User Input | MCP Tool | Arguments |
+|------------|----------|-----------|
+| `/nerf` | `nerf_status` | *(none)* |
+| `/nerf status` | `nerf_status` | *(none)* |
+| `/nerf mode` | `nerf_mode` | *(none — returns current)* |
+| `/nerf mode <mode>` | `nerf_mode` | `{ "mode": "<mode>" }` |
+| `/nerf darts` | `nerf_darts` | *(none — returns current)* |
+| `/nerf darts <s> <h> <o>` | `nerf_darts` | `{ "soft": <s>, "hard": <h>, "ouch": <o> }` |
+| `/nerf <limit>` | `nerf_budget` | `{ "ouch": <limit> }` |
+| `/nerf scope` | `nerf_scope` | *(none)* |
 
-Three behavior modes, escalating in cold brutality:
+## Parsing Rules
 
-| Mode | Doom Reference | Behavior |
-|------|----------------|----------|
-| `not-too-rough` | E1 | Warn only -- you see the warnings, you decide what to do |
-| `hurt-me-plenty` | E3 (DEFAULT) | Auto-crystallize state at `hard` dart, ask before `/compact` |
-| `ultraviolence` | E4 | Auto-crystallize, auto-compact -- no questions asked |
+- Accept `k` suffix: `200k` → `200000`, `1.5m` → `1500000`
+- A bare number (e.g., `/nerf 200k`) routes to `nerf_budget`, not `nerf_darts`
+- Mode names are exact: `not-too-rough`, `hurt-me-plenty`, `ultraviolence`
 
-Mode mapping to existing `CRYSTALLIZE_MODE` values:
-- `not-too-rough` -> `manual`
-- `hurt-me-plenty` -> `prompt`
-- `ultraviolence` -> `yolo`
+## Important
 
-## Nerf Darts (Thresholds)
-
-Three named thresholds, expressed as absolute token counts:
-
-| Dart | Meaning | Default |
-|------|---------|---------|
-| **soft** | Warning -- heads up, you're getting there | 120k |
-| **hard** | Crystallize -- save state now | 150k |
-| **ouch** | Critical -- compact or die | 200k |
-
-These map to the existing crystallizer thresholds:
-- `soft` -> `WARN_THRESHOLD`
-- `hard` -> `DANGER_THRESHOLD`
-- `ouch` -> `CRITICAL_THRESHOLD`
-
-### Scaling shortcut
-
-`/nerf <limit>` sets the ouch dart and scales the others proportionally:
-- **soft** = 60% of ouch
-- **hard** = 75% of ouch
-
-Example: `/nerf 500k` sets soft=300k, hard=375k, ouch=500k.
-
-## Session Config
-
-Config is stored per-session at `/tmp/nerf-<session_id>.json`:
-
-```json
-{
-  "mode": "hurt-me-plenty",
-  "darts": {
-    "soft": 150000,
-    "hard": 180000,
-    "ouch": 200000
-  },
-  "session_id": "<session_id>"
-}
-```
-
-The `session_id` is extracted from the current session context (it appears in
-output file paths and transcript paths).
-
-## Execution
-
-### `/nerf` or `/nerf status`
-
-1. Read the session nerf config (or show defaults if none exists)
-2. Get current context usage from the transcript (use `context-analyzer.sh` logic)
-3. Display:
-
-```
-Nerf Status
-  Mode:    hurt-me-plenty (auto-crystallize + ask)
-  Budget:  200k tokens (real window: 1M)
-
-  Darts:
-    soft   120k  ---- warning
-    hard   150k  ---- crystallize
-    ouch   200k  ---- compact or die
-
-  Current: 87k tokens (43%)
-```
-
-### `/nerf mode`
-
-Without argument: echo the current mode name and its behavior.
-
-### `/nerf mode <mode>`
-
-1. Validate mode is one of: `not-too-rough`, `hurt-me-plenty`, `ultraviolence`
-2. Write to session config
-3. Confirm: `Mode set to <mode> (<behavior description>)`
-
-### `/nerf darts`
-
-Without arguments: echo current dart positions.
-
-### `/nerf darts <soft> <hard> <ouch>`
-
-1. Parse values (accept `150k` or `150000` format)
-2. Validate: soft < hard < ouch
-3. Write to session config
-4. Confirm with new positions
-
-### `/nerf <limit>`
-
-1. Parse the limit value (e.g., `200k` -> 200000)
-2. Compute: soft = limit * 0.75, hard = limit * 0.90, ouch = limit
-3. Write to session config
-4. Confirm with new dart positions
-
-### `/nerf scope`
-
-1. Determine the current `session_id` from context
-2. Detect terminal emulator via `$TERM_PROGRAM`
-3. Spawn `cc-context watch --session <session_id>` in a new terminal:
-
-```bash
-case "$TERM_PROGRAM" in
-    ghostty)    ghostty -e cc-context watch --session "$SESSION_ID" ;;
-    alacritty)  alacritty -e cc-context watch --session "$SESSION_ID" ;;
-    kitty)      kitty cc-context watch --session "$SESSION_ID" ;;
-    *)          x-terminal-emulator -e cc-context watch --session "$SESSION_ID" ;;
-esac
-```
-
-4. Report: `Scope monitor launched in <terminal> for session <short_id>`
-
-## Dependencies
-
-- `~/.claude/context-crystallizer/hooks/post-tool-use.sh` -- reads nerf config
-- `~/.claude/context-crystallizer/bin/cc-context` -- `--session` flag + nerf display
-- `~/.claude/context-crystallizer/lib/context-analyzer.sh` -- token counting
+- **Do NOT perform arithmetic** — the MCP server handles all calculations
+- **Do NOT read or write config files** — the MCP server manages config state
+- **Do NOT estimate context usage** — the MCP server shells out to the analyzer
+- **Present the MCP tool's response as-is** — it returns pre-formatted output
