@@ -1,6 +1,14 @@
 ---
 name: issue
 description: Create structured issues (feature, bug, chore, docs, epic) with proper templates and labels. Supports both GitHub (gh) and GitLab (glab). Self-contained — does not depend on CLAUDE.md for templates.
+usage: |
+  /issue feature <prompt>  Create a feature issue
+  /issue bug <prompt>      Create a bug issue
+  /issue chore <prompt>    Create a chore issue
+  /issue docs <prompt>     Create a docs issue
+  /issue epic <prompt>     Create an epic issue
+  /issue <prompt>          Infer type from the prompt
+  /issue                   Infer from recent conversation context
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND

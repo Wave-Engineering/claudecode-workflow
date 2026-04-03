@@ -1,6 +1,13 @@
 ---
 name: disc
 description: Send/read messages and manage channels on the Oak and Wave Discord server
+usage: |
+  /disc send #channel "message"  Send a message to a channel
+  /disc read #channel            Read recent messages from a channel
+  /disc create #channel-name     Create a new text channel
+  /disc thread "name" in #ch     Create a thread in a channel
+  /disc list channels            List all channels
+  /disc                          Post check-in to #roll-call
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
