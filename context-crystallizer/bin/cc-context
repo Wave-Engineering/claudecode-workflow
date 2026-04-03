@@ -1,0 +1,431 @@
+#!/usr/bin/env bash
+# cc-context - CLI tool to check Claude Code context status
+# Usage: cc-context [watch] [--log]
+#
+# Features:
+#   - Reverse search (tac) for fast most-recent lookup
+#   - Filters for MAIN agent only (ignores subagent progress messages)
+#   - Caching: shows last known value if fresh data unavailable
+#   - Stale indicator: visual marker when using cached data
+#   - Optional logging: --log to record stale events for debugging
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HISTORY_FILE="${HOME}/.claude/history.jsonl"
+PROJECTS_DIR="${HOME}/.claude/projects"
+
+# Configuration
+CONTEXT_LIMIT="${CONTEXT_LIMIT:-200000}"
+WARN_THRESHOLD="${WARN_THRESHOLD:-70}"
+DANGER_THRESHOLD="${DANGER_THRESHOLD:-85}"
+CRITICAL_THRESHOLD="${CRITICAL_THRESHOLD:-92}"
+
+# Calibration: Our token count appears ~15% lower than Claude Code's native meter
+# This offset aligns our percentage with CC's "Context left until auto-compact"
+CALIBRATION_OFFSET="${CALIBRATION_OFFSET:-15}"
+
+# Cache and logging
+CACHE_FILE="/tmp/cc-context-cache.$$"
+STALE_LOG="${HOME}/.claude/cc-context-stale.log"
+
+# ANSI colors
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# Parse arguments
+MODE="once"
+LOG_MODE=false
+SESSION_ID=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        watch) MODE="watch"; shift ;;
+        --log) LOG_MODE=true; shift ;;
+        --session)
+            if [[ -n "${2:-}" ]]; then
+                SESSION_ID="$2"
+                shift 2
+            else
+                echo "Error: --session requires a session ID argument" >&2
+                exit 1
+            fi
+            ;;
+        -h|--help)
+            echo "Usage: cc-context [watch] [--session <session_id>] [--log]"
+            echo ""
+            echo "Options:"
+            echo "  watch                   - Continuous monitoring mode (updates every 5s)"
+            echo "  --session <session_id>  - Monitor a specific session by ID"
+            echo "  --log                   - Log stale data events to ~/.claude/cc-context-stale.log"
+            echo ""
+            echo "Environment variables:"
+            echo "  CONTEXT_LIMIT      - Context window size (default: 200000)"
+            echo "  WARN_THRESHOLD     - Warning threshold % (default: 70)"
+            echo "  DANGER_THRESHOLD   - Danger threshold % (default: 85)"
+            echo "  CRITICAL_THRESHOLD - Critical threshold % (default: 92)"
+            exit 0
+            ;;
+        *) shift ;;
+    esac
+done
+
+# Cleanup cache on exit
+cleanup() {
+    rm -f "$CACHE_FILE" 2>/dev/null
+}
+trap cleanup EXIT
+
+find_session_by_id() {
+    # Resolve transcript for a specific session ID
+    local SID="$1"
+
+    if [[ -z "$SID" ]]; then
+        echo ""
+        return
+    fi
+
+    # Direct lookup: search all project directories for <session_id>.jsonl
+    local TRANSCRIPT
+    TRANSCRIPT=$(find "$PROJECTS_DIR" -name "${SID}.jsonl" -type f 2>/dev/null | head -1)
+
+    echo "$TRANSCRIPT"
+}
+
+find_current_session() {
+    # If --session was provided, use direct lookup
+    if [[ -n "$SESSION_ID" ]]; then
+        find_session_by_id "$SESSION_ID"
+        return
+    fi
+
+    # Get the most recent session from history
+    if [[ ! -f "$HISTORY_FILE" ]]; then
+        echo ""
+        return
+    fi
+
+    local LAST_ENTRY
+    LAST_ENTRY=$(tail -1 "$HISTORY_FILE" 2>/dev/null)
+
+    if [[ -z "$LAST_ENTRY" ]]; then
+        echo ""
+        return
+    fi
+
+    local SID PROJECT_PATH
+    SID=$(echo "$LAST_ENTRY" | jq -r '.sessionId // empty')
+    PROJECT_PATH=$(echo "$LAST_ENTRY" | jq -r '.project // empty')
+
+    if [[ -z "$SID" || -z "$PROJECT_PATH" ]]; then
+        echo ""
+        return
+    fi
+
+    # Convert project path to folder name (replace / with -)
+    local PROJECT_SLUG="${PROJECT_PATH//\//-}"
+    PROJECT_SLUG="${PROJECT_SLUG#-}"  # Remove leading dash
+
+    local TRANSCRIPT="${PROJECTS_DIR}/-${PROJECT_SLUG}/${SID}.jsonl"
+
+    # Also try without the leading dash
+    if [[ ! -f "$TRANSCRIPT" ]]; then
+        TRANSCRIPT="${PROJECTS_DIR}/${PROJECT_SLUG}/${SID}.jsonl"
+    fi
+
+    # Try finding by session ID directly
+    if [[ ! -f "$TRANSCRIPT" ]]; then
+        TRANSCRIPT=$(find "$PROJECTS_DIR" -name "${SID}.jsonl" -type f 2>/dev/null | head -1)
+    fi
+
+    echo "$TRANSCRIPT"
+}
+
+log_stale_event() {
+    local reason="$1"
+    local transcript="$2"
+    
+    if [[ "$LOG_MODE" != "true" ]]; then
+        return
+    fi
+    
+    local timestamp file_size line_count last_modified
+    timestamp=$(date -Iseconds)
+    file_size=$(stat -c%s "$transcript" 2>/dev/null || echo "unknown")
+    line_count=$(wc -l < "$transcript" 2>/dev/null || echo "unknown")
+    last_modified=$(stat -c%Y "$transcript" 2>/dev/null || echo "unknown")
+    
+    echo "[${timestamp}] STALE: ${reason} | Transcript: $(basename "$transcript") | Size: ${file_size} | Lines: ${line_count} | ModTime: ${last_modified}" >> "$STALE_LOG"
+}
+
+analyze_transcript() {
+    local TRANSCRIPT="$1"
+    local IS_STALE="false"
+    
+    if [[ ! -f "$TRANSCRIPT" ]]; then
+        echo '{"error": "not found", "stale": false}'
+        return
+    fi
+    
+    # Use tac to search from END of file
+    # CRITICAL: Filter for REAL model messages (claude-sonnet), not synthetic placeholders
+    # Synthetic messages have model:"<synthetic>" with all-zero usage data
+    local USAGE_LINE
+    USAGE_LINE=$(tac "$TRANSCRIPT" 2>/dev/null | grep -m1 '"model":"claude-sonnet[^"]*".*"usage"' || echo "")
+    
+    if [[ -z "$USAGE_LINE" ]]; then
+        # No usage found - try cache
+        if [[ -f "$CACHE_FILE" ]]; then
+            local CACHED
+            CACHED=$(cat "$CACHE_FILE" 2>/dev/null)
+            if [[ -n "$CACHED" && "$CACHED" != '{"tokens": 0'* ]]; then
+                log_stale_event "No main agent usage found in transcript" "$TRANSCRIPT"
+                echo "$CACHED" | jq -c '. + {"stale": true}'
+                return
+            fi
+        fi
+        log_stale_event "No main agent usage found and no valid cache" "$TRANSCRIPT"
+        echo '{"tokens": 0, "percent": 0, "action": "unknown", "stale": true}'
+        return
+    fi
+    
+    # Extract usage - it's at .message.usage for main agent messages
+    local USAGE
+    USAGE=$(echo "$USAGE_LINE" | jq -c '.message.usage // empty' 2>/dev/null || echo "")
+    
+    if [[ -z "$USAGE" || "$USAGE" == "null" ]]; then
+        # Parse error - try cache
+        if [[ -f "$CACHE_FILE" ]]; then
+            local CACHED
+            CACHED=$(cat "$CACHE_FILE" 2>/dev/null)
+            if [[ -n "$CACHED" && "$CACHED" != '{"tokens": 0'* ]]; then
+                log_stale_event "Failed to parse main agent usage" "$TRANSCRIPT"
+                echo "$CACHED" | jq -c '. + {"stale": true}'
+                return
+            fi
+        fi
+        log_stale_event "Parse error and no valid cache" "$TRANSCRIPT"
+        echo '{"tokens": 0, "percent": 0, "action": "unknown", "stale": true}'
+        return
+    fi
+    
+    local INPUT CACHE_CREATE CACHE_READ TOTAL PERCENT ACTION
+    INPUT=$(echo "$USAGE" | jq -r '.input_tokens // 0')
+    CACHE_CREATE=$(echo "$USAGE" | jq -r '.cache_creation_input_tokens // 0')
+    CACHE_READ=$(echo "$USAGE" | jq -r '.cache_read_input_tokens // 0')
+    
+    TOTAL=$((INPUT + CACHE_CREATE + CACHE_READ))
+    RAW_PERCENT=$(echo "scale=1; ($TOTAL * 100) / $CONTEXT_LIMIT" | bc)
+    # Apply calibration offset to align with Claude Code's native meter
+    PERCENT=$(echo "scale=1; $RAW_PERCENT + $CALIBRATION_OFFSET" | bc)
+    
+    if (( $(echo "$PERCENT >= $CRITICAL_THRESHOLD" | bc -l) )); then
+        ACTION="critical"
+    elif (( $(echo "$PERCENT >= $DANGER_THRESHOLD" | bc -l) )); then
+        ACTION="danger"
+    elif (( $(echo "$PERCENT >= $WARN_THRESHOLD" | bc -l) )); then
+        ACTION="warn"
+    else
+        ACTION="ok"
+    fi
+    
+    local RESULT="{\"tokens\": $TOTAL, \"percent\": $PERCENT, \"action\": \"$ACTION\", \"stale\": false}"
+    
+    # Cache valid result
+    echo "$RESULT" > "$CACHE_FILE"
+    
+    echo "$RESULT"
+}
+
+load_nerf_config() {
+    # Load nerf config for the current session (if available)
+    # Sets global variables: NERF_MODE, NERF_SOFT, NERF_HARD, NERF_OUCH, NERF_ACTIVE
+    NERF_ACTIVE=false
+    NERF_MODE="hurt-me-plenty"
+    NERF_SOFT=150000
+    NERF_HARD=180000
+    NERF_OUCH=200000
+
+    local SID="$1"
+    if [[ -z "$SID" ]]; then
+        return
+    fi
+
+    local NERF_CONFIG="/tmp/nerf-${SID}.json"
+    if [[ ! -f "$NERF_CONFIG" ]]; then
+        return
+    fi
+
+    NERF_ACTIVE=true
+    NERF_MODE=$(jq -r '.mode // "hurt-me-plenty"' "$NERF_CONFIG" 2>/dev/null || echo "hurt-me-plenty")
+    NERF_SOFT=$(jq -r '.darts.soft // 150000' "$NERF_CONFIG" 2>/dev/null || echo 150000)
+    NERF_HARD=$(jq -r '.darts.hard // 180000' "$NERF_CONFIG" 2>/dev/null || echo 180000)
+    NERF_OUCH=$(jq -r '.darts.ouch // 200000' "$NERF_CONFIG" 2>/dev/null || echo 200000)
+
+    # Override CONTEXT_LIMIT with the nerf'd budget
+    CONTEXT_LIMIT="$NERF_OUCH"
+
+    # Recalculate thresholds as percentages of the nerf'd budget
+    if [[ "$NERF_OUCH" -gt 0 ]]; then
+        WARN_THRESHOLD=$(echo "scale=0; ($NERF_SOFT * 100) / $NERF_OUCH" | bc 2>/dev/null || echo 70)
+        DANGER_THRESHOLD=$(echo "scale=0; ($NERF_HARD * 100) / $NERF_OUCH" | bc 2>/dev/null || echo 85)
+        CRITICAL_THRESHOLD=92
+    fi
+}
+
+format_tokens() {
+    # Format token count for display (e.g., 150000 -> "150k")
+    local val="$1"
+    if [[ "$val" -ge 1000000 ]]; then
+        echo "$(echo "scale=0; $val / 1000000" | bc)M"
+    elif [[ "$val" -ge 1000 ]]; then
+        echo "$(echo "scale=0; $val / 1000" | bc)k"
+    else
+        echo "$val"
+    fi
+}
+
+display_status() {
+    local TRANSCRIPT="$1"
+    local ANALYSIS="$2"
+
+    local TOKENS PERCENT ACTION IS_STALE
+    TOKENS=$(echo "$ANALYSIS" | jq -r '.tokens // 0')
+    PERCENT=$(echo "$ANALYSIS" | jq -r '.percent // 0')
+    ACTION=$(echo "$ANALYSIS" | jq -r '.action // "unknown"')
+    IS_STALE=$(echo "$ANALYSIS" | jq -r '.stale // false')
+
+    local COLOR STATUS_ICON STALE_MARKER
+    case "$ACTION" in
+        "ok") COLOR=$GREEN; STATUS_ICON="✅" ;;
+        "warn") COLOR=$YELLOW; STATUS_ICON="⚠️ " ;;
+        "danger") COLOR=$YELLOW; STATUS_ICON="🔶" ;;
+        "critical") COLOR=$RED; STATUS_ICON="🚨" ;;
+        *) COLOR=$BLUE; STATUS_ICON="❓" ;;
+    esac
+
+    # Stale indicator
+    if [[ "$IS_STALE" == "true" ]]; then
+        STALE_MARKER="${RED}*${NC}"
+    else
+        STALE_MARKER=" "
+    fi
+
+    # Resolve session ID for nerf config lookup
+    local DISPLAY_SID="$SESSION_ID"
+    if [[ -z "$DISPLAY_SID" ]]; then
+        DISPLAY_SID=$(basename "$TRANSCRIPT" .jsonl 2>/dev/null || echo "")
+    fi
+
+    # Load nerf config if available
+    load_nerf_config "$DISPLAY_SID"
+
+    clear
+    echo -e "${COLOR}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${COLOR}║${NC}${BOLD}     Claude Code Context Monitor ${STATUS_ICON}                   ${STALE_MARKER}${COLOR}║${NC}"
+    echo -e "${COLOR}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  Session: ${BLUE}$(basename "$TRANSCRIPT" .jsonl 2>/dev/null || echo "unknown")${NC}"
+
+    if [[ "$NERF_ACTIVE" == "true" ]]; then
+        local BUDGET_DISPLAY
+        BUDGET_DISPLAY=$(format_tokens "$NERF_OUCH")
+        echo -e "  Budget:  ${BOLD}${BUDGET_DISPLAY}${NC} tokens (real window: 1M)  ${DIM}mode: ${NERF_MODE}${NC}"
+        echo -e "  Tokens:  ${BOLD}${TOKENS}${NC} / ${NERF_OUCH}"
+    else
+        echo -e "  Tokens:  ${BOLD}${TOKENS}${NC} / ${CONTEXT_LIMIT}"
+    fi
+
+    # Show stale warning on usage line if stale
+    if [[ "$IS_STALE" == "true" ]]; then
+        echo -e "  Usage:   ${COLOR}${BOLD}${PERCENT}%${NC} ${DIM}(cached - waiting for fresh data)${NC}"
+    else
+        echo -e "  Usage:   ${COLOR}${BOLD}${PERCENT}%${NC}"
+    fi
+    echo ""
+
+    # Progress bar
+    local BAR_WIDTH=50
+    local FILLED=$(echo "scale=0; ($PERCENT * $BAR_WIDTH) / 100" | bc 2>/dev/null || echo 0)
+    local EMPTY=$((BAR_WIDTH - FILLED))
+
+    printf "  ["
+    printf "${COLOR}%${FILLED}s${NC}" | tr ' ' '█' 2>/dev/null || true
+    printf "%${EMPTY}s" | tr ' ' '░' 2>/dev/null || true
+    printf "]"
+    echo ""
+    echo ""
+
+    # Threshold markers — use dart names when nerf is active
+    if [[ "$NERF_ACTIVE" == "true" ]]; then
+        local SOFT_DISPLAY HARD_DISPLAY OUCH_DISPLAY
+        SOFT_DISPLAY=$(format_tokens "$NERF_SOFT")
+        HARD_DISPLAY=$(format_tokens "$NERF_HARD")
+        OUCH_DISPLAY=$(format_tokens "$NERF_OUCH")
+        echo -e "  Darts: ${GREEN}OK${NC} < ${YELLOW}soft ${SOFT_DISPLAY}${NC} < ${YELLOW}hard ${HARD_DISPLAY}${NC} < ${RED}ouch ${OUCH_DISPLAY}${NC}"
+    else
+        echo -e "  Thresholds: ${GREEN}OK${NC} < ${WARN_THRESHOLD}% < ${YELLOW}WARN${NC} < ${DANGER_THRESHOLD}% < ${YELLOW}DANGER${NC} < ${CRITICAL_THRESHOLD}% < ${RED}CRITICAL${NC}"
+    fi
+    echo ""
+
+    case "$ACTION" in
+        "warn")
+            echo -e "  ${YELLOW}Consider crystallizing state soon.${NC}"
+            ;;
+        "danger")
+            echo -e "  ${YELLOW}${BOLD}State should be auto-crystallizing now.${NC}"
+            echo -e "  ${YELLOW}Prepare to /clear when ready.${NC}"
+            ;;
+        "critical")
+            echo -e "  ${RED}${BOLD}⚡ AUTO-COMPACT IMMINENT!${NC}"
+            echo -e "  ${RED}Run /clear NOW to avoid lossy compaction!${NC}"
+            ;;
+    esac
+
+    # Stale data explanation
+    if [[ "$IS_STALE" == "true" ]]; then
+        echo ""
+        echo -e "  ${DIM}${RED}*${NC}${DIM} = Stale data (Claude may be mid-response or subagent active)${NC}"
+    fi
+
+    echo ""
+    echo -e "  ${BLUE}Press Ctrl+C to exit${NC}"
+}
+
+# Main
+main() {
+    if [[ "$MODE" == "watch" ]]; then
+        echo "Watching for Claude Code sessions... (Ctrl+C to exit)"
+        while true; do
+            TRANSCRIPT=$(find_current_session)
+            if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
+                ANALYSIS=$(analyze_transcript "$TRANSCRIPT")
+                display_status "$TRANSCRIPT" "$ANALYSIS"
+            else
+                clear
+                echo "No active Claude Code session found."
+                echo "Start a Claude Code session and this will update automatically."
+                echo ""
+                echo "Checking: ${HISTORY_FILE}"
+            fi
+            sleep 5
+        done
+    else
+        TRANSCRIPT=$(find_current_session)
+        if [[ -n "$TRANSCRIPT" && -f "$TRANSCRIPT" ]]; then
+            ANALYSIS=$(analyze_transcript "$TRANSCRIPT")
+            display_status "$TRANSCRIPT" "$ANALYSIS"
+        else
+            echo "No active Claude Code session found."
+            echo "Usage: $0 [watch] [--log]"
+            exit 1
+        fi
+    fi
+}
+
+main "$@"

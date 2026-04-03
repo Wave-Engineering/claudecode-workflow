@@ -12,16 +12,18 @@
 #   ./install.sh --scripts    Install scripts only (also builds packages from src/)
 #   ./install.sh --config     Install config files only (smart-merges settings.json)
 #   ./install.sh --mcps       Install MCP servers only (via mcps.json manifest)
+#   ./install.sh --crystallizer Install context-crystallizer only
 #   ./install.sh --no-mcps    Install everything except MCP servers
 #
 # Targets:
-#   Skills     → ~/.claude/skills/<name>/SKILL.md
-#   Scripts    → ~/.local/bin/<name>
-#   Packages   → ~/.local/bin/<name> (built from src/ via scripts/ci/build.sh)
-#   Statusline → ~/.claude/statusline-command.sh
-#   Settings   → ~/.claude/settings.json (smart-merged: missing keys added, your
-#                 customizations preserved — see merge_settings() for rules)
-#   MCPs       → user-scope MCP servers (installed via each MCP's install-remote.sh)
+#   Skills        → ~/.claude/skills/<name>/SKILL.md
+#   Scripts       → ~/.local/bin/<name>
+#   Packages      → ~/.local/bin/<name> (built from src/ via scripts/ci/build.sh)
+#   Statusline    → ~/.claude/statusline-command.sh
+#   Settings      → ~/.claude/settings.json (smart-merged: missing keys added, your
+#                    customizations preserved — see merge_settings() for rules)
+#   MCPs          → user-scope MCP servers (installed via each MCP's install-remote.sh)
+#   Crystallizer  → ~/.claude/context-crystallizer/ (hooks, lib, bin)
 #
 # Existing files are backed up to <file>.bak before overwriting.
 
@@ -37,6 +39,7 @@ INSTALL_SKILLS=true
 INSTALL_SCRIPTS=true
 INSTALL_CONFIG=true
 INSTALL_MCPS=true
+INSTALL_CRYSTALLIZER=true
 
 # --- Parse args ---------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -53,24 +56,35 @@ while [[ $# -gt 0 ]]; do
 		INSTALL_SCRIPTS=false
 		INSTALL_CONFIG=false
 		INSTALL_MCPS=false
+		INSTALL_CRYSTALLIZER=false
 		shift
 		;;
 	--scripts)
 		INSTALL_SKILLS=false
 		INSTALL_CONFIG=false
 		INSTALL_MCPS=false
+		INSTALL_CRYSTALLIZER=false
 		shift
 		;;
 	--config)
 		INSTALL_SKILLS=false
 		INSTALL_SCRIPTS=false
 		INSTALL_MCPS=false
+		INSTALL_CRYSTALLIZER=false
 		shift
 		;;
 	--mcps)
 		INSTALL_SKILLS=false
 		INSTALL_SCRIPTS=false
 		INSTALL_CONFIG=false
+		INSTALL_CRYSTALLIZER=false
+		shift
+		;;
+	--crystallizer)
+		INSTALL_SKILLS=false
+		INSTALL_SCRIPTS=false
+		INSTALL_CONFIG=false
+		INSTALL_MCPS=false
 		shift
 		;;
 	--no-mcps)
@@ -309,6 +323,20 @@ if [[ "$CHECK_MODE" == true ]]; then
 		done
 	fi
 
+	# Crystallizer
+	if [[ -d "$REPO_DIR/context-crystallizer" ]]; then
+		echo ""
+		echo "Crystallizer"
+		echo "──────────────────────────────────────────"
+		CRYST_DEST="$CLAUDE_DIR/context-crystallizer"
+		for src_file in $(find "$REPO_DIR/context-crystallizer" -type f | sort); do
+			rel="${src_file#"$REPO_DIR"/context-crystallizer/}"
+			dest="$CRYST_DEST/$rel"
+			total=$((total + 1))
+			do_check "$src_file" "$dest" "crystallizer/$rel" || drifted=$((drifted + 1))
+		done
+	fi
+
 	# MCPs: check each MCP's install-remote.sh --check
 	if [[ -f "$REPO_DIR/mcps.json" ]] && command -v claude &>/dev/null; then
 		echo ""
@@ -445,6 +473,24 @@ if [[ "$INSTALL_CONFIG" == true ]]; then
 			fi
 		fi
 	fi
+fi
+
+# --- Install context-crystallizer ----------------------------------------------
+if [[ "$INSTALL_CRYSTALLIZER" == true && -d "$REPO_DIR/context-crystallizer" ]]; then
+	echo ""
+	echo "Crystallizer → $CLAUDE_DIR/context-crystallizer"
+	echo "──────────────────────────────────────────"
+	CRYST_DEST="$CLAUDE_DIR/context-crystallizer"
+	for src_file in $(find "$REPO_DIR/context-crystallizer" -type f | sort); do
+		rel="${src_file#"$REPO_DIR"/context-crystallizer/}"
+		dest="$CRYST_DEST/$rel"
+		do_copy "$src_file" "$dest"
+		if [[ "$DRY_RUN" != true ]]; then
+			case "$dest" in
+			*.sh | */bin/*) chmod +x "$dest" ;;
+			esac
+		fi
+	done
 fi
 
 # --- Build and install packages -----------------------------------------------
