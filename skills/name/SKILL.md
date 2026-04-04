@@ -30,7 +30,7 @@ Report the current session identity, or pick one if not yet established.
    - If empty, ask the user what Dev-Team to use
 
 4. **Pick identity (if needed)**
-   - `Dev-Name`: A single memorable name or short phrase (max 3 words). Draw from nerdcore canon — sci-fi, fantasy, comics, gaming, mythology, tech puns, wordplay. The wittier and more specific the reference, the better.
+   - `Dev-Name`: A single memorable word or hyphenated phrase in **kebab-case** (e.g., `beacon`, `null-pointer`, `mother`). Draw from nerdcore canon — sci-fi, fantasy, comics, gaming, mythology, tech puns, wordplay. The wittier and more specific the reference, the better. Generic names are boring. Kebab-case is required so the name works as a routing key for `@<dev-name>` addressing.
    - `Dev-Avatar`: A Unicode emoji character (e.g., 🧠, 👾). Should feel like it belongs with the name.
    - Persist to the resolved identity file:
      ```bash
@@ -46,3 +46,22 @@ Report the current session identity, or pick one if not yet established.
 
 5. **Announce** — Always respond with:
    > I'm **\<Dev-Name\>** \<Dev-Avatar\> from team `<Dev-Team>`.
+
+6. **Set session display name** — So the Remote Control UI shows your identity:
+   ```
+   /rename <Dev-Name> <Dev-Avatar> (<Dev-Team>)
+   ```
+   Example: `/rename neuron ⚡ (cc-workflow)`. Skip silently if `/rename` is unavailable.
+
+7. **Check in via Discord** — If `discord-bot` is available on PATH, announce yourself in `#roll-call`:
+   ```bash
+   ROLL_CALL=$(jq -r '.channels["roll-call"].id' ~/.claude/discord.json 2>/dev/null || echo "1487382005036617851")
+   discord-bot send "$ROLL_CALL" "<message>"
+   ```
+   Message format:
+   ```
+   **<dev-name>** <dev-avatar> online — team `<dev-team>` @ <project-root>
+
+   — **<dev-name>** <dev-avatar> (<dev-team>)
+   ```
+   If `discord-bot` is not available or the send fails, skip silently — check-in is best-effort.
