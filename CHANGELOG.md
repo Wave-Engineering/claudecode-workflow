@@ -8,13 +8,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- `ccfold` skill — Merge upstream CLAUDE.md template changes into a project's local CLAUDE.md, preserving project-specific content (Dev-Team, custom sections)
-- `sync.sh` — Reverse-sync: pull local skill/script changes back into the repo
+- **Nerf MCP server** — Deterministic context budget management via `nerf-server` MCP. Includes dart thresholds (soft/hard/ouch), behavior modes (not-too-rough, hurt-me-plenty, ultraviolence), statusline indicators, and a terminal-based scope monitor
+- **`/nerf` skill** — Thin routing stub for the nerf MCP server with `k`/`m` suffix parsing
+- **`/issue` skill** — Create structured issues (feature, bug, chore, docs, epic) with proper templates and labels. Self-contained, dual-platform (GitHub/GitLab)
+- **`/ddd` skill** — Domain-Driven Design facilitation with 8-stage event storming, domain model formalization, and PRD generation
+- **`/man` skill** — Display usage information for any installed skill via SKILL.md frontmatter
+- **`/cryopact` skill** — Background cryo via subagent — preserve state without blocking the main conversation
+- **`/disc` skill** — Unified Discord integration: check-in, send, read, list channels, create threads
+- **`/view` skill** — Open file/URL in a GUI viewer (read-only) with cross-platform file-opener
+- **`/edit` skill** — Open file/URL in a GUI editor for modification
+- **`/vox` skill** — Text-to-speech voice announcements via Chatterbox API with local fallback
+- **`/precheck` skill** — Pre-commit gate: branch/issue compliance, validation, code review, checklist
+- **`/assesswaves` skill** — Quick assessment of wave-pattern suitability for parallel execution
+- **`/ccwork` skill** — Onboarding hub with interactive tours, labs, and setup wizards
+- **`/scpmr` and `/scpmmr` combo skills** — Stage/commit/push/create PR/merge in one command
+- **`/ccfold` skill** — Merge upstream CLAUDE.md template changes into local project CLAUDE.md
+- **`sync.sh`** — Reverse-sync: pull local skill/script changes back into the repo
+- **Context crystallizer** — Session state preservation pipeline: hooks (PostToolUse, SessionStart, SubagentStop), libraries (context-analyzer, crystallizer), CLI tools (cc-context, cc-cleanup). Tracked in `context-crystallizer/` and installed via `--crystallizer`
+- **Discord watcher channel server** — Real-time inter-agent communication via Discord with targeted message filtering, thread polling, voice message STT, and Dev-Name echo suppression
+- **Discord bot** — REST API client for Discord: send, read, create channels/threads, resolve names, with 429 retry handling and kill switch
+- **Discord status post** — Wave-status embed with auto-updating pinned message, debounce, and dev-team fallback
+- **`discord-lock`** — Advisory lock for serializing Discord channel writes across agents
+- **`cc-inspector`** — Context window inspector: mitmproxy + Flask UI for API payload capture
+- **`generate-status-panel`** — HTML status panel generator for wave progress
+- **`worktree-manager`** — Manage isolated worktrees for parallel agent execution
+- **Remote installer** — `scripts/install-remote.sh` for curl-pipe-bash installation from GitHub Releases
+- **MCP manifest** — `mcps.json` with bundle-install architecture for wtf-server, discord-watcher, and nerf-server
+- **GitHub Actions workflow** for GitHub Release packaging
+- **Statusline v2** — Two-line layout with per-session indicators, visual refresh, and JSON-based indicator interface
+- **Introduction system** — First-run introduction.md display for new skills with marker file gating
+- **Work Item Standards** — Label taxonomy (`group::value`), issue templates (feature, bug, chore, docs, epic), and wave-pattern quality requirements in CLAUDE.md
+- **`.claude-project.md`** — Cached platform detection results (GitHub/GitLab, CLI tool, labels, CI)
+- **Agent identity keying** — Migrated from PPID to project-root md5 hash for stable cross-process resolution
+- **PRD template v2.0** — EARS requirements, phased implementation, artifact manifest, CI/CD pipeline, documentation kit, test plan sections, foundation story checklist, one-story-one-repo rule
+- **Getting Started guide** — 15-minute walkthrough of first session
+- **Skill Reference** — Detailed documentation for all skills
+- **Concepts guide** — Architecture overview of the three-layer kit
+- **Troubleshooting guide** — Common issues and fixes
+- **Discord configuration guide** — Bot token, watcher, inter-agent messaging setup
+- **Statusline indicators guide** — Per-session indicator interface documentation
 
 ### Changed
 
 - `install.sh --config` now smart-merges `settings.template.json` into existing `settings.json` — missing hooks, plugins, and permissions are added while user customizations are preserved
-- `install.sh --check` now reports missing hooks, plugins, and MCP server registrations in addition to file drift
+- `install.sh --check` now reports missing hooks, plugins, MCP server registrations, and crystallizer drift
+- `install.sh` supports selective flags: `--skills`, `--scripts`, `--config`, `--mcps`, `--crystallizer`
+- Repo restructured: skills carry their own scripts (discord-bot inside disc, file-opener inside view, etc.)
+- `/cryopact` delegates to cryo subagent, removes auto-clear, fixes immediate mode
+- `/disc` default action changed from read to check-in
+- `/nextwave` uses pre-created worktrees instead of isolation worktrees, with granular lifecycle tasks and explicit wave-status calls
+- `/pong` uses priority-ordered default discovery flow (active thread → addressed messages → general history)
+- `/vox` adds `--output FILE` flag for render-to-disk mode
+- Discord config abstracted into `~/.claude/discord.json`
+- Agent check-in on session start via `#roll-call` channel
+- RC display name set to match Dev-Name at session start
+- Introduction-gate marker files use dot prefix for hiding
+- Nerf default thresholds lowered for 200k context window safety
+
+### Fixed
+
+- `install.sh` unbound tmpdir variable on script exit
+- `install.sh` handles `claude mcp add` failure gracefully
+- Discord-bot 429 retry-after handling and JSONL API call logging
+- Discord-bot kill switch to halt all API calls on global 429
+- Discord watcher strips punctuation from @-addressing tokens
+- Vox Bluetooth wake noise prepend to prevent audio clipping
+- Vox help text for `-o` flag and `espeak-ng` fallback
+- Wave-status meta-refresh fallback for `file://` dashboard viewing
+- Wave-status infers phase/wave position when `current_wave` is null
+- Identity keying migrated from PPID to project-root hash (fixes multi-session collisions)
+- Ping/pong channel name corrected and channel ID added
+- `/precheck` runs immediately without asking permission
+- `/issue` removes per-issue approval gate (issues are cheap to edit)
+
+### Removed
+
+- `afk-notify` Stop hook — replaced by kill switch on discord-watcher
 
 ## [0.1.0] - 2026-03-22
 

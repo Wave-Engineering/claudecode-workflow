@@ -55,13 +55,18 @@ Key features:
 | ccfold | `/ccfold` | Merge upstream CLAUDE.md template updates into local project |
 | ccwork | `/ccwork` | Onboarding hub — tour the kit, run labs, configure integrations |
 | cryo | `/cryo` | Preserve session state before context compaction |
+| cryopact | `/cryopact` | Background cryo via subagent — keep working, append delta, compact when ready |
+| ddd | `/ddd` | Domain-Driven Design facilitation — event storming, domain modeling, PRD generation |
 | disc | `/disc` | Discord integration — check-in, send, read, list, resolve channels |
 | edit | `/edit` | Open file/URL in GUI editor |
 | engage | `/engage` | Load CLAUDE.md, confirm rules of engagement |
 | ibm | `/ibm` | Issue-Branch-PR/MR workflow reminder |
+| issue | `/issue` | Create structured issues (feature, bug, chore, docs, epic) with templates and labels |
 | jfail | `/jfail` | CI job/workflow failure analysis |
+| man | `/man` | Display usage information for any installed skill |
 | mmr | `/mmr` | Merge a PR/MR with squash |
 | name | `/name` | Report or pick agent session identity |
+| nerf | `/nerf` | Context budget system — soft limits, doom modes, scope monitor |
 | nextwave | `/nextwave` | Execute parallel spec-driven sub-agents |
 | ping | `/ping` | Post to #ai-dev Slack channel |
 | pong | `/pong` | Read #ai-dev Slack channel |
@@ -85,6 +90,10 @@ Key features:
 | `file-opener` | `xdg-open` / `open` | Cross-platform file/URL opener for `/view` and `/edit` |
 | `vox` | `curl`, audio player (`aplay`/`afplay`) | Text-to-speech via Chatterbox API, with local fallback (espeak/piper/say) |
 | `statusline-command.sh` | `jq`, `git` | Custom status line: git branch, dirty state, context window remaining, model |
+| `cc-inspector` | `python3`, `mitmproxy` | Context window inspector — proxy + Flask UI for API payload capture |
+| `discord-lock` | `flock`, `jq` | Advisory lock for serializing Discord channel writes across agents |
+| `generate-status-panel` | `python3` | Generate HTML status panel for wave progress |
+| `worktree-manager` | `git` | Manage isolated worktrees for parallel agent execution |
 
 ### MCP Servers
 
@@ -94,14 +103,25 @@ MCP servers are managed via `mcps.json` and installed from their own repos:
 |--------|------|-------------|
 | `wtf-server` | [mcp-server-wtf](https://github.com/Wave-Engineering/mcp-server-wtf) | Flight recorder for incident troubleshooting |
 | `discord-watcher` | [mcp-server-discord-watcher](https://github.com/Wave-Engineering/mcp-server-discord-watcher) | Discord channel notification server for inter-agent communication |
+| `nerf-server` | [mcp-server-nerf](https://github.com/Wave-Engineering/mcp-server-nerf) | Deterministic context budget management (nerf darts, modes, statusline) |
 
 Each MCP has its own `install-remote.sh` for standalone installation. Running `./install.sh` installs all MCPs from the manifest automatically.
+
+### Context Crystallizer
+
+The `context-crystallizer/` directory contains the hooks and libraries that power session state preservation. It installs to `~/.claude/context-crystallizer/` and provides:
+
+- **Hooks** — SessionStart (restore crystallized state), PostToolUse (auto-crystallize at high context usage), SubagentStop (capture subagent results)
+- **Libraries** — `context-analyzer.sh` (parse API payloads for token counts), `crystallizer.sh` (write crystal files)
+- **CLI** — `cc-context` (watch token usage in a terminal), `cc-cleanup` (prune old crystal files)
+
+Install standalone with `./install.sh --crystallizer`.
 
 ### Settings Template
 
 `settings.template.json` provides a starting point for `~/.claude/settings.json` with:
 - **Permissions** — Granular tool allowlists for common CLIs (git, gh, glab, docker, terraform, aws, etc.)
-- **Hooks** — PostToolUse, SessionStart, and SubagentStop hook structure (requires [context-crystallizer](https://github.com/Wave-Engineering/context-crystallizer) for crystallization hooks)
+- **Hooks** — PostToolUse, SessionStart, and SubagentStop hook structure (requires [context-crystallizer](context-crystallizer/) for crystallization hooks)
 - **Status line** — Points to the custom statusline script
 - **Plugins** — Full plugin list (see Plugins section below)
 - **Effort level** — Set to `high` for thorough responses
@@ -150,8 +170,9 @@ This will:
 ./install.sh --skills      # Install skills only
 ./install.sh --scripts     # Install scripts only
 ./install.sh --config      # Install config files only
-./install.sh --mcps        # Install MCP servers only (via mcps.json manifest)
-./install.sh --no-mcps     # Install everything except MCP servers
+./install.sh --mcps         # Install MCP servers only (via mcps.json manifest)
+./install.sh --crystallizer # Install context-crystallizer only
+./install.sh --no-mcps      # Install everything except MCP servers
 ```
 
 ### Check for Drift
