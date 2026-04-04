@@ -205,13 +205,13 @@ The full skill reference is in [Skill Reference](skill-reference.md) with detail
 | `/vox` | Text-to-speech announcements ("Hey, the build passed") |
 | `/jfail` | Fetch and analyze a failed CI job or workflow run |
 
-### Advanced: Parallel Execution
+### Advanced: Wave-Pattern Execution
 
-For large features that decompose into independent sub-issues, the wave system lets multiple agents work in parallel:
+For structured work (parallel, serial, or mixed), the wave system provides lifecycle tracking, a dashboard, and an audit trail:
 
-1. `/assesswaves` -- quick assessment of whether work items are suitable for parallel execution
+1. `/assesswaves` -- quick assessment of topology (parallel, serial, or mixed) and whether wave tracking is worth it
 2. `/prepwaves` -- full planning: validate sub-issue specs, compute dependency waves, partition into flights
-3. `/nextwave` -- execute one wave at a time with isolated worktrees and conflict avoidance
+3. `/nextwave` -- execute one wave at a time; parallel flights use isolated worktrees, serial flights use a streamlined fast-path
 
 See the [Skill Reference](skill-reference.md) for detailed documentation on each, or the [skill SKILL.md files](../skills/) for the raw agent prompts.
 

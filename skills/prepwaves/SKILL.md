@@ -1,6 +1,6 @@
 ---
 name: prepwaves
-description: Analyze a master issue, validate sub-issue specs, compute dependency waves, and prepare for parallel agent execution
+description: Analyze a master issue, validate sub-issue specs, compute dependency waves, and prepare for wave-pattern execution (parallel, serial, or mixed)
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
@@ -9,9 +9,9 @@ description: Analyze a master issue, validate sub-issue specs, compute dependenc
      Do NOT delete introduction.md — it lives in a protected directory.
      Do this BEFORE executing any skill logic below. -->
 
-# PrepWaves: Plan Parallel Execution Waves
+# PrepWaves: Plan Wave Execution
 
-Analyze epic issues and their sub-issues, validate they are ready for spec-driven parallel agent execution, compute dependency-ordered waves, and prepare everything for `/nextwave` to execute.
+Analyze epic issues and their sub-issues, validate they are ready for spec-driven agent execution, compute dependency-ordered waves, and prepare everything for `/nextwave` to execute. Supports parallel, serial, and mixed topologies — the wave pattern provides lifecycle tracking and dashboard visibility regardless of whether agents run concurrently.
 
 ## Prerequisites
 
@@ -81,9 +81,16 @@ Using the dependency graph from the sub-issues:
 1. **Topological sort** — Group issues into waves where all dependencies are satisfied by prior waves
 2. **Maximize parallelism** — Within each wave, all issues are independent and can run concurrently
 3. **Identify the critical path** — The longest chain of sequential waves
+4. **Detect topology** — Classify the plan:
+   - **Parallel**: at least one wave has 2+ independent issues
+   - **Serial**: every wave has exactly 1 issue (linear dependency chain)
+   - **Mixed**: some waves are parallel, some are single-issue
 
-Present the wave plan:
+All three topologies are valid. Serial waves get the same tracking, dashboard, and audit trail as parallel waves — `/nextwave` uses a streamlined fast-path for single-issue flights (no worktree isolation, no conflict detection).
 
+Present the wave plan. Examples by topology:
+
+**Parallel/mixed topology:**
 ```
 Wave 1 (parallel — no dependencies)
 ├── #N  Title  [branch: feature/N-description]
@@ -92,8 +99,18 @@ Wave 1 (parallel — no dependencies)
 Wave 2 (parallel — depends on Wave 1)
 ├── #P  Title  [needs #N]
 └── #Q  Title  [needs #N, #M]
+```
 
-...
+**Serial topology (1 issue per wave):**
+```
+Wave 1 (serial)
+└── #N  Title  [branch: feature/N-description]
+
+Wave 2 (serial — depends on Wave 1)
+└── #M  Title  [needs #N]
+
+Wave 3 (serial — depends on Wave 2)
+└── #P  Title  [needs #M]
 ```
 
 Include:
@@ -185,4 +202,5 @@ Tell the user:
 - If the user wants to change the wave plan, iterate here — not during `/nextwave`
 - The quality of the issue specs directly determines the quality of agent output
 - Pair with `/nextwave` for execution: `/prepwaves` plans, `/nextwave` executes one wave at a time
-- `/nextwave` uses a **flight model** within each wave — it launches planning agents first to detect file-level conflicts, then partitions the wave into conflict-free flights. You do NOT need to account for file-level conflicts during `/prepwaves` — only dependency-level ordering matters here. Flight partitioning happens at execution time.
+- `/nextwave` uses a **flight model** within each wave — for multi-issue flights, it launches planning agents to detect file-level conflicts, then partitions into conflict-free flights. For single-issue flights (serial topology), it skips conflict detection and worktree isolation entirely. You do NOT need to account for file-level conflicts during `/prepwaves` — only dependency-level ordering matters here. Flight partitioning happens at execution time.
+- **Serial is valid.** A fully sequential dependency chain (every issue depends on the previous one) still benefits from wave tracking. Don't reject serial work — classify it as serial topology and let `/nextwave` use its streamlined path.

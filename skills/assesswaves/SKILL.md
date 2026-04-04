@@ -1,6 +1,6 @@
 ---
 name: assesswaves
-description: Quick assessment of whether a piece of work is suitable for wave-pattern parallel execution. Lighter than /prepwaves — helps decide decomposition before (or after) issues are created.
+description: Quick assessment of whether a piece of work is suitable for wave-pattern execution (parallel or serial). Lighter than /prepwaves — helps decide decomposition before (or after) issues are created.
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
@@ -11,7 +11,7 @@ description: Quick assessment of whether a piece of work is suitable for wave-pa
 
 # AssessWaves: Is This Work Wave-Patternable?
 
-Quickly assess whether a set of work items can benefit from parallel agent execution via the wave pattern. This is a **decision tool**, not a planning tool — it recommends a decomposition and verdict, but does not create issues, flight plans, or execute anything.
+Quickly assess whether a set of work items can benefit from wave-pattern execution — parallel, serial, or mixed. The wave pattern provides lifecycle tracking, dashboard visibility, and audit trail regardless of whether work runs in parallel or sequentially. This is a **decision tool**, not a planning tool — it recommends a topology and verdict, but does not create issues, flight plans, or execute anything.
 
 Use this **before** `/prepwaves` to decide whether wave-pattern execution is worth it.
 
@@ -78,6 +78,7 @@ Present the assessment in this format:
 |-------|-------|
 | **Work items** | N items assessed |
 | **Wave-able** | yes / no / maybe |
+| **Topology** | parallel / serial / mixed |
 | **Suggested waves** | N waves (rough sketch) |
 | **Risk level** | low / medium / high |
 
@@ -93,8 +94,16 @@ Present the assessment in this format:
 
 ### Wave Sketch
 
+Examples by topology:
+
+**Parallel/mixed:**
 - **Wave 1** (parallel): Items 1, 3 — no file overlap, independent
-- **Wave 2** (sequential after wave 1): Item 2 — depends on Item 1's output
+- **Wave 2** (serial — depends on Wave 1): Item 2 — depends on Item 1's output
+
+**Serial (all sequential):**
+- **Wave 1** (serial): Item 1
+- **Wave 2** (serial): Item 2 — depends on Item 1
+- **Wave 3** (serial): Item 3 — depends on Item 2
 
 ### Risk Flags
 
@@ -104,10 +113,14 @@ Present the assessment in this format:
 ### Recommendation
 
 (one of:)
-- "Wave-able. Create issues for each item and run `/prepwaves` for full planning."
-- "Wave-able. Issues already exist — ready for `/prepwaves`."
-- "Not wave-able. These items have too much file overlap / are logically sequential. Execute them in series."
+- "Wave-able (parallel). Create issues for each item and run `/prepwaves` for full planning."
+- "Wave-able (parallel). Issues already exist — ready for `/prepwaves`."
+- "Wave-able (serial). Issues are sequential — use single-issue flights for lifecycle tracking and dashboard visibility."
+- "Wave-able (mixed). Some items can run in parallel, others are sequential. `/prepwaves` will compute the optimal topology."
 - "Maybe wave-able with restructuring. Consider splitting <item> into <X> and <Y> to reduce overlap."
+- "Not wave-able. Fewer than 3 items — overhead exceeds benefit. Execute directly."
+
+**Key insight:** Serial work is a valid wave topology. The wave pattern provides lifecycle tracking, a dashboard, and an audit trail regardless of parallelism. "Logically sequential" is NOT a reason to reject wave tracking — it determines topology (serial flights), not suitability.
 ```
 
 ## What This Skill Does NOT Do
