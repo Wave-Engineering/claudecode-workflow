@@ -621,6 +621,44 @@ No arguments. It identifies the next pending wave from the task list and auto-de
 
 ---
 
+## Tools / CLI
+
+### `campaign-status` -- SDLC Campaign Lifecycle CLI
+
+A standalone CLI tool (Python zipapp) for tracking project progress through SDLC stages. Manages stage transitions with gates, deferrals, and generates an HTML dashboard. State is stored in `.sdlc/` and committed to git on every mutation.
+
+**Subcommands:**
+
+| Command | Purpose |
+|---------|---------|
+| `init <project-name>` | Create `.sdlc/` directory, initialize campaign with 5 stages |
+| `stage-start <stage>` | Transition campaign to a new stage (concept/prd/backlog/implementation/dod) |
+| `stage-review <stage>` | Mark stage as in-review (concept, prd, dod only) |
+| `stage-complete <stage>` | Mark stage as complete (gate passed) |
+| `defer <item> --reason <text>` | Defer a deliverable or work item with rationale |
+| `show` | Print current campaign state to terminal (read-only) |
+
+**Stage progression:** concept -> prd -> backlog -> implementation -> dod. Each stage must be completed before the next can start. Concept, PRD, and DoD have review gates; backlog and implementation go directly from active to complete.
+
+**Examples:**
+
+```
+campaign-status init my-project
+campaign-status stage-start concept
+campaign-status stage-review concept
+campaign-status stage-complete concept
+campaign-status defer "Advanced analytics" --reason "Phase 2"
+campaign-status show
+```
+
+---
+
+### `wave-status` -- Wave Execution Lifecycle CLI
+
+A standalone CLI tool (Python zipapp) for tracking wave-pattern execution. See the wave pattern skills above for context on how waves work.
+
+---
+
 ## See Also
 
 - [Getting Started](getting-started.md) -- hands-on walkthrough of your first session
