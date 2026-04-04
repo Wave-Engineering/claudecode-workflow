@@ -26,17 +26,22 @@ with the following brief:
 2. **Pass it a session summary** — a concise brief of what happened this
    session: what was built, key decisions, current branch/issue, what's
    pending. This is the subagent's only window into conversation context.
-3. **Resolve the project root** for the subagent — run
-   `git rev-parse --show-toplevel` and substitute `<PROJECT_ROOT>` in the
-   prompt template.
+3. **Resolve the project root and memory directory** for the subagent — run
+   `git rev-parse --show-toplevel` and find the memory directory path from
+   your system context (the directory where MEMORY.md lives). Substitute
+   `<PROJECT_ROOT>` and `<MEMORY_DIR>` in the prompt template.
 4. **Instruct it to**:
    - Create a temp file: `mktemp /tmp/cryo-XXXXXX.md`
    - Read `skills/cryo/SKILL.md` for the plan template and writing rules
-   - Follow cryo's Step 1 (Audit Current State) and Step 2 (Curate the Plan
-     File) — but **skip Step 3** (task curation is not delegable)
+   - Follow cryo's Step 1 (Audit Current State), **Step 1.5 (Extract Durable
+     Facts to Memory)**, and Step 2 (Curate the Plan File) — but **skip
+     Step 3** (task curation is not delegable)
+   - **Write durable facts directly to memory files** at `<MEMORY_DIR>` using
+     the tier classification rules. These writes are DURABLE — they survive
+     `/clear` and compaction.
+   - Write ONLY ephemeral state to the temp file (branch, commits, pending)
    - Use the plan file path you provided (not discover it from system context)
-   - Write the result to the temp file
-   - **Return the temp file path** in its response
+   - **Return the temp file path AND a list of memory files written/updated**
 
 5. **When the subagent returns**, note the temp file path it gives you. You
    will need this path in Phase 3. Remember it — shell variables do not
@@ -44,25 +49,31 @@ with the following brief:
 
 **Subagent prompt template:**
 
-Before spawning, substitute `<PLAN_PATH>`, `<YOUR_BRIEF>`, and `<PROJECT_ROOT>`
-with real values.
+Before spawning, substitute `<PLAN_PATH>`, `<YOUR_BRIEF>`, `<PROJECT_ROOT>`,
+and `<MEMORY_DIR>` with real values. The subagent receives actual filesystem
+paths, not placeholders.
 
 ```
 You are performing a cryo (context preservation) for the main agent.
 
 Plan file path: <PLAN_PATH>
+Memory directory: <MEMORY_DIR>
 Session summary: <YOUR_BRIEF>
 
 Instructions:
 1. Run: CRYO_TMP=$(mktemp /tmp/cryo-XXXXXX.md) && echo "$CRYO_TMP"
 2. Read the skill file at <PROJECT_ROOT>/skills/cryo/SKILL.md — it contains
-   the plan template structure and writing rules.
-3. Follow cryo's Step 1 (Audit Current State) and Step 2 (Curate the Plan
-   File). SKIP Step 3 (task curation) — you don't have access to TaskList.
-   Use the plan file path above when cryo references "the existing plan file."
-4. Write the result to $CRYO_TMP — do NOT deploy to the plan path. The main
-   agent handles deployment.
-5. Return the temp file path so the main agent can deploy it.
+   the plan template structure, tier classification rules, and writing rules.
+3. Follow cryo's Step 1 (Audit Current State).
+4. Follow cryo's Step 1.5 (Extract Durable Facts to Memory). Write durable
+   facts (design decisions, lessons learned, architecture) DIRECTLY to memory
+   files at <MEMORY_DIR>. These writes survive /clear — this is the whole
+   point. Update MEMORY.md at <MEMORY_DIR>/MEMORY.md for any new files.
+5. Follow cryo's Step 2 (Curate the Plan File) for ONLY ephemeral state
+   (branch, commits, pending, next steps). SKIP Step 3 (task curation) —
+   you don't have access to TaskList. Write to $CRYO_TMP.
+6. Return BOTH the temp file path AND a list of memory files you wrote/updated
+   so the main agent knows what was persisted.
 ```
 
 ## Phase 2: Keep Working

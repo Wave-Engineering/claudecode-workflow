@@ -24,12 +24,17 @@ This skill is the post-compaction (or session-start) ritual. It restores context
    - This confirmation is required by the post-compaction protocol
 
 3. **Load Current Plan** - Check for an active plan file
+   - Durable project knowledge (decisions, lessons, architecture) may already
+     be loaded from memory files — check your system context for memory content
    - Look in the plan mode system context for a plan file path
    - If a plan file exists, read it and summarize the current state:
      - What was being worked on
      - What's done vs. pending
      - Any blockers or next steps
-   - If no plan file exists, say "No active plan found."
+   - If no plan file exists but memory files are present, durable context is
+     loaded from memory — report the project knowledge you have and state that
+     no active task context exists (clean slate ready for new work)
+   - If neither exists, say "No active plan or memory context found."
 
 4. **Present Ready State** - End with a brief "ready" message that includes:
    - Current git branch
