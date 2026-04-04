@@ -1,5 +1,7 @@
 # DDD → PRD Translation Protocol
 
+> **Recommended:** Use `/prd create` with a DDD domain model as input to automate this translation interactively. The `/prd create` skill walks each PRD section with you, applies the mapping rules below, and manages the Deliverables Manifest. This protocol document remains as reference for understanding the mapping, but the primary workflow is now: `/ddd accept` (produces concept handoff) → `/prd create` (produces PRD).
+
 This guide documents the process for converting a Domain Model (Event Storming output) into a Product Requirements Document following the PRD template (`docs/PRD-template.md`).
 
 ## Purpose
