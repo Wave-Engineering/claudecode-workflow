@@ -94,6 +94,48 @@ No arguments. If an identity file exists for this project, it reports the curren
 
 ---
 
+### `/cryopact` -- Background Cryo
+
+Delegates session state preservation to a background subagent so you can keep working. The subagent writes a frozen snapshot to `/tmp`, and when context pressure hits, the main agent appends a short delta and deploys.
+
+**When to use it:**
+- When context is getting high but you are mid-task and do not want to stop
+- As a faster alternative to `/cryo` that does not block the main conversation
+- When autocompact is imminent and you need to preserve state without burning main context
+
+**Examples:**
+
+```
+/cryopact
+```
+
+No arguments. It launches a background cryo subagent, continues working, and merges the result when compaction is needed. In immediate mode (context pressure warning has fired), it writes minimal breadcrumbs and lets the subagent finish in the background.
+
+**Key detail:** `/cryopact` is the non-blocking cousin of `/cryo`. Use `/cryo` when you can afford to pause; use `/cryopact` when you cannot.
+
+---
+
+### `/man` -- Skill Usage Display
+
+Displays the usage information for any installed skill by reading its SKILL.md frontmatter. A quick reference without loading the full skill into context.
+
+**When to use it:**
+- When you need a reminder of a skill's syntax or subcommands
+- To list all installed skills and their descriptions
+- To check what options a skill supports without invoking it
+
+**Examples:**
+
+```
+/man nerf          # Show usage for /nerf
+/man scp           # Show usage for /scp
+/man               # List all installed skills
+```
+
+This is read-only -- it never invokes the target skill. It reads the `usage` frontmatter field for structured output, or interprets the full file when no usage field exists.
+
+---
+
 ### `/ccwork` -- Onboarding Hub
 
 Single entry point for discovering and learning the ccwork kit. Routes to tours, labs, and setup wizards.
@@ -122,6 +164,61 @@ Single entry point for discovering and learning the ccwork kit. Routes to tours,
 ## Workflow Skills
 
 These drive the development loop: issues, commits, reviews, merges.
+
+---
+
+### `/issue` -- Structured Issue Creation
+
+Creates properly templated and labeled issues from a natural language prompt. Detects the platform (GitHub/GitLab), applies the correct template for the issue type, infers labels, and creates the issue directly.
+
+**When to use it:**
+- When you need to create an issue following the project's template and labeling standards
+- When starting new work and an issue does not exist yet
+- When decomposing work into tracked items
+
+**Examples:**
+
+```
+/issue feature add retry logic to the upload endpoint
+/issue bug the login form crashes on empty password
+/issue chore update dependencies to latest patch versions
+/issue docs update the API reference for v2 endpoints
+/issue epic redesign the authentication system
+/issue                   # Infer from recent conversation context
+```
+
+The first word selects the template (feature, bug, chore, docs, epic). If omitted, the type is inferred from the prompt. Issues are created immediately -- the skill does not ask for confirmation since issues are cheap to edit.
+
+**Key detail:** The skill is self-contained -- it carries its own templates rather than depending on CLAUDE.md. Labels follow the `group::value` taxonomy with priority and urgency as orthogonal axes.
+
+---
+
+### `/nerf` -- Context Budget Management
+
+Routes to the `nerf-server` MCP for deterministic context budget control. Manages soft limits (darts), behavior modes, and a scope monitor for tracking token usage over time.
+
+**When to use it:**
+- To check your current context usage and dart thresholds
+- To adjust the context budget (raise or lower limits)
+- To switch behavior modes (more or less aggressive context management)
+- To launch a terminal-based scope monitor for real-time token tracking
+
+**Examples:**
+
+```
+/nerf                          # Show status (mode, darts, context usage)
+/nerf status                   # Same as /nerf
+/nerf mode                     # Show current behavior mode
+/nerf mode hurt-me-plenty      # Set mode
+/nerf darts                    # Show current dart thresholds
+/nerf darts 120k 160k 180k    # Set all three thresholds
+/nerf 200k                     # Set ouch dart, scale soft/hard proportionally
+/nerf scope                    # Launch context monitor in new terminal
+```
+
+All operations are handled by the MCP server -- the skill is a thin routing stub that parses input and calls the appropriate MCP tool. Accepts `k` suffix (e.g., `200k` = 200000).
+
+**Modes:** `not-too-rough` (gentle reminders), `hurt-me-plenty` (firm limits), `ultraviolence` (aggressive compaction pressure).
 
 ---
 
@@ -430,6 +527,36 @@ Opens a file or URL in a GUI editor for modification. Like `/view` but prefers f
 ```
 
 Checks `$VISUAL` and `$EDITOR` environment variables, then user preferences, then suggests by file type. Falls back to `file-opener` or the system default handler.
+
+---
+
+## Advanced Skills -- Domain-Driven Design
+
+---
+
+### `/ddd` -- Domain-Driven Design Facilitation
+
+A structured workflow for domain modeling using event storming. Guides you through 8 stages of domain discovery, formalizes the results into a Domain Model document, and translates it into an implementation-ready PRD.
+
+**When to use it:**
+- When starting a new project and need to discover the domain model
+- When translating business requirements into technical architecture
+- When you want a structured PRD generated from domain analysis
+
+**Examples:**
+
+```
+/ddd begin       # Start interactive event storming session
+/ddd draft       # Formalize sketchbook into Domain Model document
+/ddd accept      # Translate Domain Model to PRD
+/ddd resume      # Resume interrupted event storming session
+```
+
+**The pipeline:** `/ddd begin` (8-stage event storming → `docs/SKETCHBOOK.md`) → `/ddd draft` (formalize → `docs/DOMAIN-MODEL.md`) → `/ddd accept` (translate → `docs/<project>-PRD.md`).
+
+**Event storming stages:** Domain Context → Events (brainstorm) → Events (organize) → Commands → Actors → Policies → Aggregates → Read Models. Progress is checkpointed to the sketchbook after each stage.
+
+**Key detail:** This is a Socratic process — the agent asks probing questions rather than dictating the domain. The best domain models emerge from questioning and challenging assumptions.
 
 ---
 

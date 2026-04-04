@@ -108,13 +108,13 @@ Before writing any code, you need a tracked issue. Either find an existing one o
 > Let's work on issue #42
 ```
 
-or
+or use the `/issue` skill to create a properly templated and labeled issue:
 
 ```
-> Create an issue for adding retry logic to the upload endpoint
+/issue feature add retry logic to the upload endpoint
 ```
 
-Claude uses `gh issue create` or `glab issue create` depending on your platform. The issue must exist before any code is written -- this is a hard rule.
+This detects your platform, applies the correct template (feature, bug, chore, docs, epic), infers labels, and creates the issue. The issue must exist before any code is written -- this is a hard rule.
 
 ### 4b: Create a Branch
 
@@ -198,6 +198,8 @@ The full skill reference is in [Skill Reference](skill-reference.md) with detail
 |-------|---------------|
 | `/cryo` | Before context compaction -- freezes session state so `/engage` can restore it |
 | `/review` | Run a standalone code review on staged changes, a branch diff, or a specific file |
+| `/issue` | Create structured issues with proper templates and labels from natural language |
+| `/nerf` | Context budget management -- check usage, adjust limits, launch scope monitor |
 | `/ibm` | Quick reminder of the Issue-Branch-PR/MR workflow when you need to reset your mental model |
 | `/disc` | Send and read Discord messages, check in to `#roll-call`, manage channels |
 | `/vox` | Text-to-speech announcements ("Hey, the build passed") |
@@ -242,8 +244,10 @@ This merges new sections and updates while preserving your project-specific cont
 | Start a session | `claude` in any project with `CLAUDE.md` |
 | Load rules | `/engage` |
 | Check workflow | `/ibm` |
+| Create an issue | `/issue feature <prompt>` |
 | Pre-commit gate | `/precheck` |
 | Ship code | `/scp`, `/scpmr`, or `/scpmmr` |
+| Context budget | `/nerf` |
 | Freeze state | `/cryo` |
 | Restore state | `/engage` |
 | Update kit | `git pull && ./install.sh` |
