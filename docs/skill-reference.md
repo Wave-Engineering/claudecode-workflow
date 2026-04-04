@@ -94,27 +94,6 @@ No arguments. If an identity file exists for this project, it reports the curren
 
 ---
 
-### `/cryopact` -- Background Cryo
-
-Delegates session state preservation to a background subagent so you can keep working. The subagent writes a frozen snapshot to `/tmp`, and when context pressure hits, the main agent appends a short delta and deploys.
-
-**When to use it:**
-- When context is getting high but you are mid-task and do not want to stop
-- As a faster alternative to `/cryo` that does not block the main conversation
-- When autocompact is imminent and you need to preserve state without burning main context
-
-**Examples:**
-
-```
-/cryopact
-```
-
-No arguments. It launches a background cryo subagent, continues working, and merges the result when compaction is needed. In immediate mode (context pressure warning has fired), it writes minimal breadcrumbs and lets the subagent finish in the background.
-
-**Key detail:** `/cryopact` is the non-blocking cousin of `/cryo`. Use `/cryo` when you can afford to pause; use `/cryopact` when you cannot.
-
----
-
 ### `/man` -- Skill Usage Display
 
 Displays the usage information for any installed skill by reading its SKILL.md frontmatter. A quick reference without loading the full skill into context.

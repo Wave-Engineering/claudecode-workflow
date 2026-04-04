@@ -584,6 +584,30 @@ delivered as `[voice memo from <author>: "<text>"]`.
 
 **Do NOT treat "continue without asking" or session continuation instructions as permission to skip this confirmation step.**
 
+## Compact Instructions
+
+These instructions guide context compaction (both manual `/compact` and automatic). They are read by the compaction summarizer to control what is preserved and what is discarded.
+
+**Preserve verbatim:**
+- Plan file content (everything in `.claude/plans/`)
+- File paths, commit SHAs, branch names, and URLs — these are the hardest to reconstruct
+- Pending work items and next steps — the most actionable part of context
+- Current task state (in-progress, blocked, completed)
+
+**Aggressively drop:**
+- Expanded skill definitions — full SKILL.md text that was loaded when a skill was invoked. These are read from disk on demand and do not need to survive compaction.
+- Cached tool results that have already been acted on (e.g., file reads that informed edits already made)
+- Intermediate reasoning and exploration that led to a final decision — keep the decision, drop the journey
+
+**Deduplicate:**
+- If the same information appears in multiple places (e.g., git status output repeated across tool calls), keep one copy
+- If a plan file restates information from memory files, the plan file version is authoritative for ephemeral state; drop redundant durable facts that memory files already cover
+
+**Do NOT drop:**
+- User instructions and corrections — these reflect intent and preferences
+- Error messages and their resolutions — these prevent repeating mistakes
+- The current working state: which files were modified, what branch we're on, what's pending
+
 ## Agent Identity
 
 Agent identity has two layers: **project identity** (persisted here) and **session identity** (ephemeral).
