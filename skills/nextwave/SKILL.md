@@ -1,6 +1,6 @@
 ---
 name: nextwave
-description: Execute the next pending wave of parallel spec-driven sub-agents on isolated worktrees, using flight-based conflict avoidance
+description: Execute the next pending wave of spec-driven sub-agents, using flight-based conflict avoidance for parallel flights and a streamlined fast-path for serial flights
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
@@ -11,16 +11,23 @@ description: Execute the next pending wave of parallel spec-driven sub-agents on
 
 # NextWave: Execute One Wave with Flight-Based Conflict Avoidance
 
-Execute the next pending wave from a plan created by `/prepwaves`. Uses a two-phase approach: **planning agents** identify file targets, then issues are partitioned into **flights** (conflict-free groups) for safe parallel execution. Merges via PR/MR — never directly to main.
+Execute the next pending wave from a plan created by `/prepwaves`. Supports two execution modes:
+
+- **Parallel flights** (2+ issues per flight): Planning agents identify file targets, issues are partitioned into conflict-free flights, executed on isolated worktrees.
+- **Serial flights** (1 issue per flight): Fast-path — skip planning agents, skip worktree isolation, execute directly. Same lifecycle tracking and dashboard updates.
+
+The mode is detected automatically based on flight size. Merges via PR/MR — never directly to main.
 
 ## Core Concepts
 
 - **Wave**: A group of issues whose dependencies are all satisfied by prior waves. Defined by `/prepwaves`.
-- **Flight**: A subset of a wave's issues that can execute in parallel without file-level conflicts. Determined at runtime by analyzing planning agent output.
-- **Planning Agent**: A lightweight, read-only agent that reads an issue and the codebase, then reports which files/functions it would modify — without writing any code.
-- **Execution Agent**: A full agent that implements the issue on an isolated worktree.
+- **Flight**: A subset of a wave's issues that can execute in parallel without file-level conflicts. Determined at runtime by analyzing planning agent output. A single-issue flight uses the serial fast-path.
+- **Planning Agent**: A lightweight, read-only agent that reads an issue and the codebase, then reports which files/functions it would modify — without writing any code. **Skipped for single-issue flights.**
+- **Execution Agent**: A full agent that implements the issue on an isolated worktree (parallel) or directly in the current session (serial).
 
-Flow: `Pre-Flight Checks → Planning Phase → Flight 1 (execute + merge) → Re-Validate → Flight 2 (execute + merge) → ... → Drift Check → Wave Complete`
+Flow (parallel): `Pre-Flight Checks → Planning Phase → Flight 1 (execute + merge) → Re-Validate → Flight 2 (execute + merge) → ... → Drift Check → Wave Complete`
+
+Flow (serial): `Pre-Flight Checks → Flight 1 (execute + merge) → Flight 2 (execute + merge) → ... → Drift Check → Wave Complete`
 
 ## Status Panel
 
@@ -74,6 +81,27 @@ If any check fails, **stop and report** — do not launch agents on a bad founda
 ---
 
 ## Step 2: Planning Phase — Target Analysis
+
+### Serial Fast-Path
+
+**If this wave contains only 1 issue, or the plan's topology is serial (each wave has 1 issue):** Skip this entire step. There are no file conflicts to detect when the wave has a single issue. Jump directly to Step 3 with a trivial flight plan — one flight per issue, sequential order. Still signal the transition:
+```bash
+wave-status planning
+```
+Then immediately build the flight plan (one issue per flight) and proceed:
+```bash
+# Build trivial serial flight plan
+cat > /tmp/flight-plan.json << 'FLIGHTS'
+[
+  {"issues": [<issue-1>], "status": "pending"},
+  {"issues": [<issue-2>], "status": "pending"},
+  ...
+]
+FLIGHTS
+wave-status flight-plan /tmp/flight-plan.json
+```
+
+### Parallel Path (2+ issues in at least one flight)
 
 Signal the transition to the planning phase:
 ```bash
@@ -193,6 +221,16 @@ Signal the flight is starting:
 ```bash
 wave-status flight <N>
 ```
+
+### Serial Flight (1 issue)
+
+If this flight has exactly 1 issue:
+1. **Skip worktree isolation** — execute directly on the feature branch (no parallel agents, no merge conflict risk)
+2. **Launch a single execution agent** (or execute directly in the current session if preferred)
+3. The agent works on the feature branch created in Step 1, implements the issue, and reports back
+4. Proceed to the pre-commit checklist and merge flow below (same as parallel)
+
+### Parallel Flight (2+ issues)
 
 For the current flight, launch **execution agents** — one per issue, all in parallel on isolated worktrees.
 
@@ -416,6 +454,8 @@ For each approved agent:
 
 **This step runs before each flight after Flight 1.** Its purpose is to ensure that the previous flight's merged changes haven't invalidated the next flight's plans.
 
+**Serial fast-path:** When both the previous and next flights are single-issue, re-validation is still valuable (the previous issue may have changed files the next issue needs) but the re-validation agent is optional — the execution agent in Step 3 reads the codebase fresh anyway. Use judgment: if the previous flight's changes were small and localized, skip re-validation. If they were structural, run it.
+
 ### 4a: Identify Changed Files
 
 Determine which files were modified by the previous flight:
@@ -626,8 +666,8 @@ Do NOT let deferred items disappear into the void. Every deferral must be tracke
 - Sub-agents are SPEC EXECUTORS — they implement what the issue says, nothing more
 - If an agent needs to deviate from the spec, it escalates — it does NOT improvise
 - **Default to safe** — latency is always preferable to broken code or merge conflicts
-- **Flights exist to prevent merge conflicts** — the planning phase is cheap, conflict resolution is expensive
-- Worktrees provide isolation — agents cannot interfere with each other or with `main`
+- **Flights exist to prevent merge conflicts** — the planning phase is cheap, conflict resolution is expensive. For single-issue flights, conflicts are impossible — use the serial fast-path.
+- Worktrees provide isolation for parallel flights — agents cannot interfere with each other or with `main`. Serial flights skip worktree isolation since there's only one agent.
 - **NEVER merge directly to main** — always go through a PR/MR for audit trail and CI
 - NEVER skip the pre-commit checklist — it exists because compaction has caused skipped reviews before
 - NEVER commit without user approval — even if the agent reports all green

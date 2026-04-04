@@ -172,15 +172,15 @@ These handle interaction with external systems: Discord, Slack, voice, and file 
 
 ### Advanced Skills
 
-These enable parallel execution of work across multiple agents -- the "wave pattern."
+The "wave pattern" provides lifecycle tracking, dashboard visibility, and audit trails for structured work -- parallel, serial, or mixed.
 
 | Skill | Purpose |
 |-------|---------|
-| `/assesswaves` | Quick assessment of whether work items are suitable for parallel execution. |
+| `/assesswaves` | Quick assessment of whether work items are suitable for wave-pattern execution (parallel, serial, or mixed). |
 | `/prepwaves` | Full planning: validate sub-issue specs, compute dependency waves, prepare for execution. |
-| `/nextwave` | Execute one wave at a time with isolated worktrees and flight-based conflict avoidance. |
+| `/nextwave` | Execute one wave at a time -- parallel flights use isolated worktrees, serial flights use a streamlined fast-path. |
 
-The wave skills form a pipeline: `/assesswaves` decides if parallelism is worth it, `/prepwaves` plans the execution order, and `/nextwave` executes one wave at a time. Each wave can contain multiple "flights" -- groups of issues that can safely run in parallel without file-level conflicts. See the individual [skill files](../skills/) for full documentation.
+The wave skills form a pipeline: `/assesswaves` determines the topology, `/prepwaves` plans the execution order, and `/nextwave` executes one wave at a time. Parallel flights use isolated worktrees with flight-based conflict avoidance. Serial flights (1 issue per flight) skip worktree isolation and conflict detection. See the individual [skill files](../skills/) for full documentation.
 
 ---
 

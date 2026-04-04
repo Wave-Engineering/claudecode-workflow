@@ -541,7 +541,13 @@ A structured workflow for domain modeling using event storming. Guides you throu
 
 ## Advanced Skills -- Wave Pattern
 
-These enable parallel execution of work across multiple agents. The wave pattern decomposes a large feature into independent sub-issues, groups them into dependency-ordered waves, and executes each wave with isolated worktrees and flight-based conflict avoidance.
+The wave pattern decomposes work into dependency-ordered waves and executes each wave with lifecycle tracking, dashboard visibility, and an audit trail. It supports three topologies:
+
+- **Parallel** — multiple agents execute independent issues concurrently on isolated worktrees with flight-based conflict avoidance
+- **Serial** — single-issue flights execute sequentially with a streamlined fast-path (no worktree isolation, no conflict detection)
+- **Mixed** — some waves are parallel, some are serial
+
+The wave pattern is valuable for **tracking and visibility**, not just parallelism. Even fully sequential work benefits from the dashboard, lifecycle management, and git audit trail.
 
 The pipeline is: `/assesswaves` (decide) -> `/prepwaves` (plan) -> `/nextwave` (execute).
 
@@ -549,12 +555,12 @@ The pipeline is: `/assesswaves` (decide) -> `/prepwaves` (plan) -> `/nextwave` (
 
 ### `/assesswaves` -- Quick Wave Assessment
 
-Quickly assesses whether a set of work items can benefit from parallel agent execution via the wave pattern. This is a decision tool -- it recommends a verdict but does not create issues, plans, or execute anything.
+Quickly assesses whether a set of work items can benefit from wave-pattern execution (parallel, serial, or mixed). This is a decision tool -- it recommends a topology and verdict but does not create issues, plans, or execute anything.
 
 **When to use it:**
-- Before `/prepwaves`, to decide whether wave-pattern execution is worth the overhead
-- When evaluating a new feature or epic for parallelism potential
-- After issues are created, to check for file-level conflicts
+- Before `/prepwaves`, to decide whether wave-pattern execution is worth it
+- When evaluating a new feature or epic — even fully sequential work can benefit from wave tracking
+- After issues are created, to check for file-level conflicts and determine optimal topology
 
 **Examples:**
 
@@ -564,17 +570,17 @@ Quickly assesses whether a set of work items can benefit from parallel agent exe
 /assesswaves                  # Describe work items in conversation
 ```
 
-It gathers work items, launches sub-agents to analyze file impact, builds a conflict matrix, and presents a verdict card: wave-able (yes/no/maybe), suggested waves, risk level, and a recommendation for next steps.
+It gathers work items, launches sub-agents to analyze file impact, builds a conflict matrix, and presents a verdict card: wave-able (yes/no/maybe), topology (parallel/serial/mixed), suggested waves, risk level, and a recommendation for next steps.
 
 ---
 
 ### `/prepwaves` -- Plan Execution Waves
 
-Analyzes a master issue and its sub-issues, validates they are ready for spec-driven agent execution, computes dependency-ordered waves, and prepares everything for `/nextwave`.
+Analyzes a master issue and its sub-issues, validates they are ready for spec-driven agent execution, computes dependency-ordered waves (parallel, serial, or mixed), and prepares everything for `/nextwave`.
 
 **When to use it:**
-- After `/assesswaves` confirms the work is wave-able
-- When you have a master issue (epic) with well-specified sub-issues and want to plan parallel execution
+- After `/assesswaves` confirms the work is wave-able (any topology)
+- When you have a master issue (epic) with well-specified sub-issues
 - Before running `/nextwave` for the first time on a set of issues
 
 **Examples:**
@@ -592,10 +598,10 @@ It validates the master issue structure, reads each sub-issue and checks for req
 
 ### `/nextwave` -- Execute One Wave
 
-Executes the next pending wave from a plan created by `/prepwaves`. Uses a two-phase approach: planning agents identify file targets, then issues are partitioned into conflict-free flights for safe parallel execution on isolated worktrees.
+Executes the next pending wave from a plan created by `/prepwaves`. Automatically selects the right execution mode: for multi-issue flights, planning agents detect file conflicts and agents execute on isolated worktrees. For single-issue flights (serial topology), the fast-path skips conflict detection and worktree isolation.
 
 **When to use it:**
-- After `/prepwaves` has created a wave plan
+- After `/prepwaves` has created a wave plan (any topology)
 - To execute the next wave in the sequence (one wave per invocation)
 - When the previous wave has been merged and you are ready to continue
 
@@ -605,9 +611,11 @@ Executes the next pending wave from a plan created by `/prepwaves`. Uses a two-p
 /nextwave
 ```
 
-No arguments. It identifies the next pending wave from the task list, runs pre-flight checks, launches planning agents to detect file conflicts, partitions into flights, and executes each flight with isolated worktrees. Between flights, it runs re-validation to ensure merged changes have not invalidated the next flight's plans. After all flights, it runs a design review of the next wave's specs.
+No arguments. It identifies the next pending wave from the task list and auto-detects topology. For parallel flights: launches planning agents, detects file conflicts, partitions into flights, executes on isolated worktrees. For serial flights: skips planning and worktree isolation, executes directly. Between flights, it runs re-validation. After all flights, it runs a drift check on the next wave's specs.
 
-**Flow:** Pre-Flight Checks -> Planning Phase -> Flight 1 (execute + merge) -> Re-Validate -> Flight 2 (execute + merge) -> ... -> Design Review -> Wave Complete.
+**Flow (parallel):** Pre-Flight Checks -> Planning Phase -> Flight 1 (execute + merge) -> Re-Validate -> Flight 2 -> ... -> Drift Check -> Wave Complete.
+
+**Flow (serial):** Pre-Flight Checks -> Flight 1 (execute + merge) -> Flight 2 (execute + merge) -> ... -> Drift Check -> Wave Complete.
 
 **Key detail:** One wave per invocation. The user controls the pace. Run `/cryo` between waves if compaction is imminent.
 
