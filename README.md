@@ -69,6 +69,7 @@ Key features:
 | nextwave | `/nextwave` | Execute parallel spec-driven sub-agents |
 | ping | `/ping` | Post to #ai-dev Slack channel |
 | pong | `/pong` | Read #ai-dev Slack channel |
+| prd | `/prd` | Interactive PRD creation with Deliverables Manifest and finalization checklist |
 | precheck | `/precheck` | Pre-commit gate — verify compliance, run code review, present checklist |
 | prepwaves | `/prepwaves` | Analyze issues and compute dependency waves |
 | review | `/review` | Code review on staged/branch changes |

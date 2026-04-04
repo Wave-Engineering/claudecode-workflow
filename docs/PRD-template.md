@@ -14,11 +14,11 @@
 3. [Requirements (EARS Format)](#3-requirements-ears-format)
 4. [Concept of Operations](#4-concept-of-operations)
 5. [Detailed Design](#5-detailed-design)
-   - [5.A Artifact Manifest](#5a-artifact-manifest)
+   - [5.A Deliverables Manifest](#5a-deliverables-manifest)
    - [5.B Installation & Deployment](#5b-installation--deployment)
 6. [Test Plan](#6-test-plan)
 7. [Definition of Done](#7-definition-of-done)
-   - [7.1 Documentation Kit](#71-documentation-kit)
+   - [7.2 PRD Finalization Checklist](#72-prd-finalization-checklist)
 8. [Phased Implementation Plan](#8-phased-implementation-plan)
 9. [Appendices](#9-appendices)
 
@@ -136,7 +136,7 @@ Not every project needs all of these. Include the flows that are necessary to gi
 - **Technology Choices** — table of components with chosen technology and rationale
 - **Deployment Architecture** — how the system is deployed and operated (if applicable)
 - **Security Model** — authentication, authorization, secrets handling (if applicable)
-- **Artifact Manifest** — every artifact the project produces, including test outputs (see 5.A below)
+- **Deliverables Manifest** — everything the project must produce: code artifacts, test outputs, documentation, and verification records (see 5.A below)
 - **Installation & Deployment** — how artifacts get from "built" to "running/available" (see 5.B below)
 
 Include diagrams where they add clarity. Prefer ASCII art or Mermaid for version-control-friendly diagrams.]]
@@ -147,18 +147,37 @@ _Sections 5.1–5.N are project-specific design topics — add as many as needed
 
 [[detailed design content]]
 
-### 5.A Artifact Manifest
+### 5.A Deliverables Manifest
 
-[[Every artifact this project produces — not just the primary deliverable, but test outputs, documentation, packages, and anything that leaves the build. This manifest is the single source of truth for "what does this project emit?" and directly informs CI/CD pipeline design and story acceptance criteria.
+[[The single source of truth for everything this project must produce — code artifacts, test outputs, documentation, and verification records. Every row needs a file path and a wave assignment before the PRD is finalized.
 
-Include test artifacts (JUnit XML, coverage reports, lint summaries) — these are first-class outputs that CI consumes.]]
+**Tier system:**
+- **Tier 1 (required):** Opt-OUT with rationale — must provide "N/A — because [reason]" to skip
+- **Tier 2 (conditional):** Added when triggers fire (documented in the trigger column)
+- **Tier 3 (opt-in):** Only added when explicitly requested — silent-skip is fine
 
-| ID | Artifact | Type | Build Command | Destination |
-|----|----------|------|---------------|-------------|
-| A-01 | [[e.g., `dist/my-tool`]] | [[binary / package / report / doc]] | [[e.g., `./scripts/ci/build.sh`]] | [[e.g., `~/.local/bin/`, PyPI, S3, GitLab Package Registry]] |
-| A-02 | [[e.g., `reports/junit.xml`]] | test report | [[e.g., `pytest --junitxml=reports/junit.xml`]] | [[e.g., CI artifact upload, GitLab test report parser]] |
-| A-03 | [[e.g., `reports/coverage.xml`]] | coverage report | [[e.g., `pytest --cov --cov-report=xml`]] | [[e.g., CI artifact upload, Codecov]] |
-| A-04 | [[e.g., `docs/api-reference.md`]] | documentation | [[e.g., `./scripts/ci/gen-docs.sh`]] | [[e.g., GitLab/GitHub Pages, S3 static site]] |
+The table below starts with Tier 1 defaults. The `/prd create` skill walks these with you during PRD generation. Tier 2 rows are added when their triggers fire. Tier 3 rows are added only on request.]]
+
+| ID | Deliverable | Category | Tier | File Path | Produced In | Status | Notes |
+|----|-------------|----------|------|-----------|-------------|--------|-------|
+| DM-01 | README.md | Docs | 1 | `README.md` | | required | Project overview, quickstart, contributing guide |
+| DM-02 | Unified build system | Code | 1 | `Makefile` | | required | CI and terminal use identical commands |
+| DM-03 | CI/CD pipeline | Code | 1 | | | required | Automated lint + test on every PR/MR |
+| DM-04 | Automated test suite | Test | 1 | | | required | Unit + integration tests |
+| DM-05 | Test results (JUnit XML) | Test | 1 | `reports/junit.xml` | | required | CI artifact upload |
+| DM-06 | Coverage report | Test | 1 | `reports/coverage.xml` | | required | CI artifact upload |
+| DM-07 | CHANGELOG | Docs | 1 | `CHANGELOG.md` | | required | Release-by-release summary |
+| DM-08 | VRTM | Trace | 1 | PRD Appendix V | | required | Requirement traceability matrix |
+| DM-09 | Audience-facing doc (ops runbook, user manual, API/CLI ref) | Docs | 1 | | | required | At least one must have a file path |
+
+[[**Tier 2 triggers** (add rows when conditions are met):
+- **Manual test procedures** → when MV-XX items exist in Section 6.4
+- **Architecture doc** → when >2 interacting components
+- **Deployment verification procedures** → when project deploys infrastructure
+- **Environment prerequisites doc** → when project has host/platform requirements]]
+
+[[**Tier 3 examples** (add only when requested):
+- Sequence diagrams, data flow diagrams, threat model, performance benchmarks]]
 
 ### 5.B Installation & Deployment
 
@@ -255,30 +274,21 @@ After all phases are complete, the VRTM in Section 9 provides the formal proof t
 
 - [ ] All Phase DoD checklists are satisfied
 - [ ] All Test Plan items (Section 6) executed and passed
-- [ ] All Documentation Kit items delivered (Section 7.1)
-- [ ] All artifacts from the Artifact Manifest (Section 5.A) build and install successfully
+- [ ] All deliverables from the Deliverables Manifest (Section 5.A) produced and verified
 - [ ] [[cross-cutting condition — annotate with requirement IDs, e.g., [R-01, R-05] ]]
 - [ ] [[cross-cutting condition [R-XX] ]]
 
-### 7.1 Documentation Kit
+### 7.2 PRD Finalization Checklist
 
-[[Define the complete set of documentation artifacts the project must deliver. This is not "nice to have" — these are tracked deliverables with owners and deadlines (by phase). Each document should have a story in the implementation plan that produces it.
+[[Go/no-go gate before wave planning. Run `/prd finalize` to verify mechanically.]]
 
-Common documentation artifacts to consider:
-- **README** — project overview, quickstart, how to contribute
-- **API Reference** — auto-generated or hand-written endpoint/function docs
-- **Architecture / Design Doc** — high-level system design for maintainers
-- **Runbook / Operations Guide** — how to deploy, monitor, troubleshoot (if applicable)
-- **User Guide** — how end users interact with the system (if applicable)
-- **CHANGELOG** — release-by-release summary of changes
-
-Not every project needs all of these. But every project needs to explicitly decide which ones it needs and plan stories to produce them.]]
-
-| Document | Audience | Format | Produced In | Notes |
-|----------|----------|--------|-------------|-------|
-| [[e.g., README.md]] | [[e.g., developers, contributors]] | [[e.g., Markdown in repo root]] | [[e.g., Phase 1]] | [[e.g., must include quickstart and install instructions]] |
-| [[e.g., API Reference]] | [[e.g., integrators]] | [[e.g., auto-generated from docstrings]] | [[e.g., Phase 2]] | [[e.g., published to GitHub Pages]] |
-| [[e.g., Runbook]] | [[e.g., operators]] | [[e.g., Markdown in docs/]] | [[e.g., Phase 3]] | [[e.g., covers deploy, rollback, alerting]] |
+- [ ] Every Tier 1 row in the Deliverables Manifest (5.A) has a file path or "N/A — because [reason]"
+- [ ] Every Tier 2 trigger that fires has a corresponding row in the Deliverables Manifest
+- [ ] Every Deliverables Manifest row has a "Produced In" wave assignment
+- [ ] Every MV-XX in Section 6.4 has a procedure document in the Deliverables Manifest
+- [ ] No deliverable is referenced only as a verb without a corresponding noun (file path)
+- [ ] At least one audience-facing doc (DM-09) has a file path assigned
+- [ ] Section 7 Definition of Done references the Deliverables Manifest (not separate Artifact Manifest + Documentation Kit)
 
 ---
 
@@ -302,11 +312,11 @@ Every project needs certain infrastructure before feature work begins. Wave 1 sh
 
 - [ ] **Project scaffold** — dependency manifest (`pyproject.toml`, `package.json`, `pom.xml`, etc.), package/module structure, empty test directory
 - [ ] **CI/CD pipeline** — implement the pipeline defined in Section 5.B. Automated lint + test on every PR/MR. Keep workflow definitions thin (orchestration only) with logic in scripts.
-- [ ] **Artifact build & install** — implement the build commands and installation procedures from the Artifact Manifest (Section 5.A) and Installation & Deployment (Section 5.B)
+- [ ] **Artifact build & install** — implement the build commands and installation procedures from the Deliverables Manifest (Section 5.A) and Installation & Deployment (Section 5.B)
 - [ ] **Linting and formatting** — configured and enforced in CI from the first commit
-- [ ] **Test runner** — configured and passing (even if the only test is a smoke/import test). Test artifact outputs (JUnit XML, coverage) wired to CI as defined in the Artifact Manifest (Section 5.A).
+- [ ] **Test runner** — configured and passing (even if the only test is a smoke/import test). Test artifact outputs (JUnit XML, coverage) wired to CI as defined in the Deliverables Manifest (Section 5.A).
 - [ ] **Makefile or task runner** — standard targets (`lint`, `test`, `ci`) so humans and agents use the same commands
-- [ ] **Initial documentation** — README and any Phase 1 items from the Documentation Kit (Section 7.1)
+- [ ] **Initial documentation** — README and any Phase 1 items from the Deliverables Manifest (Section 5.A)
 
 If any of these are missing from Wave 1, add a story. CI/CD in particular is easy to forget and painful to retrofit — every PR from Wave 2 onward should be validated automatically.
 

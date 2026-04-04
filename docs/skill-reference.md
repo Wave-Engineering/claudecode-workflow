@@ -539,6 +539,40 @@ A structured workflow for domain modeling using event storming. Guides you throu
 
 ---
 
+### `/prd` -- Interactive PRD Creation
+
+Creates Product Requirements Documents through an interactive, section-by-section workflow. Instead of generating a PRD in one shot, it walks each section collaboratively -- drafting, presenting, and waiting for feedback before moving on. Manages a unified Deliverables Manifest (Tier 1 required defaults, Tier 2 conditional triggers, Tier 3 opt-in) and runs a mechanical finalization checklist.
+
+**When to use it:**
+- After `/ddd accept` produces a domain model and you need to create a PRD from it
+- When starting a new project and need a structured PRD from a concept doc or verbal description
+- When you have an existing PRD and want to verify it meets completeness requirements
+
+**Examples:**
+
+```
+/prd create       # Start interactive PRD generation
+/prd finalize     # Run the finalization checklist on an existing PRD
+/prd              # Show help
+```
+
+**The pipeline:** `/ddd accept` (domain model) or concept doc or verbal description → `/prd create` (interactive PRD generation → `docs/<project>-PRD.md`) → `/prd finalize` (verify completeness) → `/prepwaves` (plan execution waves).
+
+**`/prd create` flow:**
+1. Determine input source (DDD domain model, external doc, or verbal description)
+2. Walk each PRD section (1-9) interactively -- draft, present, get feedback, iterate
+3. After Section 5: walk Tier 1 Deliverables Manifest defaults, confirm or N/A each row
+4. Scan for Tier 2 triggers, add conditional rows
+5. After Section 8: verify every manifest row has a wave assignment
+6. Write the PRD file
+
+**`/prd finalize` flow:**
+Run the Section 7.2 Finalization Checklist mechanically against an existing PRD. Reports pass/fail per item (Tier 1 file paths, Tier 2 triggers, wave assignments, MV-XX coverage, verb-only deliverables, audience-facing docs, DoD references). Summary: "X/7 checks passed. PRD is ready / not ready for approval."
+
+**Key detail:** Tier 1 deliverables are opt-OUT (must provide "N/A -- because [reason]" to skip). The Deliverables Manifest (Section 5.A) is the single source of truth for all project outputs -- there is no separate Artifact Manifest or Documentation Kit.
+
+---
+
 ## Advanced Skills -- Wave Pattern
 
 The wave pattern decomposes work into dependency-ordered waves and executes each wave with lifecycle tracking, dashboard visibility, and an audit trail. It supports three topologies:
