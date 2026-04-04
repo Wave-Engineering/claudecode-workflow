@@ -83,7 +83,7 @@ for resuming *this specific task* → Tier 2 (plan file).
 
 **Tier 1 facts (decisions, lessons, architecture) go to memory immediately.**
 The graduation heuristic does NOT apply to these — they are durable by nature
-and must survive `/clear`.
+and must survive compaction.
 
 For **ambiguous facts** that might be Tier 1 or Tier 2: keep them in the plan
 file on the first session. If the same fact survives into a second cryo and is
@@ -117,9 +117,9 @@ type: project  # or reference for lessons/gotchas
 
 ### Why This Matters
 
-Memory files survive `/clear` and compaction. They load automatically into every
-future session's system prompt at zero tool-call cost. Durable knowledge written
-here is never lost — even if the plan file deploy fails or `/clear` fires early.
+Memory files survive compaction. They load automatically into every future
+session's system prompt at zero tool-call cost. Durable knowledge written here
+is never lost — even if the plan file deploy fails or compaction fires early.
 
 ## Step 2: Curate the Plan File
 
