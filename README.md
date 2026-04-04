@@ -91,6 +91,7 @@ Key features:
 | `statusline-command.sh` | `jq`, `git` | Custom status line: git branch, dirty state, context window remaining, model |
 | `cc-inspector` | `python3`, `mitmproxy` | Context window inspector — proxy + Flask UI for API payload capture |
 | `discord-lock` | `flock`, `jq` | Advisory lock for serializing Discord channel writes across agents |
+| `campaign-status` | `python3` | SDLC campaign lifecycle CLI — stage tracking, gates, deferrals, and dashboard |
 | `generate-status-panel` | `python3` | Generate HTML status panel for wave progress |
 | `worktree-manager` | `git` | Manage isolated worktrees for parallel agent execution |
 

@@ -42,18 +42,43 @@ def get_project_root() -> Path:
 
 
 def status_dir(root: Path) -> Path:
-    """Return the path to ``<root>/.claude/status/``."""
+    """Return the wave status directory path.
+
+    Prefers ``<root>/.sdlc/waves/`` if the ``.sdlc/`` directory exists,
+    otherwise falls back to ``<root>/.claude/status/`` for backward
+    compatibility.  Uses the same predicate (``.sdlc/`` existence) as
+    ``html_path()`` and ``ensure_status_dir()`` so all three functions
+    agree on which path family to use.
+    """
+    sdlc_dir = root / ".sdlc"
+    if sdlc_dir.exists():
+        return sdlc_dir / "waves"
     return root / ".claude" / "status"
 
 
 def html_path(root: Path) -> Path:
-    """Return the path to the generated HTML dashboard."""
+    """Return the path to the generated HTML dashboard.
+
+    If ``.sdlc/`` exists, writes to ``.sdlc/waves/dashboard.html``,
+    otherwise falls back to ``.status-panel.html``.
+    """
+    sdlc_dir = root / ".sdlc"
+    if sdlc_dir.exists():
+        return sdlc_dir / "waves" / "dashboard.html"
     return root / ".status-panel.html"
 
 
 def ensure_status_dir(root: Path) -> Path:
-    """Create ``.claude/status/`` if absent [R-35] and return its path."""
-    d = status_dir(root)
+    """Create the wave status directory if absent and return its path.
+
+    If ``.sdlc/`` exists, creates ``.sdlc/waves/``, otherwise creates
+    ``.claude/status/`` [R-35].
+    """
+    sdlc_dir = root / ".sdlc"
+    if sdlc_dir.exists():
+        d = sdlc_dir / "waves"
+    else:
+        d = root / ".claude" / "status"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
