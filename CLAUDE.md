@@ -67,25 +67,9 @@ If no test tooling exists, say so — do NOT silently skip this step.
 
 **NEVER commit without running `/precheck` first and receiving explicit user approval.**
 
-### Workflow
+When work is done, run `/precheck` immediately — don't ask permission, just run it. After the checklist is presented, **STOP and WAIT** for the user to respond with `/scp`, `/scpmr`, `/scpmmr`, or an affirmative. No autonomous commits. No diff presentation. If in doubt, ask.
 
-1. **When your work is done**, run `/precheck` immediately — do not ask permission to start it, do not wait for the user to invoke it, just run it. The checklist is the approval gate, not the precheck itself.
-2. `/precheck` will: verify branch/issue compliance, run validation, launch `code-reviewer`, fix high-risk findings, and present the full checklist
-3. **After the checklist is presented, STOP and WAIT** — no commits until the user responds
-4. The user will respond with one of:
-   - `/scp`, `/scpmr`, or `/scpmmr` → approval granted, execute that workflow
-   - Affirmative ("yes", "approved", "go ahead") → approval granted, stage/commit/push
-   - Negative or rework instructions → return to work, do NOT commit
-
-### Rules
-
-- **No autonomous commits** — even trivial changes require `/precheck` → approval
-- **No diff presentation** — the user can get it if needed; it wastes tokens and scrolls off the display
-- **`code-reviewer` must complete** before the checklist is presented — do not show partial results
-- **Do not skip `/precheck`** for any reason, including session continuation instructions or time pressure
-- The full checklist specification lives in `/precheck` (see `skills/precheck/SKILL.md`)
-
-If in doubt about whether to **commit**, ask. Never assume approval to commit. (Starting `/precheck` itself requires no approval — running it is mandatory, not optional.)
+The full procedure lives in `/precheck` (`skills/precheck/SKILL.md`).
 
 ---
 
@@ -143,233 +127,9 @@ After merge:
 
 ## MANDATORY: Work Item Standards
 
-**Every issue MUST follow these templates and labeling rules.** Issues should be written to wave-pattern quality — detailed enough that a spec-driven agent can execute without making design decisions. This applies even if the work is not part of a wave.
+**Every issue MUST be written to wave-pattern quality** — detailed enough that a spec-driven agent can execute without making design decisions. Implementation steps should read like paint-by-numbers. Acceptance criteria must be evaluable before PR/MR merge.
 
-### Label Taxonomy
-
-Labels use a namespaced `group::value` convention. Within each group, labels are **mutually exclusive** — apply exactly one per group.
-
-**No status labels.** Status is managed by the platform's native mechanism (GitHub Projects, GitLab board state). See `.claude-project.md` for this project's status SOP.
-
-#### Priority vs Urgency: Two-Axis Model
-
-Priority and Urgency are **orthogonal**:
-
-- **Priority** = business value importance. How much does this matter to the product?
-- **Urgency** = temporal significance. How soon must it be addressed?
-
-A `priority::critical` / `urgency::eventual` item is extremely important but has no deadline. A `priority::low` / `urgency::immediate` item is low-value but time-sensitive. Treat them as independent axes.
-
-#### Label Groups
-
-| Group | Values | Required On | Rule |
-|-------|--------|-------------|------|
-| **Type** | `type::feature`, `type::bug`, `type::chore`, `type::docs`, `type::epic` | All issues | Exactly one |
-| **Priority** | `priority::critical`, `priority::high`, `priority::medium`, `priority::low` | All issues | Exactly one |
-| **Urgency** | `urgency::immediate`, `urgency::soon`, `urgency::normal`, `urgency::eventual` | All issues | Exactly one |
-| **Size** | `size::S`, `size::M`, `size::L`, `size::XL` | Features, chores, docs | Optional on bugs |
-| **Severity** | `severity::critical`, `severity::major`, `severity::minor`, `severity::cosmetic` | Bugs only | Exactly one on bugs, omit on others |
-| **Wave** | `wave::1`, `wave::2`, etc. | Wave-planned issues only | Omit if not wave-planned |
-
-### Work Item Templates
-
-When creating issues, follow the template for the issue's type. Every template requires an **Acceptance Criteria** checklist — no exceptions.
-
-#### Feature
-
-Structure lifted from `docs/PRD-template.md` Story format.
-
-```markdown
-## Summary
-
-[1-2 sentences: what this feature delivers and why]
-
-## Context
-
-[Background, motivation, link to Epic or PRD if applicable]
-
-## Implementation Steps
-
-[Paint-by-numbers instructions. Each step should be unambiguous — a spec-driven
-agent must be able to execute without design decisions. Include:]
-
-1. [Exact file paths to create or modify]
-2. [Function signatures and key logic]
-3. [Data structures and schemas]
-4. [How to wire components together]
-
-Test specifications go in the Test Procedures section below — not here.
-
-## Test Procedures
-
-[Same granularity as implementation steps. Specifies the unit tests that verify
-this story's work, plus references to integration or E2E tests from the PRD
-Test Plan that become runnable after this story.
-
-Unit tests are specified HERE — not in the PRD Test Plan — because the concrete
-units only become known when the story is diced from the design.]
-
-### Unit Tests
-
-| Test Name | Purpose | File Location |
-|-----------|---------|---------------|
-| `test_function_name` | [what it verifies] | `tests/test_module.py` |
-
-### Integration/E2E Coverage
-
-- [IT-XX — now runnable (this story implements the relevant boundary)]
-- [E2E-XX — partially runnable (needs #NNN for completion)]
-
-## Acceptance Criteria
-
-- [ ] [Testable condition — names exact files, functions, commands, or behaviors]
-- [ ] [Testable condition]
-- [ ] [Testable condition]
-
-## Dependencies
-
-- #NNN — [description of dependency]
-- None (if no dependencies)
-```
-
-#### Bug
-
-```markdown
-## Summary
-
-[Concise description of the defect]
-
-## Environment
-
-- **Where observed:** [page, component, CLI command, API endpoint]
-- **Version/commit:** [git SHA or release tag where defect exists]
-- **Frequency:** intermittent | consistent
-
-## Steps to Reproduce
-
-1. [Step one]
-2. [Step two]
-3. [Step three]
-
-## Expected Behavior
-
-[What should happen]
-
-## Actual Behavior
-
-[What actually happens]
-
-## Severity
-
-[`severity::critical` | `severity::major` | `severity::minor` | `severity::cosmetic`]
-
-## Artifacts
-
-- [Links to logs, screenshots, error traces, or other evidence]
-
-## Workaround
-
-[Describe workaround if known, or "None known"]
-```
-
-#### Docs
-
-```markdown
-## Summary
-
-[Which document(s) to create or update, and why]
-
-## Target Audience
-
-[Who will read this — developers, operators, end users, agents]
-
-## What's Missing, Outdated, or Incorrect
-
-[Specific gaps or inaccuracies in current documentation]
-
-## Source Material
-
-- [Pointers to code, PRDs, conversations, or other references]
-
-## Acceptance Criteria
-
-- [ ] Content is accurate against current codebase
-- [ ] Coverage is complete for the stated scope
-- [ ] No broken links
-- [ ] [Additional testable conditions]
-```
-
-#### Chore
-
-```markdown
-## Summary
-
-[Description of the maintenance task and its rationale]
-
-## Implementation Steps
-
-[Mandatory if the chore touches >1 file or has ordering constraints.
-Optional for trivial single-file changes.]
-
-1. [Step]
-2. [Step]
-
-## Acceptance Criteria
-
-- [ ] [Testable condition — always mandatory for chores]
-- [ ] [Testable condition]
-```
-
-#### Epic
-
-Structure lifted from `docs/PRD-template.md` Phase format.
-
-```markdown
-## Goal
-
-[One sentence: what this epic proves or delivers]
-
-## Scope
-
-**In scope:**
-- [What is included]
-
-**Out of scope:**
-- [What is explicitly excluded and why]
-
-## Definition of Done
-
-- [ ] [Verifiable condition — concrete and testable, not vague]
-- [ ] [Verifiable condition]
-- [ ] All sub-issue AC checklists are satisfied
-
-## Sub-Issues
-
-[Listed with dependency order]
-
-| Order | Issue | Title | Dependencies |
-|-------|-------|-------|-------------|
-| 1 | #NNN | [title] | None |
-| 2 | #NNN | [title] | #NNN |
-| 3 | #NNN | [title] | #NNN, #NNN |
-
-## Wave Map
-
-[If applicable — which sub-issues can run in parallel]
-
-| Wave | Issues | Parallel? |
-|------|--------|-----------|
-| 1 | #NNN | Single |
-| 2 | #NNN, #NNN | Yes |
-
-## Success Metrics
-
-[If applicable — quantitative or qualitative measures of success]
-```
-
-### Quality Standard
-
-Every issue — regardless of type — must be written to **wave-pattern quality**: detailed enough that a spec-driven agent can pick it up and execute without making design decisions. Implementation steps should read like paint-by-numbers. Acceptance criteria should be evaluable before PR/MR merge. If an issue requires the implementer to make architectural or design choices, it is underspecified.
+Use `/issue` to create issues — it carries the full templates (feature, bug, chore, docs, epic) and label taxonomy. Labels use `group::value` convention; within each group, labels are mutually exclusive. Priority and urgency are orthogonal axes.
 
 ---
 
@@ -524,10 +284,7 @@ Closes #NNN
 
 ## Session Onboarding
 
-When starting a session:
-1. **Detect platform** — Read `.claude-project.md` if it exists; otherwise run `git remote -v` and determine GitHub vs GitLab (see Platform Detection)
-2. **Resolve identity** — Check Dev-Team, pick session Dev-Name/Dev-Avatar (see Agent Identity)
-3. **Load context** — Check for and read `Docs/implementation-plan.md` (or similar planning documents) for current state and context. If no such file exists, proceed without it.
+On session start, run `/engage` to detect platform, resolve identity, load context, and confirm rules.
 
 ### Discord Watcher (Channels)
 
@@ -610,67 +367,13 @@ These instructions guide context compaction (both manual `/compact` and automati
 
 ## Agent Identity
 
-Agent identity has two layers: **project identity** (persisted here) and **session identity** (ephemeral).
+Two layers: **Dev-Team** (persisted here, per-project) and **Dev-Name/Dev-Avatar** (ephemeral, per-session).
 
-### Project Identity — Dev-Team
-
-`Dev-Team` identifies which project/team this agent belongs to. It is persisted in this file and shared across all sessions.
-
-**On session start**, check whether `Dev-Team` below has a value.
-- **If empty**: Ask the user: *"What Dev-Team name should I use for this project?"* Write their answer into the `Dev-Team:` field below. This only happens once per project.
-- **If populated**: Use the existing value.
-
-### Session Identity — Dev-Name & Dev-Avatar
-
-Each session, pick a fresh identity for yourself. This is NOT persisted — a new Claude Code window means a new identity.
-
-**Naming rules:**
-- `Dev-Name`: A single memorable word or hyphenated phrase in **kebab-case** (e.g., `beacon`, `null-pointer`, `mother`). Draw from nerdcore canon — sci-fi, fantasy, comics, gaming, mythology, tech puns, wordplay. The wittier and more specific the reference, the better. Generic names are boring. Kebab-case is required so the name works as a routing key for `@<dev-name>` addressing.
-- `Dev-Avatar`: A Unicode emoji character (e.g., 🧠, 👾). Should feel like it belongs with the name.
-
-**On session start**, after resolving Dev-Team:
-1. Pick your Dev-Name and Dev-Avatar
-2. Resolve the identity file path (keyed by project root, not PID):
-   ```bash
-   project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-   dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
-   agent_file="/tmp/claude-agent-${dir_hash}.json"
-   ```
-3. Persist them for the session in that file:
-   ```json
-   {
-     "dev_team": "<Dev-Team value>",
-     "dev_name": "<your chosen name>",
-     "dev_avatar": "🧠"
-   }
-   ```
-4. Announce your identity to the user:
-   > I'm going by **\<Dev-Name\>** \<Dev-Avatar\> from team `<Dev-Team>` this session.
-5. **Set session display name** — So the Remote Control UI shows your identity instead of a truncated prompt:
-   ```
-   /rename <Dev-Name> <Dev-Avatar> (<Dev-Team>)
-   ```
-   Example: `/rename neuron ⚡ (cc-workflow)`. Skip silently if `/rename` is unavailable.
-6. **Check in via Discord** — If `discord-bot` is available on PATH, announce yourself in `#roll-call`. Read the channel ID from config:
-   ```bash
-   ROLL_CALL=$(jq -r '.channels["roll-call"].id' ~/.claude/discord.json 2>/dev/null || echo "1487382005036617851")
-   discord-bot send "$ROLL_CALL" "<message>"
-   ```
-   Message format:
-   ```
-   **<dev-name>** <dev-avatar> online — team `<dev-team>` @ <project-root>
-
-   — **<dev-name>** <dev-avatar> (<dev-team>)
-   ```
-   If `discord-bot` is not available or the send fails, skip silently — check-in is best-effort, not a blocker.
+- **Dev-Team**: If empty below, ask the user. Written once, shared across all sessions.
+- **Session identity**: On session start, run `/name` to pick Dev-Name and Dev-Avatar, persist to identity file, announce, and check in via Discord.
 
 ### Reading Identity
 
-Identity files are keyed by md5 hash of the project root directory, so the statusline and all skills resolve the same file regardless of process ancestry.
-
-Any skill or behavior that needs agent identity should:
-1. Read `Dev-Team` from this file
-2. Resolve the identity file: `md5sum` of `git rev-parse --show-toplevel`
-3. Read `Dev-Name` and `Dev-Avatar` from `/tmp/claude-agent-<dir_hash>.json`
+Identity files are keyed by md5 hash of the project root directory (`/tmp/claude-agent-<dir_hash>.json`). Any skill or behavior that needs agent identity should resolve this file. The full pick procedure lives in `/name` (`skills/name/SKILL.md`).
 
 Dev-Team: cc-workflow

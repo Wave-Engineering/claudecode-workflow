@@ -116,7 +116,19 @@ The user may also:
 
 ## Step 8: Apply
 
-Write the merged CLAUDE.md. The final file should contain:
+**Before writing**, back up the existing CLAUDE.md so the user can inspect or extract from it later:
+
+```bash
+PROJECT_NAME=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+SESSION_ID="${CLAUDE_SESSION_ID:-$(date +%Y%m%d-%H%M%S)}"
+BACKUP="/tmp/CLAUDE.md.bak.${PROJECT_NAME}.${SESSION_ID}"
+cp CLAUDE.md "$BACKUP"
+```
+
+Tell the user:
+> Backed up previous CLAUDE.md to `<backup path>`
+
+Then write the merged CLAUDE.md. The final file should contain:
 
 1. All sections from upstream, in upstream order, with updates applied
 2. All local-only sections, appended after the last upstream section (but before `Dev-Team:` if they were originally above it)
