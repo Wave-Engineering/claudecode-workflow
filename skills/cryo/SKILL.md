@@ -57,6 +57,70 @@ Before writing anything, gather:
 - Read the existing plan file (if any) to understand its current structure
 - Check TaskList for any active tasks
 
+## Step 1.5: Extract Durable Facts to Memory
+
+Before writing the plan file, identify any **durable knowledge** from this session
+that should persist across all future sessions — not just the next one.
+
+### Tier Classification
+
+| If the fact is... | Tier | Write to |
+|-------------------|------|----------|
+| A design decision with rationale | 1 — Durable | Memory (`type: project`, `decision_<topic>.md`) |
+| A lesson learned / technical gotcha | 1 — Durable | Memory (`type: reference`, `lesson_<topic>.md`) |
+| An architecture summary ("what was built") | 1 — Durable | Memory (`type: project`, `project_<component>.md`) |
+| A completed milestone / work item | 1 — Durable | Memory (update existing `project_upcoming_work.md`) |
+| Current codebase inventory (files/components that exist NOW) | 2 — Ephemeral | Plan file (Step 2) |
+| Current branch, uncommitted state, pending work | 2 — Ephemeral | Plan file (Step 2) |
+| Commits pushed, PR/MR URLs, CI status | 2 — Ephemeral | Plan file (Step 2) |
+| Validation results, next steps | 2 — Ephemeral | Plan file (Step 2) |
+
+**Decision rule:** Would this fact be useful to a future session working on a
+*different task* in the same project? If yes → Tier 1 (memory). If only useful
+for resuming *this specific task* → Tier 2 (plan file).
+
+### Graduation Heuristic
+
+**Tier 1 facts (decisions, lessons, architecture) go to memory immediately.**
+The graduation heuristic does NOT apply to these — they are durable by nature
+and must survive `/clear`.
+
+For **ambiguous facts** that might be Tier 1 or Tier 2: keep them in the plan
+file on the first session. If the same fact survives into a second cryo and is
+still relevant, promote it to memory — it proved durable. This prevents
+transient facts from polluting memory while ensuring truly durable knowledge
+is never lost.
+
+### Writing Memory Files
+
+For each Tier 1 fact:
+
+1. **Check MEMORY.md** — does a memory file already cover this topic?
+2. **If exists and changed:** Read → Edit the file → update MEMORY.md entry if description changed
+3. **If exists and unchanged:** Skip (zero cost)
+4. **If new topic:** Write a new file with frontmatter, add entry to MEMORY.md
+
+Typical cryo produces **0-3 memory writes** — only what actually went dirty.
+
+Memory files go to the project memory directory (the same directory where
+MEMORY.md lives — visible in your system context). Use the standard frontmatter:
+
+```markdown
+---
+name: <descriptive name>
+description: <one-line summary for relevance matching>
+type: project  # or reference for lessons/gotchas
+---
+
+<content>
+```
+
+### Why This Matters
+
+Memory files survive `/clear` and compaction. They load automatically into every
+future session's system prompt at zero tool-call cost. Durable knowledge written
+here is never lost — even if the plan file deploy fails or `/clear` fires early.
+
 ## Step 2: Curate the Plan File
 
 Create the temp file first:
@@ -90,7 +154,7 @@ Structure it as:
 [Organized by component — what exists in the codebase NOW, not what's planned]
 
 ## Key Design Decisions
-[Numbered list of non-obvious choices and WHY they were made]
+[If promoted to memory in Step 1.5, write: "See memory files." Otherwise, list here.]
 
 ## Validation Results
 [What passed, what failed, what was verified]
@@ -102,7 +166,7 @@ Structure it as:
 [Paths, branches, cross-references]
 
 ## Lessons Learned
-[Anything that caused pain — CI quirks, API gotchas, workarounds]
+[If promoted to memory in Step 1.5, write: "See memory files." Otherwise, list here.]
 ```
 
 ### Writing Rules
