@@ -1,6 +1,6 @@
 ---
 name: ddd
-description: Domain-Driven Design facilitation — event storming, domain modeling, and PRD generation
+description: Domain-Driven Design facilitation — event storming, domain modeling, and concept handoff
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
@@ -11,13 +11,13 @@ description: Domain-Driven Design facilitation — event storming, domain modeli
 
 # Domain-Driven Design Workflow
 
-This skill provides a structured workflow for Domain-Driven Design using event storming. It guides you through discovering your domain model and translating it into an implementation-ready PRD.
+This skill provides a structured workflow for Domain-Driven Design using event storming. It guides you through discovering your domain model and preparing it for PRD creation via `/prd create`.
 
 ## Commands
 
 - **`/ddd begin`** — Start interactive event storming session (creates SKETCHBOOK.md)
 - **`/ddd draft`** — Formalize sketchbook into Domain Model document (creates DOMAIN-MODEL.md)
-- **`/ddd accept`** — Translate Domain Model to PRD (creates docs/[project]-PRD.md)
+- **`/ddd accept`** — Verify domain model and hand off to PRD creation
 - **`/ddd resume`** — Resume interrupted event storming session
 
 ## Usage
@@ -29,7 +29,7 @@ This skill provides a structured workflow for Domain-Driven Design using event s
 # Formalize raw notes into domain model
 /ddd draft
 
-# Generate PRD from domain model
+# Verify domain model and hand off to /prd create
 /ddd accept
 
 # Resume interrupted session
@@ -71,8 +71,8 @@ Progress is saved to `docs/SKETCHBOOK.md` after each stage.
 ### `/ddd draft` — Formalize Domain Model
 Reads `docs/SKETCHBOOK.md` and produces a formal `docs/DOMAIN-MODEL.md` following the Domain Model template. Validates completeness and adds traceability.
 
-### `/ddd accept` — Generate PRD
-Reads `docs/DOMAIN-MODEL.md` and generates `docs/[project]-PRD.md` using the DDD→PRD translation protocol. The PRD is implementation-ready with full traceability back to the domain model.
+### `/ddd accept` — Verify Domain Model and Hand Off to PRD Creation
+Verifies `docs/DOMAIN-MODEL.md` exists and is committed, prints a summary of domain model contents (aggregate/command/policy counts), and suggests running `/prd create` to generate the PRD.
 
 ### `/ddd resume` — Resume Session
 If your event storming session was interrupted (context compaction, restart), this command reads `docs/SKETCHBOOK.md` and picks up where you left off.
@@ -448,39 +448,38 @@ If the sketchbook exists, proceed. Read it and generate the formal domain model 
 <!-- END TEMPLATE: ddd-draft -->
 
 <!-- BEGIN TEMPLATE: ddd-accept -->
-## Translating Domain Model → PRD
+## Domain Model Handoff
 
-I'll apply the DDD→PRD translation protocol to generate an implementation-ready Product Requirements Document.
+I'll verify the domain model is ready and hand off to PRD creation.
 
-**Process:**
-1. Read `docs/DOMAIN-MODEL.md` (source of truth)
-2. Read `docs/PRD-template.md` (target structure)
-3. Read `docs/DDD-to-PRD-protocol.md` (translation rules)
-4. Apply 8-step translation:
-   - **Step 1:** Actors → Section 1.4 Personas
-   - **Step 2:** Aggregates → Section 5.1 Data Model
-   - **Step 3:** Policies → Section 3 Requirements (EARS format)
-   - **Step 4:** Commands → Section 4 Concept of Operations (flows)
-   - **Step 5:** Read Models → Section 5 API/UI + Section 6 Test Plan
-   - **Step 6:** Create Test Plan from policies and read models
-   - **Step 7:** Decompose into Stories (Section 8) from aggregates + policies
-   - **Step 8:** Add traceability — Domain Model as appendix, event catalog, VRTM skeleton
-5. Write `docs/[project]-PRD.md`
+**Step 1 — Verify `docs/DOMAIN-MODEL.md` exists:**
 
-**Before proceeding:** Check that the required files exist.
+Check whether `docs/DOMAIN-MODEL.md` exists and is non-empty.
 
-- Check `docs/DOMAIN-MODEL.md` — **required.** If missing, tell the user: "Run `/ddd draft` first."
-- Check `docs/PRD-template.md` — optional. If missing, use the built-in PRD structure.
-- Check `docs/DDD-to-PRD-protocol.md` — optional. If missing, use the built-in translation rules.
+- **If missing or empty:** Tell the user: "No domain model found at `docs/DOMAIN-MODEL.md`. Run `/ddd draft` first to formalize your sketchbook into a domain model."
+- **If present:** Continue to Step 2.
 
-If the domain model exists, ask the user for the project name:
+**Step 2 — Verify the file is committed and pushed:**
 
-**What should the PRD be named?** (e.g., "remotion-studio" → `docs/remotion-studio-PRD.md`)
+Run `git status docs/DOMAIN-MODEL.md` and check for uncommitted changes.
 
-After the user provides the name:
-1. Translate the domain model
-2. Generate the PRD with full traceability
-3. Validate that every policy has a requirement, every requirement has verification
+- **If uncommitted changes exist:** Tell the user: "The domain model has uncommitted changes. Please commit and push `docs/DOMAIN-MODEL.md` before accepting."
+- **If clean:** Continue to Step 3.
 
-**Commitment moment:** Once this PRD is generated, the Domain Model becomes the canonical source. Future changes should update the Domain Model and re-run `/ddd accept` to regenerate the PRD.
+**Step 3 — Present a domain model summary:**
+
+Read `docs/DOMAIN-MODEL.md` and count:
+- Number of **Aggregates** (look for aggregate table rows or `| **` patterns in the Aggregates section)
+- Number of **Commands** (look for `C-NN` entries or command table rows)
+- Number of **Policies** (look for `P-NN` entries or policy table rows)
+
+Present:
+
+> **Domain model ready.** N aggregates, M commands, P policies.
+
+**Step 4 — Suggest next step:**
+
+> Run `/prd create` to generate the PRD from this domain model.
+
+**Stop here.** Do not generate a PRD. Do not read PRD templates. Do not apply DDD→PRD translation. The `/prd create` command handles PRD generation.
 <!-- END TEMPLATE: ddd-accept -->

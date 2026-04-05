@@ -55,7 +55,7 @@ Key features:
 | ccfold | `/ccfold` | Merge upstream CLAUDE.md template updates into local project |
 | ccwork | `/ccwork` | Onboarding hub — tour the kit, run labs, configure integrations |
 | cryo | `/cryo` | Preserve session state before context compaction |
-| ddd | `/ddd` | Domain-Driven Design facilitation — event storming, domain modeling, PRD generation |
+| ddd | `/ddd` | Domain-Driven Design facilitation — event storming, domain modeling, concept handoff |
 | disc | `/disc` | Discord integration — check-in, send, read, list, resolve channels |
 | edit | `/edit` | Open file/URL in GUI editor |
 | engage | `/engage` | Load CLAUDE.md, confirm rules of engagement |
