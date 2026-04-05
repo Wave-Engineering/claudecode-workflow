@@ -93,6 +93,7 @@ Key features:
 | `cc-inspector` | `python3`, `mitmproxy` | Context window inspector — proxy + Flask UI for API payload capture |
 | `discord-lock` | `flock`, `jq` | Advisory lock for serializing Discord channel writes across agents |
 | `campaign-status` | `python3` | SDLC campaign lifecycle CLI — stage tracking, gates, deferrals, and dashboard |
+| `sdlc-dashboard` | browser | Org-wide SDLC dashboard viewer — static Pages site with live state polling |
 | `generate-status-panel` | `python3` | Generate HTML status panel for wave progress |
 | `worktree-manager` | `git` | Manage isolated worktrees for parallel agent execution |
 
