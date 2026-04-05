@@ -541,22 +541,26 @@ A structured workflow for domain modeling using event storming. Guides you throu
 
 ### `/prd` -- Interactive PRD Creation
 
-Creates Product Requirements Documents through an interactive, section-by-section workflow. Instead of generating a PRD in one shot, it walks each section collaboratively -- drafting, presenting, and waiting for feedback before moving on. Manages a unified Deliverables Manifest (Tier 1 required defaults, Tier 2 conditional triggers, Tier 3 opt-in) and runs a mechanical finalization checklist.
+Creates Product Requirements Documents through an interactive, section-by-section workflow. Instead of generating a PRD in one shot, it walks each section collaboratively -- drafting, presenting, and waiting for feedback before moving on. Manages a unified Deliverables Manifest (Tier 1 required defaults, Tier 2 conditional triggers, Tier 3 opt-in) and runs a mechanical finalization checklist. Includes an approval gate and backlog population (upshift) for the full concept-to-execution pipeline.
 
 **When to use it:**
 - After `/ddd accept` produces a domain model and you need to create a PRD from it
 - When starting a new project and need a structured PRD from a concept doc or verbal description
 - When you have an existing PRD and want to verify it meets completeness requirements
+- When a finalized PRD needs stakeholder approval before execution
+- When an approved PRD needs to be broken into trackable backlog issues
 
 **Examples:**
 
 ```
 /prd create       # Start interactive PRD generation
 /prd finalize     # Run the finalization checklist on an existing PRD
+/prd approve      # Approval gate — finalize, summarize, and record approval
+/prd upshift      # Backlog population — create issues from approved PRD
 /prd              # Show help
 ```
 
-**The pipeline:** `/ddd accept` (domain model) or concept doc or verbal description → `/prd create` (interactive PRD generation → `docs/<project>-PRD.md`) → `/prd finalize` (verify completeness) → `/prepwaves` (plan execution waves).
+**The pipeline:** `/ddd accept` (domain model) or concept doc or verbal description → `/prd create` (interactive PRD generation → `docs/<project>-PRD.md`) → `/prd finalize` (verify completeness) → `/prd approve` (human approval gate) → `/prd upshift` (backlog population) → `/prepwaves` (plan execution waves).
 
 **`/prd create` flow:**
 1. Determine input source (DDD domain model, external doc, or verbal description)
@@ -568,6 +572,22 @@ Creates Product Requirements Documents through an interactive, section-by-sectio
 
 **`/prd finalize` flow:**
 Run the Section 7.2 Finalization Checklist mechanically against an existing PRD. Reports pass/fail per item (Tier 1 file paths, Tier 2 triggers, wave assignments, MV-XX coverage, verb-only deliverables, audience-facing docs, DoD references). Summary: "X/7 checks passed. PRD is ready / not ready for approval."
+
+**`/prd approve` flow:**
+1. Run the finalization checklist automatically (rejects if any checks fail)
+2. Present a PRD summary: section count, story count, wave count, deliverable count
+3. Hard stop: "Approve this PRD? (yes/no)" -- waits for human response
+4. On approval: records approval timestamp, approver, and finalization score in PRD metadata
+5. On rejection: lists failing items, suggests fixes, stops
+
+**`/prd upshift` flow:**
+1. Verify PRD has approval metadata (`approved: true`)
+2. Parse Section 8 (Phased Implementation Plan) for phases, waves, and stories
+3. Create one epic issue per phase with Phase DoD as acceptance criteria
+4. Create one story issue per story with implementation steps, test procedures, and AC from PRD
+5. Create wave master issues linking constituent story issues
+6. Report summary: "Created N epics, M stories, P wave master issues"
+7. Backfill issue numbers into the PRD (e.g., `### Phase 1: Foundation (#NNN)`)
 
 **Key detail:** Tier 1 deliverables are opt-OUT (must provide "N/A -- because [reason]" to skip). The Deliverables Manifest (Section 5.A) is the single source of truth for all project outputs -- there is no separate Artifact Manifest or Documentation Kit.
 

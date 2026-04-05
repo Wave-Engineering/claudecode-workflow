@@ -1,6 +1,6 @@
 ---
 name: prd
-description: Interactive PRD creation with Deliverables Manifest and finalization checklist
+description: Interactive PRD creation with Deliverables Manifest, finalization checklist, approval gate, and backlog population
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
@@ -24,6 +24,8 @@ Before proceeding, detect the platform:
 
 - **`/prd create`** — Interactive PRD generation (walk each section, build Deliverables Manifest)
 - **`/prd finalize`** — Mechanical finalization checklist (verify PRD completeness)
+- **`/prd approve`** — Approval gate (run finalization, present summary, record approval)
+- **`/prd upshift`** — Backlog population (create epics, stories, and wave master issues from approved PRD)
 
 ## Usage
 
@@ -33,6 +35,12 @@ Before proceeding, detect the platform:
 
 # Run the finalization checklist on an existing PRD
 /prd finalize
+
+# Approve a finalized PRD (human gate)
+/prd approve
+
+# Create backlog issues from an approved PRD
+/prd upshift
 
 # Show help
 /prd
@@ -44,6 +52,10 @@ Before proceeding, detect the platform:
   {{> prd-create}}
 {{else if (eq args "finalize")}}
   {{> prd-finalize}}
+{{else if (eq args "approve")}}
+  {{> prd-approve}}
+{{else if (eq args "upshift")}}
+  {{> prd-upshift}}
 {{else}}
   {{> prd-help}}
 {{/if}}
@@ -60,6 +72,16 @@ Walk each PRD section collaboratively. I'll generate a draft for each section, p
 
 ### `/prd finalize` — Finalization Checklist
 Run the Section 7.2 finalization checklist mechanically against an existing PRD. Reports pass/fail per item with explanation.
+
+### `/prd approve` — Approval Gate
+Run the finalization checklist, present a PRD summary (section count, story count, wave count, deliverable count), and hard-stop for human approval. On approval, records approval metadata in the PRD. On rejection, lists failing items with suggested fixes.
+
+**Prerequisite:** A finalized PRD that passes all checklist items.
+
+### `/prd upshift` — Backlog Population
+Create backlog issues from an approved PRD's Section 8 (Phased Implementation Plan). Creates epic issues per phase, story issues with full acceptance criteria, and wave master issues linking constituent stories. Backfills issue numbers into the PRD.
+
+**Prerequisite:** An approved PRD (must have approval metadata from `/prd approve`).
 
 **Which command would you like to run?**
 <!-- END TEMPLATE: prd-help -->
@@ -350,6 +372,228 @@ If all checks pass:
 - "PRD is ready for approval. Next step: get stakeholder sign-off, then run `/prepwaves` to plan execution."
 
 <!-- END TEMPLATE: prd-finalize -->
+
+<!-- BEGIN TEMPLATE: prd-approve -->
+## PRD Approval Gate
+
+This is the gate between PRD creation and backlog population. No issues get created until the PRD is explicitly approved by a human.
+
+### Step 1: Locate the PRD
+
+Check for the PRD file:
+1. If the user provided a path, use it
+2. Otherwise, look for `docs/*-PRD.md` files
+3. If multiple PRDs exist, ask the user which one to approve
+4. If no PRD exists, tell the user: "No PRD found. Run `/prd create` first."
+
+### Step 2: Run Finalization Checklist
+
+Run the `/prd finalize` checklist automatically against the PRD. This is the same mechanical checklist from the finalize subcommand.
+
+1. Execute all 7 finalization checks
+2. Collect the results
+
+**If any checks fail:**
+- Present the finalization report with failures highlighted
+- List each failing item with a specific remediation suggestion
+- Tell the user: "PRD has N failing checks. Fix these issues and run `/prd approve` again."
+- **Stop here.** Do not proceed to approval.
+
+### Step 3: Present PRD Summary
+
+If all finalization checks pass, present a PRD summary to the user:
+
+```
+## PRD Approval Summary
+
+| Metric | Count |
+|--------|-------|
+| Sections | N |
+| Stories | N |
+| Waves | N |
+| Deliverables | N |
+| Finalization checks | 7/7 passed |
+```
+
+Count these by scanning the PRD:
+- **Sections**: Count top-level `## N.` headings
+- **Stories**: Count story entries in Section 8 (look for `#### Story` headings or numbered story items)
+- **Waves**: Count wave entries in Section 8 (look for `### Wave` headings or wave references)
+- **Deliverables**: Count active (non-N/A) rows in the Deliverables Manifest (Section 5.A)
+
+### Step 4: Hard Stop for Approval
+
+Present the approval prompt and **stop**. Do not proceed until the user responds.
+
+**Tell the user:**
+
+> PRD is ready for approval. All 7 finalization checks passed.
+>
+> **Approve this PRD? (yes/no)**
+
+**Wait for the user's response.** Do not take any further action until they respond.
+
+### Step 5: Process Response
+
+**On approval (user says yes/approve/confirmed/y):**
+
+1. Add an approval metadata section to the PRD. Insert it after the frontmatter (if any) or at the top of the document, before Section 1:
+
+```markdown
+<!-- PRD-APPROVAL
+approved: true
+approved_by: [user name or "stakeholder"]
+approved_at: [ISO 8601 timestamp, e.g. 2026-04-04T12:00:00Z]
+finalization_score: 7/7
+-->
+```
+
+2. Confirm to the user: "PRD approved. Approval metadata recorded. Next step: run `/prd upshift` to create backlog issues."
+
+**On rejection (user says no/reject/n):**
+
+1. Ask the user what needs to change
+2. List the finalization results as a starting point for discussion
+3. Tell the user: "Make the requested changes to the PRD, then run `/prd approve` again."
+4. **Stop here.**
+
+<!-- END TEMPLATE: prd-approve -->
+
+<!-- BEGIN TEMPLATE: prd-upshift -->
+## PRD Backlog Population (Upshift)
+
+Creates backlog issues from an approved PRD's Section 8 (Phased Implementation Plan). This is the bridge from PRD to execution.
+
+### Step 1: Locate and Verify the PRD
+
+Check for the PRD file:
+1. If the user provided a path, use it
+2. Otherwise, look for `docs/*-PRD.md` files
+3. If multiple PRDs exist, ask the user which one to upshift
+4. If no PRD exists, tell the user: "No PRD found. Run `/prd create` first."
+
+**Verify approval:**
+1. Search the PRD for the approval metadata comment block (`<!-- PRD-APPROVAL`)
+2. Check that `approved: true` is present in the metadata
+3. If no approval metadata is found or `approved` is not `true`:
+   - Tell the user: "This PRD has not been approved. Run `/prd approve` first."
+   - **Stop here.** Do not create any issues.
+
+### Step 2: Parse Section 8
+
+Read Section 8 (Phased Implementation Plan) and extract the structure:
+
+1. **Phases** — Each `### Phase N:` heading defines a phase (epic)
+2. **Waves** — Each `#### Wave N` or wave reference within a phase
+3. **Stories** — Each story entry within a wave (look for `##### Story:` headings, numbered story items, or bullet-pointed stories)
+
+For each story, extract:
+- **Title** — The story name/description
+- **Implementation steps** — Numbered steps or bullet points under the story
+- **Test procedures** — Any test-related items
+- **Acceptance criteria** — Checkboxes or criteria items
+- **Wave assignment** — Which wave the story belongs to
+
+### Step 3: Create Epic Issues (One per Phase)
+
+For each Phase in Section 8:
+
+1. Create an epic issue using the platform CLI:
+   ```
+   Title: Epic: Phase N — [Phase Name]
+   Body:
+   ## Phase Definition of Done
+   [Copy the Phase DoD from the PRD]
+
+   ## Stories
+   [List story titles that will be linked after creation]
+
+   Labels: type::epic
+   ```
+
+2. Record the created issue number
+
+### Step 4: Create Story Issues (One per Story)
+
+For each Story in Section 8:
+
+1. Create an issue using the platform CLI:
+   ```
+   Title: [Story title from PRD]
+   Body:
+   ## Summary
+   [Story description from PRD]
+
+   ## Implementation Steps
+   [Copy implementation steps from PRD]
+
+   ## Test Procedures
+   [Copy test procedures from PRD]
+
+   ## Acceptance Criteria
+   [Copy acceptance criteria from PRD as checkboxes]
+
+   ## Metadata
+   - **Wave:** [wave assignment]
+   - **Phase:** [parent phase]
+   - **Parent Epic:** #[epic issue number]
+
+   Labels: type::feature
+   ```
+
+2. Record the created issue number
+3. Link to the parent epic by editing the epic issue body to include `#NNN`
+
+### Step 5: Create Wave Master Issues
+
+For each Wave in Section 8:
+
+1. Collect all story issue numbers created for this wave
+2. Create a wave master issue:
+   ```
+   Title: Wave N Master — [brief description]
+   Body:
+   ## Constituent Stories
+   - [ ] #[story-1-number] — [story-1-title]
+   - [ ] #[story-2-number] — [story-2-title]
+   ...
+
+   ## Wave Metadata
+   - **Phase:** [parent phase]
+   - **Story count:** N
+
+   Labels: type::chore
+   ```
+
+3. Record the created issue number
+
+### Step 6: Report Summary
+
+Present a creation summary:
+
+```
+## Backlog Population Summary
+
+| Type | Count | Issue Numbers |
+|------|-------|---------------|
+| Epics (Phases) | N | #X, #Y |
+| Stories | N | #A, #B, #C, ... |
+| Wave Masters | N | #P, #Q |
+| **Total issues created** | **N** | |
+```
+
+### Step 7: Backfill Issue Numbers into PRD
+
+Update the PRD file to include the created issue numbers:
+
+1. For each Phase heading, append the epic issue number: `### Phase 1: Foundation (#NNN)`
+2. For each Story, append the story issue number
+3. For each Wave reference, append the wave master issue number
+4. Write the updated PRD back to disk
+
+Confirm to the user: "Backlog populated. N issues created. PRD updated with issue references. Run `/prepwaves` to plan execution."
+
+<!-- END TEMPLATE: prd-upshift -->
 
 ---
 
