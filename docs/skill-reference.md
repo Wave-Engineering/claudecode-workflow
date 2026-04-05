@@ -671,6 +671,7 @@ A standalone CLI tool (Python zipapp) for tracking project progress through SDLC
 | `stage-complete <stage>` | Mark stage as complete (gate passed) |
 | `defer <item> --reason <text>` | Defer a deliverable or work item with rationale |
 | `show` | Print current campaign state to terminal (read-only) |
+| `dashboard-url [--branch <branch>]` | Print the SDLC dashboard viewer URL for this repo |
 
 **Stage progression:** concept -> prd -> backlog -> implementation -> dod. Each stage must be completed before the next can start. Concept, PRD, and DoD have review gates; backlog and implementation go directly from active to complete.
 
@@ -690,6 +691,38 @@ campaign-status show
 ### `wave-status` -- Wave Execution Lifecycle CLI
 
 A standalone CLI tool (Python zipapp) for tracking wave-pattern execution. See the wave pattern skills above for context on how waves work.
+
+---
+
+### `sdlc-dashboard-viewer` -- Org-Wide SDLC Dashboard
+
+A self-contained HTML+JS dashboard viewer deployed once per GitHub org via Pages. Opens in a browser and fetches campaign and wave state JSON from the repo's raw URL, renders the dashboard client-side, and polls for updates every 3-5 seconds. Zero per-project setup -- any project with a `.sdlc/` directory is immediately visible.
+
+**Usage:**
+
+Open in a browser with URL parameters:
+
+```
+https://<org>.github.io/sdlc-dashboard/?repo=<org>/<repo>&branch=<branch>
+```
+
+Or generate the URL from the CLI:
+
+```bash
+campaign-status dashboard-url
+campaign-status dashboard-url --branch feature/42-work
+```
+
+**Features:**
+
+- Campaign progress rail (5-stage pipeline visualization)
+- Wave/flight detail view during implementation
+- Auto-refresh: polls raw URLs every 3-5 seconds
+- Offline indicator: shows "stale" badge if fetch fails for >30 seconds
+- Private repo support: one-time PAT paste stored in localStorage
+- Responsive: works on mobile for quick status checks
+- Cyberpunk theme: consistent with wave-status panel aesthetic
+- Self-contained: no external dependencies, no build step
 
 ---
 

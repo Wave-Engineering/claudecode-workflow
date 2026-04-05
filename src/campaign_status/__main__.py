@@ -34,6 +34,64 @@ from campaign_status.state import (
 
 
 # ---------------------------------------------------------------------------
+# Git detection helpers
+# ---------------------------------------------------------------------------
+
+def _detect_org_repo(root: Path) -> str | None:
+    """Parse ``org/repo`` from the git remote origin URL.
+
+    Supports both SSH (``git@github.com:Org/Repo.git``) and HTTPS
+    (``https://github.com/Org/Repo.git``) formats.
+
+    Returns ``None`` if detection fails.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        url = result.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+    # SSH: git@github.com:Org/Repo.git
+    if url.startswith("git@"):
+        # "git@github.com:Org/Repo.git" -> "Org/Repo.git"
+        _, _, path_part = url.partition(":")
+        return path_part.removesuffix(".git") if path_part else None
+
+    # HTTPS: https://github.com/Org/Repo.git
+    if "://" in url:
+        # "https://github.com/Org/Repo.git" -> ["", "github.com", "Org", "Repo.git"]
+        parts = url.split("/")
+        if len(parts) >= 5:
+            org = parts[3]
+            repo = parts[4].removesuffix(".git")
+            return f"{org}/{repo}"
+
+    return None
+
+
+def _detect_branch(root: Path) -> str:
+    """Return the current git branch name, defaulting to ``main``."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        branch = result.stdout.strip()
+        return branch if branch else "main"
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "main"
+
+
+# ---------------------------------------------------------------------------
 # Dashboard regeneration helper
 # ---------------------------------------------------------------------------
 
@@ -142,12 +200,38 @@ def _cmd_show(args: argparse.Namespace) -> None:
     print("\n".join(lines))
 
 
+def _cmd_dashboard_url(args: argparse.Namespace) -> None:
+    """Handle ``dashboard-url`` -- print the SDLC dashboard viewer URL."""
+    root = get_project_root()
+
+    # Detect org/repo from git remote
+    org_repo = _detect_org_repo(root)
+    if org_repo is None:
+        print(
+            "Error: could not detect org/repo from git remote. "
+            "Ensure a remote named 'origin' is configured.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    org = org_repo.split("/")[0]
+
+    # Detect current branch
+    branch = args.branch
+    if branch is None:
+        branch = _detect_branch(root)
+
+    base_url = f"https://{org}.github.io/sdlc-dashboard/"
+    full_url = f"{base_url}?repo={org_repo}&branch={branch}"
+    print(full_url)
+
+
 # ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Construct the argparse parser with all 6 subcommands."""
+    """Construct the argparse parser with all 7 subcommands."""
     parser = argparse.ArgumentParser(
         prog="campaign-status",
         description="SDLC campaign lifecycle CLI -- stage tracking, gates, deferrals",
@@ -183,6 +267,18 @@ def _build_parser() -> argparse.ArgumentParser:
     # show
     p_sh = sub.add_parser("show", help="Print current campaign state (read-only)")
     p_sh.set_defaults(func=_cmd_show)
+
+    # dashboard-url
+    p_du = sub.add_parser(
+        "dashboard-url",
+        help="Print the SDLC dashboard viewer URL for this repo",
+    )
+    p_du.add_argument(
+        "--branch",
+        default=None,
+        help="Branch to view (default: current branch)",
+    )
+    p_du.set_defaults(func=_cmd_dashboard_url)
 
     return parser
 

@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SDLC Dashboard</title>
+  <style>
+    /* ---------------------------------------------------------------
+       Cyberpunk theme — consistent with wave-status panel aesthetic
+       --------------------------------------------------------------- */
+    :root {
+      --bg-primary: #0a0a1a;
+      --bg-secondary: #12122a;
+      --bg-card: #1a1a3e;
+      --bg-card-hover: #222255;
+      --border: #2a2a5a;
+      --text-primary: #e0e0ff;
+      --text-secondary: #8888bb;
+      --text-muted: #5555aa;
+      --accent-cyan: #00e5ff;
+      --accent-magenta: #ff00ff;
+      --accent-green: #39ff14;
+      --accent-yellow: #ffe600;
+      --accent-orange: #ff8c00;
+      --accent-red: #ff1744;
+      --stage-not-started: #333366;
+      --stage-active: #003388;
+      --stage-review: #664400;
+      --stage-complete: #005500;
+      --glow-cyan: 0 0 8px rgba(0, 229, 255, 0.3);
+      --glow-magenta: 0 0 8px rgba(255, 0, 255, 0.3);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Courier New', 'Fira Code', monospace;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+    }
+
+    /* Header */
+    .header {
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 1.5rem;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .header h1 {
+      font-size: 1.1rem;
+      color: var(--accent-cyan);
+      text-shadow: var(--glow-cyan);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+
+    .header .repo-info {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    .header .repo-info strong {
+      color: var(--accent-magenta);
+    }
+
+    .header .status-badge {
+      margin-left: auto;
+      font-size: 0.75rem;
+      padding: 0.25rem 0.6rem;
+      border-radius: 3px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .status-badge.live {
+      background: rgba(57, 255, 20, 0.15);
+      color: var(--accent-green);
+      border: 1px solid rgba(57, 255, 20, 0.3);
+    }
+
+    .status-badge.stale {
+      background: rgba(255, 23, 68, 0.15);
+      color: var(--accent-red);
+      border: 1px solid rgba(255, 23, 68, 0.3);
+      animation: pulse-stale 2s ease-in-out infinite;
+    }
+
+    .status-badge.loading {
+      background: rgba(255, 230, 0, 0.15);
+      color: var(--accent-yellow);
+      border: 1px solid rgba(255, 230, 0, 0.3);
+    }
+
+    @keyframes pulse-stale {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    /* Auth form */
+    .auth-form {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1.5rem;
+      margin: 1.5rem;
+      max-width: 600px;
+    }
+
+    .auth-form h2 {
+      font-size: 0.9rem;
+      color: var(--accent-yellow);
+      margin-bottom: 0.75rem;
+    }
+
+    .auth-form p {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      margin-bottom: 1rem;
+    }
+
+    .auth-form input {
+      width: 100%;
+      padding: 0.5rem;
+      background: var(--bg-primary);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 0.85rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .auth-form input:focus {
+      outline: none;
+      border-color: var(--accent-cyan);
+      box-shadow: var(--glow-cyan);
+    }
+
+    .auth-form button {
+      padding: 0.4rem 1rem;
+      background: var(--accent-cyan);
+      color: var(--bg-primary);
+      border: none;
+      border-radius: 3px;
+      font-family: inherit;
+      font-size: 0.8rem;
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    .auth-form button:hover { opacity: 0.85; }
+
+    .auth-form .clear-btn {
+      background: transparent;
+      color: var(--accent-red);
+      border: 1px solid var(--accent-red);
+      margin-left: 0.5rem;
+    }
+
+    /* Container */
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 1.5rem;
+    }
+
+    /* Campaign progress rail */
+    .progress-rail {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      margin-bottom: 2rem;
+      overflow-x: auto;
+      padding: 0.5rem 0;
+    }
+
+    .rail-stage {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      flex-shrink: 0;
+    }
+
+    .rail-node {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.5rem 0.75rem;
+      border-radius: 6px;
+      min-width: 90px;
+      text-align: center;
+      transition: background 0.3s;
+    }
+
+    .rail-node .icon { font-size: 1.3rem; }
+    .rail-node .label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .rail-node.not_started { background: var(--stage-not-started); color: var(--text-muted); }
+    .rail-node.active {
+      background: var(--stage-active);
+      color: var(--accent-cyan);
+      border: 1px solid rgba(0, 229, 255, 0.3);
+      box-shadow: var(--glow-cyan);
+    }
+    .rail-node.review {
+      background: var(--stage-review);
+      color: var(--accent-orange);
+      border: 1px solid rgba(255, 140, 0, 0.3);
+    }
+    .rail-node.complete {
+      background: var(--stage-complete);
+      color: var(--accent-green);
+    }
+
+    .rail-connector {
+      width: 30px;
+      height: 2px;
+      background: var(--border);
+      flex-shrink: 0;
+    }
+
+    .rail-connector.complete { background: var(--accent-green); }
+
+    /* Section headings */
+    .section-title {
+      font-size: 0.85rem;
+      color: var(--accent-cyan);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      margin-bottom: 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    /* Wave detail */
+    .wave-detail {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .wave-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.75rem;
+    }
+
+    .wave-header h3 {
+      font-size: 0.9rem;
+      color: var(--text-primary);
+    }
+
+    .wave-header .wave-meta {
+      font-size: 0.75rem;
+      color: var(--text-secondary);
+    }
+
+    .flight-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8rem;
+    }
+
+    .flight-table th {
+      text-align: left;
+      padding: 0.4rem 0.6rem;
+      color: var(--text-muted);
+      font-weight: normal;
+      text-transform: uppercase;
+      font-size: 0.7rem;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .flight-table td {
+      padding: 0.4rem 0.6rem;
+      border-bottom: 1px solid rgba(42, 42, 90, 0.5);
+    }
+
+    .flight-table tr:last-child td { border-bottom: none; }
+
+    .issue-status {
+      display: inline-block;
+      padding: 0.15rem 0.4rem;
+      border-radius: 3px;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+    }
+
+    .issue-status.merged {
+      background: rgba(57, 255, 20, 0.15);
+      color: var(--accent-green);
+    }
+
+    .issue-status.flying {
+      background: rgba(0, 229, 255, 0.15);
+      color: var(--accent-cyan);
+    }
+
+    .issue-status.queued {
+      background: rgba(85, 85, 170, 0.15);
+      color: var(--text-muted);
+    }
+
+    .issue-status.failed {
+      background: rgba(255, 23, 68, 0.15);
+      color: var(--accent-red);
+    }
+
+    /* Deliverables summary */
+    .summary-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .summary-stat {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+    }
+
+    .summary-stat strong {
+      color: var(--text-primary);
+    }
+
+    /* Footer */
+    .footer {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      padding-top: 1rem;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      padding: 3rem 1rem;
+      color: var(--text-muted);
+    }
+
+    .empty-state h2 {
+      font-size: 1rem;
+      color: var(--text-secondary);
+      margin-bottom: 0.75rem;
+    }
+
+    .empty-state p {
+      font-size: 0.85rem;
+      line-height: 1.6;
+    }
+
+    .empty-state code {
+      background: var(--bg-card);
+      padding: 0.15rem 0.4rem;
+      border-radius: 3px;
+      font-size: 0.8rem;
+    }
+
+    /* No wave data state */
+    .no-wave-data {
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      font-style: italic;
+      padding: 0.5rem 0;
+    }
+
+    /* Responsive */
+    @media (max-width: 600px) {
+      .header { flex-direction: column; align-items: flex-start; }
+      .header .status-badge { margin-left: 0; }
+      .container { padding: 1rem; }
+      .progress-rail { gap: 0; }
+      .rail-node { min-width: 65px; padding: 0.4rem 0.5rem; }
+      .rail-node .label { font-size: 0.6rem; }
+      .rail-connector { width: 15px; }
+      .summary-bar { flex-direction: column; gap: 0.5rem; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>SDLC Dashboard</h1>
+  <div class="repo-info" id="repo-info">
+    Loading...
+  </div>
+  <div class="status-badge loading" id="status-badge">Connecting</div>
+</div>
+
+<div class="container" id="main-container">
+  <div class="empty-state" id="empty-state">
+    <h2>No repository selected</h2>
+    <p>
+      Add URL parameters to select a repo:<br>
+      <code>?repo=org/repo-name&amp;branch=main</code>
+    </p>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // -------------------------------------------------------------------
+  // Configuration
+  // -------------------------------------------------------------------
+
+  var POLL_INTERVAL_MS = 4000;
+  var STALE_THRESHOLD_MS = 30000;
+  var RAW_BASE = "https://raw.githubusercontent.com";
+  var LS_TOKEN_KEY = "sdlc-dashboard-pat";
+
+  // -------------------------------------------------------------------
+  // State
+  // -------------------------------------------------------------------
+
+  var state = {
+    repo: null,          // "org/repo"
+    branch: "main",
+    campaignState: null,
+    campaignItems: null,
+    waveState: null,
+    waveFlights: null,
+    lastSuccessfulFetch: 0,
+    pollTimer: null,
+    fetchInProgress: false,
+    authRequired: false,
+    errorCount: 0
+  };
+
+  // -------------------------------------------------------------------
+  // URL parameter parsing
+  // -------------------------------------------------------------------
+
+  function getParams() {
+    var params = new URLSearchParams(window.location.search);
+    return {
+      repo: params.get("repo"),
+      branch: params.get("branch") || "main"
+    };
+  }
+
+  // -------------------------------------------------------------------
+  // Auth helpers
+  // -------------------------------------------------------------------
+
+  function getToken() {
+    try { return localStorage.getItem(LS_TOKEN_KEY) || ""; }
+    catch (e) { return ""; }
+  }
+
+  function setToken(token) {
+    try { localStorage.setItem(LS_TOKEN_KEY, token); }
+    catch (e) { /* localStorage unavailable */ }
+  }
+
+  function clearToken() {
+    try { localStorage.removeItem(LS_TOKEN_KEY); }
+    catch (e) { /* localStorage unavailable */ }
+  }
+
+  // -------------------------------------------------------------------
+  // Fetch helpers
+  // -------------------------------------------------------------------
+
+  function rawUrl(filePath) {
+    return RAW_BASE + "/" + state.repo + "/" + state.branch + "/" + filePath;
+  }
+
+  function fetchJson(filePath) {
+    var url = rawUrl(filePath);
+    var headers = {};
+    var token = getToken();
+    if (token) {
+      headers["Authorization"] = "token " + token;
+    }
+    return fetch(url, { headers: headers })
+      .then(function (res) {
+        if (res.status === 404) return null;
+        if (res.status === 401 || res.status === 403) {
+          state.authRequired = true;
+          return null;
+        }
+        if (!res.ok) return null;
+        state.authRequired = false;
+        return res.json();
+      })
+      .catch(function () { return null; });
+  }
+
+  // -------------------------------------------------------------------
+  // Data fetching
+  // -------------------------------------------------------------------
+
+  function fetchAllData() {
+    if (state.fetchInProgress || !state.repo) return;
+    state.fetchInProgress = true;
+
+    Promise.all([
+      fetchJson(".sdlc/campaign-state.json"),
+      fetchJson(".sdlc/campaign-items.json"),
+      fetchJson(".sdlc/waves/state.json"),
+      fetchJson(".sdlc/waves/flights.json")
+    ]).then(function (results) {
+      state.fetchInProgress = false;
+
+      var campaignState = results[0];
+      var campaignItems = results[1];
+      var waveState = results[2];
+      var waveFlights = results[3];
+
+      if (state.authRequired) {
+        renderAuthForm();
+        return;
+      }
+
+      if (campaignState !== null) {
+        state.campaignState = campaignState;
+        state.lastSuccessfulFetch = Date.now();
+        state.errorCount = 0;
+      } else {
+        state.errorCount++;
+      }
+
+      if (campaignItems !== null) {
+        state.campaignItems = campaignItems;
+      }
+
+      state.waveState = waveState;
+      state.waveFlights = waveFlights;
+
+      render();
+    }).catch(function () {
+      state.fetchInProgress = false;
+      state.errorCount++;
+      render();
+    });
+  }
+
+  // -------------------------------------------------------------------
+  // Rendering: status badge
+  // -------------------------------------------------------------------
+
+  function renderStatusBadge() {
+    var badge = document.getElementById("status-badge");
+    if (!badge) return;
+
+    var now = Date.now();
+    var timeSinceLast = now - state.lastSuccessfulFetch;
+
+    if (state.lastSuccessfulFetch === 0) {
+      badge.className = "status-badge loading";
+      badge.textContent = "Connecting";
+    } else if (timeSinceLast > STALE_THRESHOLD_MS) {
+      badge.className = "status-badge stale";
+      badge.textContent = "Stale (" + Math.round(timeSinceLast / 1000) + "s)";
+    } else {
+      badge.className = "status-badge live";
+      badge.textContent = "Live";
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Rendering: repo info
+  // -------------------------------------------------------------------
+
+  function renderRepoInfo() {
+    var el = document.getElementById("repo-info");
+    if (!el) return;
+    el.innerHTML = "<strong>" + escapeHtml(state.repo) + "</strong> &middot; branch: <strong>" + escapeHtml(state.branch) + "</strong>";
+  }
+
+  // -------------------------------------------------------------------
+  // Rendering: auth form
+  // -------------------------------------------------------------------
+
+  function renderAuthForm() {
+    var container = document.getElementById("main-container");
+    var existingToken = getToken();
+
+    container.innerHTML =
+      '<div class="auth-form">' +
+      '<h2>Authentication Required</h2>' +
+      '<p>This appears to be a private repository. Enter a GitHub Personal Access Token with <code>contents:read</code> scope. The token is stored in localStorage and never leaves your browser.</p>' +
+      '<input type="password" id="pat-input" placeholder="ghp_xxxxxxxxxxxx" value="' + escapeHtml(existingToken) + '">' +
+      '<button onclick="window.__sdlcSaveToken()">Save &amp; Retry</button>' +
+      '<button class="clear-btn" onclick="window.__sdlcClearToken()">Clear Token</button>' +
+      '</div>';
+  }
+
+  window.__sdlcSaveToken = function () {
+    var input = document.getElementById("pat-input");
+    if (input && input.value.trim()) {
+      setToken(input.value.trim());
+      state.authRequired = false;
+      state.errorCount = 0;
+      fetchAllData();
+    }
+  };
+
+  window.__sdlcClearToken = function () {
+    clearToken();
+    state.authRequired = false;
+    state.errorCount = 0;
+    fetchAllData();
+  };
+
+  // -------------------------------------------------------------------
+  // Rendering: progress rail
+  // -------------------------------------------------------------------
+
+  var STAGES = ["concept", "prd", "backlog", "implementation", "dod"];
+  var STAGE_LABELS = {
+    concept: "Concept",
+    prd: "PRD",
+    backlog: "Backlog",
+    implementation: "Impl",
+    dod: "DoD"
+  };
+
+  var STATUS_ICONS = {
+    not_started: "\u25CB",  // empty circle
+    active: "\u25CF",       // filled circle
+    review: "\u25D4",       // half circle
+    complete: "\u2714"      // checkmark
+  };
+
+  function renderProgressRail(stagesData) {
+    if (!stagesData) return "";
+
+    var html = '<div class="progress-rail">';
+    for (var i = 0; i < STAGES.length; i++) {
+      var stage = STAGES[i];
+      var status = stagesData[stage] || "not_started";
+      var icon = STATUS_ICONS[status] || STATUS_ICONS.not_started;
+      var label = STAGE_LABELS[stage] || stage;
+
+      html += '<div class="rail-stage">';
+      html += '<div class="rail-node ' + escapeHtml(status) + '">';
+      html += '<span class="icon">' + icon + '</span>';
+      html += '<span class="label">' + escapeHtml(label) + '</span>';
+      html += '</div>';
+
+      if (i < STAGES.length - 1) {
+        var connClass = status === "complete" ? "rail-connector complete" : "rail-connector";
+        html += '<div class="' + connClass + '"></div>';
+      }
+
+      html += '</div>';
+    }
+    html += '</div>';
+    return html;
+  }
+
+  // -------------------------------------------------------------------
+  // Rendering: wave/flight detail
+  // -------------------------------------------------------------------
+
+  function renderWaveDetail() {
+    var ws = state.waveState;
+    var wf = state.waveFlights;
+
+    if (!ws && !wf) {
+      return "";
+    }
+
+    var html = '<div class="section-title">Wave / Flight Detail</div>';
+
+    if (ws) {
+      var currentWave = ws.current_wave || ws.wave || "?";
+      var totalWaves = ws.total_waves || "?";
+      var currentFlight = ws.current_flight || ws.flight || "?";
+      var totalFlights = ws.total_flights || "?";
+
+      html += '<div class="wave-detail">';
+      html += '<div class="wave-header">';
+      html += '<h3>Wave ' + escapeHtml(String(currentWave)) + ' of ' + escapeHtml(String(totalWaves)) + '</h3>';
+      html += '<span class="wave-meta">Flight ' + escapeHtml(String(currentFlight)) + ' of ' + escapeHtml(String(totalFlights)) + '</span>';
+      html += '</div>';
+    } else {
+      html += '<div class="wave-detail">';
+      html += '<div class="wave-header"><h3>Waves</h3></div>';
+    }
+
+    if (wf && wf.length > 0) {
+      html += '<table class="flight-table">';
+      html += '<thead><tr><th>Issue</th><th>Flight</th><th>Status</th><th>PR/MR</th></tr></thead>';
+      html += '<tbody>';
+
+      for (var i = 0; i < wf.length; i++) {
+        var item = wf[i];
+        var issueNum = item.issue || item.number || "?";
+        var flight = item.flight || "?";
+        var itemStatus = item.status || "queued";
+        var pr = item.pr || item.mr || "\u2014";
+
+        html += '<tr>';
+        html += '<td>#' + escapeHtml(String(issueNum)) + '</td>';
+        html += '<td>' + escapeHtml(String(flight)) + '</td>';
+        html += '<td><span class="issue-status ' + escapeHtml(itemStatus) + '">' + escapeHtml(itemStatus) + '</span></td>';
+        html += '<td>' + escapeHtml(String(pr)) + '</td>';
+        html += '</tr>';
+      }
+
+      html += '</tbody></table>';
+    } else {
+      html += '<div class="no-wave-data">No flight data available.</div>';
+    }
+
+    html += '</div>';
+    return html;
+  }
+
+  // -------------------------------------------------------------------
+  // Rendering: deliverables summary
+  // -------------------------------------------------------------------
+
+  function renderSummaryBar() {
+    var items = state.campaignItems;
+    var cs = state.campaignState;
+    var html = '<div class="summary-bar">';
+
+    if (items) {
+      var deferrals = items.deferrals || [];
+      html += '<div class="summary-stat">Deferrals: <strong>' + deferrals.length + '</strong></div>';
+    }
+
+    if (cs && cs.stages) {
+      var completedCount = 0;
+      for (var i = 0; i < STAGES.length; i++) {
+        if (cs.stages[STAGES[i]] === "complete") completedCount++;
+      }
+      html += '<div class="summary-stat">Stages complete: <strong>' + completedCount + '/' + STAGES.length + '</strong></div>';
+    }
+
+    if (cs && cs.last_updated) {
+      html += '<div class="summary-stat">State updated: <strong>' + escapeHtml(cs.last_updated) + '</strong></div>';
+    }
+
+    html += '</div>';
+    return html;
+  }
+
+  // -------------------------------------------------------------------
+  // Rendering: main
+  // -------------------------------------------------------------------
+
+  function render() {
+    renderStatusBadge();
+
+    if (!state.repo) return;
+
+    renderRepoInfo();
+
+    var container = document.getElementById("main-container");
+    if (!container) return;
+
+    if (!state.campaignState) {
+      if (state.errorCount > 0 && state.lastSuccessfulFetch === 0) {
+        container.innerHTML =
+          '<div class="empty-state">' +
+          '<h2>No campaign data found</h2>' +
+          '<p>Could not fetch <code>.sdlc/campaign-state.json</code> from<br>' +
+          '<code>' + escapeHtml(state.repo) + '</code> on branch <code>' + escapeHtml(state.branch) + '</code>.</p>' +
+          '<p>Make sure the repository has been initialized with <code>campaign-status init</code>.</p>' +
+          '</div>';
+      }
+      return;
+    }
+
+    var html = "";
+
+    // Campaign progress rail
+    html += '<div class="section-title">Campaign Progress</div>';
+    html += renderProgressRail(state.campaignState.stages);
+
+    // Summary bar
+    html += renderSummaryBar();
+
+    // Wave/flight detail (only when implementation is active/review)
+    var implStatus = state.campaignState.stages ? state.campaignState.stages.implementation : null;
+    if (implStatus === "active" || implStatus === "review" || state.waveState || state.waveFlights) {
+      html += renderWaveDetail();
+    }
+
+    // Footer
+    var ago = state.lastSuccessfulFetch > 0
+      ? Math.round((Date.now() - state.lastSuccessfulFetch) / 1000) + "s ago"
+      : "never";
+
+    html += '<div class="footer">';
+    html += '<span>Last fetched: ' + ago + '</span>';
+    html += '<span>Polling every ' + (POLL_INTERVAL_MS / 1000) + 's</span>';
+    html += '</div>';
+
+    container.innerHTML = html;
+  }
+
+  // -------------------------------------------------------------------
+  // Utility
+  // -------------------------------------------------------------------
+
+  function escapeHtml(str) {
+    if (typeof str !== "string") str = String(str || "");
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  // -------------------------------------------------------------------
+  // Init
+  // -------------------------------------------------------------------
+
+  function init() {
+    var params = getParams();
+    if (!params.repo) {
+      document.title = "SDLC Dashboard";
+      return;
+    }
+
+    state.repo = params.repo;
+    state.branch = params.branch;
+
+    document.title = "SDLC — " + state.repo;
+
+    renderRepoInfo();
+    fetchAllData();
+
+    state.pollTimer = setInterval(function () {
+      fetchAllData();
+      renderStatusBadge();
+    }, POLL_INTERVAL_MS);
+  }
+
+  init();
+})();
+</script>
+
+</body>
+</html>
