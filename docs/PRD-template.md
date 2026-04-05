@@ -225,7 +225,13 @@ Open questions should be resolved before or during implementation. When resolved
 
 [[This section is written during PRD creation while the agent has full design context. It specifies integration and end-to-end verification — NOT unit tests. Unit tests are specified at story level (Section 8) once the implementation is diced into concrete units.
 
-Every test item is annotated with the requirement IDs it verifies. A single test can verify multiple requirements — use `[R-01, R-03, R-07]` when a test covers several. These annotations feed the VRTM (Section 9, Appendix V).]]
+Every test item is annotated with the requirement IDs it verifies. A single test can verify multiple requirements — use `[R-01, R-03, R-07]` when a test covers several. These annotations feed the VRTM (Section 9, Appendix V).
+
+**Test tier expectations:**
+- **Unit tests** (Section 8, story-level Test Procedures): always expected — every story includes them
+- **Integration tests** (Section 6.2): expected when the project has component boundaries or module interactions
+- **End-to-end tests** (Section 6.3): expected when the project has user-facing flows
+- **Manual verification** (Section 6.4): procedures must be both executed AND documented — execution alone without recorded evidence is insufficient]]
 
 ### 6.1 Test Strategy
 
@@ -313,10 +319,12 @@ Every project needs certain infrastructure before feature work begins. Wave 1 sh
 - [ ] **Project scaffold** — dependency manifest (`pyproject.toml`, `package.json`, `pom.xml`, etc.), package/module structure, empty test directory
 - [ ] **CI/CD pipeline** — implement the pipeline defined in Section 5.B. Automated lint + test on every PR/MR. Keep workflow definitions thin (orchestration only) with logic in scripts.
 - [ ] **Artifact build & install** — implement the build commands and installation procedures from the Deliverables Manifest (Section 5.A) and Installation & Deployment (Section 5.B)
+- [ ] **Unified build system** — CI and terminal use identical commands (e.g., `make test` in both environments). No CI-only logic that diverges from local dev.
 - [ ] **Linting and formatting** — configured and enforced in CI from the first commit
 - [ ] **Test runner** — configured and passing (even if the only test is a smoke/import test). Test artifact outputs (JUnit XML, coverage) wired to CI as defined in the Deliverables Manifest (Section 5.A).
 - [ ] **Makefile or task runner** — standard targets (`lint`, `test`, `ci`) so humans and agents use the same commands
 - [ ] **Initial documentation** — README and any Phase 1 items from the Deliverables Manifest (Section 5.A)
+- [ ] **Verify Deliverables Manifest coverage** — all rows in the Deliverables Manifest (Section 5.A) assigned to Wave 1 are covered by this story
 
 If any of these are missing from Wave 1, add a story. CI/CD in particular is easy to forget and painful to retrofit — every PR from Wave 2 onward should be validated automatically.
 
@@ -327,6 +335,8 @@ The final wave must include a story that executes all manual verification proced
 - [ ] Executes each MV-XX procedure and records pass/fail with evidence
 - [ ] Creates bug issues for any failures found during manual verification
 - [ ] Completes the VRTM (Section 9, Appendix V) with final status for all items
+- [ ] Verifies all Deliverables Manifest rows with "Produced In" matching this phase have been delivered
+- [ ] Verifies every delivered artifact has its verification procedure executed and recorded
 
 Do not skip this story. Manual verification is tracked work with its own acceptance criteria, not a "someone will get to it" afterthought.
 
@@ -351,6 +361,10 @@ Wave 3 ─── [X.X] Story D
 | 1 | X.X | Story X.X | Single story |
 | 2 | X.X, X.X, X.X | Wave 2 Master | Yes — N independent stories |
 | 3 | X.X | Story X.X | Single story |
+
+### Co-production Rule
+
+If a wave produces a deployable artifact (binary, Docker image, infrastructure config, API endpoint), that wave must also include a story that produces the artifact's verification procedure. Verification procedures must not be deferred to later waves. This ensures that every artifact can be validated at the time it lands.
 
 ---
 
