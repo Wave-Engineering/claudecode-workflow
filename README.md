@@ -57,6 +57,7 @@ Key features:
 | cryo | `/cryo` | Preserve session state before context compaction |
 | ddd | `/ddd` | Domain-Driven Design facilitation — event storming, domain modeling, concept handoff |
 | disc | `/disc` | Discord integration — check-in, send, read, list, resolve channels |
+| dod | `/dod` | Project Definition of Done verification against the Deliverables Manifest |
 | edit | `/edit` | Open file/URL in GUI editor |
 | engage | `/engage` | Load CLAUDE.md, confirm rules of engagement |
 | ibm | `/ibm` | Issue-Branch-PR/MR workflow reminder |
