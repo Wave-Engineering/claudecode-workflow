@@ -515,23 +515,23 @@ Checks `$VISUAL` and `$EDITOR` environment variables, then user preferences, the
 
 ### `/ddd` -- Domain-Driven Design Facilitation
 
-A structured workflow for domain modeling using event storming. Guides you through 8 stages of domain discovery, formalizes the results into a Domain Model document, and translates it into an implementation-ready PRD.
+A structured workflow for domain modeling using event storming. Guides you through 8 stages of domain discovery, formalizes the results into a Domain Model document, and hands off to `/prd create` for PRD generation.
 
 **When to use it:**
 - When starting a new project and need to discover the domain model
 - When translating business requirements into technical architecture
-- When you want a structured PRD generated from domain analysis
+- When you want a structured domain model to feed into PRD creation
 
 **Examples:**
 
 ```
 /ddd begin       # Start interactive event storming session
 /ddd draft       # Formalize sketchbook into Domain Model document
-/ddd accept      # Translate Domain Model to PRD
+/ddd accept      # Verify domain model and hand off to PRD creation
 /ddd resume      # Resume interrupted event storming session
 ```
 
-**The pipeline:** `/ddd begin` (8-stage event storming → `docs/SKETCHBOOK.md`) → `/ddd draft` (formalize → `docs/DOMAIN-MODEL.md`) → `/ddd accept` (translate → `docs/<project>-PRD.md`).
+**The pipeline:** `/ddd begin` (8-stage event storming → `docs/SKETCHBOOK.md`) → `/ddd draft` (formalize → `docs/DOMAIN-MODEL.md`) → `/ddd accept` (verify and hand off) → `/prd create` (generate PRD).
 
 **Event storming stages:** Domain Context → Events (brainstorm) → Events (organize) → Commands → Actors → Policies → Aggregates → Read Models. Progress is checkpointed to the sketchbook after each stage.
 
