@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# vox-tts — Default TTS audio engine for vox
+#
+# This script is the swappable TTS backend. Replace it (or set VOX_TTS to
+# point elsewhere) to use a different speech synthesis engine.
+#
+# Contract:
+#   Input:   text on stdin
+#   Output:  WAV audio written to --output FILE
+#   Exit:    0 on success, 1 on failure
+#
+# Usage:
+#   echo "Hello" | vox-tts --output /tmp/out.wav
+#   echo "Hello" | vox-tts --output /tmp/out.wav --voice "Taylor.wav"
+#   vox-tts --list-voices
+#
+# Backend resolution (first match wins):
+#   1. VOX_COMMAND env var   — custom command that accepts text on stdin, audio on stdout
+#   2. VOX_ENDPOINT env var  — HTTP endpoint (OpenAI-compatible TTS API)
+#   3. Local fallback        — espeak / espeak-ng / piper / say (macOS)
+#
+# Environment:
+#   VOX_COMMAND    Shell expression evaluated by bash -c (text on stdin, audio on stdout)
+#   VOX_ENDPOINT   HTTP TTS endpoint (default: http://archer:8004/v1/audio/speech)
+#   VOX_VOICE      Default voice name (default: Taylor.wav)
+#   VOX_MODEL      TTS model name (default: chatterbox-turbo)
+#
+# Exit codes:
+#   0  Audio written successfully
+#   1  No TTS backend available or request failed
+
+set -euo pipefail
+
+# --- Defaults -----------------------------------------------------------------
+
+DEFAULT_ENDPOINT="http://archer:8004/v1/audio/speech"
+DEFAULT_VOICE="Taylor.wav"
+DEFAULT_MODEL="chatterbox-turbo"
+
+# --- Parse args ---------------------------------------------------------------
+
+VOICE="${VOX_VOICE:-$DEFAULT_VOICE}"
+OUTPUT_FILE=""
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--output | -o)
+		OUTPUT_FILE="${2:-}"
+		[[ -z "$OUTPUT_FILE" ]] && {
+			echo "Error: --output requires a file path" >&2
+			exit 1
+		}
+		shift 2
+		;;
+	--voice)
+		VOICE="${2:-}"
+		[[ -z "$VOICE" ]] && {
+			echo "Error: --voice requires a name" >&2
+			exit 1
+		}
+		shift 2
+		;;
+	--list-voices)
+		endpoint="${VOX_ENDPOINT:-$DEFAULT_ENDPOINT}"
+		voices_url="${endpoint%/speech}/voices"
+		if command -v curl &>/dev/null; then
+			curl -sS "$voices_url" | {
+				if command -v jq &>/dev/null; then
+					jq -r '.voices[] | if type == "object" then .name else . end' 2>/dev/null || cat
+				else
+					cat
+				fi
+			}
+		else
+			echo "Error: curl required for --list-voices" >&2
+			exit 1
+		fi
+		exit 0
+		;;
+	-h | --help)
+		sed -n '2,/^[^#]/{ /^#/s/^# \{0,1\}//p }' "$0"
+		exit 0
+		;;
+	*)
+		echo "Error: unknown option '$1'" >&2
+		exit 1
+		;;
+	esac
+done
+
+# --- Read text from stdin -----------------------------------------------------
+
+if [[ -t 0 ]]; then
+	echo "Error: no text on stdin" >&2
+	exit 1
+fi
+
+TEXT="$(cat)"
+
+if [[ -z "${TEXT//[$' \t\n\r']/}" ]]; then
+	echo "Error: empty text" >&2
+	exit 1
+fi
+
+if [[ -z "$OUTPUT_FILE" ]]; then
+	echo "Error: --output is required" >&2
+	exit 1
+fi
+
+# --- Backend 1: VOX_COMMAND ---------------------------------------------------
+
+if [[ -n "${VOX_COMMAND:-}" ]]; then
+	# VOX_COMMAND is a shell expression (e.g. "my-tts --format wav") evaluated
+	# via bash -c. This is intentional — it allows users to pass flags and pipes.
+	# If you only need a simple command path, set VOX_TTS in the parent vox script.
+	printf '%s\n' "$TEXT" | bash -c "$VOX_COMMAND" >"$OUTPUT_FILE"
+	exit 0
+fi
+
+# --- Backend 2: VOX_ENDPOINT (OpenAI-compatible TTS API) ---------------------
+
+endpoint="${VOX_ENDPOINT:-}"
+
+if [[ -z "$endpoint" ]]; then
+	if command -v curl &>/dev/null; then
+		if curl -s --connect-timeout 2 --max-time 3 "${DEFAULT_ENDPOINT%/speech}" >/dev/null 2>&1; then
+			endpoint="$DEFAULT_ENDPOINT"
+		fi
+	fi
+fi
+
+if [[ -n "$endpoint" ]]; then
+	if ! command -v curl &>/dev/null; then
+		echo "Error: curl required for HTTP TTS endpoint" >&2
+		exit 1
+	fi
+
+	MODEL="${VOX_MODEL:-$DEFAULT_MODEL}"
+
+	json_text=$(printf '%s' "$TEXT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null) || {
+		escaped="${TEXT//\\/\\\\}"
+		escaped="${escaped//\"/\\\"}"
+		escaped="${escaped//$'\t'/\\t}"
+		escaped="${escaped//$'\n'/\\n}"
+		escaped="${escaped//$'\r'/\\r}"
+		json_text="\"${escaped}\""
+	}
+
+	if [[ -z "$json_text" || "$json_text" == '""' ]]; then
+		echo "Error: failed to encode message as JSON" >&2
+		exit 1
+	fi
+
+	payload="{\"model\":\"${MODEL}\",\"input\":${json_text},\"voice\":\"${VOICE}\",\"response_format\":\"wav\"}"
+
+	tmp_out="$(mktemp --suffix=.wav)"
+	trap 'rm -f "$tmp_out"' EXIT
+
+	http_code=$(curl -sS -w '%{http_code}' -o "$tmp_out" \
+		-X POST \
+		-H "Content-Type: application/json" \
+		-d "$payload" \
+		--connect-timeout 5 \
+		--max-time 30 \
+		"$endpoint") || {
+		echo "Error: TTS request failed" >&2
+		exit 1
+	}
+
+	if [[ "$http_code" -ge 400 ]]; then
+		echo "Error: TTS endpoint returned HTTP $http_code" >&2
+		cat "$tmp_out" >&2 2>/dev/null
+		exit 1
+	fi
+
+	if [[ ! -s "$tmp_out" ]]; then
+		echo "Error: TTS endpoint returned empty response" >&2
+		exit 1
+	fi
+
+	mv "$tmp_out" "$OUTPUT_FILE"
+	trap - EXIT
+	exit 0
+fi
+
+# --- Backend 3: Local fallback ------------------------------------------------
+
+if command -v espeak &>/dev/null; then
+	espeak --stdout "$TEXT" >"$OUTPUT_FILE"
+	exit 0
+fi
+
+if command -v espeak-ng &>/dev/null; then
+	espeak-ng --stdout "$TEXT" >"$OUTPUT_FILE"
+	exit 0
+fi
+
+if command -v piper &>/dev/null; then
+	printf '%s\n' "$TEXT" | piper --output-file "$OUTPUT_FILE"
+	exit 0
+fi
+
+if [[ "$(uname -s)" == "Darwin" ]] && command -v say &>/dev/null; then
+	say -o "$OUTPUT_FILE" "$TEXT"
+	exit 0
+fi
+
+# --- No backend available -----------------------------------------------------
+
+echo "Error: no TTS backend available." >&2
+echo "Set VOX_ENDPOINT or VOX_COMMAND, or install espeak/espeak-ng/piper/say." >&2
+exit 1
