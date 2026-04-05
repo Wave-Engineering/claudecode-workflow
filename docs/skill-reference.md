@@ -593,6 +593,48 @@ Run the Section 7.2 Finalization Checklist mechanically against an existing PRD.
 
 ---
 
+### `/dod` -- Project Definition of Done Verification
+
+Reads the Deliverables Manifest from the project's PRD (Section 5.A) and mechanically verifies that every deliverable was produced, every test passed, and every artifact exists at its declared file path. Generates a pass/fail verification report and requires human sign-off to close the project. This is the final gate in the SDLC pipeline.
+
+**When to use it:**
+- After all implementation waves are complete and the project is ready for final verification
+- When you want to confirm that every deliverable in the PRD has been produced
+- Before closing the parent epic or transitioning the campaign to the DoD stage
+- When stakeholders ask for evidence that all requirements have been met
+
+**Examples:**
+
+```
+/dod            # Run the full DoD verification (default)
+/dod check      # Same as /dod
+```
+
+**Verification categories:**
+
+| Category | What is checked |
+|----------|----------------|
+| Docs | File exists at declared path, is non-empty |
+| Code (binary/package) | File exists, build command succeeds |
+| Code (CI/CD) | Pipeline config exists, last CI run passed |
+| Code (build system) | Makefile/task runner exists, `make test` succeeds |
+| Test (results) | File exists, parse for pass/fail summary |
+| Test (coverage) | File exists, parse coverage percentage |
+| Test (manual procedures) | File exists, has recorded execution results |
+| Trace (VRTM) | VRTM populated, no "Pending" status rows |
+
+**Report format:** Each deliverable is marked V (verified), X (failing), or O (N/A opted out). The report includes a summary count, Global DoD (Section 7) verification, and a final READY/NOT READY verdict.
+
+**Approval flow:**
+1. All pass -> "Approve to close the project?"
+2. Failures exist -> "Approve anyway, or fix first?"
+3. On "fix" -> lists each failure with specific remediation (file paths, commands, PRD sections)
+4. On approval -> updates campaign state (if active), suggests closing the epic
+
+**Key detail:** N/A rows with rationale are respected and do not count as failures. Bare "N/A" without explanation is flagged. VRTM completeness is mandatory -- every requirement must be traceable with no "Pending" rows.
+
+---
+
 ## Advanced Skills -- Wave Pattern
 
 The wave pattern decomposes work into dependency-ordered waves and executes each wave with lifecycle tracking, dashboard visibility, and an audit trail. It supports three topologies:
