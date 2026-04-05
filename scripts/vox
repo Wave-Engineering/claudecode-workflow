@@ -8,28 +8,45 @@
 #   vox --output /tmp/memo.wav "Voice memo for Discord"
 #   vox --list-voices
 #
-# TTS backend resolution (first match wins):
-#   1. VOX_COMMAND env var   — custom command that accepts text on stdin
-#   2. VOX_ENDPOINT env var  — HTTP endpoint (OpenAI-compatible TTS API)
-#   3. Local fallback        — espeak / espeak-ng / piper / say (macOS)
+# Audio generation is delegated to a TTS engine script (default: vox-tts).
+# Replace vox-tts or set VOX_TTS to use a different engine. The engine
+# contract is:
+#
+#   stdin  → text to speak
+#   --output FILE → where to write WAV audio
+#   --voice NAME  → voice selection (optional)
+#   --list-voices → list available voices and exit
 #
 # Environment:
-#   VOX_COMMAND    Custom TTS command (text on stdin, audio on stdout)
-#   VOX_ENDPOINT   HTTP TTS endpoint (default: http://archer:8004/v1/audio/speech)
-#   VOX_VOICE      Default voice name (default: Taylor.wav)
-#   VOX_MODEL      TTS model name (default: chatterbox-turbo)
+#   VOX_TTS        Path to TTS engine script (default: vox-tts from PATH)
+#   VOX_VOICE      Default voice name (passed through to engine)
+#   VOX_ENDPOINT   Passed through to engine
+#   VOX_MODEL      Passed through to engine
+#   VOX_COMMAND    Passed through to engine
 #
 # Exit codes:
 #   0  Audio played (or backgrounded) successfully
-#   1  No TTS backend available or request failed
+#   1  No TTS engine found or generation/playback failed
 
 set -euo pipefail
 
-# --- Defaults -----------------------------------------------------------------
+# --- Resolve TTS engine -------------------------------------------------------
 
-DEFAULT_ENDPOINT="http://archer:8004/v1/audio/speech"
-DEFAULT_VOICE="Taylor.wav"
-DEFAULT_MODEL="chatterbox-turbo"
+TTS_ENGINE="${VOX_TTS:-}"
+if [[ -z "$TTS_ENGINE" ]]; then
+	if command -v vox-tts &>/dev/null; then
+		TTS_ENGINE="vox-tts"
+	else
+		# Look next to this script (pre-install, running from repo)
+		SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+		if [[ -x "$SCRIPT_DIR/vox-tts" ]]; then
+			TTS_ENGINE="$SCRIPT_DIR/vox-tts"
+		else
+			echo "Error: no TTS engine found. Install vox-tts or set VOX_TTS." >&2
+			exit 1
+		fi
+	fi
+fi
 
 # --- Usage --------------------------------------------------------------------
 
@@ -38,20 +55,23 @@ usage() {
 		Usage: vox [OPTIONS] [MESSAGE...]
 
 		Options:
-		  --voice NAME    Voice to use (default: \$VOX_VOICE or ${DEFAULT_VOICE})
-		  --list-voices   List available voices from the TTS endpoint
+		  --voice NAME    Voice to use (default: \$VOX_VOICE)
+		  --list-voices   List available voices from the TTS engine
 		  --bg            Background playback (don't wait for audio to finish)
 		  --output, -o FILE  Write audio to FILE instead of playing
 		  -h, --help      Show this help
 
 		Message can be passed as arguments or piped via stdin.
+
+		TTS engine: ${TTS_ENGINE}
+		Override:   Set VOX_TTS to a custom engine script.
 	USAGE
 	exit 0
 }
 
 # --- Parse args ---------------------------------------------------------------
 
-VOICE="${VOX_VOICE:-$DEFAULT_VOICE}"
+VOICE="${VOX_VOICE:-}"
 BACKGROUND=false
 OUTPUT_FILE=""
 
@@ -67,22 +87,8 @@ while [[ $# -gt 0 ]]; do
 		shift 2
 		;;
 	--list-voices)
-		endpoint="${VOX_ENDPOINT:-$DEFAULT_ENDPOINT}"
-		# Derive voices URL from speech endpoint: /v1/audio/speech → /v1/audio/voices
-		voices_url="${endpoint%/speech}/voices"
-		if command -v curl &>/dev/null; then
-			curl -sS "$voices_url" | {
-				if command -v jq &>/dev/null; then
-					jq -r '.voices[] | if type == "object" then .name else . end' 2>/dev/null || cat
-				else
-					cat
-				fi
-			}
-		else
-			echo "Error: curl required for --list-voices" >&2
-			exit 1
-		fi
-		exit 0
+		"$TTS_ENGINE" --list-voices
+		exit $?
 		;;
 	--bg)
 		BACKGROUND=true
@@ -131,6 +137,35 @@ if [[ -z "${TEXT//[$' \t\n\r']/}" ]]; then
 	exit 1
 fi
 
+# --- Build TTS engine args ----------------------------------------------------
+
+tts_args=(--output)
+
+if [[ -n "$OUTPUT_FILE" ]]; then
+	# Write directly to the user's requested output — no playback needed
+	tts_args+=("$OUTPUT_FILE")
+else
+	tmpfile="$(mktemp --suffix=.wav)"
+	trap 'rm -f "$tmpfile"' EXIT
+	tts_args+=("$tmpfile")
+fi
+
+if [[ -n "$VOICE" ]]; then
+	tts_args+=(--voice "$VOICE")
+fi
+
+# --- Generate audio -----------------------------------------------------------
+
+printf '%s\n' "$TEXT" | "$TTS_ENGINE" "${tts_args[@]}" || {
+	echo "Error: TTS engine failed" >&2
+	exit 1
+}
+
+# If --output was requested, we're done (audio is already at OUTPUT_FILE)
+if [[ -n "$OUTPUT_FILE" ]]; then
+	exit 0
+fi
+
 # --- Detect audio player ------------------------------------------------------
 
 detect_player() {
@@ -147,11 +182,17 @@ detect_player() {
 	fi
 }
 
+PLAYER=$(detect_player)
+if [[ -z "$PLAYER" ]]; then
+	echo "Error: no audio player found (need aplay, paplay, afplay, or ffplay)" >&2
+	exit 1
+fi
+
 # --- Wake noise (Bluetooth A2DP preamble) ------------------------------------
 
 # Prepend ~500ms of low-amplitude white noise to a WAV file. This wakes up
 # Bluetooth audio sinks that sleep when idle, preventing the first syllable
-# from being clipped. Only applied to playback paths — --output stays clean.
+# from being clipped.
 prepend_wake_noise() {
 	local wavfile="$1"
 	python3 -c '
@@ -174,174 +215,20 @@ with wave.open(sys.argv[1], "wb") as w:
 ' "$wavfile" 2>/dev/null || true # best-effort — play unmodified if python3 fails
 }
 
-# --- Backend 1: VOX_COMMAND ---------------------------------------------------
+prepend_wake_noise "$tmpfile"
 
-if [[ -n "${VOX_COMMAND:-}" ]]; then
-	if [[ -n "$OUTPUT_FILE" ]]; then
-		echo "$TEXT" | bash -c "$VOX_COMMAND" >"$OUTPUT_FILE"
-	elif $BACKGROUND; then
-		echo "$TEXT" | bash -c "$VOX_COMMAND" &>/dev/null &
-		disown
-	else
-		echo "$TEXT" | bash -c "$VOX_COMMAND"
-	fi
-	exit 0
-fi
+# --- Playback -----------------------------------------------------------------
 
-# --- Backend 2: VOX_ENDPOINT (OpenAI-compatible TTS API) ---------------------
-
-endpoint="${VOX_ENDPOINT:-}"
-
-# If no explicit endpoint, check if the default is reachable
-if [[ -z "$endpoint" ]]; then
-	if command -v curl &>/dev/null; then
-		if curl -s --connect-timeout 2 --max-time 3 "${DEFAULT_ENDPOINT%/speech}" >/dev/null 2>&1; then
-			endpoint="$DEFAULT_ENDPOINT"
-		fi
-	fi
-fi
-
-if [[ -n "$endpoint" ]]; then
-	if ! command -v curl &>/dev/null; then
-		echo "Error: curl required for HTTP TTS endpoint" >&2
-		exit 1
-	fi
-
-	MODEL="${VOX_MODEL:-$DEFAULT_MODEL}"
-
-	# Build JSON payload — escape text for JSON safety
-	json_text=$(printf '%s' "$TEXT" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))' 2>/dev/null) || {
-		# Fallback: basic escaping if python3 is unavailable
-		escaped="${TEXT//\\/\\\\}"
-		escaped="${escaped//\"/\\\"}"
-		escaped="${escaped//$'\t'/\\t}"
-		escaped="${escaped//$'\n'/\\n}"
-		escaped="${escaped//$'\r'/\\r}"
-		json_text="\"${escaped}\""
-	}
-
-	if [[ -z "$json_text" || "$json_text" == '""' ]]; then
-		echo "Error: failed to encode message as JSON" >&2
-		exit 1
-	fi
-
-	payload="{\"model\":\"${MODEL}\",\"input\":${json_text},\"voice\":\"${VOICE}\",\"response_format\":\"wav\"}"
-
-	tmpfile="$(mktemp --suffix=.wav)"
-	trap 'rm -f "$tmpfile"' EXIT
-
-	http_code=$(curl -sS -w '%{http_code}' -o "$tmpfile" \
-		-X POST \
-		-H "Content-Type: application/json" \
-		-d "$payload" \
-		--connect-timeout 5 \
-		--max-time 30 \
-		"$endpoint") || {
-		echo "Error: TTS request failed" >&2
-		exit 1
-	}
-
-	if [[ "$http_code" -ge 400 ]]; then
-		echo "Error: TTS endpoint returned HTTP $http_code" >&2
-		cat "$tmpfile" >&2 2>/dev/null
-		exit 1
-	fi
-
-	if [[ ! -s "$tmpfile" ]]; then
-		echo "Error: TTS endpoint returned empty response" >&2
-		exit 1
-	fi
-
-	if [[ -n "$OUTPUT_FILE" ]]; then
-		cp "$tmpfile" "$OUTPUT_FILE"
-		exit 0
-	fi
-
-	# Wake Bluetooth A2DP sinks before real audio starts
-	prepend_wake_noise "$tmpfile"
-
-	PLAYER=$(detect_player)
-	if [[ -z "$PLAYER" ]]; then
-		echo "Error: no audio player found (need aplay, paplay, afplay, or ffplay)" >&2
-		exit 1
-	fi
-
-	if $BACKGROUND; then
-		# Detach playback — copy tmpfile since trap will clean it up
-		bgfile="$(mktemp --suffix=.wav)"
-		cp "$tmpfile" "$bgfile"
-		(
-			# shellcheck disable=SC2086
-			timeout 60 $PLAYER "$bgfile"
-			rm -f "$bgfile"
-		) &>/dev/null &
-		disown
-	else
+if $BACKGROUND; then
+	bgfile="$(mktemp --suffix=.wav)"
+	cp "$tmpfile" "$bgfile"
+	(
 		# shellcheck disable=SC2086
-		$PLAYER "$tmpfile"
-	fi
-	exit 0
+		timeout 60 $PLAYER "$bgfile"
+		rm -f "$bgfile"
+	) &>/dev/null &
+	disown
+else
+	# shellcheck disable=SC2086
+	$PLAYER "$tmpfile"
 fi
-
-# --- Backend 3: Local fallback ------------------------------------------------
-
-if command -v espeak &>/dev/null; then
-	if [[ -n "$OUTPUT_FILE" ]]; then
-		espeak --stdout "$TEXT" >"$OUTPUT_FILE"
-	elif $BACKGROUND; then
-		espeak "$TEXT" &>/dev/null &
-		disown
-	else
-		espeak "$TEXT"
-	fi
-	exit 0
-fi
-
-if command -v espeak-ng &>/dev/null; then
-	if [[ -n "$OUTPUT_FILE" ]]; then
-		espeak-ng --stdout "$TEXT" >"$OUTPUT_FILE"
-	elif $BACKGROUND; then
-		espeak-ng "$TEXT" &>/dev/null &
-		disown
-	else
-		espeak-ng "$TEXT"
-	fi
-	exit 0
-fi
-
-if command -v piper &>/dev/null; then
-	if [[ -n "$OUTPUT_FILE" ]]; then
-		echo "$TEXT" | piper --output-file "$OUTPUT_FILE"
-		exit 0
-	fi
-	PLAYER=$(detect_player)
-	if [[ -n "$PLAYER" ]]; then
-		if $BACKGROUND; then
-			# shellcheck disable=SC2086
-			(echo "$TEXT" | piper --output-raw | timeout 60 $PLAYER) &>/dev/null &
-			disown
-		else
-			# shellcheck disable=SC2086
-			echo "$TEXT" | piper --output-raw | $PLAYER
-		fi
-		exit 0
-	fi
-fi
-
-if [[ "$(uname -s)" == "Darwin" ]] && command -v say &>/dev/null; then
-	if [[ -n "$OUTPUT_FILE" ]]; then
-		say -o "$OUTPUT_FILE" "$TEXT"
-	elif $BACKGROUND; then
-		say "$TEXT" &
-		disown
-	else
-		say "$TEXT"
-	fi
-	exit 0
-fi
-
-# --- No backend available -----------------------------------------------------
-
-echo "Error: no TTS backend available." >&2
-echo "Set VOX_ENDPOINT or VOX_COMMAND, or install espeak/espeak-ng/piper/say." >&2
-exit 1
