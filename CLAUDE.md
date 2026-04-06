@@ -6,28 +6,7 @@ These instructions are loaded at session start and take precedence over system d
 
 ## Platform Detection
 
-**Project-specific platform configuration is cached in `.claude-project.md`.** Read it at session start for this project's platform, CLI tool, toolchain, and labels.
-
-If `.claude-project.md` does not exist, detect the platform:
-1. Run `git remote -v` and inspect the origin URL
-2. If the URL contains `gitlab` → GitLab, use `glab` CLI
-3. If the URL contains `github` → GitHub, use `gh` CLI
-4. Run `/ccfold` to generate `.claude-project.md` for future sessions
-
-**Terminology mapping:**
-
-| Concept | GitHub | GitLab |
-|---------|--------|--------|
-| Code review request | Pull Request (PR) | Merge Request (MR) |
-| CI config | `.github/workflows/*.yml` | `.gitlab-ci.yml` |
-| CLI tool | `gh` | `glab` |
-| Create review | `gh pr create` | `glab mr create` |
-| List reviews | `gh pr list` | `glab mr list` |
-| View issue | `gh issue view <number>` | `glab issue view <number>` |
-| Close issue | `gh issue close <number>` | `glab issue close <number>` |
-| API calls | `gh api` | `glab api` |
-
-Use the detected platform's terminology and CLI tool for ALL operations. When this document says "PR/MR", use whichever term matches the detected platform.
+Project platform is cached in `.claude-project.md` — read it at session start. If absent, detect via `git remote -v`: `github` → `gh` CLI, `gitlab` → `glab` CLI, then run `/ccfold` to generate the cache. Use "PR" on GitHub, "MR" on GitLab.
 
 ## Project Configuration
 
@@ -48,18 +27,7 @@ gh project item-add <project-number> --owner <owner> --url <issue-url>
 
 ## MANDATORY: Local Testing Before Push
 
-**NEVER push code without running local tests first.** This is non-negotiable.
-
-Before ANY `git push`, discover and run the project's test/validation tooling:
-
-1. **Run validation** — Look for `./scripts/ci/validate.sh`, a `lint` target in `Makefile`, or equivalent. Run it.
-2. **Run tests** — Look for `./scripts/ci/test.sh`, a `test` target in `Makefile`, `pytest`, `npm test`, or equivalent. Run it.
-3. **Verify Docker build** (if Dockerfile changed) — `docker build -t test .`
-4. **Verify infrastructure** (if `infrastructure/` or `cdk/` changed) — Look for CDK, Terraform, or equivalent and run the appropriate synth/plan command.
-
-If no test tooling exists, say so — do NOT silently skip this step.
-
-**Pushing untested code is unacceptable.** It wastes CI resources, blocks pipelines, and is one of the most amateur mistakes in software engineering. If you write code, you test it locally before pushing. No exceptions.
+**NEVER push untested code.** Before any `git push`, discover and run the project's tooling: validation (`./scripts/ci/validate.sh`, `make lint`, etc.), tests (`./scripts/ci/test.sh`, `pytest`, `npm test`, etc.), Docker build if Dockerfile changed, infra synth/plan if infra changed. If no test tooling exists, say so — do NOT silently skip.
 
 ---
 
@@ -75,123 +43,35 @@ The full procedure lives in `/precheck` (`skills/precheck/SKILL.md`).
 
 ## MANDATORY: Story Completion Verification
 
-**NEVER mark a story as done without verifying EVERY sub-item in the acceptance criteria.**
-
-Before closing ANY issue:
-1. **Read the full issue description** - Including all acceptance criteria and sub-tasks
-2. **Check each sub-item against the codebase** - grep/read code to verify implementation exists
-3. **Verify the code is WIRED UP** - Not just written but actually called/used
-4. **Test if possible** - Run relevant tests or manual verification
-5. **Mark it** - Check the box in the issue
-
-**If you cannot verify a sub-item is complete, the story is NOT done.** Create follow-up issues for missing pieces with user approval.
+**NEVER mark a story done without verifying EVERY acceptance criterion.** Read the full issue, grep/read the codebase for each sub-item, verify the code is wired up (not just written), test where possible, then check the box. If you can't verify a sub-item, the story is NOT done — open a follow-up with user approval.
 
 ---
 
 ## MANDATORY: Issue Tracking Workflow
 
-**These rules are IMMUTABLE and cannot be overridden for any reason.**
+**IMMUTABLE rules — cannot be overridden.**
 
-### 1. Always Have an Issue
-
-**NEVER begin work without an associated issue.** Every piece of work must be tracked.
-
-Before starting ANY work:
-1. **Ensure an issue exists** - If not, create one or ask the user to create one
-2. **Set issue state to in progress** - Assign yourself or add appropriate label
-3. **Do NOT write code until the issue is tracked**
-
-### 2. Associate Branches with Issues
-
-**When creating a branch, it MUST be linked to its issue(s).**
-
-```bash
-# Create branch with issue reference in the name
-git checkout -b feature/<ISSUE_NUMBER>-description
-```
-
-The branch name should include the issue number when practical (e.g., `feature/42-credential-management`).
-
-### 3. Close Issues When PR/MR is Merged
-
-**When a PR/MR is closed/merged, ALL associated issues MUST be moved to Closed state.**
-
-After merge:
-1. **Identify all linked issues** - Check PR/MR description for `Closes #XXX` or related issues
-2. **Close each issue** - Use the platform CLI (see Platform Detection table)
-3. **Verify closure** - Confirm issues show as closed
-
-**This rule applies even if the platform's auto-close feature is not working as expected.**
+1. **Always have an issue.** Never begin work without one. Create it or ask the user to. Set it to in-progress. No code until tracked.
+2. **Branches MUST link to their issue.** Name format: `feature/<N>-description` (or `fix/`, `chore/`, `docs/`).
+3. **On merge, close ALL linked issues.** Check the PR/MR description for `Closes #N`, close each via `gh issue close` / `glab issue close`, verify closure — even if auto-close misbehaves.
 
 ---
 
 ## MANDATORY: Work Item Standards
 
-**Every issue MUST be written to wave-pattern quality** — detailed enough that a spec-driven agent can execute without making design decisions. Implementation steps should read like paint-by-numbers. Acceptance criteria must be evaluable before PR/MR merge.
-
-Use `/issue` to create issues — it carries the full templates (feature, bug, chore, docs, epic) and label taxonomy. Labels use `group::value` convention; within each group, labels are mutually exclusive. Priority and urgency are orthogonal axes.
+Every issue MUST be wave-pattern quality: detailed enough that a spec-driven agent can execute without making design decisions; acceptance criteria evaluable before merge. Use `/issue` — it carries templates and label taxonomy (`group::value`, mutually exclusive within group).
 
 ---
 
 ## Branching Strategy
 
-**Trunk-Based Flow with Main Branch**
-
-```
-main (protected)
-  ├── feature/XXX-description
-  ├── fix/XXX-description
-  ├── chore/XXX-description
-  └── docs/XXX-description
-```
-
-**Always branch from `main`**:
-
-```bash
-git checkout main
-git pull
-git checkout -b feature/XXX-description
-```
-
-PR/MRs target `main`.
-
-### Branch Naming
-
-```
-<type>/<brief-description>
-
-Examples:
-  feature/credential-management
-  fix/ldap-connection-timeout
-  chore/update-dependencies
-  docs/add-api-reference
-```
-
-Types: `feature`, `fix`, `chore`, `docs`
+Trunk-based flow. Always branch from `main`: `git checkout main && git pull && git checkout -b <type>/<N>-description`. Types: `feature`, `fix`, `chore`, `docs`. PR/MRs target `main`.
 
 ---
 
 ## Code Standards
 
-**Discover the project's tooling rather than assuming a specific stack.**
-
-On session start (or before first lint/format/test), detect what's available:
-
-1. **Check for a `Makefile`** — If it has `lint`, `format`, `typecheck`, or `test` targets, prefer those. They wrap the project's chosen tools.
-2. **Check for config files** — `pyproject.toml` (Python/ruff/mypy), `package.json` (Node), `Cargo.toml` (Rust), `go.mod` (Go), `.clang-format` (C/C++), etc.
-3. **Check for CI scripts** — `scripts/ci/` often reveals what the project expects to pass.
-
-Use whatever the project provides. Do not introduce new formatters or linters that the project doesn't already use.
-
-### Common Defaults (when no project-specific config is found)
-
-| Language | Formatter | Linter | Tests |
-|----------|-----------|--------|-------|
-| Python | ruff format | ruff check | pytest |
-| Shell | shfmt | shellcheck | - |
-| JavaScript/TypeScript | prettier | eslint | jest/vitest |
-| Go | gofmt | go vet | go test |
-| Rust | rustfmt | clippy | cargo test |
+Discover the project's tooling rather than assuming a stack. Check in order: `Makefile` targets (`lint`, `format`, `test`), config files (`pyproject.toml`, `package.json`, `Cargo.toml`, `go.mod`, etc.), then `scripts/ci/`. Use whatever the project provides; don't introduce new formatters or linters.
 
 ---
 
@@ -221,20 +101,7 @@ build:
 
 ## Secrets and Sensitive Files
 
-**Before staging any file that may contain secrets, WARN the user and get explicit confirmation.**
-
-Watch for these patterns when adding files to a commit:
-- `.env`, `.env.*`, `*.secret`, `*.key`, `*.pem`, `*.p12`, `*.pfx`
-- `credentials.json`, `service-account*.json`, `*-credentials.*`
-- Files containing API keys, tokens, passwords, or connection strings
-- `terraform.tfvars`, `*.auto.tfvars` (may contain infrastructure secrets)
-
-**When a suspect file is about to be staged:**
-1. Flag it explicitly: *"This file looks like it may contain secrets: `<filename>`. Are you sure you want to include it?"*
-2. Wait for explicit confirmation before staging
-3. If confirmed, proceed — some projects legitimately require committing these files
-
-This is a **safety net, not a hard block**. Trust the user's judgment after warning.
+Before staging a file that may contain secrets, WARN the user and get explicit confirmation. Watch for: `.env*`, `*.secret`, `*.key`, `*.pem`, `*.p12`, `*.pfx`, `credentials.json`, `service-account*.json`, `*-credentials.*`, `*.tfvars`, or anything with API keys / tokens / passwords. Flag the filename, wait for confirmation, then proceed. Safety net, not a hard block — trust the user after warning.
 
 ---
 
@@ -254,79 +121,13 @@ Types: `feat`, `fix`, `docs`, `style`, `refactor`, `test`, `chore`
 
 ## PR/MR Description Format
 
-When creating a PR/MR, use this structure:
-
-```markdown
-## Summary
-
-[1-3 sentences: what changed and why]
-
-## Changes
-
-- [Bulleted list of notable changes, grouped logically]
-
-## Linked Issues
-
-Closes #NNN
-
-## Test Plan
-
-- [How was this tested? What commands were run?]
-- [Any manual verification steps?]
-```
-
-**Rules:**
-- The title should be concise (under 72 characters), following the same `type(scope): description` convention as commits
-- Always link issues using `Closes #NNN` (GitHub) or `Closes #NNN` (GitLab) so they auto-close on merge
-- The test plan must reflect what was *actually done*, not what *could be done*
+Sections: `## Summary` (1-3 sentences), `## Changes` (bullets), `## Linked Issues` (`Closes #N`), `## Test Plan` (what was actually run, not what could be). Title ≤ 72 chars, same `type(scope): description` convention as commits.
 
 ---
 
 ## MCP Server Scoping
 
-Claude Code's MCP scopes are **additive, not exclusive**. Servers from `~/.claude/mcp.json`, `~/.claude/settings.json` (`mcpServers`, `enabledPlugins`), `~/.claude.json` (`mcpServers`), project `.mcp.json`, and claude.ai account-connected plugins all merge into a single deferred tool list at session start. Creating a project `.mcp.json` does NOT replace inherited servers; it adds to them.
-
-### The per-project exclusion knob
-
-`~/.claude.json` → `projects["<project-path>"].disabledMcpServers` is an array of server names to suppress for a specific project. Tools from disabled servers do not appear in the deferred tool list when running in that project. This mechanism works but is undocumented in the official Claude Code docs — it was discovered via direct inspection of `~/.claude.json` (see #266).
-
-**Server name format** — use the exact string reported by `claude mcp list`:
-- `claude.ai <Name>` for claude.ai-hosted plugins (spaces, not underscores)
-- `plugin:<marketplace>:<name>` for marketplace plugins from `enabledPlugins`
-- The raw name for stdio servers (`kapture`, `nerf-server`, etc.)
-
-### Updating the disable list
-
-```bash
-# 1. Inventory all currently-resolved servers
-claude mcp list
-
-# 2. Edit ~/.claude.json via jq + write-temp-then-mv (not an interactive
-#    editor — the file is large and contains session state written back by
-#    Claude Code, so mid-session interactive edits race with CC's own writes)
-#
-# CRITICAL: write to a .new file, NEVER `jq '...' ~/.claude.json > ~/.claude.json`
-# directly. The shell truncates the output file to zero bytes before jq reads
-# the input, silently destroying your 150KB config. Always use the temp-file
-# pattern below.
-jq '.projects["/abs/path/to/project"].disabledMcpServers = [
-      "plugin:github:github",
-      "claude.ai Canva"
-    ]' ~/.claude.json > ~/.claude.json.new && mv ~/.claude.json.new ~/.claude.json
-
-# 3. Verify
-jq '.projects["/abs/path/to/project"].disabledMcpServers' ~/.claude.json
-
-# 4. Restart Claude Code — changes take effect at the next session start,
-#    not mid-session. Verify by checking that the deferred tool list in the
-#    new session no longer contains tools from the disabled servers.
-```
-
-**Project policy for this repo:** Only servers directly used in this repo's work are kept active. `discord-watcher` (session messaging via `--channels`), `wtf-server` (flight recorder hook), and `plugin:context7:context7` (library docs) are kept. Everything else is disabled for context hygiene. See `~/.claude.json` for the authoritative current list.
-
-What this does NOT solve:
-- `.mcp.json` scope merging — there is no "exclusive mode" for project config
-- Discoverability — the `disabledMcpServers` field is not surfaced in `claude mcp --help` or the official docs; this section IS the documentation
+MCP scopes are additive — all sources merge into one tool list. Per-project exclusion lives in `~/.claude.json` under `projects["<path>"].disabledMcpServers`. See `docs/mcp-scoping.md` for the full procedure and server-name format.
 
 ---
 
@@ -334,140 +135,41 @@ What this does NOT solve:
 
 On session start, run `/engage` to detect platform, resolve identity, load context, and confirm rules.
 
-### Discord Watcher (Channels)
-
-If the session was started with `--channels` (or `--dangerously-load-development-channels`), a Discord watcher channel server pushes notifications when new messages arrive in any Oak and Wave text channel.
-
-**When you receive a `<channel source="discord_watcher">` notification:**
-
-1. Run `discord-bot read <channel_id> --limit 10` to get the full messages
-2. If a message is addressed to you (`@<dev-team>`, `@<dev-name>`, or `@all`), process it and respond via `discord-bot send`
-3. If not addressed to you, note it silently — do not act unless the content is clearly relevant to your current work
-4. Ignore messages that contain your own signature (e.g., `— **beacon**`) to avoid echo loops — other agents' messages (also from `CC Developer`) should be processed normally
-
-**Discord message format — sign every message:**
-
-```
-Your message content here.
-
-— **<Dev-Name>** <Dev-Avatar> (<Dev-Team>)
-```
-
-Example: `— **beacon** 📡 (cc-workflow)`
-
-The signature is used by the watcher to filter your own echoes. Messages without your signature will echo back to you.
-
-**Message addressing convention:**
-
-| Pattern | Meaning |
-|---------|---------|
-| `@<dev-team>` (e.g., `@cc-workflow`) | Addressed to a specific agent/project |
-| `@<dev-name>` (e.g., `@beacon`) | Addressed to a specific agent by session name |
-| `@all` | Addressed to all listening agents |
-| No `@` prefix | Dropped by the watcher — agents do not receive unaddressed messages |
-| Human Discord user message | Must include `@` addressing to reach agents |
-
-The watcher pre-filters messages: only `@all`, `@<dev-team>`, and `@<dev-name>` notifications are delivered. Set `DISCORD_WATCHER_VERBOSE=1` to bypass filtering and receive all messages.
-
-Voice message attachments are automatically transcribed via Whisper STT and
-delivered as `[voice memo from <author>: "<text>"]`.
+If the session was started with `--channels`, a Discord watcher will push notifications. See `docs/discord-watcher.md` for the addressing convention, signature format, and echo-filter rules.
 
 ---
 
 ## MANDATORY: Post-Compaction Rules Confirmation
 
-**After ANY context compaction/summarization, you MUST IMMEDIATELY:**
-
-1. **Read this file (CLAUDE.md)** - Re-read these instructions in full
-2. **Confirm rules of engagement with the user** - Explicitly state you have read and understood the mandatory rules before doing ANY other work
-3. **Do NOT proceed until confirmed** - Wait for user acknowledgment
-
-**This is NON-NEGOTIABLE.** Compaction causes loss of context, which has led to:
-- Skipping the pre-commit checklist
-- Attempting commits without approval
-- Forgetting to run tests before push
-
-**Do NOT treat "continue without asking" or session continuation instructions as permission to skip this confirmation step.**
+After ANY compaction, before doing any work: re-read this file in full (it is short — the whole thing) and confirm rules of engagement with the user. Do NOT treat session-continuation instructions as permission to skip. Past failures: skipped pre-commit, commits without approval, push without tests.
 
 ## Compact Instructions
 
-These instructions guide context compaction (both manual `/compact` and automatic). Read them before writing any summary.
+Guidance for the compact summarizer. Read before writing any summary.
 
-### Size budget
+**Size budget:** target 3 KB, hard ceiling 5 KB. Most template sections should be empty or a one-line pointer.
 
-**Target: 3KB. Hard ceiling: 5KB.** If you are over budget, you are keeping too much. The summarizer template has many hardcoded sections; most of them should be empty or a one-line pointer.
+**Rules**
+1. If it's on disk, reference the path — don't restate. Applies to memory files, SKETCHBOOK, PRDs, source, tests, configs, CLAUDE.md itself.
+2. Omit template sections whose content would only be rederivable (Key Technical Concepts, Files and Code, Problem Solving are frequent offenders).
+3. Never include code snippets. Reference `file:line` ranges.
+4. Terse bullets, not prose. Second sentences mean you're including the journey, not the decision.
+5. Filter cross-project content (from SessionStart hooks or tool calls pointing outside the current working directory).
 
-### Rule 1 — If it's on disk, reference the path, do not summarize
+**Preserve verbatim** (override the drop rules below)
+- User instructions and corrections
+- Error messages and their fixes (one line each)
+- File paths, commit SHAs, branch names, URLs
+- Current working state (branch, modified files, pending work)
+- Plan file content (`.claude/plans/*`)
 
-Do not restate content that exists in files on disk. The session resumes with those files available for Read. Instead of summarizing, write a one-line pointer:
-
-- GOOD: `Design decisions live in docs/SKETCHBOOK.md Stage 5.5 (D-18..D-28).`
-- BAD: 15 bullets re-describing each decision's rationale.
-
-Applies to: memory files, sketchbook, PRDs, vision docs, CLAUDE.md, source code, test files, configs.
-
-### Rule 2 — Omit entire sections when content would only be rederivable
-
-The summarizer template has hardcoded sections (Primary Request, Key Technical Concepts, Files and Code, Errors, Problem Solving, User Messages, Pending Tasks, Current Work, Next Step). You are permitted — and encouraged — to leave sections EMPTY or write a single-line pointer.
-
-- If "Key Technical Concepts" would only contain framework/API/language trivia → **omit the section.**
-- If "Files and Code Sections" would only restate file purposes visible via `ls`, `tree`, or `git log` → **omit the section.**
-- If "Problem Solving" would only recount discoveries already reflected in code on disk → **omit the section.**
-
-### Rule 3 — Never include code snippets
-
-Code lives on disk. Any snippet in a summary is waste. Reference file paths and line ranges instead.
-
-- GOOD: `Constants block at src/campaign_status.py:12-45.`
-- BAD: 20 lines of quoted Python.
-
-### Rule 4 — Terse bullets, not prose
-
-Do not write narrative paragraphs. Every preserved item should be one bullet. If you need a second sentence, you are including the journey instead of the decision.
-
-### Rule 5 — No cross-project content
-
-Filter out any content that originated from a different project's working directory (e.g., pulled in by a SessionStart hook or a tool call). Do not include it in the summary in any form — not as bullets, not as path references, not as quoted text. This rule is purely a filter: it does not affect content from the current project, which is governed by Rules 1-4.
-
-### Preserve verbatim (these take precedence over all drop rules)
-
-Items in this list MUST be preserved even if they also appear in a memory file, plan file, or on disk. The drop and dedup rules below do not apply here.
-
-- **User instructions and corrections** — reflect intent, hard to re-derive
-- **Error messages and their resolutions** — one line each: what failed, what fixed it
-- **File paths, commit SHAs, branch names, URLs** — hardest to reconstruct from context
-- **Current working state** — which files were modified, what branch we're on, what's pending
-- **Plan file content** (`.claude/plans/*`) — this is the ephemeral state snapshot
-
-### Aggressively drop
-
-- Expanded skill definitions — full SKILL.md text loaded when a skill was invoked. Read from disk on demand; does not need to survive compaction.
-- Tool results that already informed a completed action (e.g., file reads that led to edits already made)
-- Intermediate reasoning and exploration — keep the decision, drop the journey
-- MCP tool lists for servers the project never uses
-- Content already present in a loaded memory file
-
-### Deduplicate
-
-- Same information across multiple tool calls → keep one copy
-- If a plan file restates information from memory files, the plan file is authoritative for ephemeral state; drop redundant durable facts that memory files already cover
-- Code content that appears in both file reads and summary → drop the summary version
-
-### Anti-example (DO NOT emit output like this)
-
-    ## Key Technical Concepts
-    - Domain-Driven Design (DDD) event storming methodology
-    - Model Context Protocol (MCP) server architecture
-    - SDLC pipeline: concept → prd → backlog → implementation → dod
-    - Half-duplex director pattern (MCP responds with directives)
-    - [...12 more framework bullets...]
-
-If those concepts are captured in `docs/SKETCHBOOK.md` and memory files, the correct output is:
-
-    ## Key Technical Concepts
-    See docs/SKETCHBOOK.md Stage 5.5 and memory files.
-
-Or better — omit the section entirely.
+**Aggressively drop**
+- Expanded skill/SKILL.md bodies — re-readable on demand
+- Tool results whose consequence is already on disk
+- Intermediate reasoning — keep the decision, drop the journey
+- MCP tool lists for unused servers
+- Content already in a loaded memory file
+- Duplicate info across multiple tool calls
 
 ## Agent Identity
 
