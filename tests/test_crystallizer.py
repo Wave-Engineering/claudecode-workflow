@@ -107,6 +107,50 @@ def _assistant_text(text: str) -> dict:
     }
 
 
+def _assistant_mixed(text: str, with_thinking: bool = False) -> dict:
+    """An assistant response mixing text with tool_use and optional thinking.
+
+    Assistant content arrays legitimately contain multiple block types; the
+    crystallizer should extract only the text portion.
+    """
+    blocks = []
+    if with_thinking:
+        blocks.append({"type": "thinking", "thinking": "internal deliberation"})
+    blocks.append({"type": "text", "text": text})
+    blocks.append({
+        "type": "tool_use",
+        "id": "tool_xyz",
+        "name": "Bash",
+        "input": {"command": "ls"},
+    })
+    return {
+        "type": "assistant",
+        "message": {"role": "assistant", "content": blocks},
+    }
+
+
+def _assistant_tool_use_only() -> dict:
+    """An assistant turn that is pure tool_use with no text.
+
+    These should be excluded from the Recent Assistant Context window —
+    they don't represent an assistant "response" worth recording.
+    """
+    return {
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "tool_abc",
+                    "name": "Read",
+                    "input": {"file_path": "/etc/hostname"},
+                }
+            ],
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -234,5 +278,145 @@ class TestRecentUserInstructions:
         assert "line one" in section
         assert "line two" in section
         assert "line three" in section
+        assert "before" in section
+        assert "after" in section
+
+
+class TestRecentAssistantContext:
+    """Tests for the `Recent Assistant Context` section of crystallized state.
+
+    Regression tests for #268: the assistant-side extraction had the same
+    line-based windowing bug as the user-side (#264). Content filter was
+    correct (assistant arrays legitimately have text blocks), but
+    `tail -30 | head -15` had no record-boundary semantics.
+    """
+
+    def test_plain_assistant_responses_captured(self, tmp_path):
+        """Real assistant text responses appear in the output."""
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            _user_string("hi"),
+            _assistant_text("first response"),
+            _user_string("thanks"),
+            _assistant_text("second response"),
+        ])
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = _extract_section(
+            state_file, "Recent Assistant Context", "Recovery Instructions"
+        )
+
+        assert "first response" in section
+        assert "second response" in section
+
+    def test_mixed_blocks_extract_text_only(self, tmp_path):
+        """Text is extracted from content arrays mixing text + tool_use + thinking.
+
+        Unlike the user side (#264), assistant content arrays legitimately
+        mix block types. The filter must keep the text and drop the rest.
+        """
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            _user_string("go"),
+            _assistant_mixed("visible text portion", with_thinking=True),
+        ])
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = _extract_section(
+            state_file, "Recent Assistant Context", "Recovery Instructions"
+        )
+
+        assert "visible text portion" in section
+        # tool_use and thinking metadata must NOT appear
+        assert "internal deliberation" not in section
+        assert "tool_xyz" not in section
+        assert '"command"' not in section
+
+    def test_tool_use_only_turns_excluded(self, tmp_path):
+        """Assistant turns with no text (pure tool_use) are excluded.
+
+        The `select(length > 0)` clause after normalization drops these —
+        they aren't meaningful "responses" worth recording as context.
+        """
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            _assistant_text("before-tool"),
+            _assistant_tool_use_only(),
+            _assistant_text("after-tool"),
+        ])
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = _extract_section(
+            state_file, "Recent Assistant Context", "Recovery Instructions"
+        )
+
+        assert "before-tool" in section
+        assert "after-tool" in section
+        # Verify no stray "- " bullets from empty entries
+        bullets = [line for line in section.splitlines() if line.startswith("- ")]
+        assert len(bullets) == 2, f"Expected 2 bullets, got {len(bullets)}: {bullets!r}"
+
+    def test_chronological_order_most_recent_last(self, tmp_path):
+        """Assistant responses appear in transcript order, most recent last."""
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            _assistant_text("resp_alpha"),
+            _assistant_text("resp_bravo"),
+            _assistant_text("resp_charlie"),
+        ])
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = _extract_section(
+            state_file, "Recent Assistant Context", "Recovery Instructions"
+        )
+
+        alpha_pos = section.index("resp_alpha")
+        bravo_pos = section.index("resp_bravo")
+        charlie_pos = section.index("resp_charlie")
+        assert alpha_pos < bravo_pos < charlie_pos
+
+    def test_window_limited_to_last_fifteen(self, tmp_path):
+        """Only the last 15 assistant responses are captured.
+
+        Key regression test for #268: the original `tail -30 | head -15`
+        returned the OLDEST 15 when the output was small, or a mid-range
+        slice when the output was large. Either way, never the most recent.
+        """
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            _assistant_text(f"resp_{i:02d}") for i in range(20)
+        ])
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = _extract_section(
+            state_file, "Recent Assistant Context", "Recovery Instructions"
+        )
+
+        # Last 15 are resp_05 .. resp_19
+        assert "resp_05" in section
+        assert "resp_19" in section
+        # First 5 are dropped
+        assert "resp_00" not in section
+        assert "resp_04" not in section
+
+    def test_multiline_assistant_response_preserved(self, tmp_path):
+        """A multi-line assistant response appears intact."""
+        multiline = "thinking about it\nstep one\nstep two\nfinal answer"
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            _assistant_text("before"),
+            _assistant_text(multiline),
+            _assistant_text("after"),
+        ])
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = _extract_section(
+            state_file, "Recent Assistant Context", "Recovery Instructions"
+        )
+
+        assert "thinking about it" in section
+        assert "step one" in section
+        assert "step two" in section
+        assert "final answer" in section
         assert "before" in section
         assert "after" in section
