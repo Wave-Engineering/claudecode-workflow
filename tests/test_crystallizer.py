@@ -151,6 +151,28 @@ def _assistant_tool_use_only() -> dict:
     }
 
 
+def _assistant_file_tool(tool_name: str, file_path: str) -> dict:
+    """An assistant turn containing a single Write/Edit/MultiEdit tool_use.
+
+    Used by the Files Modified scoping tests (#265) to simulate file
+    modifications at arbitrary paths, both inside and outside $PROJECT_DIR.
+    """
+    return {
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": f"tool_{tool_name.lower()}",
+                    "name": tool_name,
+                    "input": {"file_path": file_path},
+                }
+            ],
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -420,3 +442,193 @@ class TestRecentAssistantContext:
         assert "final answer" in section
         assert "before" in section
         assert "after" in section
+
+
+class TestFilesModifiedScoping:
+    """Tests for the `Files Modified This Session` section of crystallized state.
+
+    Regression tests for #265: a single Claude Code transcript can touch
+    files across multiple project roots, because the agent reads from
+    sibling repos or the user switches projects within a conversation.
+    The crystallizer must filter Write/Edit/MultiEdit paths to those under
+    $PROJECT_DIR so that crystallized state for project A doesn't leak
+    content from project B.
+    """
+
+    def _extract_files_section(self, state_file: Path) -> str:
+        return _extract_section(
+            state_file, "Files Modified This Session", "Recent Tool Operations"
+        )
+
+    def test_files_under_project_dir_included(self, tmp_path):
+        """Paths under $PROJECT_DIR appear in the Files Modified section."""
+        project_file = str(tmp_path / "src" / "module.py")
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            _assistant_file_tool("Write", project_file),
+        ])
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = self._extract_files_section(state_file)
+
+        assert project_file in section
+
+    def test_foreign_project_files_excluded(self, tmp_path):
+        """Paths outside $PROJECT_DIR are filtered out."""
+        foreign_a = "/home/other/project-alpha/src/main.rs"
+        foreign_b = "/home/other/project-beta/lib.ts"
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            _assistant_file_tool("Write", foreign_a),
+            _assistant_file_tool("Edit", foreign_b),
+        ])
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = self._extract_files_section(state_file)
+
+        assert foreign_a not in section
+        assert foreign_b not in section
+        # Section should render the empty placeholder
+        assert "No files modified" in section
+
+    def test_mixed_local_and_foreign_only_local_kept(self, tmp_path):
+        """A transcript mixing local + foreign edits keeps only the local ones."""
+        local_file = str(tmp_path / "docs" / "README.md")
+        foreign_file = "/home/other/repo/CHANGELOG.md"
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            _assistant_file_tool("Edit", local_file),
+            _assistant_file_tool("Write", foreign_file),
+            _assistant_file_tool("MultiEdit", str(tmp_path / "src" / "app.py")),
+        ])
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = self._extract_files_section(state_file)
+
+        assert local_file in section
+        assert str(tmp_path / "src" / "app.py") in section
+        assert foreign_file not in section
+        assert "/home/other/repo" not in section
+
+    def test_write_edit_multiedit_all_filtered(self, tmp_path):
+        """The filter applies uniformly to all three file-writing tool names."""
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            _assistant_file_tool("Write", "/foreign/write.py"),
+            _assistant_file_tool("Edit", "/foreign/edit.py"),
+            _assistant_file_tool("MultiEdit", "/foreign/multiedit.py"),
+        ])
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = self._extract_files_section(state_file)
+
+        assert "/foreign/write.py" not in section
+        assert "/foreign/edit.py" not in section
+        assert "/foreign/multiedit.py" not in section
+
+    def test_sibling_directory_not_matched_by_prefix(self, tmp_path):
+        """A sibling directory sharing a name prefix with $PROJECT_DIR is excluded.
+
+        Guards the `$proj + "/"` anchor — without the trailing slash,
+        `startswith("/a/proj")` would match `/a/proj-sibling/file.py`.
+        """
+        # Create a sibling directory at the same parent as tmp_path
+        sibling = tmp_path.parent / (tmp_path.name + "-sibling")
+        sibling_file = str(sibling / "leak.py")
+        local_file = str(tmp_path / "keep.py")
+
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            _assistant_file_tool("Write", local_file),
+            _assistant_file_tool("Write", sibling_file),
+        ])
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = self._extract_files_section(state_file)
+
+        assert local_file in section
+        assert sibling_file not in section
+
+    def test_camelcase_filepath_fallback_filtered(self, tmp_path):
+        """The `filePath` camelCase fallback branch is also scoped.
+
+        Current Claude Code tools all use snake_case `file_path`, but the
+        crystallizer's jq filter has a defensive `// .input.filePath`
+        fallback for legacy/alternate input shapes. This test exercises
+        that fallback branch to ensure the scoping filter applies there
+        too — if the fallback is ever actually triggered by a real tool,
+        cross-project bleed must not reappear on that code path.
+        """
+        local_path = str(tmp_path / "local.py")
+        foreign_path = "/home/other/foreign.py"
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "tool_legacy_local",
+                        "name": "Write",
+                        "input": {"filePath": local_path},
+                    }],
+                },
+            },
+            {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "tool_legacy_foreign",
+                        "name": "Write",
+                        "input": {"filePath": foreign_path},
+                    }],
+                },
+            },
+        ])
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = self._extract_files_section(state_file)
+
+        assert local_path in section
+        assert foreign_path not in section
+
+    def test_project_dir_with_trailing_slash(self, tmp_path):
+        """A PROJECT_DIR argument with a trailing slash still filters correctly.
+
+        Guards the `${PROJECT_DIR%/}` normalization — without it, the anchor
+        would become `/path//` and never match anything.
+        """
+        project_file = str(tmp_path / "work.py")
+        foreign_file = "/home/other/work.py"
+
+        outdir = tmp_path / "out"
+        outdir.mkdir()
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            _assistant_file_tool("Write", project_file),
+            _assistant_file_tool("Write", foreign_file),
+        ])
+
+        # Pass PROJECT_DIR with a trailing slash
+        result = subprocess.run(
+            [
+                "bash", str(CRYSTALLIZER),
+                str(transcript), str(outdir),
+                str(tmp_path) + "/",  # trailing slash
+                "testsess",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, f"crystallizer failed: {result.stderr}"
+        state_file = Path(result.stdout.strip())
+        section = _extract_section(
+            state_file, "Files Modified This Session", "Recent Tool Operations"
+        )
+
+        assert project_file in section
+        assert foreign_file not in section

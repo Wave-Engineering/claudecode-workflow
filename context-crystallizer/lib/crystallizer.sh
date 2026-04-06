@@ -90,12 +90,25 @@ crystallize() {
                 join("\n\n")' 2>/dev/null)
     
     # Files that were modified (from tool uses)
+    #
+    # Filter to paths under $PROJECT_DIR. A single Claude Code session can
+    # touch files across multiple project roots (e.g., the agent reads files
+    # from a sibling repo for reference, or the user switches projects within
+    # the same transcript). Without this filter, every foreign path leaks into
+    # this project's crystallized state. Regression test for #265.
+    #
+    # Trailing slash on $PROJECT_DIR is stripped so the anchor `$proj + "/"`
+    # matches a directory boundary cleanly (otherwise `/a/proj` would also
+    # match `/a/proj2/file.txt`).
+    local PROJ_NORM="${PROJECT_DIR%/}"
     FILES_MODIFIED=$(tail -1000 "$TRANSCRIPT" | \
-        jq -r 'select(.type == "assistant") |
-               .message.content[]? |
-               select(.type == "tool_use") |
-               select(.name == "Write" or .name == "Edit" or .name == "MultiEdit") |
-               .input.file_path // .input.filePath // empty' 2>/dev/null | \
+        jq -r --arg proj "$PROJ_NORM" \
+           'select(.type == "assistant") |
+            .message.content[]? |
+            select(.type == "tool_use") |
+            select(.name == "Write" or .name == "Edit" or .name == "MultiEdit") |
+            (.input.file_path // .input.filePath // empty) |
+            select(startswith($proj + "/"))' 2>/dev/null | \
         sort -u | tail -20)
     
     # Recent tool operations
