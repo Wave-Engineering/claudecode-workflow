@@ -632,3 +632,157 @@ class TestFilesModifiedScoping:
 
         assert project_file in section
         assert foreign_file not in section
+
+
+class TestFilesModifiedWindowing:
+    """Tests for the windowing and dedup behavior of Files Modified (#272).
+
+    #264 and #268 fixed `USER_MESSAGES` and `ASSISTANT_MESSAGES` by switching
+    from line-based `tail -N | head -M` to jq slurp-mode `.[-N:]` slicing on
+    whole JSON records. `FILES_MODIFIED` was left on a `sort -u | tail -20`
+    pattern which:
+
+      1. Destroyed chronological order (dedup is lexicographic, not insertion).
+      2. Kept the 20 *lexicographically-last* unique paths instead of the
+         20 *most-recently-modified* paths.
+
+    These tests lock in the correct behavior:
+      - Output is the 20 most-recently-modified project-scoped files.
+      - Output is in chronological order (oldest → newest).
+      - Duplicate edits collapse to the path's latest position.
+    """
+
+    def _extract_files_section(self, state_file: Path) -> str:
+        return _extract_section(
+            state_file, "Files Modified This Session", "Recent Tool Operations"
+        )
+
+    def _files_in_section(self, section: str, project_root: Path) -> list[str]:
+        """Parse the fenced Files Modified block into an ordered list of paths."""
+        lines = section.splitlines()
+        # Lines are either bare paths, fence markers, or the header.
+        # Keep only lines that look like project paths.
+        root = str(project_root)
+        return [ln.strip() for ln in lines if ln.strip().startswith(root)]
+
+    def test_most_recent_twenty_survive(self, tmp_path):
+        """25 distinct files edited in chronological order → last 20 kept, first 5 dropped."""
+        # Use naming that keeps lex and chronological order in sync for this
+        # specific test (files are f_01..f_25, chronological == lex ascending)
+        # so the behavior we're asserting is about the *count* and *which end*
+        # of the window, not about lex-vs-chrono divergence.
+        paths = [str(tmp_path / "src" / f"f_{i:02d}.py") for i in range(1, 26)]
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            _assistant_file_tool("Write", p) for p in paths
+        ])
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = self._extract_files_section(state_file)
+        files = self._files_in_section(section, tmp_path)
+
+        assert len(files) == 20
+        # The 5 oldest (f_01..f_05) should be dropped.
+        for i in range(1, 6):
+            assert str(tmp_path / "src" / f"f_{i:02d}.py") not in files
+        # The 20 newest (f_06..f_25) should be present in chronological order.
+        expected = [str(tmp_path / "src" / f"f_{i:02d}.py") for i in range(6, 26)]
+        assert files == expected
+
+    def test_lexicographic_ordering_not_used(self, tmp_path):
+        """A z-prefixed file edited early must not appear after an a-prefixed file edited late.
+
+        This is the regression for the `sort -u | tail -20` bug: lex-sort
+        would put all `a_*` paths before `z_*` paths regardless of edit time,
+        but the correct behavior is chronological.
+        """
+        early_z = str(tmp_path / "src" / "zzz_early.py")
+        late_a = str(tmp_path / "src" / "aaa_late.py")
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            _assistant_file_tool("Write", early_z),
+            _assistant_file_tool("Edit", late_a),
+        ])
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = self._extract_files_section(state_file)
+        files = self._files_in_section(section, tmp_path)
+
+        assert files == [early_z, late_a], (
+            f"Expected chronological order [zzz_early, aaa_late] but got {files}. "
+            "If aaa_late appears first, dedup is still lexicographic."
+        )
+
+    def test_duplicate_path_collapses_to_latest_position(self, tmp_path):
+        """A file edited multiple times appears exactly once, at its latest chronological position.
+
+        Edit order: A, B, A, C, B → expect [A, C, B]
+          - A's last edit is at index 2 (before C at 3 and B at 4)
+          - C's last edit is at index 3
+          - B's last edit is at index 4
+        Sorted by last-index ascending: A, C, B.
+        """
+        a = str(tmp_path / "A.py")
+        b = str(tmp_path / "B.py")
+        c = str(tmp_path / "C.py")
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            _assistant_file_tool("Write", a),
+            _assistant_file_tool("Write", b),
+            _assistant_file_tool("Edit", a),
+            _assistant_file_tool("Write", c),
+            _assistant_file_tool("Edit", b),
+        ])
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = self._extract_files_section(state_file)
+        files = self._files_in_section(section, tmp_path)
+
+        assert files == [a, c, b], (
+            f"Expected last-wins order [A, C, B] but got {files}. "
+            "Dedup must keep each path at the position of its LAST edit."
+        )
+
+    def test_duplicate_path_counts_as_one_against_window(self, tmp_path):
+        """When >20 distinct files exist, duplicate edits of an existing file do not evict others.
+
+        Scenario: 20 distinct files edited, then f_01 is edited AGAIN.
+        The output should still contain all 20 distinct files; the re-edit
+        of f_01 just moves it to the tail. No file is dropped because dedup
+        runs BEFORE the `.[-20:]` slice.
+        """
+        base = [str(tmp_path / "src" / f"f_{i:02d}.py") for i in range(1, 21)]
+        re_edit = base[0]  # f_01.py edited again at the end
+        transcript = tmp_path / "t.jsonl"
+        events = [_assistant_file_tool("Write", p) for p in base]
+        events.append(_assistant_file_tool("Edit", re_edit))
+        _write_transcript(transcript, events)
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = self._extract_files_section(state_file)
+        files = self._files_in_section(section, tmp_path)
+
+        # All 20 distinct files must be present — none evicted by the re-edit.
+        assert len(files) == 20
+        assert set(files) == set(base)
+        # f_01 must now be at the END (its latest position), not at index 0.
+        assert files[-1] == re_edit
+        assert files[0] != re_edit
+
+    def test_scoping_still_applied_after_windowing_refactor(self, tmp_path):
+        """Smoke: the #265 scoping filter still removes foreign paths after the #272 rewrite."""
+        local_file = str(tmp_path / "keep.py")
+        foreign_file = "/home/other/project/leak.py"
+        transcript = tmp_path / "t.jsonl"
+        _write_transcript(transcript, [
+            _assistant_file_tool("Write", local_file),
+            _assistant_file_tool("Edit", foreign_file),
+            _assistant_file_tool("MultiEdit", foreign_file),
+        ])
+
+        state_file = _run_crystallizer(transcript, tmp_path)
+        section = self._extract_files_section(state_file)
+
+        assert local_file in section
+        assert foreign_file not in section
+        assert "/home/other" not in section
