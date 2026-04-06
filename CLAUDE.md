@@ -343,27 +343,83 @@ delivered as `[voice memo from <author>: "<text>"]`.
 
 ## Compact Instructions
 
-These instructions guide context compaction (both manual `/compact` and automatic). They are read by the compaction summarizer to control what is preserved and what is discarded.
+These instructions guide context compaction (both manual `/compact` and automatic). Read them before writing any summary.
 
-**Preserve verbatim:**
-- Plan file content (everything in `.claude/plans/`)
-- File paths, commit SHAs, branch names, and URLs — these are the hardest to reconstruct
-- Pending work items and next steps — the most actionable part of context
-- Current task state (in-progress, blocked, completed)
+### Size budget
 
-**Aggressively drop:**
-- Expanded skill definitions — full SKILL.md text that was loaded when a skill was invoked. These are read from disk on demand and do not need to survive compaction.
-- Cached tool results that have already been acted on (e.g., file reads that informed edits already made)
-- Intermediate reasoning and exploration that led to a final decision — keep the decision, drop the journey
+**Target: 3KB. Hard ceiling: 5KB.** If you are over budget, you are keeping too much. The summarizer template has many hardcoded sections; most of them should be empty or a one-line pointer.
 
-**Deduplicate:**
-- If the same information appears in multiple places (e.g., git status output repeated across tool calls), keep one copy
-- If a plan file restates information from memory files, the plan file version is authoritative for ephemeral state; drop redundant durable facts that memory files already cover
+### Rule 1 — If it's on disk, reference the path, do not summarize
 
-**Do NOT drop:**
-- User instructions and corrections — these reflect intent and preferences
-- Error messages and their resolutions — these prevent repeating mistakes
-- The current working state: which files were modified, what branch we're on, what's pending
+Do not restate content that exists in files on disk. The session resumes with those files available for Read. Instead of summarizing, write a one-line pointer:
+
+- GOOD: `Design decisions live in docs/SKETCHBOOK.md Stage 5.5 (D-18..D-28).`
+- BAD: 15 bullets re-describing each decision's rationale.
+
+Applies to: memory files, sketchbook, PRDs, vision docs, CLAUDE.md, source code, test files, configs.
+
+### Rule 2 — Omit entire sections when content would only be rederivable
+
+The summarizer template has hardcoded sections (Primary Request, Key Technical Concepts, Files and Code, Errors, Problem Solving, User Messages, Pending Tasks, Current Work, Next Step). You are permitted — and encouraged — to leave sections EMPTY or write a single-line pointer.
+
+- If "Key Technical Concepts" would only contain framework/API/language trivia → **omit the section.**
+- If "Files and Code Sections" would only restate file purposes visible via `ls`, `tree`, or `git log` → **omit the section.**
+- If "Problem Solving" would only recount discoveries already reflected in code on disk → **omit the section.**
+
+### Rule 3 — Never include code snippets
+
+Code lives on disk. Any snippet in a summary is waste. Reference file paths and line ranges instead.
+
+- GOOD: `Constants block at src/campaign_status.py:12-45.`
+- BAD: 20 lines of quoted Python.
+
+### Rule 4 — Terse bullets, not prose
+
+Do not write narrative paragraphs. Every preserved item should be one bullet. If you need a second sentence, you are including the journey instead of the decision.
+
+### Rule 5 — No cross-project content
+
+Filter out any content that originated from a different project's working directory (e.g., pulled in by a SessionStart hook or a tool call). Do not include it in the summary in any form — not as bullets, not as path references, not as quoted text. This rule is purely a filter: it does not affect content from the current project, which is governed by Rules 1-4.
+
+### Preserve verbatim (these take precedence over all drop rules)
+
+Items in this list MUST be preserved even if they also appear in a memory file, plan file, or on disk. The drop and dedup rules below do not apply here.
+
+- **User instructions and corrections** — reflect intent, hard to re-derive
+- **Error messages and their resolutions** — one line each: what failed, what fixed it
+- **File paths, commit SHAs, branch names, URLs** — hardest to reconstruct from context
+- **Current working state** — which files were modified, what branch we're on, what's pending
+- **Plan file content** (`.claude/plans/*`) — this is the ephemeral state snapshot
+
+### Aggressively drop
+
+- Expanded skill definitions — full SKILL.md text loaded when a skill was invoked. Read from disk on demand; does not need to survive compaction.
+- Tool results that already informed a completed action (e.g., file reads that led to edits already made)
+- Intermediate reasoning and exploration — keep the decision, drop the journey
+- MCP tool lists for servers the project never uses
+- Content already present in a loaded memory file
+
+### Deduplicate
+
+- Same information across multiple tool calls → keep one copy
+- If a plan file restates information from memory files, the plan file is authoritative for ephemeral state; drop redundant durable facts that memory files already cover
+- Code content that appears in both file reads and summary → drop the summary version
+
+### Anti-example (DO NOT emit output like this)
+
+    ## Key Technical Concepts
+    - Domain-Driven Design (DDD) event storming methodology
+    - Model Context Protocol (MCP) server architecture
+    - SDLC pipeline: concept → prd → backlog → implementation → dod
+    - Half-duplex director pattern (MCP responds with directives)
+    - [...12 more framework bullets...]
+
+If those concepts are captured in `docs/SKETCHBOOK.md` and memory files, the correct output is:
+
+    ## Key Technical Concepts
+    See docs/SKETCHBOOK.md Stage 5.5 and memory files.
+
+Or better — omit the section entirely.
 
 ## Agent Identity
 
