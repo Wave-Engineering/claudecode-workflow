@@ -412,7 +412,7 @@ do_check() {
 	# Scripts
 	echo "Scripts"
 	echo "--------------------------------------------"
-	local expected_scripts=(discord-bot discord-status-post slackbot-send job-fetch file-opener vox)
+	local expected_scripts=(discord-status-post slackbot-send job-fetch file-opener vox)
 	for script_name in "${expected_scripts[@]}"; do
 		if [[ -x "$SCRIPTS_DIR/$script_name" ]]; then
 			ok "$script_name"
@@ -503,7 +503,7 @@ do_uninstall() {
 	echo "Scripts"
 	echo "--------------------------------------------"
 	local known_scripts=(
-		discord-bot discord-status-post slackbot-send job-fetch
+		discord-status-post slackbot-send job-fetch
 		file-opener vox worktree-manager cc-inspector discord-lock
 		generate-status-panel wave-status
 	)
