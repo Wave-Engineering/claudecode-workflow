@@ -100,16 +100,37 @@ crystallize() {
     # Trailing slash on $PROJECT_DIR is stripped so the anchor `$proj + "/"`
     # matches a directory boundary cleanly (otherwise `/a/proj` would also
     # match `/a/proj2/file.txt`).
+    #
+    # Windowing uses jq slurp mode (`-rs`) + array slicing, matching the
+    # pattern used for USER_MESSAGES (#264) and ASSISTANT_MESSAGES (#268).
+    # The input `tail -1000` is a coarse memory cap on jq slurp for very long
+    # transcripts, not the window itself — the actual window is the `.[-20:]`
+    # slice inside jq, which operates on whole JSON records.
+    #
+    # Dedup is order-preserving with last-occurrence-wins: reverse, first-wins
+    # dedup via a `seen` set, reverse back. The previous `sort -u | tail -20`
+    # returned the 20 *lexicographically-last* unique paths, which silently
+    # degraded to an alphabetically skewed sample in long sessions — a
+    # crystallized snapshot would show the wrong files. The current form keeps
+    # the 20 *most-recently-modified* paths in chronological order
+    # (oldest → newest). Regression scope for #272.
     local PROJ_NORM="${PROJECT_DIR%/}"
     FILES_MODIFIED=$(tail -1000 "$TRANSCRIPT" | \
-        jq -r --arg proj "$PROJ_NORM" \
-           'select(.type == "assistant") |
-            .message.content[]? |
-            select(.type == "tool_use") |
-            select(.name == "Write" or .name == "Edit" or .name == "MultiEdit") |
-            (.input.file_path // .input.filePath // empty) |
-            select(startswith($proj + "/"))' 2>/dev/null | \
-        sort -u | tail -20)
+        jq -rs --arg proj "$PROJ_NORM" \
+           'map(select(.type == "assistant" and .message.content) |
+                .message.content[]? |
+                select(.type == "tool_use") |
+                select(.name == "Write" or .name == "Edit" or .name == "MultiEdit") |
+                (.input.file_path // .input.filePath // empty) |
+                select(startswith($proj + "/"))) |
+            reverse |
+            reduce .[] as $p ({list: [], seen: {}};
+                if .seen[$p] then . else
+                    .list += [$p] | .seen[$p] = true
+                end) |
+            .list | reverse |
+            .[-20:] |
+            join("\n")' 2>/dev/null)
     
     # Recent tool operations
     TOOL_USES=$(tail -500 "$TRANSCRIPT" | \
