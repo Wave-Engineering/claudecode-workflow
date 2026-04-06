@@ -35,14 +35,33 @@ crystallize() {
     local USER_MESSAGES ASSISTANT_MESSAGES TOOL_USES FILES_MODIFIED
     
     # Recent user prompts (last 10)
+    #
+    # In Claude Code's transcript format, "user"-type entries carry three
+    # different content shapes:
+    #   1. A plain string       — an actual user prompt (or slash-command
+    #                              invocation, Discord watcher notification,
+    #                              compaction continuation header)
+    #   2. An array of text blocks — a skill invocation body (e.g., /precheck
+    #                              loads the SKILL.md body into a "user" turn)
+    #   3. An array of tool_result blocks — a tool response
+    #
+    # Only shape (1) is an actual user instruction. Filtering on
+    # `.type == "text"` inside the array incorrectly captures skill bodies as
+    # "user messages", polluting the Recent User Instructions section with
+    # kilobytes of skill documentation. Restrict to plain strings.
+    #
+    # Windowing is done with jq slurp mode (`-s`) + array slicing rather than
+    # `tail -N | head -N` on jq's text output. Line-based windowing produces
+    # garbage when a single user message spans multiple lines (either empty
+    # output, or a mid-message fragment), because it has no record-boundary
+    # semantics. Slurp + slice operates on whole records.
     USER_MESSAGES=$(tail -500 "$TRANSCRIPT" | \
-        jq -r 'select(.type == "user" and .message.content) | 
-               .message.content | 
-               if type == "array" then 
-                   map(select(.type == "text") | .text) | join("\n") 
-               elif type == "string" then . 
-               else empty end' 2>/dev/null | \
-        tail -20 | head -10)
+        jq -rs 'map(select(.type == "user" and .message.content) |
+                    select((.message.content | type) == "string") |
+                    .message.content) |
+                .[-10:] |
+                map("- " + (gsub("\n"; "\n  "))) |
+                join("\n\n")' 2>/dev/null)
     
     # Recent assistant responses (summaries)
     ASSISTANT_MESSAGES=$(tail -500 "$TRANSCRIPT" | \
