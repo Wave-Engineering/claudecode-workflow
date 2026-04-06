@@ -3,6 +3,8 @@
 #
 # Usage:
 #   discord-bot send <channel-id> <message> [--embed title:text] [--attach FILE]
+#     Messages over 2000 chars are automatically split into numbered multi-part
+#     messages. Embeds and attachments are applied to the final chunk only.
 #   discord-bot read <channel-id> [--limit N] [--after ID]
 #   discord-bot create-channel <guild-id> <name> [--topic TOPIC] [--category ID] [--type text|category]
 #   discord-bot create-thread <channel-id> <name> [--auto-archive 60|1440|4320|10080]
@@ -351,6 +353,72 @@ api_post() {
 	echo "$body"
 }
 
+# --- Message splitting --------------------------------------------------------
+# Discord's hard limit on the `content` field is 2000 characters (codepoints).
+# Anything larger returns HTTP 400. The splitter below slices oversize messages
+# into chunks at natural boundaries so callers don't have to truncate by hand.
+#
+# Budget is 1900 not 2000: each chunk gets a trailing "\n(N/M)" footer, and 100
+# chars of headroom handles totals up to (99/99) comfortably.
+#
+# Character math: ${#var} counts codepoints when the locale is UTF-8, which is
+# what Discord's limit actually measures. On non-UTF-8 locales it degrades to
+# byte counting — conservative, so splits will still be under the wire limit.
+_DISCORD_MSG_LIMIT=2000
+_DISCORD_CHUNK_BUDGET=1900
+
+# Split $1 into chunks of at most $_DISCORD_CHUNK_BUDGET characters.
+# Preference order at each split point: last newline in budget → last space in
+# budget → hard cut at budget. Writes chunks to stdout separated by NUL bytes
+# so embedded newlines remain unambiguous.
+#
+# Space-fallback note: when splitting at a space, the space itself is dropped
+# so the next chunk doesn't start with a leading space. Newline-fallback keeps
+# the newline with the preceding chunk (trailing) so line structure is visible.
+_split_for_discord() {
+	local text="$1"
+	local budget="$_DISCORD_CHUNK_BUDGET"
+	local -a chunks=()
+
+	while ((${#text} > budget)); do
+		local chunk="${text:0:$budget}"
+		local split_at=$budget
+
+		# Prefer the last newline in the budget window
+		local before_last_nl="${chunk%$'\n'*}"
+		if [[ "$before_last_nl" != "$chunk" ]]; then
+			# include the newline in the chunk we're about to emit
+			split_at=$((${#before_last_nl} + 1))
+			chunks+=("${text:0:$split_at}")
+			text="${text:$split_at}"
+			continue
+		fi
+
+		# Fall back to the last space in the budget window
+		local before_last_sp="${chunk% *}"
+		if [[ "$before_last_sp" != "$chunk" ]]; then
+			# emit through the character before the space, skip the space itself
+			local keep_len=${#before_last_sp}
+			chunks+=("${text:0:$keep_len}")
+			text="${text:$((keep_len + 1))}"
+			continue
+		fi
+
+		# Hard cut at the budget boundary
+		chunks+=("$chunk")
+		text="${text:$budget}"
+	done
+
+	chunks+=("$text")
+	printf '%s\0' "${chunks[@]}"
+}
+
+# Append "(idx/total)" as a new line on $3 and print to stdout.
+_apply_chunk_footer() {
+	local idx="$1" total="$2" chunk="$3"
+	printf '%s\n(%d/%d)' "$chunk" "$idx" "$total"
+}
+
 # --- Subcommand: send ---------------------------------------------------------
 send_help() {
 	cat <<'HELPTEXT'
@@ -367,12 +435,100 @@ Options:
   --attach FILE        Upload a file attachment alongside the message
   -h, --help           Show this help message
 
+Behavior:
+  Messages over 2000 characters (Discord's hard limit on content) are split
+  automatically into multiple messages. Each chunk is appended with a
+  "(N/M)" footer on its own line. Splits prefer newline boundaries, then
+  whitespace, then hard-cut as a last resort. Embeds and attachments are
+  attached to the FINAL chunk only so they render at the bottom of the
+  full message.
+
+  Return value: a single message ID on stdout. For split sends this is the
+  ID of the last chunk — preserving backward compat with callers that
+  capture the output.
+
 Examples:
   discord-bot send 123456789 "Hello, world!"
   discord-bot send 123456789 "Deploy report" --embed "Status:All green"
   discord-bot send 123456789 "See attached" --attach ./report.txt
+  discord-bot send 123456789 "$(cat long-report.md)"   # auto-splits
 HELPTEXT
 	exit 0
+}
+
+# Internal: send one Discord message (no splitting). Handles text-only via
+# api_post (which already has 429 handling) and the multipart attachment path
+# inline because multipart doesn't flow through api_post.
+#
+# Args: channel_id content [embed_title] [embed_text] [attach_file]
+# Writes the created message ID to stdout, or returns nonzero on failure.
+_send_single_chunk() {
+	local channel_id="$1" content="$2"
+	local embed_title="${3:-}" embed_text="${4:-}" attach_file="${5:-}"
+	local payload
+
+	if [[ -n "$embed_title" ]]; then
+		payload=$(jq -c -n \
+			--arg content "$content" \
+			--arg title "$embed_title" \
+			--arg desc "$embed_text" \
+			'{content: $content, embeds: [{title: $title, description: $desc}]}')
+	else
+		payload=$(jq -c -n --arg content "$content" '{content: $content}')
+	fi
+
+	if [[ -z "$attach_file" ]]; then
+		local response
+		response=$(api_post "/channels/$channel_id/messages" "$payload") || return 1
+		jq -r '.id' <<<"$response"
+		return 0
+	fi
+
+	# Multipart attachment path — duplicates 429 handling because the multipart
+	# POST doesn't route through api_post.
+	check_kill_switch
+	local http_code body endpoint="/channels/$channel_id/messages"
+	body=$(curl -sS -D "$_DISCORD_HEADERS_FILE" -w '\n%{http_code}' -X POST \
+		--config <(echo "$_curl_auth_cfg") \
+		-F "payload_json=$payload" \
+		-F "files[0]=@${attach_file}" \
+		"$API_BASE$endpoint")
+	http_code=$(tail -1 <<<"$body")
+	body=$(sed '$d' <<<"$body")
+	log_api_call "POST(multipart)" "$endpoint" "$http_code"
+
+	if [[ "$http_code" == "429" ]]; then
+		local is_global header_retry body_retry wait_time
+		is_global=$(echo "$body" | jq -r '.global // false' 2>/dev/null)
+		header_retry=$(_get_retry_after_header)
+		body_retry=$(echo "$body" | jq -r '.retry_after // empty' 2>/dev/null)
+		wait_time="${header_retry:-${body_retry:-1}}"
+
+		if [[ "$is_global" == "true" ]]; then
+			_engage_global_kill "${wait_time%.*}"
+			log_api_call "POST(multipart)" "$endpoint" "429" "global=true, retry_after=${wait_time}s, kill_engaged=true"
+			return 1
+		fi
+
+		echo "Rate limited (scope: channel). Waiting ${wait_time}s..." >&2
+		sleep "$wait_time"
+		check_kill_switch
+		body=$(curl -sS -D "$_DISCORD_HEADERS_FILE" -w '\n%{http_code}' -X POST \
+			--config <(echo "$_curl_auth_cfg") \
+			-F "payload_json=$payload" \
+			-F "files[0]=@${attach_file}" \
+			"$API_BASE$endpoint")
+		http_code=$(tail -1 <<<"$body")
+		body=$(sed '$d' <<<"$body")
+		log_api_call "POST(multipart)" "$endpoint" "$http_code" "retry=1 after ${wait_time}s"
+	fi
+
+	if [[ "$http_code" -ge 400 ]]; then
+		echo "Error: Discord API returned HTTP $http_code on multipart POST $endpoint" >&2
+		[[ -n "$body" ]] && echo "$body" | jq -r '.message // empty' 2>/dev/null >&2
+		return 1
+	fi
+	jq -r '.id' <<<"$body"
 }
 
 cmd_send() {
@@ -421,67 +577,32 @@ cmd_send() {
 		exit 1
 	}
 
-	local payload
-	if [[ -n "$embed_title" ]]; then
-		payload=$(jq -c -n \
-			--arg content "$message" \
-			--arg title "$embed_title" \
-			--arg desc "$embed_text" \
-			'{content: $content, embeds: [{title: $title, description: $desc}]}')
-	else
-		payload=$(jq -c -n --arg content "$message" '{content: $content}')
+	# Fast path: message fits in a single Discord message.
+	if ((${#message} <= _DISCORD_MSG_LIMIT)); then
+		_send_single_chunk "$channel_id" "$message" "$embed_title" "$embed_text" "$attach_file"
+		return
 	fi
 
-	if [[ -n "$attach_file" ]]; then
-		check_kill_switch
-		local http_code body endpoint="/channels/$channel_id/messages"
-		body=$(curl -sS -D "$_DISCORD_HEADERS_FILE" -w '\n%{http_code}' -X POST \
-			--config <(echo "$_curl_auth_cfg") \
-			-F "payload_json=$payload" \
-			-F "files[0]=@${attach_file}" \
-			"$API_BASE$endpoint")
-		http_code=$(tail -1 <<<"$body")
-		body=$(sed '$d' <<<"$body")
-		log_api_call "POST(multipart)" "$endpoint" "$http_code"
+	# Split path: slice into chunks, number them, send in order. The final
+	# chunk carries any embed/attachment so those render at the bottom of the
+	# full message thread.
+	local -a chunks=()
+	mapfile -d '' chunks < <(_split_for_discord "$message")
+	local total=${#chunks[@]}
 
-		# 429 handling — global vs channel
-		if [[ "$http_code" == "429" ]]; then
-			local is_global header_retry body_retry wait_time
-			is_global=$(echo "$body" | jq -r '.global // false' 2>/dev/null)
-			header_retry=$(_get_retry_after_header)
-			body_retry=$(echo "$body" | jq -r '.retry_after // empty' 2>/dev/null)
-			wait_time="${header_retry:-${body_retry:-1}}"
+	local last_id="" i idx footer_text
+	for ((i = 0; i < total; i++)); do
+		idx=$((i + 1))
+		footer_text=$(_apply_chunk_footer "$idx" "$total" "${chunks[$i]}")
 
-			if [[ "$is_global" == "true" ]]; then
-				_engage_global_kill "${wait_time%.*}"
-				log_api_call "POST(multipart)" "$endpoint" "429" "global=true, retry_after=${wait_time}s, kill_engaged=true"
-				return 1
-			fi
-
-			echo "Rate limited (scope: channel). Waiting ${wait_time}s..." >&2
-			sleep "$wait_time"
-			check_kill_switch
-			body=$(curl -sS -D "$_DISCORD_HEADERS_FILE" -w '\n%{http_code}' -X POST \
-				--config <(echo "$_curl_auth_cfg") \
-				-F "payload_json=$payload" \
-				-F "files[0]=@${attach_file}" \
-				"$API_BASE$endpoint")
-			http_code=$(tail -1 <<<"$body")
-			body=$(sed '$d' <<<"$body")
-			log_api_call "POST(multipart)" "$endpoint" "$http_code" "retry=1 after ${wait_time}s"
+		if ((idx == total)); then
+			last_id=$(_send_single_chunk "$channel_id" "$footer_text" "$embed_title" "$embed_text" "$attach_file") || return 1
+		else
+			_send_single_chunk "$channel_id" "$footer_text" "" "" "" >/dev/null || return 1
 		fi
+	done
 
-		if [[ "$http_code" -ge 400 ]]; then
-			echo "Error: Discord API returned HTTP $http_code on multipart POST $endpoint" >&2
-			[[ -n "$body" ]] && echo "$body" | jq -r '.message // empty' 2>/dev/null >&2
-			return 1
-		fi
-		jq -r '.id' <<<"$body"
-	else
-		local response
-		response=$(api_post "/channels/$channel_id/messages" "$payload")
-		jq -r '.id' <<<"$response"
-	fi
+	echo "$last_id"
 }
 
 # --- Subcommand: read ---------------------------------------------------------
@@ -856,6 +977,10 @@ cmd_resolve() {
 }
 
 # --- Dispatch -----------------------------------------------------------------
+# Skip dispatch when the script is sourced (e.g. from tests) so the helpers
+# above can be exercised without executing a subcommand.
+[[ "${BASH_SOURCE[0]}" == "${0}" ]] || return 0
+
 [[ $# -lt 1 ]] && usage
 
 case "$1" in
