@@ -64,14 +64,30 @@ crystallize() {
                 join("\n\n")' 2>/dev/null)
     
     # Recent assistant responses (summaries)
+    #
+    # Assistant content arrays legitimately mix text, tool_use, and thinking
+    # blocks, so we extract only the text blocks and join them per message.
+    # Unlike the user-side, there is no leak bug here — the filter is right.
+    #
+    # But the same line-based windowing problem as the user-side (see #264):
+    # `tail -30 | head -15` on jq's raw text output has no record-boundary
+    # semantics, so multi-line responses either get truncated mid-content or
+    # the window slides onto blank lines and returns nothing. Slurp mode +
+    # array slicing fixes this the same way.
+    #
+    # `select(length > 0)` drops messages whose only content was tool_use /
+    # thinking with no text output — those should not count toward the
+    # window of "recent responses".
     ASSISTANT_MESSAGES=$(tail -500 "$TRANSCRIPT" | \
-        jq -r 'select(.type == "assistant" and .message.content) |
-               .message.content |
-               if type == "array" then
-                   map(select(.type == "text") | .text) | join("\n")
-               elif type == "string" then .
-               else empty end' 2>/dev/null | \
-        tail -30 | head -15)
+        jq -rs 'map(select(.type == "assistant" and .message.content) |
+                    (.message.content | if type == "array" then
+                                            map(select(.type == "text") | .text) | join("\n")
+                                        elif type == "string" then .
+                                        else empty end) |
+                    select(length > 0)) |
+                .[-15:] |
+                map("- " + (gsub("\n"; "\n  "))) |
+                join("\n\n")' 2>/dev/null)
     
     # Files that were modified (from tool uses)
     FILES_MODIFIED=$(tail -1000 "$TRANSCRIPT" | \
