@@ -19,6 +19,11 @@
       "repo": "Wave-Engineering/mcp-server-discord",
       "install_url": "https://raw.githubusercontent.com/Wave-Engineering/mcp-server-discord/main/scripts/install-remote.sh",
       "description": "Discord send/read/manage for Claude Code agents"
+    },
+    "sdlc-server": {
+      "repo": "Wave-Engineering/mcp-server-sdlc",
+      "install_url": "https://raw.githubusercontent.com/Wave-Engineering/mcp-server-sdlc/main/scripts/install-remote.sh",
+      "description": "SDLC workflow tools for Claude Code agents"
     }
   }
 }
