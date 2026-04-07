@@ -53,6 +53,24 @@ if [ -n "$dev_name" ]; then
 	fi
 fi
 
+# --- Wavemachine indicator ---
+# /wavemachine writes wavemachine_active:true to .claude/status/state.json at
+# launch and clears it on completion/abort. Display 🌊 while active.
+# Silent skip if state.json is missing or malformed.
+wave_str=""
+if [ -n "$project_root" ] && [ -f "$project_root/.claude/status/state.json" ]; then
+	wave_active=$(jq -r '.wavemachine_active // false' "$project_root/.claude/status/state.json" 2>/dev/null)
+	if [ "$wave_active" = "true" ]; then
+		wave_str="🌊 "
+		# Optional progress when wavemachine tracks wave position
+		wave_n=$(jq -r '.wavemachine_active_wave // empty' "$project_root/.claude/status/state.json" 2>/dev/null)
+		wave_total=$(jq -r '.wavemachine_total_waves // empty' "$project_root/.claude/status/state.json" 2>/dev/null)
+		if [ -n "$wave_n" ] && [ -n "$wave_total" ]; then
+			wave_str="🌊 wave ${wave_n}/${wave_total} "
+		fi
+	fi
+fi
+
 # --- Agent display string ---
 agent_str=""
 if [ -n "$dev_name" ]; then
@@ -62,8 +80,9 @@ if [ -n "$dev_name" ]; then
 	fi
 fi
 
-# === LINE 1: [indicators] [pwd] [dev-name] [dev-avatar] ===
+# === LINE 1: [indicators] [wavemachine] [pwd] [dev-name] [dev-avatar] ===
 printf "%s" "$indicators_str"
+printf "%s" "$wave_str"
 printf '%b' "${c_blue}${short_cwd}${c_reset}"
 printf "%s" "$agent_str"
 printf "\n"
