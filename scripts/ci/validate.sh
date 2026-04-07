@@ -219,6 +219,27 @@ for skill_file in "$REPO_DIR"/skills/*/SKILL.md; do
 	fi
 done
 
+# --- Install script skill registration ---------------------------------------
+# Ensures every skills/*/ directory is reachable by the install script's
+# skill-discovery loop. This guards against regressions where a new skill
+# (e.g. wavemachine) gets filed but the install path is accidentally narrowed
+# to a hardcoded list. Both install and scripts/install-remote.sh must loop
+# over skills/*/ unconditionally.
+echo ""
+echo "Install script skill registration"
+echo "──────────────────────────────────────────"
+for install_script in "$REPO_DIR/install" "$REPO_DIR/scripts/install-remote.sh"; do
+	[[ -f "$install_script" ]] || continue
+	rel="${install_script#"$REPO_DIR/"}"
+	if grep -q 'for skill_dir in .*skills/\*/' "$install_script"; then
+		info "$rel — discovers skills/*/ unconditionally"
+		PASS=$((PASS + 1))
+	else
+		err "$rel — does not appear to discover skills/*/ (possible hardcoded list)"
+		FAIL=$((FAIL + 1))
+	fi
+done
+
 # --- Summary ------------------------------------------------------------------
 echo ""
 echo "──────────────────────────────────────────"
