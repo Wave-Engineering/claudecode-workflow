@@ -11,13 +11,13 @@ description: Domain-Driven Design facilitation — event storming, domain modeli
 
 # Domain-Driven Design Workflow
 
-This skill provides a structured workflow for Domain-Driven Design using event storming. It guides you through discovering your domain model and preparing it for PRD creation via `/prd create`.
+This skill provides a structured workflow for Domain-Driven Design using event storming. It guides you through discovering your domain model and preparing it for Dev Spec creation via `/devspec create`.
 
 ## Commands
 
 - **`/ddd begin`** — Start interactive event storming session (creates SKETCHBOOK.md)
 - **`/ddd draft`** — Formalize sketchbook into Domain Model document (creates DOMAIN-MODEL.md)
-- **`/ddd accept`** — Verify domain model and hand off to PRD creation
+- **`/ddd accept`** — Verify domain model and hand off to Dev Spec creation
 - **`/ddd resume`** — Resume interrupted event storming session
 
 ## Usage
@@ -29,7 +29,7 @@ This skill provides a structured workflow for Domain-Driven Design using event s
 # Formalize raw notes into domain model
 /ddd draft
 
-# Verify domain model and hand off to /prd create
+# Verify domain model and hand off to /devspec create
 /ddd accept
 
 # Resume interrupted session
@@ -71,8 +71,8 @@ Progress is saved to `docs/SKETCHBOOK.md` after each stage.
 ### `/ddd draft` — Formalize Domain Model
 Reads `docs/SKETCHBOOK.md` and produces a formal `docs/DOMAIN-MODEL.md` following the Domain Model template. Validates completeness and adds traceability.
 
-### `/ddd accept` — Verify Domain Model and Hand Off to PRD Creation
-Verifies `docs/DOMAIN-MODEL.md` exists and is committed, prints a summary of domain model contents (aggregate/command/policy counts), and suggests running `/prd create` to generate the PRD.
+### `/ddd accept` — Verify Domain Model and Hand Off to Dev Spec Creation
+Verifies `docs/DOMAIN-MODEL.md` exists and is committed, prints a summary of domain model contents (aggregate/command/policy counts), and suggests running `/devspec create` to generate the Dev Spec.
 
 ### `/ddd resume` — Resume Session
 If your event storming session was interrupted (context compaction, restart), this command reads `docs/SKETCHBOOK.md` and picks up where you left off.
@@ -431,7 +431,7 @@ I'll read your sketchbook and produce a formal Domain Model document following t
    - Aggregates (state machines, invariants)
    - Read Models (what views actors need)
    - Open Questions
-   - DDD→PRD Translation Map
+   - DDD→Dev Spec Translation Map
 4. Validate completeness:
    - Every policy references events/commands
    - Every aggregate has a state machine
@@ -450,7 +450,7 @@ If the sketchbook exists, proceed. Read it and generate the formal domain model 
 <!-- BEGIN TEMPLATE: ddd-accept -->
 ## Domain Model Handoff
 
-I'll verify the domain model is ready and hand off to PRD creation.
+I'll verify the domain model is ready and hand off to Dev Spec creation.
 
 **Step 1 — Verify `docs/DOMAIN-MODEL.md` exists:**
 
@@ -479,7 +479,7 @@ Present:
 
 **Step 4 — Suggest next step:**
 
-> Run `/prd create` to generate the PRD from this domain model.
+> Run `/devspec create` to generate the Dev Spec from this domain model.
 
-**Stop here.** Do not generate a PRD. Do not read PRD templates. Do not apply DDD→PRD translation. The `/prd create` command handles PRD generation.
+**Stop here.** Do not generate a Dev Spec. Do not read Dev Spec templates. Do not apply DDD→Dev Spec translation. The `/devspec create` command handles Dev Spec generation.
 <!-- END TEMPLATE: ddd-accept -->

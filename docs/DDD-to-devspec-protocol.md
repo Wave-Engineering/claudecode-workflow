@@ -1,14 +1,14 @@
-# DDD → PRD Translation Protocol
+# DDD → Dev Spec Translation Protocol
 
-> **Recommended:** Use `/prd create` with a DDD domain model as input to automate this translation interactively. The `/prd create` skill walks each PRD section with you, applies the mapping rules below, and manages the Deliverables Manifest. This protocol document remains as reference for understanding the mapping, but the primary workflow is now: `/ddd accept` (produces concept handoff) → `/prd create` (produces PRD).
+> **Recommended:** Use `/devspec create` with a DDD domain model as input to automate this translation interactively. The `/devspec create` skill walks each Dev Spec section with you, applies the mapping rules below, and manages the Deliverables Manifest. This protocol document remains as reference for understanding the mapping, but the primary workflow is now: `/ddd accept` (produces concept handoff) → `/devspec create` (produces Dev Spec).
 
-This guide documents the process for converting a Domain Model (Event Storming output) into a Product Requirements Document following the PRD template (`docs/PRD-template.md`).
+This guide documents the process for converting a Domain Model (Event Storming output) into a Development Specification following the Dev Spec template (`docs/devspec-template.md`).
 
 ## Purpose
 
-After completing Domain-Driven Design via event storming, you have a **Domain Model** — a complete picture of your domain's events, commands, actors, policies, aggregates, and read models. This document shows how to translate that model into an **implementation-ready PRD** that agents and developers can execute from.
+After completing Domain-Driven Design via event storming, you have a **Domain Model** — a complete picture of your domain's events, commands, actors, policies, aggregates, and read models. This document shows how to translate that model into an **implementation-ready Dev Spec** that agents and developers can execute from.
 
-**Key principle:** DDD doesn't replace requirements — it **discovers** them. The PRD is still the contract with implementers. This protocol is the bridge.
+**Key principle:** DDD doesn't replace requirements — it **discovers** them. The Dev Spec is still the contract with implementers. This protocol is the bridge.
 
 ---
 
@@ -23,17 +23,17 @@ Before starting translation, ensure you have:
   - Policies table (P-01, P-02, ...) grouped by type
   - Aggregates definition with state machines
   - Read Models inventory
-- [x] **PRD Template** (`docs/PRD-template.md`)
+- [x] **Dev Spec Template** (`docs/devspec-template.md`)
 - [x] **Project name** for output file naming
 
 ---
 
 ## Translation Steps
 
-### Step 1: Extract Personas (DDD Actors → PRD Section 1.4)
+### Step 1: Extract Personas (DDD Actors → Dev Spec Section 1.4)
 
 **Input:** Actors responsibility matrix from Domain Model Section 5
-**Output:** Persona table in PRD Section 1.4 (Target Users)
+**Output:** Persona table in Dev Spec Section 1.4 (Target Users)
 
 **Process:**
 
@@ -50,7 +50,7 @@ Before starting translation, ensure you have:
 | **Executive Producer (Human)** | C-01, C-03, C-11, C-17 | Approval gates, "ship it" decision |
 ```
 
-**→ Becomes PRD Section 1.4:**
+**→ Becomes Dev Spec Section 1.4:**
 ```markdown
 | Persona | Description | Primary Use Case |
 |---------|-------------|------------------|
@@ -61,10 +61,10 @@ Before starting translation, ensure you have:
 
 ---
 
-### Step 2: Design Data Model (DDD Aggregates → PRD Section 5.1)
+### Step 2: Design Data Model (DDD Aggregates → Dev Spec Section 5.1)
 
 **Input:** Aggregates section from Domain Model Section 7
-**Output:** Data Model section (PRD Section 5.1) with state machines, invariants, relationships
+**Output:** Data Model section (Dev Spec Section 5.1) with state machines, invariants, relationships
 
 **Process:**
 
@@ -94,7 +94,7 @@ Before starting translation, ensure you have:
 - References Script (1:1), Creative Briefs (1:many), Voiceover (1:1), Composition (1:1)
 ```
 
-**→ Becomes PRD Section 5.1:**
+**→ Becomes Dev Spec Section 5.1:**
 ````markdown
 ### 5.1 Data Model
 
@@ -131,10 +131,10 @@ idea → commissioned → in-production → approved → published → retired
 
 ---
 
-### Step 3: Extract Requirements (DDD Policies → PRD Section 3)
+### Step 3: Extract Requirements (DDD Policies → Dev Spec Section 3)
 
 **Input:** Policies section from Domain Model Section 6
-**Output:** EARS-formatted requirements in PRD Section 3, grouped by theme
+**Output:** EARS-formatted requirements in Dev Spec Section 3, grouped by theme
 
 **Process:**
 
@@ -159,7 +159,7 @@ idea → commissioned → in-production → approved → published → retired
 | P-07 | Composition Assembled (E-34) + Voiceover Approved (E-24) + Sound Designed (E-29) | Trigger Render Rough Cut (C-16) | First renderable state — join gate |
 ```
 
-**→ Becomes PRD Section 3:**
+**→ Becomes Dev Spec Section 3:**
 ```markdown
 ### 3.2 Production Requirements
 
@@ -173,7 +173,7 @@ idea → commissioned → in-production → approved → published → retired
 | P-10 | Asset Ingested (E-12) | Validate format, resolution, file size | Catch bad assets before composition |
 ```
 
-**→ Becomes PRD Section 3:**
+**→ Becomes Dev Spec Section 3:**
 ```markdown
 | R-20 | Unwanted | If Asset Ingested (E-12) with invalid format, incorrect resolution, or excessive file size, then the system shall reject the asset and trigger E-61 (Asset Creation Failed). [P-10] |
 ```
@@ -182,10 +182,10 @@ idea → commissioned → in-production → approved → published → retired
 
 ---
 
-### Step 4: Write Operational Flows (DDD Commands → PRD Section 4)
+### Step 4: Write Operational Flows (DDD Commands → Dev Spec Section 4)
 
 **Input:** Commands section from Domain Model Section 4
-**Output:** Concept of Operations flows (PRD Section 4.X)
+**Output:** Concept of Operations flows (Dev Spec Section 4.X)
 
 **Process:**
 
@@ -209,7 +209,7 @@ idea → commissioned → in-production → approved → published → retired
 | P-07 | E-34 + E-24 + E-29 | Trigger Render Rough Cut (C-16) | Join gate |
 ```
 
-**→ Becomes PRD Section 4.2: Primary Production Flow:**
+**→ Becomes Dev Spec Section 4.2: Primary Production Flow:**
 ```markdown
 ### 4.2 Primary Production Flow
 
@@ -257,10 +257,10 @@ idea → commissioned → in-production → approved → published → retired
 
 ---
 
-### Step 5: Design API/UI (DDD Read Models → PRD Section 5.X)
+### Step 5: Design API/UI (DDD Read Models → Dev Spec Section 5.X)
 
 **Input:** Read Models section from Domain Model Section 8
-**Output:** API surface or UI component specs in PRD Section 5.X
+**Output:** API surface or UI component specs in Dev Spec Section 5.X
 
 **Process:**
 
@@ -278,7 +278,7 @@ idea → commissioned → in-production → approved → published → retired
 | RM-03 | Rough Cut Player | "Does this cut feel right?" (C-16, C-17) | Video playback, timestamp-linked feedback, script side-by-side, caption toggle |
 ```
 
-**→ Becomes PRD Section 5.2: Read Model API:**
+**→ Becomes Dev Spec Section 5.2: Read Model API:**
 ````markdown
 ### 5.2 Read Model API
 
@@ -313,10 +313,10 @@ idea → commissioned → in-production → approved → published → retired
 
 ---
 
-### Step 6: Create Test Plan (DDD Read Models + Policies → PRD Section 6)
+### Step 6: Create Test Plan (DDD Read Models + Policies → Dev Spec Section 6)
 
 **Input:** Policies (for integration tests), Read Models (for manual verification)
-**Output:** Test Plan (PRD Section 6) with IT-XX, E2E-XX, MV-XX items
+**Output:** Test Plan (Dev Spec Section 6) with IT-XX, E2E-XX, MV-XX items
 
 **Process:**
 
@@ -336,7 +336,7 @@ idea → commissioned → in-production → approved → published → retired
 | P-10 | Asset Ingested (E-12) | Validate format, resolution | Catch bad assets |
 ```
 
-**→ Becomes PRD Section 6.2: Integration Tests:**
+**→ Becomes Dev Spec Section 6.2: Integration Tests:**
 ```markdown
 | ID | Boundary | Description | Req IDs |
 |----|----------|-------------|---------|
@@ -349,7 +349,7 @@ idea → commissioned → in-production → approved → published → retired
 | RM-03 | Rough Cut Player | Video playback, timestamp feedback |
 ```
 
-**→ Becomes PRD Section 6.4: Manual Verification:**
+**→ Becomes Dev Spec Section 6.4: Manual Verification:**
 ```markdown
 | ID | Procedure | Pass Criteria | Req IDs |
 |----|-----------|--------------|---------|
@@ -358,10 +358,10 @@ idea → commissioned → in-production → approved → published → retired
 
 ---
 
-### Step 7: Decompose into Stories (DDD Aggregates + Policies → PRD Section 8)
+### Step 7: Decompose into Stories (DDD Aggregates + Policies → Dev Spec Section 8)
 
 **Input:** Aggregates (Section 7), Policies (Section 6), Commands (Section 4) from Domain Model
-**Output:** Phased Implementation Plan (PRD Section 8) with stories grouped into waves
+**Output:** Phased Implementation Plan (Dev Spec Section 8) with stories grouped into waves
 
 **Process:**
 
@@ -402,7 +402,7 @@ State machine: idea → commissioned → in-production → approved → publishe
 | P-07 | E-34 + E-24 + E-29 | Trigger C-16 | Join gate |
 ```
 
-**→ Becomes PRD Section 8:**
+**→ Becomes Dev Spec Section 8:**
 ```markdown
 #### Story 1.1: Implement Video Aggregate
 
@@ -479,7 +479,7 @@ Implement the join gate that triggers rough cut rendering when all three prerequ
 
 **Process:**
 
-1. **Add Section 0 to PRD:** "Domain Model Reference" with link to `docs/DOMAIN-MODEL.md`
+1. **Add Section 0 to Dev Spec:** "Domain Model Reference" with link to `docs/DOMAIN-MODEL.md`
 2. **Append Domain Event Catalog (Appendix D):** Full E-XX list from Domain Model
 3. **Create VRTM skeleton (Appendix V):** Table with columns: Req ID, Requirement (short), Source, Verification Item, Verification Method, Status
 4. **Cross-reference throughout:**
@@ -492,7 +492,7 @@ Implement the join gate that triggers rough cut rendering when all three prerequ
 ```markdown
 ## 0. Domain Model Reference
 
-This PRD was generated from a Domain Model created via Event Storming (Domain-Driven Design). The complete Domain Model is preserved at `docs/DOMAIN-MODEL.md`.
+This Dev Spec was generated from a Domain Model created via Event Storming (Domain-Driven Design). The complete Domain Model is preserved at `docs/DOMAIN-MODEL.md`.
 
 **Traceability:**
 - Requirements (Section 3) extracted from Policies (Domain Model Section 6)
@@ -520,7 +520,7 @@ Before declaring translation complete, verify:
 - [ ] **Every read model** has an API/UI design in Section 5 and a test item in Section 6
 - [ ] **Every requirement** is annotated with policy ID (e.g., `[P-07]`)
 - [ ] **Every story AC item** is annotated with requirement ID (e.g., `[R-17]`)
-- [ ] **Domain Model** appended to PRD as Section 0 reference
+- [ ] **Domain Model** appended to Dev Spec as Section 0 reference
 - [ ] **Event catalog** included as Appendix D
 - [ ] **VRTM skeleton** created as Appendix V
 
@@ -535,7 +535,7 @@ If any check fails, the translation is incomplete. Return to the missing step.
 **Fix:** Every loop must have an explicit exit condition in the flow. Example: "Loop C-16 until C-17 (Approve Final Cut) or C-21 (Cancel Video)".
 
 ### 2. Orphaned Policies
-**Problem:** Policy P-XX is in Domain Model but no requirement in PRD.
+**Problem:** Policy P-XX is in Domain Model but no requirement in Dev Spec.
 **Fix:** Apply Step 3 heuristic to every policy — no policy should be skipped.
 
 ### 3. Vague Requirements
@@ -560,7 +560,7 @@ If any check fails, the translation is incomplete. Return to the missing step.
 
 After completing this protocol, you will have:
 
-1. **PRD** (`docs/[project]-PRD.md`) with:
+1. **Dev Spec** (`docs/[project]-devspec.md`) with:
    - Section 0: Domain Model Reference
    - Section 1.4: Personas (from Actors)
    - Section 3: Requirements (from Policies, EARS format)
@@ -572,9 +572,9 @@ After completing this protocol, you will have:
    - Appendix D: Domain Event Catalog
    - Appendix V: VRTM skeleton
 2. **Full traceability:** Policy → Requirement → Flow → Story → AC → Test
-3. **Implementation-ready spec:** Agents can execute from PRD with confidence
+3. **Implementation-ready spec:** Agents can execute from Dev Spec with confidence
 
-The PRD can now feed into existing workflow: `/prepwaves` → `/nextwave` → execution.
+The Dev Spec can now feed into existing workflow: `/prepwaves` → `/nextwave` → execution.
 
 ---
 
@@ -582,7 +582,7 @@ The PRD can now feed into existing workflow: `/prepwaves` → `/nextwave` → ex
 
 **If the Domain Model changes after `/ddd accept`:**
 1. Update `docs/DOMAIN-MODEL.md` with changes
-2. Re-run `/ddd accept` to regenerate PRD
-3. Domain Model is the source of truth — PRD is always derivable
+2. Re-run `/ddd accept` to regenerate Dev Spec
+3. Domain Model is the source of truth — Dev Spec is always derivable
 
-**Do not edit PRD directly.** Treat it as compiled output from the Domain Model.
+**Do not edit Dev Spec directly.** Treat it as compiled output from the Domain Model.

@@ -1,6 +1,6 @@
 # Welcome to Domain-Driven Design
 
-This skill provides a structured workflow for discovering your domain model through **Event Storming** and translating it into an implementation-ready PRD.
+This skill provides a structured workflow for discovering your domain model through **Event Storming** and translating it into an implementation-ready Dev Spec.
 
 ## What is Event Storming?
 
@@ -41,12 +41,12 @@ I read your sketchbook and produce a formal Domain Model document following the 
 - Numbered events, commands, policies
 - State machines for aggregates
 - Traceability (policies reference events, commands reference actors)
-- DDD→PRD translation map
+- DDD→Dev Spec translation map
 
 **Output:** `docs/DOMAIN-MODEL.md` (formal, canonical)
 
 ### 3. `/ddd accept` — Translate
-I apply the DDD→PRD protocol to generate an implementation-ready PRD:
+I apply the DDD→Dev Spec protocol to generate an implementation-ready Dev Spec:
 - Actors → Personas (Section 1.4)
 - Aggregates → Data Model (Section 5.1)
 - Policies → Requirements (Section 3, EARS format)
@@ -54,9 +54,9 @@ I apply the DDD→PRD protocol to generate an implementation-ready PRD:
 - Read Models → API/UI Design (Section 5)
 - Aggregates + Policies → Implementation Stories (Section 8)
 
-**Output:** `docs/[project]-PRD.md` (implementation spec)
+**Output:** `docs/[project]-devspec.md` (implementation spec)
 
-After this, your PRD feeds into existing workflow: `/prepwaves` → `/nextwave` → execution.
+After this, your Dev Spec feeds into existing workflow: `/prepwaves` → `/nextwave` → execution.
 
 ## When to Use DDD vs Requirements Engineering
 
@@ -65,7 +65,7 @@ After this, your PRD feeds into existing workflow: `/prepwaves` → `/nextwave` 
 | **DDD (Event Storming)** | Complex workflows, state machines, multi-actor coordination | Domain events ("what happened?") |
 | **Requirements Engineering** | Well-understood problems, API design, technical solutions | Goals, constraints, user needs |
 
-Both converge at the PRD. Choose based on problem characteristics.
+Both converge at the Dev Spec. Choose based on problem characteristics.
 
 **DDD shines when:**
 - The workflow is complex (many decision points, loops, parallel paths)
@@ -96,7 +96,7 @@ The best domain models emerge from **questioning**, not dictation. I'm here to h
 docs/
   SKETCHBOOK.md              ← Raw notes (/ddd begin)
   DOMAIN-MODEL.md            ← Formal model (/ddd draft)
-  [project]-PRD.md           ← Implementation spec (/ddd accept)
+  [project]-devspec.md           ← Implementation spec (/ddd accept)
 ```
 
 ## Reference Documents (pre-existing)
@@ -104,7 +104,7 @@ docs/
 ```
 docs/
   Domain-Model-template.md   ← Template structure
-  DDD-to-PRD-protocol.md     ← Translation guide
+  DDD-to-devspec-protocol.md     ← Translation guide
 ```
 
 ## Resume After Interruption

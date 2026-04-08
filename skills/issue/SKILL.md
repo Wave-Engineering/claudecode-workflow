@@ -81,7 +81,7 @@ Use the prompt (or conversation context) to fill in the appropriate template bel
 
 ## Context
 
-[Background, motivation, link to Epic or PRD if applicable]
+[Background, motivation, link to Epic or Dev Spec if applicable]
 
 ## Implementation Steps
 

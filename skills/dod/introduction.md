@@ -1,10 +1,10 @@
 # Welcome to Project DoD Verification
 
-This skill verifies that a project has met its **Definition of Done** by mechanically checking every deliverable in the PRD's Deliverables Manifest (Section 5.A).
+This skill verifies that a project has met its **Definition of Done** by mechanically checking every deliverable in the Dev Spec's Deliverables Manifest (Section 5.A).
 
 ## What It Does
 
-`/dod` reads your PRD, finds the Deliverables Manifest, and checks each row:
+`/dod` reads your Dev Spec, finds the Deliverables Manifest, and checks each row:
 
 - **Docs** -- File exists and is non-empty
 - **Code** -- File exists, build succeeds, CI passes
@@ -44,7 +44,7 @@ RESULT: NOT READY -- 2 items failing
 `/dod` is the **final gate** in the SDLC pipeline:
 
 ```
-/ddd --> /prd --> /prepwaves --> /nextwave --> /dod
+/ddd --> /devspec --> /prepwaves --> /nextwave --> /dod
 ```
 
 After `/dod` approval, the project is done. If `campaign-status` is active, it transitions the campaign to the DoD review stage.

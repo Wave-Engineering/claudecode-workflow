@@ -1,12 +1,12 @@
 """Tests for skills/ddd/SKILL.md — ddd accept refactor into concept handoff.
 
 Validates:
-- /ddd accept no longer references PRD generation
+- /ddd accept no longer references Dev Spec generation
 - /ddd accept includes domain model verification steps (exists, committed)
 - /ddd accept includes domain model summary (aggregate/command/policy counts)
-- /ddd accept suggests running /prd create
+- /ddd accept suggests running /devspec create
 - /ddd begin, /ddd draft, /ddd resume templates are unchanged in structure
-- docs/DDD-to-PRD-protocol.md is preserved (not deleted)
+- docs/DDD-to-devspec-protocol.md is preserved (not deleted)
 - Help text reflects new /ddd accept behavior
 - Skill frontmatter description updated
 - docs/skill-reference.md updated with new /ddd accept description
@@ -26,7 +26,7 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parent.parent
 SKILL_PATH = _ROOT / "skills" / "ddd" / "SKILL.md"
-PROTOCOL_PATH = _ROOT / "docs" / "DDD-to-PRD-protocol.md"
+PROTOCOL_PATH = _ROOT / "docs" / "DDD-to-devspec-protocol.md"
 SKILL_REF_PATH = _ROOT / "docs" / "skill-reference.md"
 README_PATH = _ROOT / "README.md"
 
@@ -65,41 +65,41 @@ def _extract_template(text: str, template_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# 1. /ddd accept no longer generates a PRD
+# 1. /ddd accept no longer generates a Dev Spec
 # ---------------------------------------------------------------------------
 
 
 class TestAcceptNoPrdGeneration:
-    """Verify /ddd accept does not generate a PRD file."""
+    """Verify /ddd accept does not generate a Dev Spec file."""
 
     def test_no_prd_file_creation_in_accept(self, skill_text: str) -> None:
-        """The ddd-accept template must not reference writing a PRD file."""
+        """The ddd-accept template must not reference writing a Dev Spec file."""
         accept = _extract_template(skill_text, "ddd-accept")
         assert accept, "ddd-accept template not found"
         assert "Write `docs/" not in accept
-        assert "-PRD.md`" not in accept
+        assert "-devspec.md`" not in accept
 
     def test_no_prd_template_reading(self, skill_text: str) -> None:
-        """The ddd-accept template must not read PRD templates."""
+        """The ddd-accept template must not read Dev Spec templates."""
         accept = _extract_template(skill_text, "ddd-accept")
-        assert "PRD-template.md" not in accept
+        assert "devspec-template.md" not in accept
 
     def test_no_translation_steps(self, skill_text: str) -> None:
-        """The ddd-accept template must not contain DDD-to-PRD translation steps."""
+        """The ddd-accept template must not contain DDD-to-Dev Spec translation steps."""
         accept = _extract_template(skill_text, "ddd-accept")
         assert "8-step translation" not in accept
         assert "Apply 8-step" not in accept
         assert "Step 1:" not in accept or "Actors" not in accept
 
     def test_no_ddd_to_prd_protocol_reading(self, skill_text: str) -> None:
-        """The ddd-accept template must not read DDD-to-PRD-protocol.md."""
+        """The ddd-accept template must not read DDD-to-devspec-protocol.md."""
         accept = _extract_template(skill_text, "ddd-accept")
-        assert "DDD-to-PRD-protocol.md" not in accept
+        assert "DDD-to-devspec-protocol.md" not in accept
 
     def test_stop_directive_present(self, skill_text: str) -> None:
         """The ddd-accept template must include an explicit stop directive."""
         accept = _extract_template(skill_text, "ddd-accept")
-        assert "Stop here" in accept or "Do not generate a PRD" in accept
+        assert "Stop here" in accept or "Do not generate a Dev Spec" in accept
 
 
 # ---------------------------------------------------------------------------
@@ -162,17 +162,17 @@ class TestAcceptSummary:
 
 
 # ---------------------------------------------------------------------------
-# 4. /ddd accept suggests running /prd create
+# 4. /ddd accept suggests running /devspec create
 # ---------------------------------------------------------------------------
 
 
 class TestAcceptHandoff:
-    """Verify /ddd accept suggests /prd create."""
+    """Verify /ddd accept suggests /devspec create."""
 
     def test_suggests_prd_create(self, skill_text: str) -> None:
-        """The ddd-accept template suggests running /prd create."""
+        """The ddd-accept template suggests running /devspec create."""
         accept = _extract_template(skill_text, "ddd-accept")
-        assert "/prd create" in accept
+        assert "/devspec create" in accept
 
 
 # ---------------------------------------------------------------------------
@@ -221,23 +221,23 @@ class TestOtherTemplatesPreserved:
 
 
 # ---------------------------------------------------------------------------
-# 6. DDD-to-PRD protocol is preserved
+# 6. DDD-to-Dev Spec protocol is preserved
 # ---------------------------------------------------------------------------
 
 
 class TestProtocolPreserved:
-    """Verify docs/DDD-to-PRD-protocol.md is not deleted."""
+    """Verify docs/DDD-to-devspec-protocol.md is not deleted."""
 
     def test_protocol_file_exists(self) -> None:
-        """The DDD-to-PRD-protocol.md file must still exist."""
+        """The DDD-to-devspec-protocol.md file must still exist."""
         assert PROTOCOL_PATH.exists(), (
-            f"DDD-to-PRD-protocol.md was deleted: {PROTOCOL_PATH}"
+            f"DDD-to-devspec-protocol.md was deleted: {PROTOCOL_PATH}"
         )
 
     def test_protocol_file_not_empty(self) -> None:
-        """The DDD-to-PRD-protocol.md file must not be empty."""
+        """The DDD-to-devspec-protocol.md file must not be empty."""
         content = PROTOCOL_PATH.read_text(encoding="utf-8")
-        assert len(content.strip()) > 0, "DDD-to-PRD-protocol.md is empty"
+        assert len(content.strip()) > 0, "DDD-to-devspec-protocol.md is empty"
 
 
 # ---------------------------------------------------------------------------
@@ -249,7 +249,7 @@ class TestHelpText:
     """Verify the ddd-help template reflects the new accept behavior."""
 
     def test_help_accept_no_generate_prd(self, skill_text: str) -> None:
-        """Help text for /ddd accept does not say 'Generate PRD'."""
+        """Help text for /ddd accept does not say 'Generate Dev Spec'."""
         help_text = _extract_template(skill_text, "ddd-help")
         # Find the accept section in help
         accept_idx = help_text.find("/ddd accept")
@@ -258,7 +258,7 @@ class TestHelpText:
         after_accept = help_text[accept_idx:]
         next_heading = after_accept.find("\n###", 1)
         accept_help = after_accept[:next_heading] if next_heading != -1 else after_accept
-        assert "Generate PRD" not in accept_help
+        assert "Generate Dev Spec" not in accept_help
 
     def test_help_accept_mentions_verify(self, skill_text: str) -> None:
         """Help text for /ddd accept mentions verification."""
@@ -271,14 +271,14 @@ class TestHelpText:
         assert "Verif" in accept_help or "verif" in accept_help
 
     def test_help_accept_mentions_prd_create(self, skill_text: str) -> None:
-        """Help text for /ddd accept mentions /prd create."""
+        """Help text for /ddd accept mentions /devspec create."""
         help_text = _extract_template(skill_text, "ddd-help")
         accept_idx = help_text.find("/ddd accept")
         assert accept_idx != -1
         after_accept = help_text[accept_idx:]
         next_heading = after_accept.find("\n###", 1)
         accept_help = after_accept[:next_heading] if next_heading != -1 else after_accept
-        assert "/prd create" in accept_help
+        assert "/devspec create" in accept_help
 
 
 # ---------------------------------------------------------------------------
@@ -290,13 +290,13 @@ class TestFrontmatter:
     """Verify SKILL.md frontmatter description reflects the change."""
 
     def test_frontmatter_no_prd_generation(self, skill_text: str) -> None:
-        """Frontmatter description must not say 'PRD generation'."""
+        """Frontmatter description must not say 'Dev Spec generation'."""
         # Extract frontmatter (between --- markers)
         lines = skill_text.split("\n")
         assert lines[0].strip() == "---"
         end_idx = skill_text.index("---", 4)
         frontmatter = skill_text[: end_idx + 3]
-        assert "PRD generation" not in frontmatter
+        assert "Dev Spec generation" not in frontmatter
 
     def test_frontmatter_mentions_handoff(self, skill_text: str) -> None:
         """Frontmatter description mentions concept handoff or similar."""
@@ -320,14 +320,14 @@ class TestSkillReference:
         assert "### `/ddd`" in skill_ref_text
 
     def test_no_translate_domain_model_to_prd(self, skill_ref_text: str) -> None:
-        """The /ddd section does not say 'Translate Domain Model to PRD'."""
+        """The /ddd section does not say 'Translate Domain Model to Dev Spec'."""
         # Find the /ddd section
         ddd_start = skill_ref_text.find("### `/ddd`")
         assert ddd_start != -1
         # Find the next ## heading
         next_section = skill_ref_text.find("\n## ", ddd_start + 1)
         ddd_section = skill_ref_text[ddd_start:next_section] if next_section != -1 else skill_ref_text[ddd_start:]
-        assert "Translate Domain Model to PRD" not in ddd_section
+        assert "Translate Domain Model to Dev Spec" not in ddd_section
 
     def test_accept_described_as_handoff(self, skill_ref_text: str) -> None:
         """The /ddd accept example line reflects handoff behavior."""
@@ -339,12 +339,12 @@ class TestSkillReference:
         assert "hand off" in ddd_section.lower() or "verify" in ddd_section.lower()
 
     def test_pipeline_includes_prd_create(self, skill_ref_text: str) -> None:
-        """The pipeline description includes /prd create as the next step."""
+        """The pipeline description includes /devspec create as the next step."""
         ddd_start = skill_ref_text.find("### `/ddd`")
         assert ddd_start != -1
         next_section = skill_ref_text.find("\n## ", ddd_start + 1)
         ddd_section = skill_ref_text[ddd_start:next_section] if next_section != -1 else skill_ref_text[ddd_start:]
-        assert "/prd create" in ddd_section
+        assert "/devspec create" in ddd_section
 
 
 # ---------------------------------------------------------------------------
@@ -360,10 +360,10 @@ class TestReadme:
         assert "| ddd |" in readme_text
 
     def test_ddd_row_no_prd_generation(self, readme_text: str) -> None:
-        """The DDD row does not say 'PRD generation'."""
+        """The DDD row does not say 'Dev Spec generation'."""
         for line in readme_text.split("\n"):
             if "| ddd |" in line:
-                assert "PRD generation" not in line
+                assert "Dev Spec generation" not in line
                 break
 
     def test_ddd_row_mentions_handoff(self, readme_text: str) -> None:

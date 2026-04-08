@@ -102,7 +102,7 @@ def _render_stage_card(stage: str, status: str) -> str:
     style = _STATUS_STYLES.get(status, _STATUS_STYLES["not_started"])
     name = _html.escape(stage.replace("_", " ").title())
     if stage == "prd":
-        name = "PRD"
+        name = "Dev Spec"
     elif stage == "dod":
         name = "DoD"
 

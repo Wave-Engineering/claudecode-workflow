@@ -1,4 +1,4 @@
-"""Tests for docs/PRD-template.md — co-produce rule and checklist updates.
+"""Tests for docs/devspec-template.md — co-produce rule and checklist updates.
 
 Validates:
 - Co-produce rule is present in Section 8 preamble
@@ -19,15 +19,15 @@ from pathlib import Path
 import pytest
 
 # ---------------------------------------------------------------------------
-# Fixture: load the PRD template once per module
+# Fixture: load the Dev Spec template once per module
 # ---------------------------------------------------------------------------
 
-TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "docs" / "PRD-template.md"
+TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "docs" / "devspec-template.md"
 
 
 @pytest.fixture(scope="module")
 def template_text() -> str:
-    """Read the PRD template file."""
+    """Read the Dev Spec template file."""
     return TEMPLATE_PATH.read_text(encoding="utf-8")
 
 
