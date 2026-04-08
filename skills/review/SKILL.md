@@ -11,50 +11,29 @@ description: Run a code review on staged changes, branch diff, or a specific fil
 
 # Code Review
 
-Run a targeted code review using the `feature-dev:code-reviewer` subagent.
+Targeted code review via the `feature-dev:code-reviewer` subagent.
 
-## Determine Scope
+## Tools Used
+- `pr_diff` — unified diff for a PR/MR by number (platform-agnostic)
+- `pr_files` — changed-file list for a PR/MR by number
 
-Parse the argument to determine what to review:
-
-{{#if args}}
-- `staged` → review only staged changes (`git diff --cached`)
-- `branch` → review the full branch diff against the base branch
-- `<filepath>` → review a specific file
-- `mr <number>` or `pr <number>` → review a merge request / pull request by number
-{{else}}
-- No argument → default to `branch` (full branch diff)
-{{/if}}
-
-**Argument received:** `{{args}}`
+## Scope
+Parse `{{args}}` (default `branch`): `staged` (`git diff --cached`), `branch` (full diff vs base), `<filepath>` (single file), `mr <number>` / `pr <number>` (PR/MR by number).
 
 ## Gather Context
+1. **Diff + file list by scope:**
+   - `staged`: `git diff --cached`
+   - `branch`: determine base (`release/*` or `main`), run `git diff <base>...HEAD`
+   - `<filepath>`: `git diff HEAD -- <filepath>` plus read the full file
+   - `mr <number>` / `pr <number>`: `pr_files({number})` for the path-level overview, then `pr_diff({number})` for the unified diff. Tools handle platform translation — no `gh`/`glab` calls.
+2. **Issue** — if branch name contains an issue number (e.g., `fix/76-description`), fetch via `gh issue view <N>` / `glab issue view <N>`.
+3. **Intent** — `git log --oneline <base>...HEAD`.
 
-Before dispatching the reviewer, gather supporting context:
-
-1. **Detect platform** — run `git remote -v | head -1`:
-   - URL contains `github` → use `gh` CLI
-   - URL contains `gitlab` → use `glab` CLI
-
-2. **The diff** — based on scope above:
-   - `staged`: run `git diff --cached`
-   - `branch`: determine the base branch (look for `release/*` or `main`), run `git diff <base>...HEAD`
-   - `<filepath>`: run `git diff HEAD -- <filepath>`, also read the full file
-   - `mr <number>` or `pr <number>`:
-     - **GitLab:** `glab mr diff <number>`
-     - **GitHub:** `gh pr diff <number>`
-
-3. **The issue** — if the current branch name contains an issue number (e.g., `fix/76-description`), fetch the issue description:
-   - **GitLab:** `glab issue view <number>`
-   - **GitHub:** `gh issue view <number>`
-
-4. **Recent commit messages** — run `git log --oneline <base>...HEAD` to understand the intent
-
-If the diff is empty, tell the user there's nothing to review and stop.
+If the diff is empty, stop and tell the user there's nothing to review.
 
 ## Dispatch Reviewer
 
-Launch a `feature-dev:code-reviewer` subagent with this prompt structure:
+Launch a `feature-dev:code-reviewer` subagent with this prompt:
 
 ```
 ## Code Review Request
@@ -63,9 +42,10 @@ Launch a `feature-dev:code-reviewer` subagent with this prompt structure:
 - Branch: {branch name}
 - Issue: {issue title and description, if found}
 - Intent: {summary from commit messages}
+- Files changed: {from pr_files, if mr/pr scope}
 
 ### Diff
-{the diff content}
+{the diff content — from pr_diff tool's response or git diff}
 
 ### Review Instructions
 Review this code for:
@@ -82,15 +62,9 @@ If you find nothing significant, say so. A clean review is a valid outcome.
 
 ## Present Results
 
-After the reviewer returns:
-
-1. **If issues found** — present them organized by severity, with file paths and line numbers
-2. **If clean** — say "Review passed — no high-confidence issues found"
-3. **Do NOT auto-fix** — present findings and let the user decide what to address
+Issues found → organize by severity with file:line refs. Clean → "Review passed — no high-confidence issues found". **Do NOT auto-fix** — present findings; the user decides.
 
 ## Important Rules
-
 - This is READ-ONLY. Never edit files or commit as part of a review.
-- Keep the reviewer focused. Long diffs should be split across multiple reviewer calls if needed (max ~500 lines per call for quality).
-- Be honest about false positives. If the reviewer flags something questionable, say so.
-- Do not block `/scp`. This is advisory, not a gate.
+- Split long diffs across multiple reviewer calls (max ~500 lines per call).
+- Be honest about false positives. Do not block `/scp` — this is advisory, not a gate.
