@@ -3,7 +3,7 @@
 **Method:** Event Storming (Domain-Driven Design)
 **Date:** [Date]
 **Participants:** [Who participated in the event storming]
-**Status:** Draft | Validated | Translated to PRD
+**Status:** Draft | Validated | Translated to Dev Spec
 
 ---
 
@@ -18,7 +18,7 @@
 7. [Aggregates](#7-aggregates)
 8. [Read Models](#8-read-models)
 9. [Open Questions](#9-open-questions)
-10. [DDD → PRD Translation Map](#10-ddd--prd-translation-map)
+10. [DDD → Dev Spec Translation Map](#10-ddd--dev-spec-translation-map)
 
 ---
 
@@ -265,11 +265,11 @@
 
 ---
 
-## 10. DDD → PRD Translation Map
+## 10. DDD → Dev Spec Translation Map
 
-[[This section documents how each DDD artifact maps to PRD sections. This is reference material for `/ddd accept`.]]
+[[This section documents how each DDD artifact maps to Dev Spec sections. This is reference material for `/ddd accept`.]]
 
-| DDD Artifact | PRD Section | Translation | Status |
+| DDD Artifact | Dev Spec Section | Translation | Status |
 |--------------|-------------|-------------|:------:|
 | **Actors** | 1.4 Target Users (Personas) | Each actor → persona with use cases from commands issued | [[✓ / Pending]] |
 | **Aggregates** | 5.1 Data Model | Each aggregate → entity with state machine, invariants, relationships | [[✓ / Pending]] |
@@ -307,7 +307,7 @@
 
 ## Appendix: Worked Example
 
-[[Optional: Include one complete lineage showing DDD → PRD translation for a single policy/aggregate. Useful for implementers to understand traceability.]]
+[[Optional: Include one complete lineage showing DDD → Dev Spec translation for a single policy/aggregate. Useful for implementers to understand traceability.]]
 
 **Example: P-07 Join Gate**
 
@@ -318,12 +318,12 @@
        First renderable state — join gate, all three must be true |
 ```
 
-**→ Becomes Requirement (PRD Section 3):**
+**→ Becomes Requirement (Dev Spec Section 3):**
 ```
 | R-17 | Event-driven | When Composition Assembled (E-34) AND Voiceover Approved (E-24) AND Sound Designed (E-29), the system shall trigger Render Rough Cut (C-16). |
 ```
 
-**→ Becomes Flow Step (PRD Section 4):**
+**→ Becomes Flow Step (Dev Spec Section 4):**
 ```
 6. **Join Gate** (P-07)
    - Composition Assembled (E-34) — all scenes connected, assets wired
@@ -332,7 +332,7 @@
    - **Trigger:** System automatically initiates Render Rough Cut (C-16)
 ```
 
-**→ Becomes Implementation Story (PRD Section 8):**
+**→ Becomes Implementation Story (Dev Spec Section 8):**
 ```
 #### Story 2.5: Implement P-07 Join Gate
 **Wave:** 2

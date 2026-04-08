@@ -515,23 +515,23 @@ Checks `$VISUAL` and `$EDITOR` environment variables, then user preferences, the
 
 ### `/ddd` -- Domain-Driven Design Facilitation
 
-A structured workflow for domain modeling using event storming. Guides you through 8 stages of domain discovery, formalizes the results into a Domain Model document, and hands off to `/prd create` for PRD generation.
+A structured workflow for domain modeling using event storming. Guides you through 8 stages of domain discovery, formalizes the results into a Domain Model document, and hands off to `/devspec create` for Dev Spec generation.
 
 **When to use it:**
 - When starting a new project and need to discover the domain model
 - When translating business requirements into technical architecture
-- When you want a structured domain model to feed into PRD creation
+- When you want a structured domain model to feed into Dev Spec creation
 
 **Examples:**
 
 ```
 /ddd begin       # Start interactive event storming session
 /ddd draft       # Formalize sketchbook into Domain Model document
-/ddd accept      # Verify domain model and hand off to PRD creation
+/ddd accept      # Verify domain model and hand off to Dev Spec creation
 /ddd resume      # Resume interrupted event storming session
 ```
 
-**The pipeline:** `/ddd begin` (8-stage event storming → `docs/SKETCHBOOK.md`) → `/ddd draft` (formalize → `docs/DOMAIN-MODEL.md`) → `/ddd accept` (verify and hand off) → `/prd create` (generate PRD).
+**The pipeline:** `/ddd begin` (8-stage event storming → `docs/SKETCHBOOK.md`) → `/ddd draft` (formalize → `docs/DOMAIN-MODEL.md`) → `/ddd accept` (verify and hand off) → `/devspec create` (generate Dev Spec).
 
 **Event storming stages:** Domain Context → Events (brainstorm) → Events (organize) → Commands → Actors → Policies → Aggregates → Read Models. Progress is checkpointed to the sketchbook after each stage.
 
@@ -539,55 +539,55 @@ A structured workflow for domain modeling using event storming. Guides you throu
 
 ---
 
-### `/prd` -- Interactive PRD Creation
+### `/devspec` -- Interactive Dev Spec Creation
 
-Creates Product Requirements Documents through an interactive, section-by-section workflow. Instead of generating a PRD in one shot, it walks each section collaboratively -- drafting, presenting, and waiting for feedback before moving on. Manages a unified Deliverables Manifest (Tier 1 required defaults, Tier 2 conditional triggers, Tier 3 opt-in) and runs a mechanical finalization checklist. Includes an approval gate and backlog population (upshift) for the full concept-to-execution pipeline.
+Creates Development Specifications through an interactive, section-by-section workflow. Instead of generating a Dev Spec in one shot, it walks each section collaboratively -- drafting, presenting, and waiting for feedback before moving on. Manages a unified Deliverables Manifest (Tier 1 required defaults, Tier 2 conditional triggers, Tier 3 opt-in) and runs a mechanical finalization checklist. Includes an approval gate and backlog population (upshift) for the full concept-to-execution pipeline.
 
 **When to use it:**
-- After `/ddd accept` produces a domain model and you need to create a PRD from it
-- When starting a new project and need a structured PRD from a concept doc or verbal description
-- When you have an existing PRD and want to verify it meets completeness requirements
-- When a finalized PRD needs stakeholder approval before execution
-- When an approved PRD needs to be broken into trackable backlog issues
+- After `/ddd accept` produces a domain model and you need to create a Dev Spec from it
+- When starting a new project and need a structured Dev Spec from a concept doc or verbal description
+- When you have an existing Dev Spec and want to verify it meets completeness requirements
+- When a finalized Dev Spec needs stakeholder approval before execution
+- When an approved Dev Spec needs to be broken into trackable backlog issues
 
 **Examples:**
 
 ```
-/prd create       # Start interactive PRD generation
-/prd finalize     # Run the finalization checklist on an existing PRD
-/prd approve      # Approval gate — finalize, summarize, and record approval
-/prd upshift      # Backlog population — create issues from approved PRD
-/prd              # Show help
+/devspec create       # Start interactive Dev Spec generation
+/devspec finalize     # Run the finalization checklist on an existing Dev Spec
+/devspec approve      # Approval gate — finalize, summarize, and record approval
+/devspec upshift      # Backlog population — create issues from approved Dev Spec
+/devspec              # Show help
 ```
 
-**The pipeline:** `/ddd accept` (domain model) or concept doc or verbal description → `/prd create` (interactive PRD generation → `docs/<project>-PRD.md`) → `/prd finalize` (verify completeness) → `/prd approve` (human approval gate) → `/prd upshift` (backlog population) → `/prepwaves` (plan execution waves).
+**The pipeline:** `/ddd accept` (domain model) or concept doc or verbal description → `/devspec create` (interactive Dev Spec generation → `docs/<project>-devspec.md`) → `/devspec finalize` (verify completeness) → `/devspec approve` (human approval gate) → `/devspec upshift` (backlog population) → `/prepwaves` (plan execution waves).
 
-**`/prd create` flow:**
+**`/devspec create` flow:**
 1. Determine input source (DDD domain model, external doc, or verbal description)
-2. Walk each PRD section (1-9) interactively -- draft, present, get feedback, iterate
+2. Walk each Dev Spec section (1-9) interactively -- draft, present, get feedback, iterate
 3. After Section 5: walk Tier 1 Deliverables Manifest defaults, confirm or N/A each row
 4. Scan for Tier 2 triggers, add conditional rows
 5. After Section 8: verify every manifest row has a wave assignment
-6. Write the PRD file
+6. Write the Dev Spec file
 
-**`/prd finalize` flow:**
-Run the Section 7.2 Finalization Checklist mechanically against an existing PRD. Reports pass/fail per item (Tier 1 file paths, Tier 2 triggers, wave assignments, MV-XX coverage, verb-only deliverables, audience-facing docs, DoD references). Summary: "X/7 checks passed. PRD is ready / not ready for approval."
+**`/devspec finalize` flow:**
+Run the Section 7.2 Finalization Checklist mechanically against an existing Dev Spec. Reports pass/fail per item (Tier 1 file paths, Tier 2 triggers, wave assignments, MV-XX coverage, verb-only deliverables, audience-facing docs, DoD references). Summary: "X/7 checks passed. Dev Spec is ready / not ready for approval."
 
-**`/prd approve` flow:**
+**`/devspec approve` flow:**
 1. Run the finalization checklist automatically (rejects if any checks fail)
-2. Present a PRD summary: section count, story count, wave count, deliverable count
-3. Hard stop: "Approve this PRD? (yes/no)" -- waits for human response
-4. On approval: records approval timestamp, approver, and finalization score in PRD metadata
+2. Present a Dev Spec summary: section count, story count, wave count, deliverable count
+3. Hard stop: "Approve this Dev Spec? (yes/no)" -- waits for human response
+4. On approval: records approval timestamp, approver, and finalization score in Dev Spec metadata
 5. On rejection: lists failing items, suggests fixes, stops
 
-**`/prd upshift` flow:**
-1. Verify PRD has approval metadata (`approved: true`)
+**`/devspec upshift` flow:**
+1. Verify Dev Spec has approval metadata (`approved: true`)
 2. Parse Section 8 (Phased Implementation Plan) for phases, waves, and stories
 3. Create one epic issue per phase with Phase DoD as acceptance criteria
-4. Create one story issue per story with implementation steps, test procedures, and AC from PRD
+4. Create one story issue per story with implementation steps, test procedures, and AC from Dev Spec
 5. Create wave master issues linking constituent story issues
 6. Report summary: "Created N epics, M stories, P wave master issues"
-7. Backfill issue numbers into the PRD (e.g., `### Phase 1: Foundation (#NNN)`)
+7. Backfill issue numbers into the Dev Spec (e.g., `### Phase 1: Foundation (#NNN)`)
 
 **Key detail:** Tier 1 deliverables are opt-OUT (must provide "N/A -- because [reason]" to skip). The Deliverables Manifest (Section 5.A) is the single source of truth for all project outputs -- there is no separate Artifact Manifest or Documentation Kit.
 
@@ -595,11 +595,11 @@ Run the Section 7.2 Finalization Checklist mechanically against an existing PRD.
 
 ### `/dod` -- Project Definition of Done Verification
 
-Reads the Deliverables Manifest from the project's PRD (Section 5.A) and mechanically verifies that every deliverable was produced, every test passed, and every artifact exists at its declared file path. Generates a pass/fail verification report and requires human sign-off to close the project. This is the final gate in the SDLC pipeline.
+Reads the Deliverables Manifest from the project's Dev Spec (Section 5.A) and mechanically verifies that every deliverable was produced, every test passed, and every artifact exists at its declared file path. Generates a pass/fail verification report and requires human sign-off to close the project. This is the final gate in the SDLC pipeline.
 
 **When to use it:**
 - After all implementation waves are complete and the project is ready for final verification
-- When you want to confirm that every deliverable in the PRD has been produced
+- When you want to confirm that every deliverable in the Dev Spec has been produced
 - Before closing the parent epic or transitioning the campaign to the DoD stage
 - When stakeholders ask for evidence that all requirements have been met
 
@@ -628,7 +628,7 @@ Reads the Deliverables Manifest from the project's PRD (Section 5.A) and mechani
 **Approval flow:**
 1. All pass -> "Approve to close the project?"
 2. Failures exist -> "Approve anyway, or fix first?"
-3. On "fix" -> lists each failure with specific remediation (file paths, commands, PRD sections)
+3. On "fix" -> lists each failure with specific remediation (file paths, commands, Dev Spec sections)
 4. On approval -> updates campaign state (if active), suggests closing the epic
 
 **Key detail:** N/A rows with rationale are respected and do not count as failures. Bare "N/A" without explanation is flagged. VRTM completeness is mandatory -- every requirement must be traceable with no "Pending" rows.
@@ -735,7 +735,7 @@ A standalone CLI tool (Python zipapp) for tracking project progress through SDLC
 | `show` | Print current campaign state to terminal (read-only) |
 | `dashboard-url [--branch <branch>]` | Print the SDLC dashboard viewer URL for this repo |
 
-**Stage progression:** concept -> prd -> backlog -> implementation -> dod. Each stage must be completed before the next can start. Concept, PRD, and DoD have review gates; backlog and implementation go directly from active to complete.
+**Stage progression:** concept -> prd -> backlog -> implementation -> dod. Each stage must be completed before the next can start. Concept, Dev Spec, and DoD have review gates; backlog and implementation go directly from active to complete.
 
 **Examples:**
 

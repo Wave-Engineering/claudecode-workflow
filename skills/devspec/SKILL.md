@@ -1,17 +1,17 @@
 ---
-name: prd
-description: Interactive PRD creation with Deliverables Manifest, finalization checklist, approval gate, and backlog population
+name: devspec
+description: Interactive Development Specification creation with Deliverables Manifest, finalization checklist, approval gate, and backlog population
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
-     the marker file /tmp/.skill-intro-prd does NOT exist, read introduction.md,
-     present its contents to the user, then create the marker: touch /tmp/.skill-intro-prd
+     the marker file /tmp/.skill-intro-devspec does NOT exist, read introduction.md,
+     present its contents to the user, then create the marker: touch /tmp/.skill-intro-devspec
      Do NOT delete introduction.md — it lives in a protected directory.
      Do this BEFORE executing any skill logic below. -->
 
-# PRD Creation Workflow
+# Development Specification Creation Workflow
 
-This skill provides a structured, interactive workflow for creating Product Requirements Documents. It walks each PRD section collaboratively, manages the Deliverables Manifest, and runs a mechanical finalization checklist.
+This skill provides a structured, interactive workflow for creating Development Specifications. It walks each Dev Spec section collaboratively, manages the Deliverables Manifest, and runs a mechanical finalization checklist.
 
 ## Platform Detection
 
@@ -22,87 +22,87 @@ Before proceeding, detect the platform:
 
 ## Commands
 
-- **`/prd create`** — Interactive PRD generation (walk each section, build Deliverables Manifest)
-- **`/prd finalize`** — Mechanical finalization checklist (verify PRD completeness)
-- **`/prd approve`** — Approval gate (run finalization, present summary, record approval)
-- **`/prd upshift`** — Backlog population (create epics, stories, and wave master issues from approved PRD)
+- **`/devspec create`** — Interactive Dev Spec generation (walk each section, build Deliverables Manifest)
+- **`/devspec finalize`** — Mechanical finalization checklist (verify Dev Spec completeness)
+- **`/devspec approve`** — Approval gate (run finalization, present summary, record approval)
+- **`/devspec upshift`** — Backlog population (create epics, stories, and wave master issues from approved Dev Spec)
 
 ## Usage
 
 ```bash
-# Create a new PRD interactively
-/prd create
+# Create a new Dev Spec interactively
+/devspec create
 
-# Run the finalization checklist on an existing PRD
-/prd finalize
+# Run the finalization checklist on an existing Dev Spec
+/devspec finalize
 
-# Approve a finalized PRD (human gate)
-/prd approve
+# Approve a finalized Dev Spec (human gate)
+/devspec approve
 
-# Create backlog issues from an approved PRD
-/prd upshift
+# Create backlog issues from an approved Dev Spec
+/devspec upshift
 
 # Show help
-/prd
+/devspec
 ```
 
 ---
 
 {{#if (eq args "create")}}
-  {{> prd-create}}
+  {{> devspec-create}}
 {{else if (eq args "finalize")}}
-  {{> prd-finalize}}
+  {{> devspec-finalize}}
 {{else if (eq args "approve")}}
-  {{> prd-approve}}
+  {{> devspec-approve}}
 {{else if (eq args "upshift")}}
-  {{> prd-upshift}}
+  {{> devspec-upshift}}
 {{else}}
-  {{> prd-help}}
+  {{> devspec-help}}
 {{/if}}
 
-<!-- BEGIN TEMPLATE: prd-help -->
-## /prd Command Reference
+<!-- BEGIN TEMPLATE: devspec-help -->
+## /devspec Command Reference
 
-You've invoked `/prd` without a command. Use one of:
+You've invoked `/devspec` without a command. Use one of:
 
-### `/prd create` — Interactive PRD Generation
-Walk each PRD section collaboratively. I'll generate a draft for each section, present it for review, and wait for your feedback before moving to the next. After Section 5 (Detailed Design), we'll walk the Deliverables Manifest defaults together.
+### `/devspec create` — Interactive Dev Spec Generation
+Walk each Dev Spec section collaboratively. I'll generate a draft for each section, present it for review, and wait for your feedback before moving to the next. After Section 5 (Detailed Design), we'll walk the Deliverables Manifest defaults together.
 
 **Input sources:** DDD domain model, external document, or verbal description.
 
-### `/prd finalize` — Finalization Checklist
-Run the Section 7.2 finalization checklist mechanically against an existing PRD. Reports pass/fail per item with explanation.
+### `/devspec finalize` — Finalization Checklist
+Run the Section 7.2 finalization checklist mechanically against an existing Dev Spec. Reports pass/fail per item with explanation.
 
-### `/prd approve` — Approval Gate
-Run the finalization checklist, present a PRD summary (section count, story count, wave count, deliverable count), and hard-stop for human approval. On approval, records approval metadata in the PRD. On rejection, lists failing items with suggested fixes.
+### `/devspec approve` — Approval Gate
+Run the finalization checklist, present a Dev Spec summary (section count, story count, wave count, deliverable count), and hard-stop for human approval. On approval, records approval metadata in the Dev Spec. On rejection, lists failing items with suggested fixes.
 
-**Prerequisite:** A finalized PRD that passes all checklist items.
+**Prerequisite:** A finalized Dev Spec that passes all checklist items.
 
-### `/prd upshift` — Backlog Population
-Create backlog issues from an approved PRD's Section 8 (Phased Implementation Plan). Creates epic issues per phase, story issues with full acceptance criteria, and wave master issues linking constituent stories. Backfills issue numbers into the PRD.
+### `/devspec upshift` — Backlog Population
+Create backlog issues from an approved Dev Spec's Section 8 (Phased Implementation Plan). Creates epic issues per phase, story issues with full acceptance criteria, and wave master issues linking constituent stories. Backfills issue numbers into the Dev Spec.
 
-**Prerequisite:** An approved PRD (must have approval metadata from `/prd approve`).
+**Prerequisite:** An approved Dev Spec (must have approval metadata from `/devspec approve`).
 
 **Which command would you like to run?**
-<!-- END TEMPLATE: prd-help -->
+<!-- END TEMPLATE: devspec-help -->
 
-<!-- BEGIN TEMPLATE: prd-create -->
-## Interactive PRD Generation
+<!-- BEGIN TEMPLATE: devspec-create -->
+## Interactive Dev Spec Generation
 
-I'll guide you through creating a complete PRD, section by section. For each section, I'll generate a draft, present it for review, and wait for your feedback before proceeding.
+I'll guide you through creating a complete Dev Spec, section by section. For each section, I'll generate a draft, present it for review, and wait for your feedback before proceeding.
 
 ### Step 1: Determine Input Source
 
-**How would you like to provide the concept for this PRD?**
+**How would you like to provide the concept for this Dev Spec?**
 
 Check the arguments and conversation context for input mode:
 
-1. **DDD Domain Model** — If the user provides a path to a domain model (e.g., `docs/DOMAIN-MODEL.md`), or says "from the domain model", read it and use the DDD-to-PRD translation protocol (`docs/DDD-to-PRD-protocol.md`) as the mapping guide.
+1. **DDD Domain Model** — If the user provides a path to a domain model (e.g., `docs/DOMAIN-MODEL.md`), or says "from the domain model", read it and use the DDD → Dev Spec translation protocol (`docs/DDD-to-devspec-protocol.md`) as the mapping guide.
 2. **External Document** — If the user provides a path to any other document (concept doc, brief, notes), read it and extract the concept.
 3. **Verbal Description** — If no document is provided, ask the user to describe the project concept verbally.
 
 **If input is a DDD domain model:**
-- Read `docs/DDD-to-PRD-protocol.md` for the translation rules
+- Read `docs/DDD-to-devspec-protocol.md` for the translation rules
 - Apply the 8-step translation as the backbone, but still walk each section interactively
 - The protocol provides structure; the user provides judgment
 
@@ -112,13 +112,13 @@ Check the arguments and conversation context for input mode:
 
 ### Step 2: Ask for Project Name
 
-**What should the PRD be named?** (e.g., "my-project" → `docs/my-project-PRD.md`)
+**What should the Dev Spec be named?** (e.g., "my-project" → `docs/my-project-devspec.md`)
 
-Read `docs/PRD-template.md` to load the template structure.
+Read `docs/devspec-template.md` to load the template structure.
 
 ### Step 3: Walk Each Section
 
-For **each** PRD section (1 through 9), follow this pattern:
+For **each** Dev Spec section (1 through 9), follow this pattern:
 
 1. **Generate a draft** for the section based on the input source
 2. **Present the draft** to the user
@@ -163,7 +163,7 @@ For **each** PRD section (1 through 9), follow this pattern:
 
 **Section 7: Definition of Done**
 - Global DoD checklist
-- 7.2 PRD Finalization Checklist (pre-populated from template)
+- 7.2 Dev Spec Finalization Checklist (pre-populated from template)
 
 **Section 8: Phased Implementation Plan**
 - Phase structure, stories, waves
@@ -199,7 +199,7 @@ For **each** Tier 1 row (DM-01 through DM-09):
 
 ### Step 5: Scan for Tier 2 Triggers
 
-After walking Tier 1, scan the PRD content for Tier 2 trigger conditions:
+After walking Tier 1, scan the Dev Spec content for Tier 2 trigger conditions:
 
 | Trigger Condition | Deliverable to Add |
 |-------------------|--------------------|
@@ -222,15 +222,15 @@ For any row missing an assignment:
 2. **Ask the user** which wave/phase should produce it
 3. **Update the row**
 
-This is a hard gate — the PRD cannot be finalized without complete wave assignments.
+This is a hard gate — the Dev Spec cannot be finalized without complete wave assignments.
 
-### Step 7: Write the PRD
+### Step 7: Write the Dev Spec
 
 After all sections are walked and the manifest is complete:
 
-1. **Assemble the PRD** from all approved sections
-2. **Write to** `docs/<project-name>-PRD.md`
-3. **Report:** "PRD written to `docs/<project-name>-PRD.md`. Run `/prd finalize` to verify completeness."
+1. **Assemble the Dev Spec** from all approved sections
+2. **Write to** `docs/<project-name>-devspec.md`
+3. **Report:** "Dev Spec written to `docs/<project-name>-devspec.md`. Run `/devspec finalize` to verify completeness."
 
 ---
 
@@ -243,38 +243,38 @@ After all sections are walked and the manifest is complete:
 - **Use EARS format** for all requirements in Section 3.
 - **Fill in template placeholders.** Replace `[[...]]` guidance blocks with actual content — do not leave template instructions in the output.
 
-<!-- END TEMPLATE: prd-create -->
+<!-- END TEMPLATE: devspec-create -->
 
-<!-- BEGIN TEMPLATE: prd-finalize -->
-## PRD Finalization Checklist
+<!-- BEGIN TEMPLATE: devspec-finalize -->
+## Dev Spec Finalization Checklist
 
-I'll run the Section 7.2 finalization checklist mechanically against an existing PRD and report pass/fail for each item.
+I'll run the Section 7.2 finalization checklist mechanically against an existing Dev Spec and report pass/fail for each item.
 
-### Step 1: Locate the PRD
+### Step 1: Locate the Dev Spec
 
-Check for the PRD file:
+Check for the Dev Spec file:
 1. If the user provided a path, use it
-2. Otherwise, look for `docs/*-PRD.md` files
-3. If multiple PRDs exist, ask the user which one to finalize
-4. If no PRD exists, tell the user: "No PRD found. Run `/prd create` first."
+2. Otherwise, look for `docs/*-devspec.md` files
+3. If multiple Dev Specs exist, ask the user which one to finalize
+4. If no Dev Spec exists, tell the user: "No Dev Spec found. Run `/devspec create` first."
 
-### Step 2: Read the PRD
+### Step 2: Read the Dev Spec
 
-Read the entire PRD file into context. Also read `docs/PRD-template.md` for reference on expected structure.
+Read the entire Dev Spec file into context. Also read `docs/devspec-template.md` for reference on expected structure.
 
 ### Step 3: Run Each Check
 
-Execute each item from the Section 7.2 PRD Finalization Checklist. For each item, report:
+Execute each item from the Section 7.2 Dev Spec Finalization Checklist. For each item, report:
 - **Pass** or **Fail**
 - **Evidence** — what was found (or not found) that determined the result
-- **Location** — where in the PRD the relevant content lives
+- **Location** — where in the Dev Spec the relevant content lives
 
 #### Check 1: Tier 1 Deliverables Manifest — File Paths
 
 > Every Tier 1 row in the Deliverables Manifest (5.A) has a file path or "N/A — because [reason]"
 
 **How to verify:**
-1. Find Section 5.A in the PRD
+1. Find Section 5.A in the Dev Spec
 2. Identify all rows with Tier = 1
 3. For each Tier 1 row, check the "File Path" column
 4. Pass if every Tier 1 row has a non-empty file path OR contains "N/A" with a rationale
@@ -349,7 +349,7 @@ Execute each item from the Section 7.2 PRD Finalization Checklist. For each item
 After all checks complete, present:
 
 ```
-## PRD Finalization Report
+## Dev Spec Finalization Report
 
 | # | Check | Result | Evidence |
 |---|-------|--------|----------|
@@ -361,34 +361,34 @@ After all checks complete, present:
 | 6 | Audience-facing docs | PASS/FAIL | [details] |
 | 7 | DoD references | PASS/FAIL | [details] |
 
-**Result: X/7 checks passed. PRD is [ready / not ready] for approval.**
+**Result: X/7 checks passed. Dev Spec is [ready / not ready] for approval.**
 ```
 
 If not all checks pass:
 - List the specific failures with remediation steps
-- Suggest running `/prd create` to fix the issues interactively
+- Suggest running `/devspec create` to fix the issues interactively
 
 If all checks pass:
-- "PRD is ready for approval. Next step: get stakeholder sign-off, then run `/prepwaves` to plan execution."
+- "Dev Spec is ready for approval. Next step: get stakeholder sign-off, then run `/prepwaves` to plan execution."
 
-<!-- END TEMPLATE: prd-finalize -->
+<!-- END TEMPLATE: devspec-finalize -->
 
-<!-- BEGIN TEMPLATE: prd-approve -->
-## PRD Approval Gate
+<!-- BEGIN TEMPLATE: devspec-approve -->
+## Dev Spec Approval Gate
 
-This is the gate between PRD creation and backlog population. No issues get created until the PRD is explicitly approved by a human.
+This is the gate between Dev Spec creation and backlog population. No issues get created until the Dev Spec is explicitly approved by a human.
 
-### Step 1: Locate the PRD
+### Step 1: Locate the Dev Spec
 
-Check for the PRD file:
+Check for the Dev Spec file:
 1. If the user provided a path, use it
-2. Otherwise, look for `docs/*-PRD.md` files
-3. If multiple PRDs exist, ask the user which one to approve
-4. If no PRD exists, tell the user: "No PRD found. Run `/prd create` first."
+2. Otherwise, look for `docs/*-devspec.md` files
+3. If multiple Dev Specs exist, ask the user which one to approve
+4. If no Dev Spec exists, tell the user: "No Dev Spec found. Run `/devspec create` first."
 
 ### Step 2: Run Finalization Checklist
 
-Run the `/prd finalize` checklist automatically against the PRD. This is the same mechanical checklist from the finalize subcommand.
+Run the `/devspec finalize` checklist automatically against the Dev Spec. This is the same mechanical checklist from the finalize subcommand.
 
 1. Execute all 7 finalization checks
 2. Collect the results
@@ -396,15 +396,15 @@ Run the `/prd finalize` checklist automatically against the PRD. This is the sam
 **If any checks fail:**
 - Present the finalization report with failures highlighted
 - List each failing item with a specific remediation suggestion
-- Tell the user: "PRD has N failing checks. Fix these issues and run `/prd approve` again."
+- Tell the user: "Dev Spec has N failing checks. Fix these issues and run `/devspec approve` again."
 - **Stop here.** Do not proceed to approval.
 
-### Step 3: Present PRD Summary
+### Step 3: Present Dev Spec Summary
 
-If all finalization checks pass, present a PRD summary to the user:
+If all finalization checks pass, present a Dev Spec summary to the user:
 
 ```
-## PRD Approval Summary
+## Dev Spec Approval Summary
 
 | Metric | Count |
 |--------|-------|
@@ -415,7 +415,7 @@ If all finalization checks pass, present a PRD summary to the user:
 | Finalization checks | 7/7 passed |
 ```
 
-Count these by scanning the PRD:
+Count these by scanning the Dev Spec:
 - **Sections**: Count top-level `## N.` headings
 - **Stories**: Count story entries in Section 8 (look for `#### Story` headings or numbered story items)
 - **Waves**: Count wave entries in Section 8 (look for `### Wave` headings or wave references)
@@ -427,9 +427,9 @@ Present the approval prompt and **stop**. Do not proceed until the user responds
 
 **Tell the user:**
 
-> PRD is ready for approval. All 7 finalization checks passed.
+> Dev Spec is ready for approval. All 7 finalization checks passed.
 >
-> **Approve this PRD? (yes/no)**
+> **Approve this Dev Spec? (yes/no)**
 
 **Wait for the user's response.** Do not take any further action until they respond.
 
@@ -437,10 +437,10 @@ Present the approval prompt and **stop**. Do not proceed until the user responds
 
 **On approval (user says yes/approve/confirmed/y):**
 
-1. Add an approval metadata section to the PRD. Insert it after the frontmatter (if any) or at the top of the document, before Section 1:
+1. Add an approval metadata section to the Dev Spec. Insert it after the frontmatter (if any) or at the top of the document, before Section 1:
 
 ```markdown
-<!-- PRD-APPROVAL
+<!-- DEV-SPEC-APPROVAL
 approved: true
 approved_by: [user name or "stakeholder"]
 approved_at: [ISO 8601 timestamp, e.g. 2026-04-04T12:00:00Z]
@@ -448,35 +448,35 @@ finalization_score: 7/7
 -->
 ```
 
-2. Confirm to the user: "PRD approved. Approval metadata recorded. Next step: run `/prd upshift` to create backlog issues."
+2. Confirm to the user: "Dev Spec approved. Approval metadata recorded. Next step: run `/devspec upshift` to create backlog issues."
 
 **On rejection (user says no/reject/n):**
 
 1. Ask the user what needs to change
 2. List the finalization results as a starting point for discussion
-3. Tell the user: "Make the requested changes to the PRD, then run `/prd approve` again."
+3. Tell the user: "Make the requested changes to the Dev Spec, then run `/devspec approve` again."
 4. **Stop here.**
 
-<!-- END TEMPLATE: prd-approve -->
+<!-- END TEMPLATE: devspec-approve -->
 
-<!-- BEGIN TEMPLATE: prd-upshift -->
-## PRD Backlog Population (Upshift)
+<!-- BEGIN TEMPLATE: devspec-upshift -->
+## Dev Spec Backlog Population (Upshift)
 
-Creates backlog issues from an approved PRD's Section 8 (Phased Implementation Plan). This is the bridge from PRD to execution.
+Creates backlog issues from an approved Dev Spec's Section 8 (Phased Implementation Plan). This is the bridge from Dev Spec to execution.
 
-### Step 1: Locate and Verify the PRD
+### Step 1: Locate and Verify the Dev Spec
 
-Check for the PRD file:
+Check for the Dev Spec file:
 1. If the user provided a path, use it
-2. Otherwise, look for `docs/*-PRD.md` files
-3. If multiple PRDs exist, ask the user which one to upshift
-4. If no PRD exists, tell the user: "No PRD found. Run `/prd create` first."
+2. Otherwise, look for `docs/*-devspec.md` files
+3. If multiple Dev Specs exist, ask the user which one to upshift
+4. If no Dev Spec exists, tell the user: "No Dev Spec found. Run `/devspec create` first."
 
 **Verify approval:**
-1. Search the PRD for the approval metadata comment block (`<!-- PRD-APPROVAL`)
+1. Search the Dev Spec for the approval metadata comment block (`<!-- DEV-SPEC-APPROVAL`)
 2. Check that `approved: true` is present in the metadata
 3. If no approval metadata is found or `approved` is not `true`:
-   - Tell the user: "This PRD has not been approved. Run `/prd approve` first."
+   - Tell the user: "This Dev Spec has not been approved. Run `/devspec approve` first."
    - **Stop here.** Do not create any issues.
 
 ### Step 2: Parse Section 8
@@ -503,7 +503,7 @@ For each Phase in Section 8:
    Title: Epic: Phase N — [Phase Name]
    Body:
    ## Phase Definition of Done
-   [Copy the Phase DoD from the PRD]
+   [Copy the Phase DoD from the Dev Spec]
 
    ## Stories
    [List story titles that will be linked after creation]
@@ -519,19 +519,19 @@ For each Story in Section 8:
 
 1. Create an issue using the platform CLI:
    ```
-   Title: [Story title from PRD]
+   Title: [Story title from Dev Spec]
    Body:
    ## Summary
-   [Story description from PRD]
+   [Story description from Dev Spec]
 
    ## Implementation Steps
-   [Copy implementation steps from PRD]
+   [Copy implementation steps from Dev Spec]
 
    ## Test Procedures
-   [Copy test procedures from PRD]
+   [Copy test procedures from Dev Spec]
 
    ## Acceptance Criteria
-   [Copy acceptance criteria from PRD as checkboxes]
+   [Copy acceptance criteria from Dev Spec as checkboxes]
 
    ## Metadata
    - **Wave:** [wave assignment]
@@ -582,27 +582,27 @@ Present a creation summary:
 | **Total issues created** | **N** | |
 ```
 
-### Step 7: Backfill Issue Numbers into PRD
+### Step 7: Backfill Issue Numbers into Dev Spec
 
-Update the PRD file to include the created issue numbers:
+Update the Dev Spec file to include the created issue numbers:
 
 1. For each Phase heading, append the epic issue number: `### Phase 1: Foundation (#NNN)`
 2. For each Story, append the story issue number
 3. For each Wave reference, append the wave master issue number
-4. Write the updated PRD back to disk
+4. Write the updated Dev Spec back to disk
 
-Confirm to the user: "Backlog populated. N issues created. PRD updated with issue references. Run `/prepwaves` to plan execution."
+Confirm to the user: "Backlog populated. N issues created. Dev Spec updated with issue references. Run `/prepwaves` to plan execution."
 
-<!-- END TEMPLATE: prd-upshift -->
+<!-- END TEMPLATE: devspec-upshift -->
 
 ---
 
 ## Important Rules
 
-1. **Never skip the interactive walk.** Every section must be presented and approved by the user. Do not generate the entire PRD in one shot.
+1. **Never skip the interactive walk.** Every section must be presented and approved by the user. Do not generate the entire Dev Spec in one shot.
 2. **Tier 1 is opt-OUT.** Every Tier 1 deliverable must be explicitly confirmed or given an "N/A — because [reason]" rationale. Silence is not consent to skip.
-3. **Tier 2 triggers are mechanical.** Scan the PRD content for trigger conditions — do not rely on the user to remember them.
-4. **Wave assignment is a hard gate.** Every active manifest row must have a "Produced In" wave before the PRD is written.
+3. **Tier 2 triggers are mechanical.** Scan the Dev Spec content for trigger conditions — do not rely on the user to remember them.
+4. **Wave assignment is a hard gate.** Every active manifest row must have a "Produced In" wave before the Dev Spec is written.
 5. **The Deliverables Manifest is the single source of truth.** Do not create separate artifact manifests or documentation kits — everything goes in 5.A.
-6. **Finalization is mechanical.** `/prd finalize` checks are deterministic — no judgment calls, no "looks good enough."
+6. **Finalization is mechanical.** `/devspec finalize` checks are deterministic — no judgment calls, no "looks good enough."
 7. **Traceability is non-negotiable.** If the input is a DDD domain model, every requirement must trace back to a policy, every flow to commands/events, every story AC to requirements.

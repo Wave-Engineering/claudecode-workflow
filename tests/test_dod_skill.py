@@ -114,12 +114,12 @@ class TestTemplate:
         assert check, "dod-check template not found"
 
     def test_has_locate_prd_step(self, skill_text: str) -> None:
-        """Template has a step to locate the PRD."""
+        """Template has a step to locate the Dev Spec."""
         check = _extract_template(skill_text, "dod-check")
-        assert "Locate the PRD" in check or "*-PRD.md" in check
+        assert "Locate the Dev Spec" in check or "*-devspec.md" in check
 
     def test_has_read_prd_step(self, skill_text: str) -> None:
-        """Template has a step to read and parse the PRD."""
+        """Template has a step to read and parse the Dev Spec."""
         check = _extract_template(skill_text, "dod-check")
         assert "Deliverables Manifest" in check
         assert "Section 5.A" in check
@@ -246,9 +246,9 @@ class TestReportFormat:
         assert "project-name" in check.lower() or "Project:" in check
 
     def test_report_has_prd_path(self, skill_text: str) -> None:
-        """Report includes PRD file path."""
+        """Report includes Dev Spec file path."""
         check = _extract_template(skill_text, "dod-check")
-        assert "PRD:" in check or "docs/" in check
+        assert "Dev Spec:" in check or "docs/" in check
 
     def test_report_has_status_indicators(self, skill_text: str) -> None:
         """Report uses V/X/O status indicators."""

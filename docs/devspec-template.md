@@ -1,4 +1,4 @@
-# [Project] — Product Requirements Document
+# [Project] — Development Specification
 
 **Version:** 1.0
 **Date:** [Today's Date]
@@ -18,7 +18,7 @@
    - [5.B Installation & Deployment](#5b-installation--deployment)
 6. [Test Plan](#6-test-plan)
 7. [Definition of Done](#7-definition-of-done)
-   - [7.2 PRD Finalization Checklist](#72-prd-finalization-checklist)
+   - [7.2 Dev Spec Finalization Checklist](#72-dev-spec-finalization-checklist)
 8. [Phased Implementation Plan](#8-phased-implementation-plan)
 9. [Appendices](#9-appendices)
 
@@ -149,14 +149,14 @@ _Sections 5.1–5.N are project-specific design topics — add as many as needed
 
 ### 5.A Deliverables Manifest
 
-[[The single source of truth for everything this project must produce — code artifacts, test outputs, documentation, and verification records. Every row needs a file path and a wave assignment before the PRD is finalized.
+[[The single source of truth for everything this project must produce — code artifacts, test outputs, documentation, and verification records. Every row needs a file path and a wave assignment before the Dev Spec is finalized.
 
 **Tier system:**
 - **Tier 1 (required):** Opt-OUT with rationale — must provide "N/A — because [reason]" to skip
 - **Tier 2 (conditional):** Added when triggers fire (documented in the trigger column)
 - **Tier 3 (opt-in):** Only added when explicitly requested — silent-skip is fine
 
-The table below starts with Tier 1 defaults. The `/prd create` skill walks these with you during PRD generation. Tier 2 rows are added when their triggers fire. Tier 3 rows are added only on request.]]
+The table below starts with Tier 1 defaults. The `/devspec create` skill walks these with you during Dev Spec generation. Tier 2 rows are added when their triggers fire. Tier 3 rows are added only on request.]]
 
 | ID | Deliverable | Category | Tier | File Path | Produced In | Status | Notes |
 |----|-------------|----------|------|-----------|-------------|--------|-------|
@@ -167,7 +167,7 @@ The table below starts with Tier 1 defaults. The `/prd create` skill walks these
 | DM-05 | Test results (JUnit XML) | Test | 1 | `reports/junit.xml` | | required | CI artifact upload |
 | DM-06 | Coverage report | Test | 1 | `reports/coverage.xml` | | required | CI artifact upload |
 | DM-07 | CHANGELOG | Docs | 1 | `CHANGELOG.md` | | required | Release-by-release summary |
-| DM-08 | VRTM | Trace | 1 | PRD Appendix V | | required | Requirement traceability matrix |
+| DM-08 | VRTM | Trace | 1 | Dev Spec Appendix V | | required | Requirement traceability matrix |
 | DM-09 | Audience-facing doc (ops runbook, user manual, API/CLI ref) | Docs | 1 | | | required | At least one must have a file path |
 
 [[**Tier 2 triggers** (add rows when conditions are met):
@@ -223,7 +223,7 @@ Open questions should be resolved before or during implementation. When resolved
 
 ## 6. Test Plan
 
-[[This section is written during PRD creation while the agent has full design context. It specifies integration and end-to-end verification — NOT unit tests. Unit tests are specified at story level (Section 8) once the implementation is diced into concrete units.
+[[This section is written during Dev Spec creation while the agent has full design context. It specifies integration and end-to-end verification — NOT unit tests. Unit tests are specified at story level (Section 8) once the implementation is diced into concrete units.
 
 Every test item is annotated with the requirement IDs it verifies. A single test can verify multiple requirements — use `[R-01, R-03, R-07]` when a test covers several. These annotations feed the VRTM (Section 9, Appendix V).
 
@@ -284,9 +284,9 @@ After all phases are complete, the VRTM in Section 9 provides the formal proof t
 - [ ] [[cross-cutting condition — annotate with requirement IDs, e.g., [R-01, R-05] ]]
 - [ ] [[cross-cutting condition [R-XX] ]]
 
-### 7.2 PRD Finalization Checklist
+### 7.2 Dev Spec Finalization Checklist
 
-[[Go/no-go gate before wave planning. Run `/prd finalize` to verify mechanically.]]
+[[Go/no-go gate before wave planning. Run `/devspec finalize` to verify mechanically.]]
 
 - [ ] Every Tier 1 row in the Deliverables Manifest (5.A) has a file path or "N/A — because [reason]"
 - [ ] Every Tier 2 trigger that fires has a corresponding row in the Deliverables Manifest
