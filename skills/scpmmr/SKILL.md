@@ -11,41 +11,19 @@ description: Stage, commit, push, create PR/MR, then merge it — full pipeline 
 
 # Stage, Commit, Push, Create PR/MR, Merge
 
-This is a combo skill that chains `/scp` and `/mmr` into a single invocation.
+Combo skill chaining `/scp` → `/mmr`. Both underlying skills are rewritten to use Origin Operations MCP tools: `/scp` uses `pr_list` + `pr_create`; `/mmr` uses `pr_status` + `pr_diff` + `pr_wait_ci` + `pr_merge` + `ci_wait_run` (optional post-merge main-branch pipeline wait, server-side, zero token burn).
 
-## Pre-Commit Gate
+## Procedure
 
-If `/precheck` has not been run in this conversation, run it first and wait for approval before proceeding. Invoking `/scpmmr` after `/precheck` is approval to execute.
+Requires `/precheck` first — invoking `/scpmmr` after `/precheck` is approval to execute. If `/precheck` has not been run, run it first and wait for approval.
 
-## Workflow
-
-1. **Run `/scp`** — Execute the full scp workflow (stage, commit, push, create PR/MR)
-   - The scp skill will create a PR/MR if one doesn't exist
-
-2. **Run `/mmr`** — Immediately after scp completes, merge the PR/MR
-   - Target the PR/MR that was just created or already exists for this branch
-   - Use `--admin` flag if branch protection requires it (same as prior merge patterns in this repo)
-   - Follow the full mmr workflow: gather context, verify CI, generate squash message, merge
-
-## Voice Announcement
-
-After the merge completes successfully, resolve agent identity and announce via `vox` (best-effort):
-
-```bash
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
-DEV_NAME=$(jq -r '.dev_name // "agent"' "/tmp/claude-agent-${dir_hash}.json" 2>/dev/null)
-DEV_TEAM=$(jq -r '.dev_team // "unknown"' "/tmp/claude-agent-${dir_hash}.json" 2>/dev/null)
-PROJECT=$(basename "$project_root")
-
-vox "Hey BJ, this is $DEV_NAME from $DEV_TEAM on $PROJECT. PR <NUMBER> is merged into main for issue <NUMBER>. All done." 2>/dev/null || true
-```
-
-Keep it brief — identify yourself, issue number, PR number, merged. Write for the ear.
+1. Run `/scp` — creates the PR/MR via `pr_create`
+2. Run `/mmr` — targets the just-created PR/MR. Handles merge-queue auto-fallback internally via `pr_merge` (no `--admin` flag needed). Post-merge `ci_wait_run(ref: "main", timeout_sec: 1800)` confirms the main-branch pipeline lands clean.
+3. `vox` announcement (best-effort): identity from `/tmp/claude-agent-<md5>.json`, then name/team/project/issue/PR/"merged into main"
 
 ## Important
 
-- This is a **convenience shortcut** — it does NOT skip any safety checks
-- `/precheck` must have been run and the checklist presented before execution
-- CI verification before merge still applies
-- If any step fails, stop and report — do NOT continue to the next step
+- Convenience shortcut — does NOT skip any safety checks
+- `/precheck` must run and be approved first
+- CI verification before merge is handled by `pr_wait_ci` inside `/mmr`
+- Any step failure → STOP and report, do NOT continue to the next step
