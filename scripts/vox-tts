@@ -23,7 +23,7 @@
 #   VOX_COMMAND    Shell expression evaluated by bash -c (text on stdin, audio on stdout)
 #   VOX_ENDPOINT   HTTP TTS endpoint (default: http://archer:8004/v1/audio/speech)
 #   VOX_VOICE      Default voice name (default: Taylor.wav)
-#   VOX_MODEL      TTS model name (default: chatterbox-turbo)
+#   VOX_MODEL      TTS model name (default: qwen3-tts)
 #
 # Exit codes:
 #   0  Audio written successfully
@@ -35,7 +35,7 @@ set -euo pipefail
 
 DEFAULT_ENDPOINT="http://archer:8004/v1/audio/speech"
 DEFAULT_VOICE="Taylor.wav"
-DEFAULT_MODEL="chatterbox-turbo"
+DEFAULT_MODEL="qwen3-tts"
 
 # --- Parse args ---------------------------------------------------------------
 
