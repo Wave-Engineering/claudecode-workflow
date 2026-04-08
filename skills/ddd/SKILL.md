@@ -1,6 +1,6 @@
 ---
 name: ddd
-description: Domain-Driven Design facilitation — event storming, domain modeling, and concept handoff
+description: Domain-Driven Design facilitation — event storming, domain modeling, and concept handoff (uses sdlc-server MCP tools for deterministic checks)
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
@@ -399,15 +399,15 @@ After Stage 8:
 
 Let me check where we left off...
 
-**Before proceeding:** Check whether `docs/SKETCHBOOK.md` exists.
+**Before proceeding:** Call `ddd_locate_sketchbook` to check whether `docs/SKETCHBOOK.md` exists. The tool returns `{ ok: true, path, exists: true|false }`.
 
-**If it exists:**
+**If the sketchbook exists:**
 1. Read the sketchbook to find the last completed stage
 2. Summarize what we've discovered so far
 3. Identify the next stage to work on
 4. Continue from there
 
-**If it does not exist:**
+**If the sketchbook does not exist:**
 Tell the user: "No sketchbook found at `docs/SKETCHBOOK.md`. Would you like to:
 - **Start fresh:** `/ddd begin`
 - **Import existing:** Move your sketchbook to `docs/SKETCHBOOK.md` and run `/ddd resume` again"
@@ -439,10 +439,12 @@ I'll read your sketchbook and produce a formal Domain Model document following t
    - No orphaned references
 5. Write `docs/DOMAIN-MODEL.md`
 
-**Before proceeding:** Check that the required files exist.
+**Before proceeding:** Call `ddd_locate_sketchbook` to verify the sketchbook exists. The tool returns `{ ok: true, path, exists: true|false }`.
 
-- Check `docs/SKETCHBOOK.md` — **required.** If missing, tell the user: "Run `/ddd begin` first or move your sketchbook to `docs/SKETCHBOOK.md`."
-- Check `docs/Domain-Model-template.md` — optional. If missing, use the built-in template structure.
+- If `exists: false`, tell the user: "Run `/ddd begin` first or move your sketchbook to `docs/SKETCHBOOK.md`."
+- If `exists: true`, proceed to the next step.
+
+Also check `docs/Domain-Model-template.md` — optional. If missing, use the built-in template structure.
 
 If the sketchbook exists, proceed. Read it and generate the formal domain model now.
 <!-- END TEMPLATE: ddd-draft -->
@@ -452,32 +454,50 @@ If the sketchbook exists, proceed. Read it and generate the formal domain model 
 
 I'll verify the domain model is ready and hand off to Dev Spec creation.
 
+This subcommand is a handoff — not a translation. The tool chain is: `ddd_locate_domain_model` → `ddd_verify_committed` → `ddd_summary` → `devspec_locate`.
+
 **Step 1 — Verify `docs/DOMAIN-MODEL.md` exists:**
 
-Check whether `docs/DOMAIN-MODEL.md` exists and is non-empty.
+Call `ddd_locate_domain_model` to find the domain model file. The tool returns `{ ok: true, path, exists: true|false }`.
 
-- **If missing or empty:** Tell the user: "No domain model found at `docs/DOMAIN-MODEL.md`. Run `/ddd draft` first to formalize your sketchbook into a domain model."
-- **If present:** Continue to Step 2.
+- **If `exists: false`:** Tell the user: "No domain model found at `docs/DOMAIN-MODEL.md`. Run `/ddd draft` first to formalize your sketchbook into a domain model."
+- **If `exists: true`:** Continue to Step 2.
 
 **Step 2 — Verify the file is committed and pushed:**
 
-Run `git status docs/DOMAIN-MODEL.md` and check for uncommitted changes.
+Call `ddd_verify_committed(path)` with the domain model path. The tool runs `git status --porcelain -- <path>` with the correct cwd and returns `{ ok: true, committed: true|false, status?: "..." }`.
 
-- **If uncommitted changes exist:** Tell the user: "The domain model has uncommitted changes. Please commit and push `docs/DOMAIN-MODEL.md` before accepting."
-- **If clean:** Continue to Step 3.
+- **If `committed: false`:** Tell the user: "The domain model has uncommitted changes (`status`). Please commit and push `docs/DOMAIN-MODEL.md` before accepting."
+- **If `committed: true`:** Continue to Step 3.
 
 **Step 3 — Present a domain model summary:**
 
-Read `docs/DOMAIN-MODEL.md` and count:
-- Number of **Aggregates** (look for aggregate table rows or `| **` patterns in the Aggregates section)
-- Number of **Commands** (look for `C-NN` entries or command table rows)
-- Number of **Policies** (look for `P-NN` entries or policy table rows)
+Call `ddd_summary(path)` with the domain model path. The tool returns structured counts:
+
+```json
+{
+  "ok": true,
+  "path": "docs/DOMAIN-MODEL.md",
+  "aggregates": N,
+  "commands": M,
+  "policies": P,
+  "events": E,
+  "read_models": R
+}
+```
 
 Present:
 
 > **Domain model ready.** N aggregates, M commands, P policies.
 
-**Step 4 — Suggest next step:**
+**Step 4 — Check for an existing Dev Spec:**
+
+Call `devspec_locate` to check whether a Dev Spec already exists for this project. If one is found, report it in the handoff message so the user knows whether to run `/devspec create` (new) vs. update an existing one:
+
+- If a Dev Spec exists: "Existing Dev Spec found at `docs/<name>-devspec.md`. Run `/devspec create` to update it, or review manually."
+- If no Dev Spec exists: "No Dev Spec found yet. Run `/devspec create` to generate the Dev Spec from this domain model."
+
+**Step 5 — Suggest next step:**
 
 > Run `/devspec create` to generate the Dev Spec from this domain model.
 

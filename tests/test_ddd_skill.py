@@ -73,11 +73,20 @@ class TestAcceptNoPrdGeneration:
     """Verify /ddd accept does not generate a Dev Spec file."""
 
     def test_no_prd_file_creation_in_accept(self, skill_text: str) -> None:
-        """The ddd-accept template must not reference writing a Dev Spec file."""
+        """The ddd-accept template must not reference writing/generating a Dev Spec file.
+
+        Post-#334: the rewrite calls `devspec_locate` as part of the handoff
+        to check whether a Dev Spec already exists for this project, and the
+        handoff message may legitimately mention the `-devspec.md` path as a
+        reference (not as a creation). The assertion therefore checks for
+        *write* operations, not mere mention.
+        """
         accept = _extract_template(skill_text, "ddd-accept")
         assert accept, "ddd-accept template not found"
+        # No file write/generation of a Dev Spec
         assert "Write `docs/" not in accept
-        assert "-devspec.md`" not in accept
+        assert "write docs/" not in accept.lower()
+        assert "generate a dev spec" not in accept.lower() or "do not generate a dev spec" in accept.lower()
 
     def test_no_prd_template_reading(self, skill_text: str) -> None:
         """The ddd-accept template must not read Dev Spec templates."""
@@ -85,11 +94,23 @@ class TestAcceptNoPrdGeneration:
         assert "devspec-template.md" not in accept
 
     def test_no_translation_steps(self, skill_text: str) -> None:
-        """The ddd-accept template must not contain DDD-to-Dev Spec translation steps."""
+        """The ddd-accept template must not contain DDD-to-Dev Spec translation steps.
+
+        The previous revision had `assert "Step 1:" not in accept or "Actors"
+        not in accept` which is trivially satisfied — a regression that
+        introduces one token but not the other would pass. Split into two
+        independent assertions so the AND-negation is actually enforced.
+        """
         accept = _extract_template(skill_text, "ddd-accept")
         assert "8-step translation" not in accept
         assert "Apply 8-step" not in accept
-        assert "Step 1:" not in accept or "Actors" not in accept
+        # The ddd-accept template does have "Step 1 —" numbered subsections
+        # (Step 1 — verify exists, Step 2 — verify committed, etc.), so a
+        # bare "Step 1:" check with `in` would false-positive. Check the
+        # specific translation-step phrase that came from the original
+        # DDD-to-devspec protocol instead.
+        assert "Translate the Actors" not in accept
+        assert "Translate Policies" not in accept
 
     def test_no_ddd_to_prd_protocol_reading(self, skill_text: str) -> None:
         """The ddd-accept template must not read DDD-to-devspec-protocol.md."""
@@ -372,3 +393,76 @@ class TestReadme:
             if "| ddd |" in line:
                 assert "handoff" in line.lower() or "hand off" in line.lower()
                 break
+
+
+# ---------------------------------------------------------------------------
+# 11. MCP tool invocations (Phase 2 rewrite — Family 3)
+# ---------------------------------------------------------------------------
+
+
+class TestMcpToolInvocations:
+    """Verify the rewritten templates invoke the new sdlc-server MCP tool
+    handlers instead of running hand-written bash checks.
+
+    Added for #334 (Family 3 Phase 2 — ddd skill rewrite to use Phase 1
+    MCP tools). The /ddd begin template is intentionally NOT covered here
+    — it is 100% reasoning work and should not invoke any MCP tool.
+    """
+
+    def test_accept_calls_ddd_locate_domain_model(self, skill_text: str) -> None:
+        """The ddd-accept template calls ddd_locate_domain_model instead of
+        running a hand-written file-existence check."""
+        accept = _extract_template(skill_text, "ddd-accept")
+        assert "ddd_locate_domain_model" in accept
+
+    def test_accept_calls_ddd_verify_committed(self, skill_text: str) -> None:
+        """The ddd-accept template calls ddd_verify_committed instead of
+        running `git status` directly."""
+        accept = _extract_template(skill_text, "ddd-accept")
+        assert "ddd_verify_committed" in accept
+
+    def test_accept_calls_ddd_summary(self, skill_text: str) -> None:
+        """The ddd-accept template calls ddd_summary instead of
+        hand-counting aggregates/commands/policies from the file."""
+        accept = _extract_template(skill_text, "ddd-accept")
+        assert "ddd_summary" in accept
+
+    def test_accept_calls_devspec_locate(self, skill_text: str) -> None:
+        """The ddd-accept template calls devspec_locate to check whether a
+        Dev Spec already exists for this project (improves the handoff
+        message)."""
+        accept = _extract_template(skill_text, "ddd-accept")
+        assert "devspec_locate" in accept
+
+    def test_draft_calls_ddd_locate_sketchbook(self, skill_text: str) -> None:
+        """The ddd-draft template calls ddd_locate_sketchbook before
+        drafting instead of running a hand-written file-existence check."""
+        draft = _extract_template(skill_text, "ddd-draft")
+        assert "ddd_locate_sketchbook" in draft
+
+    def test_resume_calls_ddd_locate_sketchbook(self, skill_text: str) -> None:
+        """The ddd-resume template calls ddd_locate_sketchbook to check
+        whether the sketchbook exists before resuming."""
+        resume = _extract_template(skill_text, "ddd-resume")
+        assert "ddd_locate_sketchbook" in resume
+
+    def test_begin_does_not_call_mcp_tools(self, skill_text: str) -> None:
+        """The ddd-begin template is pure reasoning work and must NOT call
+        any MCP tool handlers. This guards against scope creep — the 8-stage
+        Socratic event storming workflow is human+agent discovery, not
+        deterministic procedure."""
+        begin = _extract_template(skill_text, "ddd-begin")
+        # No ddd_* or devspec_* handler calls allowed in /ddd begin
+        forbidden = [
+            "ddd_locate_sketchbook",
+            "ddd_locate_domain_model",
+            "ddd_verify_committed",
+            "ddd_summary",
+            "devspec_locate",
+            "devspec_finalize",
+            "devspec_approve",
+        ]
+        for tool in forbidden:
+            assert tool not in begin, (
+                f"/ddd begin must be pure reasoning — found forbidden tool call: {tool}"
+            )
