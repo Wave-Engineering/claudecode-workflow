@@ -9,160 +9,65 @@ description: Fetch and analyze a failed CI job (GitLab) or workflow run (GitHub)
      Do NOT delete introduction.md — it lives in a protected directory.
      Do this BEFORE executing any skill logic below. -->
 
-# CI Job/Workflow Failure Analysis
+# CI Failure Analysis
 
-Fetch and summarize a failed CI job's output without flooding the parent context window.
+Fetch and summarize a failed CI run without flooding the parent context. Works on GitHub Actions and GitLab CI — the tools normalize the platform.
 
-Supports both **GitLab CI** (jobs) and **GitHub Actions** (workflow runs).
+## Tools Used
 
-## Detect Platform
-
-Before any other step, detect the platform:
-
-```bash
-REMOTE_URL=$(git remote get-url origin 2>/dev/null)
-if echo "$REMOTE_URL" | grep -qi github; then
-  PLATFORM="github"
-elif echo "$REMOTE_URL" | grep -qi gitlab; then
-  PLATFORM="gitlab"
-else
-  echo "Unknown platform — ask the user"
-fi
-```
+- `mcp__sdlc-server__ci_run_status` — resolve `latest` (optionally on a branch) to a run
+- `mcp__sdlc-server__ci_failed_jobs` — list failing jobs for a run
+- `mcp__sdlc-server__ci_run_logs` — fetch failed-only log content (truncated) for a job
 
 ## Arguments
 
 {{#if args}}
-Job/run identifier: `{{args}}`
-- If numeric, treat as a job ID (GitLab) or workflow run ID (GitHub)
-- If "latest", find the most recent failed job/run on the current branch
-- If "latest <branch>", find the most recent failed job/run on that branch
-- A repo path may be included anywhere: `/path/to/repo <job-id>` or `<job-id> /path/to/repo`
+`{{args}}` — numeric run ID, `latest`, or `latest <branch>`.
 {{else}}
-No argument provided. Use `latest` to find the most recent failed job/run on the current branch.
+No argument → default to `latest` on the current branch.
 {{/if}}
 
-## Workflow
+## Step 1: Parse arguments
 
-### Step 1: Parse arguments
+Decide mode: numeric `run_id` vs. `latest` (with optional branch). For bare `latest`, use `git branch --show-current`.
 
-From the args `{{args}}`, determine:
-- **Job/run identifier**: the numeric ID or "latest" (with optional branch)
-- **Repo path**: if a filesystem path is included (starts with `/` or `~` or `.`), use it as the `-C` flag (GitLab) or `--repo` context. If the current working directory is already a git repo for the correct project, no extra flag is needed.
+## Step 2: Resolve run, find failed job, fetch logs
 
-### Step 2: Fetch job/run output
+1. `latest` mode → `ci_run_status({ref: <branch>})`; if not a failure, stop and report. Numeric mode → use the given id.
+2. `ci_failed_jobs({run_id})`. If empty, report "no failed jobs" and stop. Pick the first failed `job_id`.
+3. `ci_run_logs({run_id, job_id, failed_only: true})` → returns normalized metadata (name, ref, url, conclusion, truncation) and log content as a string.
 
-#### GitLab
+If any tool errors (invalid ID, wrong repo, 404), report and stop — no shell fallback, no guessing.
 
-Run `job-fetch [-C /path/to/repo] <job-id|latest> [branch]` using the Bash tool. This writes the full job trace to `/tmp/<job-id>.out` and prints metadata to stdout.
+## Step 3: Analyze with sub-agent
 
-If `job-fetch` returns a 404, the job likely belongs to a different project. Tell the user and ask which repo to use.
+Launch a sub-agent (`subagent_type: general-purpose`, `model: haiku`) with the log content appended to the prompt. If content is very large (>200 KB), spill to `/tmp/jfail-<run_id>-<job_id>.out` and pass the path instead — agent's judgment. Prompt:
 
-Parse the metadata lines from stdout — they are `KEY=VALUE` pairs:
-- `JOB_ID`, `JOB_NAME`, `STAGE`, `STATUS`, `REF`, `PIPELINE`, `URL`, `FAILURE_REASON`, `DURATION`, `FINISHED_AT`, `OUTPUT_FILE`, `LINE_COUNT`
+> Analyze the CI failure log (appended / at the given path). The parent agent will only see your summary.
+>
+> 1. Strip ANSI codes (`[0K`, `[36;1m`, etc.).
+> 2. Classify as: `test-failure` / `lint-error` / `build-error` / `dependency-error` / `deploy-error` / `infrastructure` / `script-error` / `unknown`.
+> 3. Extract error sections (contiguous blocks with context). ≤30 lines → full; >30 → first 15 + last 15 with `... [N lines omitted] ...`.
+> 4. Extract actionable details — file:line, failing test names, exact failing command, exit codes.
+> 5. Return exactly:
+>    ```
+>    CLASSIFICATION: <type>
+>    SUMMARY: <one sentence>
+>    ERROR SECTIONS:
+>    ---
+>    <section>
+>    ---
+>    ACTIONABLE:
+>    - <file:line / test / command>
+>    ```
+>
+> Skip setup/cache/install noise unless directly relevant.
 
-#### GitHub
+## Step 4: Present results
 
-Use `gh` CLI to fetch failed workflow run logs:
-
-1. **Find the failed run** (if "latest"):
-   ```bash
-   BRANCH=$(git branch --show-current)
-   gh run list --branch "$BRANCH" --status failure --limit 1 --json databaseId,name,conclusion,headBranch,url,createdAt
-   ```
-   If a specific run ID was given, use it directly.
-
-2. **Fetch the run details:**
-   ```bash
-   gh run view <run-id> --json jobs,name,conclusion,url,headBranch,createdAt
-   ```
-
-3. **Download the logs:**
-   ```bash
-   gh run view <run-id> --log-failed > /tmp/<run-id>.out 2>&1
-   ```
-
-4. **Build metadata** from the JSON output:
-   - `RUN_ID`, `WORKFLOW_NAME`, `STATUS`, `REF` (headBranch), `URL`, `FAILURE_REASON` (conclusion), `OUTPUT_FILE`, `LINE_COUNT`
-
-If no failed runs are found, tell the user and stop.
-
-### Step 3: Analyze with sub-agent
-
-Launch a sub-agent (subagent_type: `general-purpose`, model: `haiku`) to read and analyze the job output. Pass it this prompt:
-
----
-
-Read the CI job output file at `[OUTPUT_FILE path from step 2]`.
-
-Your job is to produce a concise failure summary for the parent agent who needs to diagnose and fix the issue. The parent agent WILL NOT see the raw output — only your summary.
-
-**Do the following:**
-
-1. **Strip ANSI codes** — The file contains terminal escape sequences (`[0K`, `[36;1m`, etc.). Ignore them when reading.
-
-2. **Classify the failure** into one of:
-   - `test-failure` — pytest/junit/test runner reports failing tests
-   - `lint-error` — ruff, black, shellcheck, mypy, checkstyle
-   - `build-error` — compilation, package build, Docker/Kaniko build failure
-   - `dependency-error` — pip, npm, maven dependency resolution
-   - `deploy-error` — deployment script failure
-   - `infrastructure` — runner issues, timeout, OOM, network
-   - `script-error` — shell script failure (exit code, unset variable, command not found)
-   - `unknown` — none of the above
-
-3. **Extract error sections** — Find contiguous blocks of output that contain the actual error. Include enough surrounding context to understand what command or step triggered the error (typically a few lines before the error starts). For each error section:
-   - If the section is 30 lines or fewer, include it in full
-   - If longer than 30 lines, include the first 15 lines and last 15 lines with a `... [N lines omitted] ...` marker between them
-
-4. **Extract actionable details:**
-   - File paths and line numbers mentioned in errors
-   - Failing test names
-   - The specific command that failed
-   - Any error codes or exit codes
-
-5. **Return your analysis in this format:**
-
-```
-CLASSIFICATION: <type>
-SUMMARY: <one-sentence description of what went wrong>
-
-ERROR SECTIONS:
----
-<section 1 with context>
----
-<section 2 if applicable>
----
-
-ACTIONABLE:
-- <specific file:line or test name or command>
-- <etc>
-```
-
-Do NOT include the full job output. Do NOT include successful steps (setup, cache, dependency install) unless they are directly relevant to the failure. Be concise but complete — the parent agent should be able to start fixing the issue immediately from your summary alone.
-
----
-
-### Step 4: Present results
-
-After the sub-agent returns, present the analysis to the user with this structure:
-
-#### GitLab
-**Job:** `<JOB_NAME>` (stage: `<STAGE>`) — [link](<URL>)
-**Ref:** `<REF>` | **Duration:** `<DURATION>s` | **Reason:** `<FAILURE_REASON>`
-
-#### GitHub
-**Workflow:** `<WORKFLOW_NAME>` — [link](<URL>)
-**Ref:** `<REF>` | **Conclusion:** `<FAILURE_REASON>`
-
-Then include the sub-agent's classification, summary, error sections, and actionable items.
-
-End with:
-> Full output: `<OUTPUT_FILE>` (<LINE_COUNT> lines)
+Using the metadata from `ci_run_logs`, show `**Workflow/Job:** <name> — [link](<url>)` and `**Ref:** <ref> | **Conclusion:** <conclusion>`, then the sub-agent's CLASSIFICATION / SUMMARY / ERROR SECTIONS / ACTIONABLE. If `ci_run_logs` reports truncation, append `> Logs truncated by ci_run_logs.` If spilled to a file, append `> Full log: /tmp/jfail-<run_id>-<job_id>.out`.
 
 ## Important
 
-- The sub-agent does the heavy reading so the parent context stays clean
-- **GitLab:** If `job-fetch` fails (wrong project, invalid ID), report the error and stop — do not guess. Job IDs are project-specific. A 404 means the job belongs to a different project — ask the user which repo
-- **GitHub:** If `gh run view` fails, the run ID may be wrong or the repo may not match — report the error and stop
-- Use `model: haiku` for the sub-agent to minimize cost — this is a summarization task, not a reasoning task
+- Sub-agent does the heavy reading; parent stays clean. `model: haiku` — summarization, not reasoning.
+- Tool failure → report and stop. No shell fallback.
