@@ -11,82 +11,38 @@ description: Merge a PR/MR with squash and source branch deletion
 
 # Merge PR/MR
 
-Merge a pull request (GitHub) or merge request (GitLab) with squash commits, a detailed commit message, and source branch deletion.
+Squash-merge a pull request (GitHub) or merge request (GitLab) with a detailed commit message and source branch deletion. All platform differences are handled inside the MCP tools — no inline `gh`/`glab` bash.
 
-## Detect Platform
+## Tools Used
+- `mcp__sdlc-server__pr_status` — state, merge_state, mergeable, checks summary
+- `mcp__sdlc-server__pr_diff` — unified diff for squash message drafting
+- `mcp__sdlc-server__pr_wait_ci` — server-side block on pending checks (default 30s interval, 30min timeout)
+- `mcp__sdlc-server__pr_merge` — squash merge with auto-fallback to merge-queue on GitHub
+- `mcp__sdlc-server__ci_wait_run` — optional post-merge main-branch pipeline wait (default 10s interval)
 
-Before any other step, detect the platform:
+## Procedure
 
-```bash
-REMOTE_URL=$(git remote get-url origin 2>/dev/null)
-if echo "$REMOTE_URL" | grep -qi github; then
-  PLATFORM="github"; CLI="gh"
-elif echo "$REMOTE_URL" | grep -qi gitlab; then
-  PLATFORM="gitlab"; CLI="glab"
-else
-  echo "Unknown platform — ask the user"; exit 1
-fi
-```
+Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix); otherwise resolve via `pr_status` on the current branch's PR or fail if none exists.
 
-Use the detected platform's CLI and terminology (PR vs MR) throughout.
-
-## Determine Target PR/MR
-
-{{#if args}}
-The user specified PR/MR number: {{args}} (strip any `!` or `#` prefix if present)
-{{else}}
-No PR/MR number provided. Detect the PR/MR for the current branch:
-- **GitLab:** `glab mr list --source-branch=$(git branch --show-current)`
-- **GitHub:** `gh pr list --head $(git branch --show-current)`
-If none is found, report the error and stop.
-{{/if}}
-
-## Workflow
-
-1. **Gather PR/MR Context** — Run these in parallel:
-   - Get details: title, description, source/target branches
-     - **GitLab:** `glab mr view <number>`
-     - **GitHub:** `gh pr view <number>`
-   - Get the full diff
-     - **GitLab:** `glab mr diff <number>`
-     - **GitHub:** `gh pr diff <number>`
-   - Get all commits that will be squashed (`git log target..source`)
-
-2. **Verify CI Status** — Check that the pipeline/checks have passed
-   - **GitLab:** Check MR pipeline status via `glab mr view`
-   - **GitHub:** `gh pr checks <number>`
-   - If CI is still running, inform the user and ask whether to wait or proceed
-   - If CI failed, stop and report — do NOT merge with failing checks
-
-3. **Generate Squash Commit Message** — Compose a thorough, detailed message:
-   - **Title line**: Use the PR/MR title (or improve it if vague), following conventional commits format: `type(scope): description`
-   - **Body**: Write a detailed description covering:
-     - What was changed and why
-     - Key implementation decisions or trade-offs
-     - Any notable side effects or behavioral changes
-   - **Footer**: Include `Closes #issue-number` for any linked issues (check PR/MR description for references)
-   - The message should be thorough enough that someone reading `git log` understands the full scope without looking at the PR/MR
-
-4. **Present for Approval** — Show the user:
-   - PR/MR number, title, source-branch to target-branch
-   - The proposed squash commit message
-   - Ask: "May I merge this PR/MR?" and WAIT for explicit approval
-   - If user responds with `/mmr` again, treat as approval
-
-5. **Merge** — Execute the merge:
-   - **GitLab:** `glab mr merge <number> --squash --remove-source-branch --yes --squash-message "<message>"` — pass the squash message via a HEREDOC for correct formatting
-   - **GitHub:** `gh pr merge <number> --squash --delete-branch --body "<message>"` — pass the body via a HEREDOC for correct formatting
-
-6. **Post-Merge Cleanup** — After successful merge:
-   - Switch to the target branch and pull
-   - Delete the local source branch if it still exists
-   - Report success with the merge commit URL
+1. `pr_status(number)` → require `state == "open"`; inspect `checks.summary`
+2. If `checks.summary == "pending"` → `pr_wait_ci(number, poll_interval_sec: 30, timeout_sec: 1800)`. On `timed_out` ask whether to wait longer. On `failed` STOP.
+3. If `checks.summary == "has_failures"` → STOP and report. Do NOT merge with failing checks.
+4. `pr_diff(number)` → use the diff content (plus `git log target..source`) to draft the squash commit message.
+5. **Draft the squash commit message** (agent reasoning — this is the judgment layer):
+   - Title: conventional commits `type(scope): description`
+   - Body: what changed and why; key implementation decisions or trade-offs; notable side effects
+   - Footer: `Closes #issue-number` for any linked issues (check the PR/MR description)
+   - Comprehensive enough that `git log` alone tells the full story without opening the PR
+6. **Present for approval**: PR/MR number, title, source→target branches, the drafted squash message. Ask "May I merge this PR/MR?" and WAIT. A second `/mmr` invocation counts as approval.
+7. `pr_merge(number, squash_message)` — handles direct squash and merge-queue auto-fallback. Returns `merge_method` (`direct_squash` | `merge_queue`), `merge_commit_sha` (direct only), `url`.
+8. **Post-merge**: switch to target branch, pull, delete local source branch if present. Optionally `ci_wait_run(ref: "main", timeout_sec: 1800)` to confirm the main-branch pipeline lands clean — skip if the user wants to move on immediately.
+9. Report success with the merge commit URL (direct) or the queue result (merge queue).
 
 ## Important Rules
 
 - NEVER merge without explicit user approval
-- NEVER merge if the pipeline/checks are failing
-- Always use squash and delete/remove the source branch
-- The squash commit message should be comprehensive — this replaces the entire commit history
-- If the PR/MR has merge conflicts, stop and report — do NOT attempt to resolve them
-- If the merge command fails, report the error and suggest resolution
+- NEVER merge if `checks.summary == "has_failures"`
+- Always squash + delete source branch
+- Squash message replaces the entire commit history — make it comprehensive
+- Merge conflicts → STOP and report, do NOT attempt to resolve
+- Tool failure → report the `{ok: false, code, error}` envelope and suggest resolution
