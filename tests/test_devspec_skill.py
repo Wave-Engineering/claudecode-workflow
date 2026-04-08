@@ -460,3 +460,167 @@ class TestSkillReference:
         """The 'When to use it' section includes backlog use case."""
         prd_section = _extract_devspec_section(skill_ref_text)
         assert "backlog" in prd_section.lower()
+
+
+# ---------------------------------------------------------------------------
+# 8. MCP tool invocations (Phase 2 rewrite — Family 3)
+# ---------------------------------------------------------------------------
+
+
+class TestMcpToolInvocations:
+    """Verify the rewritten templates invoke the new sdlc-server MCP tool handlers
+    instead of running hand-written procedural checks.
+
+    Added for #333 (Family 3 Phase 2 — devspec skill rewrite to use Phase 1 MCP tools).
+    """
+
+    def test_finalize_calls_devspec_locate(self, skill_text: str) -> None:
+        """The devspec-finalize template calls devspec_locate to find the file."""
+        finalize = _extract_template(skill_text, "devspec-finalize")
+        assert "devspec_locate" in finalize
+
+    def test_finalize_calls_devspec_finalize_tool(self, skill_text: str) -> None:
+        """The devspec-finalize template calls the devspec_finalize MCP tool."""
+        finalize = _extract_template(skill_text, "devspec-finalize")
+        assert "devspec_finalize(path)" in finalize or "devspec_finalize" in finalize
+
+    def test_approve_calls_devspec_locate(self, skill_text: str) -> None:
+        """The devspec-approve template calls devspec_locate."""
+        approve = _extract_template(skill_text, "devspec-approve")
+        assert "devspec_locate" in approve
+
+    def test_approve_calls_devspec_finalize_tool(self, skill_text: str) -> None:
+        """The devspec-approve template calls devspec_finalize for the checklist."""
+        approve = _extract_template(skill_text, "devspec-approve")
+        assert "devspec_finalize" in approve
+
+    def test_approve_calls_devspec_summary(self, skill_text: str) -> None:
+        """The devspec-approve template calls devspec_summary for the counts."""
+        approve = _extract_template(skill_text, "devspec-approve")
+        assert "devspec_summary" in approve
+
+    def test_approve_calls_devspec_approve_tool(self, skill_text: str) -> None:
+        """The devspec-approve template calls the devspec_approve MCP tool
+        to write the approval metadata (not hand-written)."""
+        approve = _extract_template(skill_text, "devspec-approve")
+        assert "devspec_approve(path" in approve or "devspec_approve(" in approve
+
+    def test_upshift_calls_devspec_locate(self, skill_text: str) -> None:
+        """The devspec-upshift template calls devspec_locate."""
+        upshift = _extract_template(skill_text, "devspec-upshift")
+        assert "devspec_locate" in upshift
+
+    def test_upshift_calls_devspec_verify_approved(self, skill_text: str) -> None:
+        """The devspec-upshift template calls devspec_verify_approved
+        instead of hand-searching for the approval metadata comment."""
+        upshift = _extract_template(skill_text, "devspec-upshift")
+        assert "devspec_verify_approved" in upshift
+
+    def test_upshift_calls_devspec_parse_section_8(self, skill_text: str) -> None:
+        """The devspec-upshift template calls devspec_parse_section_8
+        instead of hand-parsing Section 8."""
+        upshift = _extract_template(skill_text, "devspec-upshift")
+        assert "devspec_parse_section_8" in upshift
+
+    def test_upshift_calls_work_item_for_epics(self, skill_text: str) -> None:
+        """The devspec-upshift template calls work_item for epic creation."""
+        upshift = _extract_template(skill_text, "devspec-upshift")
+        assert "work_item" in upshift
+        # Must still describe epic creation
+        assert "epic" in upshift.lower()
+
+    def test_create_calls_devspec_locate_before_write(self, skill_text: str) -> None:
+        """The devspec-create template calls devspec_locate before writing
+        to detect existing Dev Specs (avoids silent overwrite)."""
+        create = _extract_template(skill_text, "devspec-create")
+        assert "devspec_locate" in create
+
+
+# ---------------------------------------------------------------------------
+# 9. Load-bearing decoupling regression (#333 AC)
+# ---------------------------------------------------------------------------
+
+
+class TestDevSpecCreateDecoupledFromDdd:
+    """Regression guard for the #333 load-bearing acceptance criterion:
+
+    /devspec create MUST work end-to-end without any DDD artifact on disk.
+    The skill body's Step 1 (Determine Input Source) supports three input
+    modes — DDD domain model, external document, verbal description — and
+    all three must be preserved as equally first-class. Do NOT add any
+    implicit assumption that docs/DOMAIN-MODEL.md or docs/SKETCHBOOK.md
+    exists.
+    """
+
+    def test_create_template_lists_three_input_sources(self, skill_text: str) -> None:
+        """The devspec-create template lists all three input sources."""
+        create = _extract_template(skill_text, "devspec-create")
+        assert "DDD Domain Model" in create or "DDD domain model" in create.lower()
+        assert "External Document" in create or "external document" in create.lower()
+        assert "Verbal Description" in create or "verbal description" in create.lower()
+
+    def test_create_template_declares_inputs_first_class(self, skill_text: str) -> None:
+        """The devspec-create template explicitly declares that all three
+        input modes are equally first-class (not DDD-required)."""
+        create = _extract_template(skill_text, "devspec-create")
+        # Must explicitly call out that verbal/external work without DDD artifacts
+        lower = create.lower()
+        assert "first-class" in lower or "equally" in lower
+
+    def test_create_template_verbal_path_does_not_require_domain_model(
+        self, skill_text: str
+    ) -> None:
+        """The devspec-create verbal input path must NOT require
+        docs/DOMAIN-MODEL.md to exist. The skill explicitly scopes the DDD
+        protocol reading to the DDD input mode only.
+        """
+        create = _extract_template(skill_text, "devspec-create")
+        # The verbal path must be described in a way that makes clear no
+        # DDD artifact is required. Verify by finding the verbal branch and
+        # confirming it does not point at DOMAIN-MODEL.md.
+        lower = create.lower()
+        assert "verbal" in lower
+        # The decoupling rule must be explicit somewhere in the create template
+        assert (
+            "must never fail" in lower
+            or "decoupl" in lower
+            or "without any ddd" in lower
+            or "without a ddd" in lower
+        )
+
+    def test_create_template_does_not_hardcode_domain_model_read(
+        self, skill_text: str
+    ) -> None:
+        """The devspec-create template must not unconditionally read
+        docs/DOMAIN-MODEL.md — any reference to that file must be guarded
+        by the DDD input mode."""
+        create = _extract_template(skill_text, "devspec-create")
+        # Any DOMAIN-MODEL.md reference must appear in a conditional context.
+        # We check that the template does NOT say "read docs/DOMAIN-MODEL.md"
+        # as an unconditional instruction.
+        lines = create.split("\n")
+        for line in lines:
+            # Flag unconditional reads
+            lower = line.lower().strip()
+            if lower.startswith("read docs/domain-model.md") or lower.startswith(
+                "read `docs/domain-model.md`"
+            ):
+                pytest.fail(
+                    f"devspec-create unconditionally reads DOMAIN-MODEL.md: {line!r}"
+                )
+
+    def test_create_template_does_not_hardcode_sketchbook_read(
+        self, skill_text: str
+    ) -> None:
+        """The devspec-create template must not unconditionally read
+        docs/SKETCHBOOK.md. Only /ddd commands should touch the sketchbook."""
+        create = _extract_template(skill_text, "devspec-create")
+        lines = create.split("\n")
+        for line in lines:
+            lower = line.lower().strip()
+            if lower.startswith("read docs/sketchbook.md") or lower.startswith(
+                "read `docs/sketchbook.md`"
+            ):
+                pytest.fail(
+                    f"devspec-create unconditionally reads SKETCHBOOK.md: {line!r}"
+                )

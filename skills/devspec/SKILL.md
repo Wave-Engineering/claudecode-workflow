@@ -1,6 +1,6 @@
 ---
 name: devspec
-description: Interactive Development Specification creation with Deliverables Manifest, finalization checklist, approval gate, and backlog population
+description: Interactive Development Specification creation with Deliverables Manifest, finalization checklist, approval gate, and backlog population (uses sdlc-server MCP tools for deterministic work)
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
@@ -95,20 +95,27 @@ I'll guide you through creating a complete Dev Spec, section by section. For eac
 
 **How would you like to provide the concept for this Dev Spec?**
 
-Check the arguments and conversation context for input mode:
+Check the arguments and conversation context for input mode. The three input sources are **equally first-class** — `/devspec create` MUST work with any of them. Do NOT assume a DDD artifact exists on disk.
 
-1. **DDD Domain Model** — If the user provides a path to a domain model (e.g., `docs/DOMAIN-MODEL.md`), or says "from the domain model", read it and use the DDD → Dev Spec translation protocol (`docs/DDD-to-devspec-protocol.md`) as the mapping guide.
-2. **External Document** — If the user provides a path to any other document (concept doc, brief, notes), read it and extract the concept.
-3. **Verbal Description** — If no document is provided, ask the user to describe the project concept verbally.
+1. **Verbal Description** — If no document is provided, ask the user to describe the project concept verbally. This is a **first-class input mode** that works without any DDD or external artifacts on disk.
+2. **External Document** — If the user provides a path to any non-DDD document (concept doc, brief, notes), read it and extract the concept.
+3. **DDD Domain Model** — Only if the user provides a path to a domain model (e.g., `docs/DOMAIN-MODEL.md`), or explicitly says "from the domain model", read it and use the DDD → Dev Spec translation protocol (`docs/DDD-to-devspec-protocol.md`) as the mapping guide. This is **opt-in**, not a prerequisite.
+
+**If input is verbal:**
+- Capture the verbal description directly into the section walk
+- Do NOT look for `docs/DOMAIN-MODEL.md` or `docs/SKETCHBOOK.md`
+- Use the captured description as the foundation for drafting each section
+
+**If input is an external document:**
+- Read the document
+- Use it as the foundation for drafting each section
 
 **If input is a DDD domain model:**
 - Read `docs/DDD-to-devspec-protocol.md` for the translation rules
 - Apply the 8-step translation as the backbone, but still walk each section interactively
 - The protocol provides structure; the user provides judgment
 
-**If input is an external document or verbal:**
-- Read the document or capture the verbal description
-- Use it as the foundation for drafting each section
+**Load-bearing decoupling rule:** `/devspec create` must never fail due to a missing `docs/DOMAIN-MODEL.md` or `docs/SKETCHBOOK.md`. Those files are only read in the DDD input mode. In verbal and external-document modes, the skill must not touch them.
 
 ### Step 2: Ask for Project Name
 
@@ -228,9 +235,10 @@ This is a hard gate — the Dev Spec cannot be finalized without complete wave a
 
 After all sections are walked and the manifest is complete:
 
-1. **Assemble the Dev Spec** from all approved sections
-2. **Write to** `docs/<project-name>-devspec.md`
-3. **Report:** "Dev Spec written to `docs/<project-name>-devspec.md`. Run `/devspec finalize` to verify completeness."
+1. **Check for existing Dev Spec:** Call `devspec_locate` to see if a Dev Spec already exists for this project. If one is found, confirm with the user whether to overwrite or choose a different project name before proceeding.
+2. **Assemble the Dev Spec** from all approved sections
+3. **Write to** `docs/<project-name>-devspec.md`
+4. **Report:** "Dev Spec written to `docs/<project-name>-devspec.md`. Run `/devspec finalize` to verify completeness."
 
 ---
 
@@ -248,160 +256,42 @@ After all sections are walked and the manifest is complete:
 <!-- BEGIN TEMPLATE: devspec-finalize -->
 ## Dev Spec Finalization Checklist
 
-I'll run the Section 7.2 finalization checklist mechanically against an existing Dev Spec and report pass/fail for each item.
+Delegates all 7 Section 7.2 checks to the `devspec_finalize` MCP tool. The skill body only formats the result — it does NOT run the checks by hand.
 
 ### Step 1: Locate the Dev Spec
 
-Check for the Dev Spec file:
-1. If the user provided a path, use it
-2. Otherwise, look for `docs/*-devspec.md` files
-3. If multiple Dev Specs exist, ask the user which one to finalize
-4. If no Dev Spec exists, tell the user: "No Dev Spec found. Run `/devspec create` first."
+Call `devspec_locate` (with the user-provided `path` if given; otherwise it searches `docs/*-devspec.md`). If multiple Dev Specs are found, ask which to finalize. If none, tell the user: "No Dev Spec found. Run `/devspec create` first."
 
-### Step 2: Read the Dev Spec
+### Step 2: Run the Checks
 
-Read the entire Dev Spec file into context. Also read `docs/devspec-template.md` for reference on expected structure.
+Call `devspec_finalize(path)`. The tool runs all 7 checks and returns `{ ok, passed, total, checks: [{ id, name, passed, evidence }, ...] }`.
 
-### Step 3: Run Each Check
+### Step 3: Report
 
-Execute each item from the Section 7.2 Dev Spec Finalization Checklist. For each item, report:
-- **Pass** or **Fail**
-- **Evidence** — what was found (or not found) that determined the result
-- **Location** — where in the Dev Spec the relevant content lives
-
-#### Check 1: Tier 1 Deliverables Manifest — File Paths
-
-> Every Tier 1 row in the Deliverables Manifest (5.A) has a file path or "N/A — because [reason]"
-
-**How to verify:**
-1. Find Section 5.A in the Dev Spec
-2. Identify all rows with Tier = 1
-3. For each Tier 1 row, check the "File Path" column
-4. Pass if every Tier 1 row has a non-empty file path OR contains "N/A" with a rationale
-5. Fail if any Tier 1 row has an empty file path without N/A rationale
-
-#### Check 2: Tier 2 Triggers
-
-> Every Tier 2 trigger that fires has a corresponding row in the Deliverables Manifest
-
-**How to verify:**
-1. Check Section 6.4 for MV-XX items → if present, manifest must have a "Manual test procedures" row
-2. Count interacting components in Section 5 → if >2, manifest must have an "Architecture doc" row
-3. Check for infrastructure deployment references → if present, manifest must have "Deployment verification" row
-4. Check for host/platform requirements → if present, manifest must have "Environment prerequisites" row
-5. Pass if all fired triggers have corresponding rows
-6. Fail if any fired trigger is missing
-
-#### Check 3: Wave Assignments
-
-> Every Deliverables Manifest row has a "Produced In" wave assignment
-
-**How to verify:**
-1. Read every row in the Deliverables Manifest (5.A)
-2. Check the "Produced In" column for each non-N/A row
-3. Pass if every active row has a wave/phase assignment
-4. Fail if any active row has an empty "Produced In"
-
-#### Check 4: Manual Verification Coverage
-
-> Every MV-XX in Section 6.4 has a procedure document in the Deliverables Manifest
-
-**How to verify:**
-1. List all MV-XX items from Section 6.4
-2. For each MV-XX, check that the Deliverables Manifest has a corresponding procedure document
-3. Pass if all MV-XX items are covered
-4. Fail if any MV-XX lacks a manifest entry
-
-#### Check 5: Verbs Without Nouns
-
-> No deliverable is referenced only as a verb without a corresponding noun (file path)
-
-**How to verify:**
-1. Scan the Deliverables Manifest for active (non-N/A) rows
-2. For each row, verify the "File Path" column contains an actual path (starts with a directory, has an extension, or is a recognizable file reference)
-3. Flag any row where the deliverable is described as an action ("run tests", "deploy") but has no file artifact
-4. Pass if all active deliverables have concrete file references
-5. Fail if any deliverable is verb-only
-
-#### Check 6: Audience-Facing Documentation
-
-> At least one audience-facing doc (DM-09) has a file path assigned
-
-**How to verify:**
-1. Find DM-09 (or equivalent audience-facing doc rows) in the Deliverables Manifest
-2. Check that at least one has a concrete file path (not N/A)
-3. Pass if at least one audience-facing doc has a path
-4. Fail if all are N/A or empty
-
-#### Check 7: Definition of Done References
-
-> Section 7 Definition of Done references the Deliverables Manifest (not separate Artifact Manifest + Documentation Kit)
-
-**How to verify:**
-1. Read Section 7 (Definition of Done)
-2. Check that it references "Deliverables Manifest (Section 5.A)" or equivalent
-3. Check that it does NOT reference "Artifact Manifest" and "Documentation Kit" as separate concepts
-4. Pass if references are unified
-5. Fail if references are split or outdated
-
-### Step 4: Report Summary
-
-After all checks complete, present:
-
-```
-## Dev Spec Finalization Report
-
-| # | Check | Result | Evidence |
-|---|-------|--------|----------|
-| 1 | Tier 1 file paths | PASS/FAIL | [details] |
-| 2 | Tier 2 triggers | PASS/FAIL | [details] |
-| 3 | Wave assignments | PASS/FAIL | [details] |
-| 4 | MV-XX coverage | PASS/FAIL | [details] |
-| 5 | Verbs without nouns | PASS/FAIL | [details] |
-| 6 | Audience-facing docs | PASS/FAIL | [details] |
-| 7 | DoD references | PASS/FAIL | [details] |
-
-**Result: X/7 checks passed. Dev Spec is [ready / not ready] for approval.**
-```
-
-If not all checks pass:
-- List the specific failures with remediation steps
-- Suggest running `/devspec create` to fix the issues interactively
-
-If all checks pass:
-- "Dev Spec is ready for approval. Next step: get stakeholder sign-off, then run `/prepwaves` to plan execution."
+Format the `checks` array into a table (columns: #, Check, Result, Evidence). Report `**Result: X/7 checks passed.**` and either:
+- All passing → "Dev Spec is ready for approval. Run `/devspec approve`."
+- Any failing → list each failure with the tool's evidence as the remediation starting point, then "Fix these issues and run `/devspec finalize` again."
 
 <!-- END TEMPLATE: devspec-finalize -->
 
 <!-- BEGIN TEMPLATE: devspec-approve -->
 ## Dev Spec Approval Gate
 
-This is the gate between Dev Spec creation and backlog population. No issues get created until the Dev Spec is explicitly approved by a human.
+Gate between Dev Spec creation and backlog population. No issues get created until the Dev Spec is explicitly approved by a human.
+
+**Tool chain:** `devspec_locate` → `devspec_finalize` → `devspec_summary` → **(hard stop — human approval)** → `devspec_approve`.
 
 ### Step 1: Locate the Dev Spec
 
-Check for the Dev Spec file:
-1. If the user provided a path, use it
-2. Otherwise, look for `docs/*-devspec.md` files
-3. If multiple Dev Specs exist, ask the user which one to approve
-4. If no Dev Spec exists, tell the user: "No Dev Spec found. Run `/devspec create` first."
+Call `devspec_locate` (path arg if provided; otherwise searches `docs/*-devspec.md`). If multiple Dev Specs are found, ask which to approve. If none, tell the user: "No Dev Spec found. Run `/devspec create` first."
 
 ### Step 2: Run Finalization Checklist
 
-Run the `/devspec finalize` checklist automatically against the Dev Spec. This is the same mechanical checklist from the finalize subcommand.
-
-1. Execute all 7 finalization checks
-2. Collect the results
-
-**If any checks fail:**
-- Present the finalization report with failures highlighted
-- List each failing item with a specific remediation suggestion
-- Tell the user: "Dev Spec has N failing checks. Fix these issues and run `/devspec approve` again."
-- **Stop here.** Do not proceed to approval.
+Call `devspec_finalize(path)`. If any checks fail, present the report with the failures highlighted (use the `evidence` field for each failing check), suggest remediation, tell the user "Dev Spec has N failing checks. Fix these issues and run `/devspec approve` again.", and **stop.** Do not proceed to approval.
 
 ### Step 3: Present Dev Spec Summary
 
-If all finalization checks pass, present a Dev Spec summary to the user:
+If all 7 checks pass, call `devspec_summary(path)` — returns `{ ok, sections, stories, waves, deliverables }`. Present:
 
 ```
 ## Dev Spec Approval Summary
@@ -415,29 +305,21 @@ If all finalization checks pass, present a Dev Spec summary to the user:
 | Finalization checks | 7/7 passed |
 ```
 
-Count these by scanning the Dev Spec:
-- **Sections**: Count top-level `## N.` headings
-- **Stories**: Count story entries in Section 8 (look for `#### Story` headings or numbered story items)
-- **Waves**: Count wave entries in Section 8 (look for `### Wave` headings or wave references)
-- **Deliverables**: Count active (non-N/A) rows in the Deliverables Manifest (Section 5.A)
-
 ### Step 4: Hard Stop for Approval
 
 Present the approval prompt and **stop**. Do not proceed until the user responds.
-
-**Tell the user:**
 
 > Dev Spec is ready for approval. All 7 finalization checks passed.
 >
 > **Approve this Dev Spec? (yes/no)**
 
-**Wait for the user's response.** Do not take any further action until they respond.
+**Wait for the user's response.**
 
 ### Step 5: Process Response
 
-**On approval (user says yes/approve/confirmed/y):**
+**On approval (yes/approve/confirmed/y):** Call `devspec_approve(path, approved_by)`. **The TOOL writes the approval metadata block — do NOT hand-write it.** The agent's job is to invoke the tool and confirm the result.
 
-1. Add an approval metadata section to the Dev Spec. Insert it after the frontmatter (if any) or at the top of the document, before Section 1:
+For reference, the block that `devspec_approve` writes into the Dev Spec file has this shape (so a future `devspec_verify_approved` call can locate it):
 
 ```markdown
 <!-- DEV-SPEC-APPROVAL
@@ -448,124 +330,40 @@ finalization_score: 7/7
 -->
 ```
 
-2. Confirm to the user: "Dev Spec approved. Approval metadata recorded. Next step: run `/devspec upshift` to create backlog issues."
+After the tool call succeeds, confirm to the user: "Dev Spec approved. Approval metadata recorded. Next step: run `/devspec upshift` to create backlog issues."
 
-**On rejection (user says no/reject/n):**
-
-1. Ask the user what needs to change
-2. List the finalization results as a starting point for discussion
-3. Tell the user: "Make the requested changes to the Dev Spec, then run `/devspec approve` again."
-4. **Stop here.**
+**On rejection (no/reject/n):** Ask what needs to change, list the finalization results as a starting point, tell the user "Make the requested changes and run `/devspec approve` again.", **stop.** Do not call `devspec_approve`.
 
 <!-- END TEMPLATE: devspec-approve -->
 
 <!-- BEGIN TEMPLATE: devspec-upshift -->
 ## Dev Spec Backlog Population (Upshift)
 
-Creates backlog issues from an approved Dev Spec's Section 8 (Phased Implementation Plan). This is the bridge from Dev Spec to execution.
+Creates backlog issues from an approved Dev Spec's Section 8 (Phased Implementation Plan) — the bridge from Dev Spec to execution.
 
-### Step 1: Locate and Verify the Dev Spec
+**Tool chain:** `devspec_locate` → `devspec_verify_approved` → `devspec_parse_section_8` → **loop** `work_item` for each epic/story/wave master → backfill issue numbers.
 
-Check for the Dev Spec file:
-1. If the user provided a path, use it
-2. Otherwise, look for `docs/*-devspec.md` files
-3. If multiple Dev Specs exist, ask the user which one to upshift
-4. If no Dev Spec exists, tell the user: "No Dev Spec found. Run `/devspec create` first."
+### Step 1: Locate and Verify
 
-**Verify approval:**
-1. Search the Dev Spec for the approval metadata comment block (`<!-- DEV-SPEC-APPROVAL`)
-2. Check that `approved: true` is present in the metadata
-3. If no approval metadata is found or `approved` is not `true`:
-   - Tell the user: "This Dev Spec has not been approved. Run `/devspec approve` first."
-   - **Stop here.** Do not create any issues.
+Call `devspec_locate` (path arg if provided; otherwise searches `docs/*-devspec.md`). If multiple Dev Specs are found, ask which to upshift. If none, tell the user: "No Dev Spec found. Run `/devspec create` first."
+
+Then call `devspec_verify_approved(path)` — returns `{ ok, approved }` after inspecting the `<!-- DEV-SPEC-APPROVAL` comment block for the `approved: true` marker. If `approved` is not `true`, tell the user: "This Dev Spec has not been approved. Run `/devspec approve` first." and **stop here.** Do not create any issues.
 
 ### Step 2: Parse Section 8
 
-Read Section 8 (Phased Implementation Plan) and extract the structure:
+Call `devspec_parse_section_8(path)` — returns `{ ok, phases: [{ name, dod, waves: [{ name, stories: [{ title, summary, implementation_steps, test_procedures, acceptance_criteria, wave }] }] }] }`.
 
-1. **Phases** — Each `### Phase N:` heading defines a phase (epic)
-2. **Waves** — Each `#### Wave N` or wave reference within a phase
-3. **Stories** — Each story entry within a wave (look for `##### Story:` headings, numbered story items, or bullet-pointed stories)
+### Step 3: Create Epic Issues (one per Phase)
 
-For each story, extract:
-- **Title** — The story name/description
-- **Implementation steps** — Numbered steps or bullet points under the story
-- **Test procedures** — Any test-related items
-- **Acceptance criteria** — Checkboxes or criteria items
-- **Wave assignment** — Which wave the story belongs to
+For each Phase, call `work_item(type: "epic", title: "Epic: Phase N — <name>", body, labels: ["type::epic"])`. The epic body includes the Phase Definition of Done (`phase.dod`) and a "Stories" placeholder to be filled after story creation. Record the returned epic issue number per phase.
 
-### Step 3: Create Epic Issues (One per Phase)
+### Step 4: Create Story Issues (one per Story)
 
-For each Phase in Section 8:
-
-1. Create an epic issue using the platform CLI:
-   ```
-   Title: Epic: Phase N — [Phase Name]
-   Body:
-   ## Phase Definition of Done
-   [Copy the Phase DoD from the Dev Spec]
-
-   ## Stories
-   [List story titles that will be linked after creation]
-
-   Labels: type::epic
-   ```
-
-2. Record the created issue number
-
-### Step 4: Create Story Issues (One per Story)
-
-For each Story in Section 8:
-
-1. Create an issue using the platform CLI:
-   ```
-   Title: [Story title from Dev Spec]
-   Body:
-   ## Summary
-   [Story description from Dev Spec]
-
-   ## Implementation Steps
-   [Copy implementation steps from Dev Spec]
-
-   ## Test Procedures
-   [Copy test procedures from Dev Spec]
-
-   ## Acceptance Criteria
-   [Copy acceptance criteria from Dev Spec as checkboxes]
-
-   ## Metadata
-   - **Wave:** [wave assignment]
-   - **Phase:** [parent phase]
-   - **Parent Epic:** #[epic issue number]
-
-   Labels: type::feature
-   ```
-
-2. Record the created issue number
-3. Link to the parent epic by editing the epic issue body to include `#NNN`
+For each Story, call `work_item(type: "feature", title: story.title, body, labels: ["type::feature"])`. The story body includes `## Summary`, `## Implementation Steps` (from `story.implementation_steps`), `## Test Procedures` (from `story.test_procedures`), `## Acceptance Criteria` (as checkboxes from `story.acceptance_criteria`), and a `## Metadata` block with **Wave**, **Phase**, and **Parent Epic:** #<epic issue number>. Record each returned issue number. After all stories for a phase land, update the parent epic's body to link them (`#NNN` references).
 
 ### Step 5: Create Wave Master Issues
 
-For each Wave in Section 8:
-
-1. Collect all story issue numbers created for this wave
-2. Create a wave master issue:
-   ```
-   Title: Wave N Master — [brief description]
-   Body:
-   ## Constituent Stories
-   - [ ] #[story-1-number] — [story-1-title]
-   - [ ] #[story-2-number] — [story-2-title]
-   ...
-
-   ## Wave Metadata
-   - **Phase:** [parent phase]
-   - **Story count:** N
-
-   Labels: type::chore
-   ```
-
-3. Record the created issue number
+For each Wave, call `work_item(type: "chore", title: "Wave N Master — <brief>", body, labels: ["type::chore"])`. The wave master body includes `## Constituent Stories` (checkbox list of story issue links) and `## Wave Metadata` with **Phase** and **Story count**. Record each returned issue number.
 
 ### Step 6: Report Summary
 
@@ -584,12 +382,7 @@ Present a creation summary:
 
 ### Step 7: Backfill Issue Numbers into Dev Spec
 
-Update the Dev Spec file to include the created issue numbers:
-
-1. For each Phase heading, append the epic issue number: `### Phase 1: Foundation (#NNN)`
-2. For each Story, append the story issue number
-3. For each Wave reference, append the wave master issue number
-4. Write the updated Dev Spec back to disk
+Update the Dev Spec file to append created issue numbers to the Section 8 headings (skill-body work — no dedicated tool): append epic number to each `### Phase N:` heading, story number to each story, wave master number to each wave reference. Write the updated Dev Spec back to disk.
 
 Confirm to the user: "Backlog populated. N issues created. Dev Spec updated with issue references. Run `/prepwaves` to plan execution."
 
