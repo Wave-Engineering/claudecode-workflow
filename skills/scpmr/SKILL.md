@@ -11,39 +11,14 @@ description: Stage, commit, push, and create PR/MR — but do not merge
 
 # Stage, Commit, Push, Create PR/MR (No Merge)
 
-This is a combo skill that runs `/scp` with an explicit instruction to create the PR/MR but stop before merging.
+Thin wrapper over `/scp` (rewritten to use `mcp__sdlc-server__ibm` + `pr_list` + `pr_create` via MCP tools). Runs the full scp workflow, then stops — does NOT merge. Explicit no-merge is the whole distinction from `/scpmmr`.
 
-## Pre-Commit Gate
+## Procedure
 
-If `/precheck` has not been run in this conversation, run it first and wait for approval before proceeding. Invoking `/scpmr` after `/precheck` is approval to execute.
+Requires `/precheck` first — invoking `/scpmr` after `/precheck` is approval to execute. If `/precheck` has not been run, run it first and wait for approval.
 
-## Workflow
+1. Run `/scp` — delegates to the rewritten skill; creates the PR/MR
+2. Stop — report the PR/MR URL. User can run `/mmr` later when ready.
+3. `vox` announcement (best-effort): identity from `/tmp/claude-agent-<md5>.json`, then name/team/project/issue/PR/"pushed and CI is running"
 
-1. **Run `/scp`** — Execute the full scp workflow (stage, commit, push, create PR/MR)
-   - The scp skill will create a PR/MR if one doesn't exist
-
-2. **Stop** — Report the PR/MR URL and do NOT merge
-   - The user wants to review the PR/MR before merging
-   - They can later run `/mmr` to merge when ready
-
-## Voice Announcement
-
-After the PR/MR is created and pushed, resolve agent identity and announce via `vox` (best-effort):
-
-```bash
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
-DEV_NAME=$(jq -r '.dev_name // "agent"' "/tmp/claude-agent-${dir_hash}.json" 2>/dev/null)
-DEV_TEAM=$(jq -r '.dev_team // "unknown"' "/tmp/claude-agent-${dir_hash}.json" 2>/dev/null)
-PROJECT=$(basename "$project_root")
-
-vox "Hey BJ, this is $DEV_NAME from $DEV_TEAM on $PROJECT. PR <NUMBER> is up for issue <NUMBER>. Pushed and CI is running." 2>/dev/null || true
-```
-
-Keep it brief — identify yourself, issue number, PR number, status. Write for the ear.
-
-## Important
-
-- This is a **convenience shortcut** — it does NOT skip any safety checks
-- `/precheck` must have been run and the checklist presented before execution
-- Do NOT merge — that's the whole point of this skill vs `/scpmmr`
+Do NOT merge — that's the distinction from `/scpmmr`. Convenience shortcut; does NOT skip any safety checks.
