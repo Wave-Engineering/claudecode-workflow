@@ -207,6 +207,16 @@ fi
 
 # --- No backend available -----------------------------------------------------
 
-echo "Error: no TTS backend available." >&2
-echo "Set VOX_ENDPOINT or VOX_COMMAND, or install espeak/espeak-ng/piper/say." >&2
+echo "vox-tts: no TTS backend reachable." >&2
+echo "" >&2
+echo "  Tried in order:" >&2
+echo "    1. VOX_COMMAND env var     — not set" >&2
+echo "    2. VOX_ENDPOINT env var    — not set" >&2
+echo "    3. Default endpoint        — ${DEFAULT_ENDPOINT} (unreachable)" >&2
+echo "    4. espeak / espeak-ng      — not installed" >&2
+echo "    5. piper                   — not installed" >&2
+[[ "$(uname -s)" == "Darwin" ]] && echo "    6. say (macOS)              — not found" >&2
+echo "" >&2
+echo "  Quick fix: sudo apt install espeak-ng" >&2
+echo "  Full setup: vox --help" >&2
 exit 1

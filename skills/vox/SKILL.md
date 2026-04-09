@@ -34,7 +34,7 @@ vox "Hey BJ, tests are green and the PR is ready for review"
 ```
 
 Options:
-- `--voice NAME` — pick a voice (default: Taylor.wav)
+- `--voice NAME` — pick a voice (default: aiden)
 - `--bg` — background playback so it doesn't block your work
 - `--output FILE` / `-o FILE` — write audio to a file instead of playing it (useful for attachments)
 - `--list-voices` — show available voices
@@ -61,10 +61,10 @@ Example: `vox "[clear throat] Attention please — the build is on fire."`
 
 ## Best-Effort
 
-If `vox` fails (no backend, network down, no speakers), **continue normally**. Never block on audio. Never retry. Just move on.
+If `vox` fails (no backend, network down, no speakers), **continue normally**. Never block on audio. Never retry. Let the error message through so the user sees how to configure it.
 
 ```bash
-vox "Done!" 2>/dev/null || true
+vox "Done!" || true
 ```
 
 ## Voice Selection
