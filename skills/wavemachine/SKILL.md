@@ -17,6 +17,7 @@ Wavemachine is a **dumb repeater with a circuit breaker**. It runs the `/nextwav
 - `mcp__sdlc-server__wave_health_check` — the circuit breaker; structured blocker report between iterations
 - `mcp__sdlc-server__wave_ci_trust_level` — detect whether the platform guarantees pre-merge CI equals post-merge CI
 - `mcp__sdlc-server__wave_waiting` — mark the plan as paused with a reason on abort
+- `mcp__disc-server__disc_send` — post status updates to `#wave-status` (`1487386934094462986`)
 - The Agent tool with `run_in_background: true` — spawn the background loop worker
 
 ## Pre-Flight Checks (refuse to start on failure)
@@ -37,10 +38,12 @@ On any refusal: explain the failure, suggest the remediation, **do not spawn**.
 Once pre-flight passes:
 
 1. **Set the active flag.** Write `wavemachine_active: true` to `.claude/status/state.json` (preserving all other keys). This is the signal the statusline 🌊 indicator reads.
-2. **Detect CI trust.** Call `wave_ci_trust_level()` once and cache the result for the background worker. Drives whether `wave_health_check()` treats post-merge main CI as a separate gate.
-3. **Spawn the background worker** via the Agent tool with `run_in_background: true` and the prompt template below. Capture the returned task ID.
-4. **Report to the user:** "Wavemachine launched (task `<task_id>`). Background agent will run the wave loop until the plan completes or a blocker is hit. Statusline 🌊 indicator is live. Main session stays conversational — ask me anything or `wave_show()` to monitor."
-5. **Return control to the main session.** You do NOT poll the background agent. It reports back when it finishes or aborts.
+2. **Regenerate and open the status panel.** Run `./scripts/generate-status-panel` then open `.status-panel.html` with `xdg-open` (Linux) or `open` (macOS). This happens here — not inside the background worker — so it costs zero sub-agent tokens and guarantees the panel is visible before work begins.
+3. **Detect CI trust.** Call `wave_ci_trust_level()` once and cache the result for the background worker. Drives whether `wave_health_check()` treats post-merge main CI as a separate gate.
+4. **Post to Discord.** `disc_send` to `#wave-status` (`1487386934094462986`): `"🌊 **Wavemachine started** — <project>, <N> waves pending. Agent: **<dev-name>** <dev-avatar>"`. Resolve identity from `/tmp/claude-agent-<md5>.json`. If `disc_send` fails, log and continue — Discord is informational, not a gate.
+5. **Spawn the background worker** via the Agent tool with `run_in_background: true` and the prompt template below. Capture the returned task ID.
+6. **Report to the user:** "Wavemachine launched (task `<task_id>`). Background agent will run the wave loop until the plan completes or a blocker is hit. Statusline 🌊 indicator is live. Status panel is open in your browser. Main session stays conversational — ask me anything or `wave_show()` to monitor."
+7. **Return control to the main session.** You do NOT poll the background agent. It reports back when it finishes or aborts.
 
 ## Background Worker Prompt Template
 
@@ -102,7 +105,9 @@ NOT on the abort list:
    as awaiting human attention.
 2. Write `wavemachine_active: false` to `.claude/status/state.json` (clears the 🌊
    indicator).
-3. Report to the parent session with a structured summary:
+3. Post to `#wave-status` (`1487386934094462986`): `"🛑 **Wavemachine aborted** —
+   <project>, wave <id>: <one-line blocker summary>. Agent: **<dev-name>** <dev-avatar>"`.
+4. Report to the parent session with a structured summary:
    - Which wave was running when you aborted
    - The full blocker list from wave_health_check (types + details)
    - What was merged successfully before the abort
@@ -111,7 +116,9 @@ NOT on the abort list:
 ## On Clean Completion
 
 1. Write `wavemachine_active: false` to `.claude/status/state.json`.
-2. Report to the parent session:
+2. Post to `#wave-status` (`1487386934094462986`): `"✅ **Wavemachine complete** —
+   <project>, all <N> waves merged. Run /dod to verify. Agent: **<dev-name>** <dev-avatar>"`.
+3. Report to the parent session:
    - All waves in the plan executed
    - Summary of what was merged across the run
    - Suggest running `/dod` for final project verification
@@ -121,7 +128,7 @@ NOT on the abort list:
 
 While wavemachine runs:
 - Call `wave_show()` to see live progress
-- Read `.status-panel.html` in a browser (already open from Wave 1)
+- Read `.status-panel.html` in a browser (opened during launch sequence)
 - Watch Discord `#agent-ops` if the background worker is signed in there
 - Check the statusline for the 🌊 indicator (disappears on completion/abort)
 

@@ -14,6 +14,7 @@ Execute the next pending wave from a plan created by `/prepwaves`. Two modes, de
 - Flight partitioning: `flight_overlap`, `flight_partition`
 - Drift: `drift_files_changed`, `drift_check_path_exists`, `drift_check_symbol_exists`
 - Spec: `spec_validate_structure`
+- Notifications: `mcp__disc-server__disc_send` — post wave status to `#wave-status` (`1487386934094462986`)
 
 ## Concepts
 
@@ -26,7 +27,7 @@ Flow (parallel): `pre-flight → plan → flight 1 (exec+merge) → re-validate 
 
 ## Step 1: Pre-Flight
 
-`wave_preflight()` → `wave_next_pending()` identifies the wave → if first wave in plan, auto-open `.status-panel.html` → verify main clean → `wave_previous_merged()` confirms prior wave landed → `spec_validate_structure(N)` for each issue in the wave → create feature branches from current main (`git checkout main && git pull && git checkout -b feature/<N>-<desc> && git push -u origin`).
+`wave_preflight()` → `wave_next_pending()` identifies the wave → verify main clean → `wave_previous_merged()` confirms prior wave landed → `spec_validate_structure(N)` for each issue in the wave → create feature branches from current main (`git checkout main && git pull && git checkout -b feature/<N>-<desc> && git push -u origin`) → post to `#wave-status` (`1487386934094462986`): `"🏄 **Wave <id> started** — <project>, <N> issues in <M> flights. Agent: **<dev-name>** <dev-avatar>"`. Resolve identity from `/tmp/claude-agent-<md5>.json`. If `disc_send` fails, log and continue.
 
 If any check fails: **stop and report.** Do not launch agents on a bad foundation.
 
@@ -91,7 +92,7 @@ Without these, you WILL lose your place when the user asks questions between wav
 
 ## Step 6: Wave Complete
 
-`wave_complete()` → mark wave task done → verify main clean → confirm all wave issues closed (`wave_show()`) → report (issues closed vs. deferred, PR/MR URLs, flight breakdown, drift findings, next wave preview) → **deferred items report** (table: item / reason / risk / tracking-issue link; every deferral MUST be tracked via `work_item` as `type::chore` or `type::docs`) → **vox announcement** (resolve identity from `/tmp/claude-agent-<md5>.json`; conversational, name/team/project/wave/counts) → prompt: "Wave N complete. Drift check for Wave N+1 is done. Run `/nextwave` for Wave N+1, or `/cryo` to preserve state."
+`wave_complete()` → mark wave task done → verify main clean → confirm all wave issues closed (`wave_show()`) → report (issues closed vs. deferred, PR/MR URLs, flight breakdown, drift findings, next wave preview) → **deferred items report** (table: item / reason / risk / tracking-issue link; every deferral MUST be tracked via `work_item` as `type::chore` or `type::docs`) → **Discord + vox announcement** (resolve identity from `/tmp/claude-agent-<md5>.json`): post to `#wave-status` (`1487386934094462986`): `"✅ **Wave <id> complete** — <project>, <N> issues merged, <M> deferred. Agent: **<dev-name>** <dev-avatar>"` then vox (conversational, name/team/project/wave/counts) → prompt: "Wave N complete. Drift check for Wave N+1 is done. Run `/nextwave` for Wave N+1, or `/cryo` to preserve state."
 
 ## Non-Negotiables
 

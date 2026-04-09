@@ -60,6 +60,30 @@ def status_icon(status: str) -> str:
     return icons.get(status, "&#x2753;")
 
 
+def normalize_issue_num(item: object) -> str:
+    """Extract issue number from either a plain int or an issue dict."""
+    if isinstance(item, dict):
+        return str(item.get("number", item.get("iid", "?")))
+    return str(item)
+
+
+def sanitize_wave_name(wave: dict) -> str:
+    """Return a clean display name for a wave card.
+
+    If the stored name contains raw object dumps (e.g., from an agent
+    interpolating the issues list), fall back to the wave ID.
+    """
+    name = wave.get("name", wave.get("id", "wave"))
+    if len(name) > 80 or "{" in name:
+        wave_id = wave.get("id")
+        if wave_id:
+            return wave_id
+        if "\u2014" in name:
+            return name.split("\u2014")[0].strip()
+        return name[:40] + "..."
+    return name
+
+
 def status_class(status: str) -> str:
     classes = {
         "completed": "completed",
@@ -130,9 +154,10 @@ def render_phase_html(phase: dict, state: dict, flights: dict) -> str:
         cls = status_class(ws)
 
         lines.append(f'  <div class="wave {cls}">')
+        wave_label = sanitize_wave_name(wave)
         lines.append(
             f'    <div class="wave-header">'
-            f'{icon} <strong>{html.escape(wave["name"])}</strong>'
+            f'{icon} <strong>{html.escape(wave_label)}</strong>'
             f' <span class="badge {cls}">{ws}</span>'
             f"</div>"
         )
@@ -143,9 +168,12 @@ def render_phase_html(phase: dict, state: dict, flights: dict) -> str:
             for i, flight in enumerate(wave_flights):
                 flight_status = flight.get("status", "pending")
                 fc = status_class(flight_status)
+                issue_refs = ", ".join(
+                    f"#{normalize_issue_num(n)}" for n in flight.get("issues", [])
+                )
                 lines.append(
                     f'      <span class="flight-badge {fc}">'
-                    f'Flight {i + 1}: {", ".join(f"#{n}" for n in flight.get("issues", []))}'
+                    f"Flight {i + 1}: {issue_refs}"
                     f"</span>"
                 )
             lines.append("    </div>")
