@@ -13,7 +13,7 @@ Mandatory verification before any commit. Checks compliance, runs code review, p
 - `mcp__disc-server__disc_send` — post approval request to `#precheck` (channel `1491195025198157834`)
 
 ## Procedure
-`ibm()` (stop on fail) → `spec_validate_structure(N)` → run repo validation (`validate.sh`/`make test`/`pytest`/`npm test`); fix failures first → launch `feature-dev:code-reviewer` via Agent over all changed files, WAIT, fix high+ findings → present the checklist → **notify BJ** (see "The Notification" below): `disc_send` to `#precheck` AND `vox` locally → **STOP.** Wait for `/scp`/`/scpmr`/`/scpmmr`/affirmative. Negative/rework → return to work. If `disc_send` fails (MCP unavailable, network), fall back to `vox` only — still STOP and wait for approval. Never bypass the STOP on notification failure.
+`ibm()` (stop on fail) → `spec_validate_structure(N)` → run repo validation (`validate.sh`/`make test`/`pytest`/`npm test`); fix failures first → launch `feature-dev:code-reviewer` via Agent over all changed files, WAIT, fix high+ findings → present the checklist → **notify BJ** (see "The Notification" below): `disc_send` to `#precheck` **then** `vox` locally — **always do both**. → **STOP.** Wait for `/scp`/`/scpmr`/`/scpmmr`/affirmative. Negative/rework → return to work. If `disc_send` fails (MCP unavailable, network), still do `vox` — still STOP and wait for approval. Never bypass the STOP on notification failure.
 
 ## The Checklist (full every time; a checkmark means VERIFIED by reading the codebase)
 **Context:** Project | Issue #N — title | Branch `feature/N-...` → `main`
@@ -42,7 +42,7 @@ Ready for `/scp` / `/scpmr` / `/scpmmr` or rework.
 — **<dev-name>** <dev-avatar> (<dev-team>)
 ```
 
-**`vox`:** same info, conversational, 1-2 sentences, ending with "Ready for your call."
+**`vox` (ALWAYS — not a fallback):** same info, conversational, 1-2 sentences, ending with "Ready for your call." Vox runs regardless of whether `disc_send` succeeded. Discord is for async visibility; vox is for immediate attention. Both are required.
 
 ## Rules
 No diff. No commit. No skipping code-reviewer. Honesty over speed — no checking items you haven't verified. **Linting is not testing** — passing lint/typecheck does not mean code works.
