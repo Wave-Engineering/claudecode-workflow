@@ -42,7 +42,15 @@ if [[ -z "$TTS_ENGINE" ]]; then
 		if [[ -x "$SCRIPT_DIR/vox-tts" ]]; then
 			TTS_ENGINE="$SCRIPT_DIR/vox-tts"
 		else
-			echo "Error: no TTS engine found. Install vox-tts or set VOX_TTS." >&2
+			echo "vox: TTS engine not found." >&2
+			echo "" >&2
+			echo "  Setup options:" >&2
+			echo "    1. Install vox-tts to PATH (e.g., ~/.local/bin/vox-tts)" >&2
+			echo "    2. Set VOX_TTS=/path/to/your/tts-engine" >&2
+			echo "    3. Set VOX_ENDPOINT=http://host:port/v1/audio/speech" >&2
+			echo "    4. Install espeak-ng: sudo apt install espeak-ng" >&2
+			echo "" >&2
+			echo "  Run: vox --help" >&2
 			exit 1
 		fi
 	fi
