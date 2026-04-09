@@ -16,6 +16,7 @@ Targeted code review via the `feature-dev:code-reviewer` subagent.
 ## Tools Used
 - `pr_diff` — unified diff for a PR/MR by number (platform-agnostic)
 - `pr_files` — changed-file list for a PR/MR by number
+- `spec_get` — fetch issue body as structured sections (platform-agnostic)
 
 ## Scope
 Parse `{{args}}` (default `branch`): `staged` (`git diff --cached`), `branch` (full diff vs base), `<filepath>` (single file), `mr <number>` / `pr <number>` (PR/MR by number).
@@ -26,7 +27,7 @@ Parse `{{args}}` (default `branch`): `staged` (`git diff --cached`), `branch` (f
    - `branch`: determine base (`release/*` or `main`), run `git diff <base>...HEAD`
    - `<filepath>`: `git diff HEAD -- <filepath>` plus read the full file
    - `mr <number>` / `pr <number>`: `pr_files({number})` for the path-level overview, then `pr_diff({number})` for the unified diff. Tools handle platform translation — no `gh`/`glab` calls.
-2. **Issue** — if branch name contains an issue number (e.g., `fix/76-description`), fetch via `gh issue view <N>` / `glab issue view <N>`.
+2. **Issue** — if branch name contains an issue number (e.g., `fix/76-description`), fetch via `spec_get({issue: N})`. The tool handles platform detection internally.
 3. **Intent** — `git log --oneline <base>...HEAD`.
 
 If the diff is empty, stop and tell the user there's nothing to review.

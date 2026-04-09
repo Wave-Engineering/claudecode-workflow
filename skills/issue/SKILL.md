@@ -33,20 +33,10 @@ Create properly templated and labeled issues from a natural language prompt.
 /issue                         Infer from recent conversation context
 ```
 
-## Step 1: Detect Platform
+## Tools Used
+- `mcp__sdlc-server__work_item` — create issues cross-platform (handles GitHub/GitLab detection internally)
 
-```bash
-REMOTE_URL=$(git remote get-url origin 2>/dev/null)
-if echo "$REMOTE_URL" | grep -qi github; then
-  PLATFORM="github"; CLI="gh"
-elif echo "$REMOTE_URL" | grep -qi gitlab; then
-  PLATFORM="gitlab"; CLI="glab"
-fi
-```
-
-Or read from `.claude-project.md` if it exists.
-
-## Step 2: Parse Arguments
+## Step 1: Parse Arguments
 
 {{#if args}}
 Parse: `{{args}}`
@@ -66,7 +56,7 @@ Extract two things:
 - Mentions epic, phase, milestone, multi-part → `epic`
 - Ambiguous → ask the user
 
-## Step 3: Draft the Issue
+## Step 2: Draft the Issue
 
 Use the prompt (or conversation context) to fill in the appropriate template below. The agent should flesh out the template sections intelligently — don't just echo the prompt back. Think about what a spec-driven implementing agent would need.
 
@@ -242,7 +232,7 @@ Use the prompt (or conversation context) to fill in the appropriate template bel
 [Quantitative or qualitative measures of success]
 ```
 
-## Step 4: Determine Labels
+## Step 3: Determine Labels
 
 Labels use the `group::value` convention. Within each group, labels are mutually exclusive.
 
@@ -274,40 +264,15 @@ Assess and apply values for these groups using judgment. Do not pause to confirm
 
 Assess labels based on the content — do not ask the user to confirm each one. Use your judgment.
 
-## Step 5: Create the Issue
+## Step 4: Create the Issue
 
 Create immediately — do not ask for approval. Issues are cheap to edit and close. The user gave intent when they invoked `/issue`; the real review happens in the project board where the editing tools are better.
 
-Write the issue body to a temp file first, then create:
+Call `work_item` with the drafted title, body, and labels. The tool handles platform detection and issue creation internally — no `gh` or `glab` CLI calls.
 
-**GitHub:**
-```bash
-# Write body to temp file (avoids shell escaping issues with multi-line markdown)
-cat > /tmp/issue-body.md << 'BODY'
-<the filled-in template>
-BODY
+If a label doesn't exist on the repo, the tool or platform will report it. Offer to create missing labels via CLI as a one-time setup step (label CRUD MCP tool is planned but not yet available).
 
-gh issue create --title "<title>" --label "<comma-separated-labels>" --body-file /tmp/issue-body.md
-```
-
-**GitLab:**
-```bash
-glab issue create --title "<title>" --label "<comma-separated-labels>" --description "$(cat /tmp/issue-body.md)"
-```
-
-If a label doesn't exist on the repo, offer to create it:
-
-**GitHub:**
-```bash
-gh label create "type::feature" --description "Feature request" --color "0E8A16"
-```
-
-**GitLab:**
-```bash
-glab label create "type::feature" --description "Feature request" --color "#0E8A16"
-```
-
-## Step 6: Report
+## Step 5: Report
 
 Confirm creation with the issue number, URL, and a nudge to review:
 

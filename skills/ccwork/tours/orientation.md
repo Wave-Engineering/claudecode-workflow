@@ -69,7 +69,7 @@ Present this table:
 
 | Step | What you do | Skill |
 |------|------------|-------|
-| 1. Track | Create or pick an issue | `gh issue create` / `gh issue view` |
+| 1. Track | Create or pick an issue | `/issue` skill |
 | 2. Branch | Create a feature branch | `git checkout -b feature/42-description` |
 | 3. Code | Write the implementation | (you or Claude) |
 | 4. Gate | Run the pre-commit checklist | `/precheck` |

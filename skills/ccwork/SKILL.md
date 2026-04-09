@@ -174,9 +174,7 @@ Read each template's `name:` field to find the match. If the argument is `#N` (a
 
 If no existing issue was referenced, create one from the template. Extract the markdown content from the template's `body` section (the `value:` field under `type: markdown`):
 
-```bash
-gh issue create --title "<lab name from template>" --body "<extracted markdown body>" --label "lab"
-```
+Call `work_item({type: "issue", title: "<lab name from template>", body: "<extracted markdown body>", labels: "lab"})`. The tool handles platform detection and creation internally.
 
 Record the created issue number for later reference.
 
@@ -189,10 +187,7 @@ Read the issue body (either the newly created issue or the referenced `#N`) and 
 - **Session replay** — look for `` **Session replay:** `labs/NN/session.jsonl` `` and extract the file path
 - **Curated session** — look for `` **Curated session:** `lab-NN` `` and extract the Clawback session ID
 
-```bash
-# Read the issue body
-gh issue view <issue-number> --json body --jq '.body'
-```
+Call `spec_get({issue: <issue-number>})` to fetch the issue body as structured sections.
 
 Parse these values. Session replay and curated session are optional — if missing, the completion step will fall back gracefully.
 
@@ -278,10 +273,8 @@ Where `<solution-tag>` is the value parsed in Step 4 (e.g., `lab/01-solution`).
 
 Read the "You Learned" checklist from the issue body. For each item, check it off in the issue:
 
-```bash
-# Update the issue body with checked items
-gh issue edit <issue-number> --body "<updated body with [x] items>"
-```
+<!-- TODO: migrate to work_item_update MCP tool when available -->
+Update the issue body via CLI (`gh issue edit` / `glab issue edit`) — no MCP tool for issue updates exists yet.
 
 ### Step 10: Update LAB.md completion tracking
 
