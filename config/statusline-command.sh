@@ -23,6 +23,40 @@ c_reset='\033[00m'
 # Shorten path: replace $HOME with ~
 short_cwd="${cwd/#$HOME/\~}"
 
+# --- Emoji shortcode conversion ---
+# Some agents write Discord/Slack shortcodes instead of Unicode emoji.
+# Convert known shortcodes so the statusline always renders correctly.
+shortcode_to_emoji() {
+	local s="$1"
+	case "$s" in
+	:mountain:) echo "🏔️" ;;
+	:hammer_and_wrench:) echo "🛠️" ;;
+	:anchor:) echo "⚓" ;;
+	:ocean:) echo "🌊" ;;
+	:shield:) echo "🛡️" ;;
+	:squid:) echo "🦑" ;;
+	:rocket:) echo "🚀" ;;
+	:fire:) echo "🔥" ;;
+	:skull:) echo "💀" ;;
+	:zap:) echo "⚡" ;;
+	:eyes:) echo "👀" ;;
+	:brain:) echo "🧠" ;;
+	:robot:) echo "🤖" ;;
+	:crossed_swords:) echo "⚔️" ;;
+	:crystal_ball:) echo "🔮" ;;
+	:gem:) echo "💎" ;;
+	:spider_web:) echo "🕸️" ;;
+	:snake:) echo "🐍" ;;
+	:wolf:) echo "🐺" ;;
+	:eagle:) echo "🦅" ;;
+	:ice_cube: | :ice:) echo "🧊" ;;
+	:pill:) echo "💊" ;;
+	:trumpet: | :postal_horn:) echo "📯" ;;
+	:*:) echo "$s" ;; # unknown shortcode — pass through
+	*) echo "$s" ;;   # already Unicode — pass through
+	esac
+}
+
 # --- Agent identity ---
 # Identity files are keyed by md5 of the project root so the statusline
 # resolves the correct agent regardless of process ancestry.
@@ -35,7 +69,7 @@ if [ -n "$cwd" ]; then
 	agent_file="/tmp/claude-agent-${dir_hash}.json"
 	if [ -f "$agent_file" ]; then
 		dev_name=$(jq -r '.dev_name // empty' "$agent_file" 2>/dev/null)
-		dev_avatar=$(jq -r '.dev_avatar // empty' "$agent_file" 2>/dev/null)
+		dev_avatar=$(shortcode_to_emoji "$(jq -r '.dev_avatar // empty' "$agent_file" 2>/dev/null)")
 	fi
 fi
 
