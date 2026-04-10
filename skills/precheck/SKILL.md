@@ -5,7 +5,9 @@ description: Pre-commit gate — verify branch/issue, run code-reviewer, present
 
 # Pre-Commit Gate
 
-Mandatory verification before any commit. Checks compliance, runs code review, presents the checklist, and **stops**. Does NOT commit/push/PR. Run when implementation is done — do not ask permission. The checklist is the approval gate.
+Mandatory verification before any commit. Checks compliance, runs code review, presents the checklist, and **stops**. Does NOT commit/push/PR.
+
+**IMPORTANT: When implementation is done, run this skill IMMEDIATELY. Do NOT ask "shall I run precheck?" or "ready for precheck?" — just start it. The checklist at the end is the approval gate; asking permission to START is a redundant pause.**
 
 ## Tools Used
 - `mcp__sdlc-server__ibm` — branch/issue workflow (no protected branch; branch linked to an open issue)
@@ -45,4 +47,4 @@ Ready for `/scp` / `/scpmr` / `/scpmmr` or rework.
 **`vox` (ALWAYS — not a fallback):** same info, conversational, 1-2 sentences, ending with "Ready for your call." Vox runs regardless of whether `disc_send` succeeded. Discord is for async visibility; vox is for immediate attention. Both are required.
 
 ## Rules
-No diff. No commit. No skipping code-reviewer. Honesty over speed — no checking items you haven't verified. **Linting is not testing** — passing lint/typecheck does not mean code works.
+No diff. No commit. No skipping code-reviewer. Honesty over speed — no checking items you haven't verified. **Linting is not testing** — passing lint/typecheck does not mean code works. **`vox` is ALWAYS called** — it is NOT a fallback for disc_send failure. Both notifications happen every time.
