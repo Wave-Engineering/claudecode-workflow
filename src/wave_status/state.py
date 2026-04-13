@@ -127,6 +127,72 @@ def save_json(path: Path, data: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Schema versioning and migration
+# ---------------------------------------------------------------------------
+
+CURRENT_SCHEMA_VERSION = 2
+
+
+def migrate_state(data: dict) -> dict:
+    """Migrate *data* to the current schema version in place and return it.
+
+    Detects the schema version:
+    - **v0**: has ``completed_waves`` (Phase 1 list-based layout).
+      Structural migration: lists to dicts, attach ``mr_urls`` to the
+      last completed wave.
+    - **v1**: has ``waves`` but no ``schema_version`` (Phase 2 dict-based).
+      Stamp only — no structural changes.
+    - **v2**: has ``schema_version: 2``.  No-op.
+
+    Unknown keys (e.g. ``wavemachine_active``) are always preserved.
+    """
+    version = data.get("schema_version", 0)
+
+    # Already current — no-op.
+    if version >= CURRENT_SCHEMA_VERSION:
+        return data
+
+    # v0 → v2: structural migration from Phase 1 list-based layout.
+    if "completed_waves" in data and "waves" not in data:
+        completed_waves = data.pop("completed_waves", [])
+        completed_issues = data.pop("completed_issues", [])
+        merge_requests = data.pop("merge_requests", {})
+
+        waves: dict[str, dict] = {}
+        for wid in completed_waves:
+            waves[wid] = {"status": "completed", "mr_urls": {}}
+        # Attach merge_requests to the last completed wave.
+        if completed_waves and merge_requests:
+            waves[completed_waves[-1]]["mr_urls"] = merge_requests
+
+        issues: dict[str, dict] = {}
+        for n in completed_issues:
+            issues[str(n)] = {"status": "closed"}
+
+        data["waves"] = waves
+        data["issues"] = issues
+
+    # Stamp the version (covers both v0→v2 and v1→v2).
+    data["schema_version"] = CURRENT_SCHEMA_VERSION
+    return data
+
+
+def load_state(path: Path, *, write_back: bool = True) -> dict:
+    """Load ``state.json``, auto-migrate, and optionally write back.
+
+    This is the canonical way to read ``state.json``.  Every call site
+    that previously used ``load_json(d / "state.json")`` should use this
+    instead.
+    """
+    data = load_json(path)
+    before_version = data.get("schema_version", 0)
+    data = migrate_state(data)
+    if write_back and data.get("schema_version", 0) != before_version:
+        save_json(path, data)
+    return data
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
@@ -372,7 +438,7 @@ def store_flight_plan(flights_data: list, root: Path) -> None:
     (e.g. ``[{"issues": [13, 1], "status": "pending"}, ...]``).
     """
     d = status_dir(root)
-    state_data = load_json(d / "state.json")
+    state_data = load_state(d / "state.json")
     current_wave = state_data.get("current_wave")
     if current_wave is None:
         raise ValueError(
@@ -388,7 +454,7 @@ def store_flight_plan(flights_data: list, root: Path) -> None:
 def _set_action(root: Path, action: str, label: str, detail: str = "") -> dict:
     """Update ``current_action`` in state.json and return the state dict."""
     d = status_dir(root)
-    state_data = load_json(d / "state.json")
+    state_data = load_state(d / "state.json")
     state_data["current_action"] = {
         "action": action,
         "label": label,
@@ -407,7 +473,7 @@ def preflight(root: Path) -> dict:
 def planning(root: Path) -> dict:
     """Set current_action to ``planning`` and current wave to ``in_progress`` [R-05]."""
     d = status_dir(root)
-    state_data = load_json(d / "state.json")
+    state_data = load_state(d / "state.json")
     current_wave = state_data.get("current_wave")
 
     state_data["current_action"] = {
@@ -428,7 +494,7 @@ def planning(root: Path) -> dict:
 def review(root: Path) -> dict:
     """Set current_action to ``post-wave-review`` [R-05]."""
     d = status_dir(root)
-    state_data = load_json(d / "state.json")
+    state_data = load_state(d / "state.json")
     current_wave = state_data.get("current_wave")
     return _set_action(root, "post-wave-review", "post-wave-review", current_wave or "")
 
@@ -450,7 +516,7 @@ def flight(n: int, root: Path) -> dict:
     Also sets ``current_action`` to ``in-flight``.
     """
     d = status_dir(root)
-    state_data = load_json(d / "state.json")
+    state_data = load_state(d / "state.json")
     current_wave = state_data.get("current_wave")
     if current_wave is None:
         raise ValueError(
@@ -504,7 +570,7 @@ def flight_done(n: int, root: Path) -> dict:
     Also sets ``current_action`` to ``merging``.
     """
     d = status_dir(root)
-    state_data = load_json(d / "state.json")
+    state_data = load_state(d / "state.json")
     current_wave = state_data.get("current_wave")
     if current_wave is None:
         raise ValueError(
@@ -550,7 +616,7 @@ def complete(root: Path) -> dict:
     Also sets ``current_action`` to ``idle``.
     """
     d = status_dir(root)
-    state_data = load_json(d / "state.json")
+    state_data = load_state(d / "state.json")
     plan_data = load_json(d / "phases-waves.json")
     current_wave = state_data.get("current_wave")
 
@@ -585,7 +651,7 @@ def close_issue(n: int, root: Path) -> dict:
     Raises ``ValueError`` if the issue does not exist in the plan.
     """
     d = status_dir(root)
-    state_data = load_json(d / "state.json")
+    state_data = load_state(d / "state.json")
     plan_data = load_json(d / "phases-waves.json")
 
     valid_issues = _all_issue_numbers(plan_data)
@@ -610,7 +676,7 @@ def record_mr(issue: int, mr: str, root: Path) -> dict:
     ``mr_urls`` [R-08].
     """
     d = status_dir(root)
-    state_data = load_json(d / "state.json")
+    state_data = load_state(d / "state.json")
     current_wave = state_data.get("current_wave")
     if current_wave is None:
         raise ValueError(
@@ -637,7 +703,7 @@ def show(root: Path) -> dict:
     **Read-only** — no files are modified, no dashboard is regenerated.
     """
     d = status_dir(root)
-    state_data = load_json(d / "state.json")
+    state_data = load_state(d / "state.json", write_back=False)
     plan_data = load_json(d / "phases-waves.json")
     flights_data = load_json(d / "flights.json")
 
