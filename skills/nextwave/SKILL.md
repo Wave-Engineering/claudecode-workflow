@@ -14,6 +14,7 @@ Execute the next pending wave from a plan created by `/prepwaves`. Two modes, de
 - Flight partitioning: `flight_overlap`, `flight_partition`
 - Drift: `drift_files_changed`, `drift_check_path_exists`, `drift_check_symbol_exists`
 - Spec: `spec_validate_structure`
+- Commutativity: `commutativity_verify`
 - Notifications: `mcp__disc-server__disc_send` — post wave status to `#wave-status` (`1487386934094462986`)
 
 ## Concepts
@@ -59,7 +60,26 @@ If any check fails: **stop and report.** Do not launch agents on a bad foundatio
 
 **Pre-commit checklist (per agent):** present the full CLAUDE.md checklist — commit context (project, issue, branch, flight), checklist items, change summary, `[fixed]`/`[deferred]` findings, `[parent-review]`. **Wait for explicit user approval on each agent's work before committing.**
 
-**Commit, push, merge:** commit with `type(scope): desc\n\nCloses #N` → push → create PR/MR (Summary / Changes / Test Results / `Closes #N`) → wait for CI green → merge via queue/train (`gh pr merge <N> --squash --delete-branch` or `glab mr merge <N> --squash --remove-source-branch --when-pipeline-succeeds`) or sequential fallback → `wave_close_issue(N)` + `wave_record_mr(N, url)` per issue → `wave_flight_done(N)` when all flight merges land → `git checkout main && git pull` → clean worktrees.
+**Commit, push, merge:** commit with `type(scope): desc\n\nCloses #N` → push → create PR/MR (Summary / Changes / Test Results / `Closes #N`) → wait for CI green → **commutativity verification (multi-issue flights only)** → merge → `wave_close_issue(N)` + `wave_record_mr(N, url)` per issue → `wave_flight_done(N)` when all flight merges land → `git checkout main && git pull` → clean worktrees.
+
+### Merge-Time Commutativity Verification (multi-issue flights only)
+
+After all execution agents in a multi-issue flight complete and CI is green on all PRs, call `commutativity_verify` before merging:
+
+1. **Build changesets.** For each PR in the flight, create a changeset: `{ id: "<issue_ref>", head_ref: "<branch_name>" }`.
+2. **Call `commutativity_verify`** with `repo_path` (project root), `base_ref` (`main`), and the changeset array.
+3. **Interpret the verdict:**
+
+| `group_verdict` | Merge strategy |
+|---|---|
+| **STRONG** | `pr_merge(skip_train=true)` for all PRs — safe to bypass merge queue |
+| **MEDIUM** | `pr_merge(skip_train=true)` for all PRs — safe to bypass merge queue |
+| **WEAK** | Sequential merge via merge queue (existing behavior) |
+| **ORACLE_REQUIRED** | Sequential merge via merge queue (existing behavior) |
+
+4. **Single-issue flights** skip `commutativity_verify` entirely — no change to current behavior. Merge directly via queue.
+
+This verification is the safety net for relaxed flight partitioning (#169 manifest discount). Even when the partitioner allows overlapping issues in the same flight, verify catches real conflicts at merge time.
 
 ## Step 4: Inter-Flight Re-Validation (before each flight after Flight 1)
 
