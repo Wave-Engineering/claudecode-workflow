@@ -40,6 +40,7 @@ from wave_status.state import (
     status_dir,
     store_flight_plan,
     waiting,
+    waiting_ci,
 )
 
 
@@ -366,6 +367,29 @@ class TestWaiting:
     def test_includes_message(self, project_root: Path) -> None:
         result = waiting(project_root, msg="Wave 1 complete.")
         assert result["current_action"]["detail"] == "Wave 1 complete."
+
+
+class TestWaitingCi:
+    """Tests for ``waiting_ci()`` — heartbeat during CI polling (#172)."""
+
+    def test_sets_action_to_waiting_ci(self, project_root: Path) -> None:
+        result = waiting_ci(project_root)
+        assert result["current_action"]["action"] == "waiting-ci"
+        assert result["current_action"]["label"] == "waiting-ci"
+
+    def test_includes_detail(self, project_root: Path) -> None:
+        result = waiting_ci(project_root, detail="PR #42 attempt 3: 2/5 passed")
+        assert result["current_action"]["detail"] == "PR #42 attempt 3: 2/5 passed"
+
+    def test_updates_last_updated(self, project_root: Path) -> None:
+        state_before = load_json(status_dir(project_root) / "state.json")
+        ts_before = state_before.get("last_updated", "")
+        waiting_ci(project_root, detail="poll")
+        state_after = load_json(status_dir(project_root) / "state.json")
+        ts_after = state_after.get("last_updated", "")
+        # Timestamp should be refreshed (or at minimum present)
+        assert ts_after >= ts_before
+        assert len(ts_after) > 0
 
 
 # ---------------------------------------------------------------------------

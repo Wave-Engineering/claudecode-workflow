@@ -40,6 +40,7 @@ from wave_status.state import (
     status_dir,
     store_flight_plan,
     waiting,
+    waiting_ci,
 )
 
 
@@ -145,6 +146,14 @@ def _cmd_waiting(args: argparse.Namespace) -> None:
     root = get_project_root()
     msg = args.msg if args.msg else ""
     waiting(root, msg=msg)
+    _regenerate_dashboard(root)
+
+
+def _cmd_waiting_ci(args: argparse.Namespace) -> None:
+    """Handle ``waiting-ci [detail]``."""
+    root = get_project_root()
+    detail = args.detail if args.detail else ""
+    waiting_ci(root, detail=detail)
     _regenerate_dashboard(root)
 
 
@@ -272,6 +281,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_wt = sub.add_parser("waiting", help="Set action to waiting-on-meatbag")
     p_wt.add_argument("msg", nargs="?", default="", help="Optional message")
     p_wt.set_defaults(func=_cmd_waiting)
+
+    # waiting-ci
+    p_wci = sub.add_parser("waiting-ci", help="Heartbeat during CI polling")
+    p_wci.add_argument("detail", nargs="?", default="", help="Optional detail string")
+    p_wci.set_defaults(func=_cmd_waiting_ci)
 
     # close-issue
     p_ci = sub.add_parser("close-issue", help="Close an issue by number")
