@@ -98,6 +98,9 @@ NOT on the abort list:
   The parent-agent review gate already fixes high+ findings in the worktree or
   defers them with user approval (deferrals DO abort). Stopping on every medium+
   code review finding would make wavemachine useless.
+- Commutativity verification returning WEAK/ORACLE_REQUIRED — this triggers
+  sequential merge via merge queue (safe fallback), not an abort. Only an actual
+  merge conflict or CI failure during sequential merge would abort.
 
 ## On Abort
 
