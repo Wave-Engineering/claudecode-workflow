@@ -22,6 +22,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from wave_status.state import (
+    CURRENT_SCHEMA_VERSION,
     close_issue,
     complete,
     ensure_status_dir,
@@ -31,6 +32,8 @@ from wave_status.state import (
     html_path,
     init_state,
     load_json,
+    load_state,
+    migrate_state,
     planning,
     preflight,
     record_mr,
@@ -208,6 +211,115 @@ class TestAtomicJsonIO:
         with open(path) as f:
             data = json.load(f)
         assert data == {"hello": "world"}
+
+
+# ---------------------------------------------------------------------------
+# migrate_state / load_state — schema versioning (#174)
+# ---------------------------------------------------------------------------
+
+class TestMigrateState:
+    """Tests for ``migrate_state()`` and ``load_state()`` — schema versioning."""
+
+    def test_v0_to_v2_structural(self) -> None:
+        """v0 (Phase 1 list-based) → v2: lists converted to dicts."""
+        v0 = {
+            "completed_waves": ["w1", "w2"],
+            "completed_issues": [1, 2, 3],
+            "merge_requests": {
+                "1": "https://github.com/org/repo/pull/10",
+                "2": "https://github.com/org/repo/pull/11",
+            },
+            "current_wave": "w3",
+            "current_action": {"action": "idle", "label": "idle", "detail": ""},
+            "wavemachine_active": True,
+        }
+        result = migrate_state(v0)
+        assert result["schema_version"] == CURRENT_SCHEMA_VERSION
+        # Lists converted to dicts.
+        assert "completed_waves" not in result
+        assert "completed_issues" not in result
+        assert "merge_requests" not in result
+        assert result["waves"]["w1"]["status"] == "completed"
+        assert result["waves"]["w2"]["status"] == "completed"
+        # mr_urls attached to last completed wave.
+        assert result["waves"]["w2"]["mr_urls"]["1"] == "https://github.com/org/repo/pull/10"
+        assert result["issues"]["1"]["status"] == "closed"
+        assert result["issues"]["3"]["status"] == "closed"
+        # Unknown key preserved.
+        assert result["wavemachine_active"] is True
+
+    def test_v1_to_v2_stamp(self) -> None:
+        """v1 (has ``waves`` but no schema_version) → v2: stamp only."""
+        v1 = {
+            "current_wave": "w1",
+            "waves": {"w1": {"status": "in_progress", "mr_urls": {}}},
+            "issues": {"10": {"status": "open"}},
+            "current_action": {"action": "idle", "label": "idle", "detail": ""},
+        }
+        result = migrate_state(v1)
+        assert result["schema_version"] == CURRENT_SCHEMA_VERSION
+        # Structure unchanged.
+        assert result["waves"]["w1"]["status"] == "in_progress"
+        assert result["issues"]["10"]["status"] == "open"
+
+    def test_v2_to_v2_noop(self) -> None:
+        """v2 → v2: no changes."""
+        v2 = {
+            "schema_version": 2,
+            "current_wave": "w1",
+            "waves": {"w1": {"status": "pending", "mr_urls": {}}},
+            "issues": {},
+            "current_action": {"action": "idle", "label": "idle", "detail": ""},
+        }
+        import copy
+        original = copy.deepcopy(v2)
+        result = migrate_state(v2)
+        assert result == original
+
+    def test_write_back(self, project_root: Path) -> None:
+        """load_state with write_back=True persists the migration."""
+        d = status_dir(project_root)
+        # Manually write a v1 state (no schema_version).
+        state_path = d / "state.json"
+        v1 = load_json(state_path)
+        v1.pop("schema_version", None)
+        save_json(state_path, v1)
+        # Confirm no schema_version on disk.
+        assert "schema_version" not in load_json(state_path)
+        # load_state should migrate and write back.
+        data = load_state(state_path, write_back=True)
+        assert data["schema_version"] == CURRENT_SCHEMA_VERSION
+        # Verify it was persisted.
+        on_disk = load_json(state_path)
+        assert on_disk["schema_version"] == CURRENT_SCHEMA_VERSION
+
+    def test_unknown_keys_preserved(self) -> None:
+        """Migration preserves keys it does not recognize."""
+        v1 = {
+            "current_wave": "w1",
+            "waves": {"w1": {"status": "pending", "mr_urls": {}}},
+            "issues": {},
+            "current_action": {"action": "idle", "label": "idle", "detail": ""},
+            "wavemachine_active": True,
+            "custom_field": [1, 2, 3],
+        }
+        result = migrate_state(v1)
+        assert result["wavemachine_active"] is True
+        assert result["custom_field"] == [1, 2, 3]
+        assert result["schema_version"] == CURRENT_SCHEMA_VERSION
+
+    def test_idempotent(self) -> None:
+        """Calling migrate_state twice produces the same result."""
+        v1 = {
+            "current_wave": "w1",
+            "waves": {"w1": {"status": "pending", "mr_urls": {}}},
+            "issues": {},
+            "current_action": {"action": "idle", "label": "idle", "detail": ""},
+        }
+        first = migrate_state(v1)
+        import copy
+        second = migrate_state(copy.deepcopy(first))
+        assert first == second
 
 
 # ---------------------------------------------------------------------------
