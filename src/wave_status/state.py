@@ -438,6 +438,11 @@ def waiting(root: Path, msg: str = "") -> dict:
     return _set_action(root, "waiting-on-meatbag", "waiting-on-meatbag", msg)
 
 
+def waiting_ci(root: Path, detail: str = "") -> dict:
+    """Set current_action to ``waiting-ci`` — heartbeat during CI polling."""
+    return _set_action(root, "waiting-ci", "waiting-ci", detail)
+
+
 def flight(n: int, root: Path) -> dict:
     """Set flight *n* to ``running`` in ``flights.json`` [R-11].
 
