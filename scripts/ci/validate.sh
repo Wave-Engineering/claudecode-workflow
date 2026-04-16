@@ -78,7 +78,7 @@ else
 				info "$rel (not a shell script — skipped)"
 				continue
 			fi
-			if shellcheck "$script" 2>&1; then
+			if shellcheck -x "$script" 2>&1; then
 				info "$rel"
 				PASS=$((PASS + 1))
 			else

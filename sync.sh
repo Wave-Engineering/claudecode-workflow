@@ -220,11 +220,22 @@ echo ""
 echo "══════════════════════════════════════════"
 
 if [[ ${#changed_installed[@]} -eq 0 ]]; then
-	echo "Everything in sync. Nothing to pull."
-	exit 0
+	echo "All files in sync."
+else
+	echo "${#changed_installed[@]} file(s) differ."
 fi
 
-echo "${#changed_installed[@]} file(s) differ."
+# External dependency check (always runs in --check mode)
+if [[ "$CHECK_ONLY" == true ]]; then
+	# shellcheck source=scripts/ci/check-deps.sh
+	source "$REPO_DIR/scripts/ci/check-deps.sh"
+	# shellcheck disable=SC2119  # intentionally no --install arg
+	check_deps || true
+fi
+
+if [[ ${#changed_installed[@]} -eq 0 ]]; then
+	exit 0
+fi
 
 if [[ "$CHECK_ONLY" == true ]]; then
 	echo "Run ./sync.sh to pull changes into the repo."

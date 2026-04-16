@@ -348,6 +348,14 @@ if [[ "$CHECK_MODE" == true ]]; then
 		fi
 	fi
 
+	# External dependencies
+	# shellcheck source=scripts/ci/check-deps.sh
+	source "$REPO_DIR/scripts/ci/check-deps.sh"
+	# shellcheck disable=SC2119  # intentionally no --install arg in check mode
+	if ! check_deps; then
+		drifted=$((drifted + 1))
+	fi
+
 	echo ""
 	echo "══════════════════════════════════════════"
 	if [[ $drifted -eq 0 ]]; then
@@ -519,33 +527,12 @@ else
 	echo "Installation complete."
 fi
 
-# --- Dependency check ---------------------------------------------------------
-echo ""
-echo "Dependency check:"
-missing=()
-for cmd in curl jq bun glab gh python3 shellcheck shfmt; do
-	if command -v "$cmd" &>/dev/null; then
-		info "$cmd $(command -v "$cmd")"
-	else
-		warn "$cmd — NOT FOUND"
-		missing+=("$cmd")
-	fi
-done
-
-if [[ -f "$HOME/secrets/slack-bot-token" ]]; then
-	info "slack-bot-token found"
+# --- Dependency check (via check-deps.sh) ------------------------------------
+# shellcheck source=scripts/ci/check-deps.sh
+source "$REPO_DIR/scripts/ci/check-deps.sh"
+if [[ "$DRY_RUN" == true ]]; then
+	# shellcheck disable=SC2119  # intentionally no --install arg in dry-run
+	check_deps
 else
-	warn "$HOME/secrets/slack-bot-token — NOT FOUND (needed for /ping)"
-fi
-
-if [[ -f "$HOME/secrets/discord-bot-token" ]]; then
-	info "discord-bot-token found"
-else
-	warn "$HOME/secrets/discord-bot-token — NOT FOUND (needed for /disc and discord-watcher)"
-fi
-
-if [[ ${#missing[@]} -gt 0 ]]; then
-	echo ""
-	warn "Missing dependencies: ${missing[*]}"
-	echo "  Install them before using the skills that require them."
+	check_deps --install
 fi
