@@ -1,0 +1,42 @@
+{
+  "deps": {
+    "context-crystallizer": {
+      "type": "repo",
+      "description": "Hook scripts for context crystallization (PostToolUse, SessionStart, SubagentStop)",
+      "required_by": "settings.json hooks",
+      "files": [
+        "~/.claude/context-crystallizer/hooks/post-tool-use.sh",
+        "~/.claude/context-crystallizer/hooks/session-start.sh",
+        "~/.claude/context-crystallizer/hooks/subagent-stop.sh"
+      ],
+      "clone_url": "git@github.com:Wave-Engineering/context-crystallizer.git",
+      "clone_dest": "~/.claude/context-crystallizer",
+      "optional": false
+    },
+    "discord-config": {
+      "type": "config",
+      "description": "Channel name-to-ID map for disc-server resolution (avoids API calls)",
+      "required_by": "disc-server channel name resolution",
+      "files": [
+        "~/.claude/discord.json"
+      ],
+      "install": "Copy from docs/discord.example.json or ask BJ for the current channel map",
+      "optional": true
+    }
+  },
+  "commands": [
+    { "name": "curl",       "required_by": "MCP install scripts" },
+    { "name": "jq",         "required_by": "settings.json merge, MCP install" },
+    { "name": "bun",        "required_by": "MCP server builds" },
+    { "name": "gh",         "required_by": "GitHub CLI (issues, PRs, releases)" },
+    { "name": "glab",       "required_by": "GitLab CLI (issues, MRs)" },
+    { "name": "python3",    "required_by": "Package builds (zipapp)" },
+    { "name": "shellcheck", "required_by": "Script validation" },
+    { "name": "shfmt",      "required_by": "Script formatting" },
+    { "name": "trivy",      "required_by": "Dependency vulnerability scan (precheck)", "optional": true }
+  ],
+  "secrets": [
+    { "path": "~/secrets/slack-bot-token",   "required_by": "/ping skill" },
+    { "path": "~/secrets/discord-bot-token", "required_by": "disc-server and discord-watcher MCPs" }
+  ]
+}
