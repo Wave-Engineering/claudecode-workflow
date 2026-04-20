@@ -454,6 +454,22 @@ if [[ "$INSTALL_CONFIG" == true ]]; then
 			fi
 		fi
 	fi
+
+	# discord.json — create from template only if missing, never overwrite
+	if [[ -f "$REPO_DIR/config/discord.template.json" ]]; then
+		if [[ -f "$CLAUDE_DIR/discord.json" ]]; then
+			skip "discord.json (already exists — not overwriting)"
+		else
+			if [[ "$DRY_RUN" == true ]]; then
+				info "(dry-run) $REPO_DIR/config/discord.template.json → $CLAUDE_DIR/discord.json"
+			else
+				mkdir -p "$(dirname "$CLAUDE_DIR/discord.json")"
+				jq 'walk(if type == "object" then del(._comment) else . end)' \
+					"$REPO_DIR/config/discord.template.json" >"$CLAUDE_DIR/discord.json"
+				info "Installed discord.json (stripped _comment keys)"
+			fi
+		fi
+	fi
 fi
 
 # --- Build and install packages -----------------------------------------------

@@ -1,0 +1,16 @@
+{
+  "_comment": "Discord server configuration for disc-server channel name resolution. Deployed by install to ~/.claude/discord.json only if the file does not exist. Never overwritten.",
+  "guild_id": "1486516321385578576",
+  "default_channel_id": "1487288523638837268",
+  "roll_call_channel_id": "1487382005036617851",
+  "channels": {
+    "general": "1486516322249478166",
+    "agent-ops": "1487288523638837268",
+    "roll-call": "1487382005036617851",
+    "wave-status": "1487386934094462986",
+    "remote-sessions": "1487462945972682763",
+    "pops-notify": "1490117544466452704",
+    "self-messages": "1490561225338388631",
+    "precheck": "1491195025198157834"
+  }
+}
