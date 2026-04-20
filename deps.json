@@ -20,8 +20,8 @@
       "files": [
         "~/.claude/discord.json"
       ],
-      "install": "Copy from docs/discord.example.json or ask BJ for the current channel map",
-      "optional": true
+      "install": "Run ./install or ./install --config to create from config/discord.template.json. Safe to customize; install never overwrites.",
+      "optional": false
     }
   },
   "commands": [
