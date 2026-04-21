@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# wavebus: atomic completion primitive — rename .partial → .md, write DONE, print canonical return.
+#
+# Usage: flight-finalize <results-partial-path> PASS|FAIL
+#
+# Validates path shape and non-empty partial file, performs atomic rename of
+# results.md.partial → results.md, writes a DONE sentinel containing exactly
+# "PASS" or "FAIL" (no trailing newline), and prints the canonical return line:
+#
+#     <results-path> PASS|FAIL
+#
+# matching regex ^(/tmp/wavemachine/[^\s]+/results\.md) (PASS|FAIL)$
+#
+# Exit codes:
+#   0  success
+#   1  usage error
+#   2  partial missing or empty
+#   3  path does not match canonical shape
+
+set -euo pipefail
+
+if [[ $# -ne 2 ]]; then
+	echo "usage: flight-finalize <results-partial-path> PASS|FAIL" >&2
+	exit 1
+fi
+
+partial_path="$1"
+status="$2"
+
+if [[ "$status" != "PASS" && "$status" != "FAIL" ]]; then
+	echo "error: status must be PASS or FAIL, got '$status'" >&2
+	exit 1
+fi
+
+# Path shape check — must be under /tmp/wavemachine/<slug>/wave-<id>/flight-<n>/issue-<x>/results.md.partial
+# Also reject traversal.
+if [[ "$partial_path" == *".."* ]]; then
+	echo "error: path contains '..': $partial_path" >&2
+	exit 3
+fi
+
+shape_re='^/tmp/wavemachine/[^/]+/wave-[^/]+/flight-[^/]+/issue-[^/]+/results\.md\.partial$'
+if ! [[ "$partial_path" =~ $shape_re ]]; then
+	echo "error: path does not match canonical shape: $partial_path" >&2
+	exit 3
+fi
+
+if [[ ! -f "$partial_path" ]]; then
+	echo "error: partial file does not exist: $partial_path" >&2
+	exit 2
+fi
+
+if [[ ! -s "$partial_path" ]]; then
+	echo "error: partial file is empty: $partial_path" >&2
+	exit 2
+fi
+
+results_path="${partial_path%.partial}"
+issue_dir="$(dirname "$partial_path")"
+done_path="${issue_dir}/DONE"
+
+# Atomic rename (same filesystem — always true, both under /tmp).
+mv -f "$partial_path" "$results_path"
+
+# Write DONE sentinel with exactly PASS or FAIL, no trailing newline.
+printf '%s' "$status" >"$done_path"
+
+echo "$results_path $status"
