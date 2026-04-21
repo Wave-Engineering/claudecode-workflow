@@ -427,6 +427,24 @@ def extend_state(plan_data: dict, root: Path) -> None:
                 if issue_key not in existing_state["issues"]:
                     existing_state["issues"][issue_key] = {"status": "open"}
 
+    # Auto-advance current_wave when the prior plan has been fully worked off
+    # and new pending waves now exist. Without this, running `init --extend`
+    # on top of a completed plan leaves `current_wave` stuck at None (or at
+    # the last-completed wave), and every subsequent subcommand that asserts
+    # "a current wave is set" (planning, flight, flight_plan, …) refuses
+    # because it can't tell the plan was extended.
+    waves_state = existing_state.get("waves", {})
+    current = existing_state.get("current_wave")
+    current_is_done = (
+        current is None
+        or waves_state.get(current, {}).get("status") == "completed"
+    )
+    if current_is_done:
+        for wid in _all_wave_ids(existing_plan):
+            if waves_state.get(wid, {}).get("status") == "pending":
+                existing_state["current_wave"] = wid
+                break
+
     existing_state["last_updated"] = _now_iso()
     save_json(state_path, existing_state)
 
@@ -507,6 +525,82 @@ def waiting(root: Path, msg: str = "") -> dict:
 def waiting_ci(root: Path, detail: str = "") -> dict:
     """Set current_action to ``waiting-ci`` — heartbeat during CI polling."""
     return _set_action(root, "waiting-ci", "waiting-ci", detail)
+
+
+def set_current_wave(wave_id: str, root: Path) -> dict:
+    """Set ``current_wave`` to *wave_id* in ``state.json``.
+
+    Validates *wave_id* exists in the plan and is not already ``completed``.
+    Intended as the CLI-accessible path to advance ``current_wave`` outside
+    of the normal ``complete`` flow (e.g. after ``init --extend`` on an
+    already-completed plan, or when a human needs to jump the pointer during
+    recovery).  Raises ``ValueError`` if the wave ID is unknown or already
+    completed — pointing at a completed wave would let ``planning`` flip its
+    status back to ``in_progress``, corrupting the completion record.
+    """
+    d = status_dir(root)
+    plan_data = load_json(d / "phases-waves.json")
+    valid_ids = _all_wave_ids(plan_data)
+    if wave_id not in valid_ids:
+        raise ValueError(
+            f"Error: wave '{wave_id}' does not exist in the plan. "
+            f"Valid wave IDs: {', '.join(valid_ids) if valid_ids else '(none)'}."
+        )
+
+    state_data = load_state(d / "state.json")
+    target_status = state_data.get("waves", {}).get(wave_id, {}).get("status")
+    if target_status == "completed":
+        raise ValueError(
+            f"Error: wave '{wave_id}' is already completed. "
+            "Pass a pending or in_progress wave ID instead."
+        )
+
+    state_data["current_wave"] = wave_id
+    state_data["last_updated"] = _now_iso()
+    save_json(d / "state.json", state_data)
+    return state_data
+
+
+def wavemachine_start(root: Path, launcher: str = "") -> dict:
+    """Mark the plan as actively driven by wavemachine.
+
+    Sets ``wavemachine_active: true`` in ``state.json`` along with
+    ``wavemachine_started_at`` and ``wavemachine_launcher`` metadata.
+    Raises ``ValueError`` if a wavemachine run is already active (one plan
+    at a time — matches the SKILL.md non-negotiable).
+    """
+    d = status_dir(root)
+    state_data = load_state(d / "state.json")
+    if state_data.get("wavemachine_active"):
+        raise ValueError(
+            "Error: wavemachine is already active for this plan. "
+            "Run 'wavemachine-stop' first, or wait for the current run to exit."
+        )
+
+    state_data["wavemachine_active"] = True
+    state_data["wavemachine_started_at"] = _now_iso()
+    if launcher:
+        state_data["wavemachine_launcher"] = launcher
+    state_data["last_updated"] = _now_iso()
+    save_json(d / "state.json", state_data)
+    return state_data
+
+
+def wavemachine_stop(root: Path) -> dict:
+    """Clear wavemachine ownership from ``state.json``.
+
+    Deletes ``wavemachine_active``, ``wavemachine_started_at``, and
+    ``wavemachine_launcher``.  Idempotent — succeeds even if no wavemachine
+    run is active (worker abort paths need this to be safe on re-entry).
+    """
+    d = status_dir(root)
+    state_data = load_state(d / "state.json")
+    state_data.pop("wavemachine_active", None)
+    state_data.pop("wavemachine_started_at", None)
+    state_data.pop("wavemachine_launcher", None)
+    state_data["last_updated"] = _now_iso()
+    save_json(d / "state.json", state_data)
+    return state_data
 
 
 def flight(n: int, root: Path) -> dict:

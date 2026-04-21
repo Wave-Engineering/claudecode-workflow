@@ -457,6 +457,269 @@ class TestDashboardGeneration:
 
 
 # ---------------------------------------------------------------------------
+# set-current + wavemachine-start/stop tests (issue #382)
+# ---------------------------------------------------------------------------
+
+def _state(repo: Path) -> dict:
+    """Read state.json from *repo* into a dict."""
+    return json.loads(
+        (repo / ".claude" / "status" / "state.json").read_text(encoding="utf-8")
+    )
+
+
+class TestSetCurrent:
+    """Verify ``set-current <wave-id>`` updates current_wave."""
+
+    def test_set_current_moves_pointer(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """``set-current wave-3`` sets current_wave to wave-3."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+
+        rc, _, err = run_cli(["set-current", "wave-3"], repo)
+        assert rc == 0, f"set-current failed: {err}"
+        assert _state(repo)["current_wave"] == "wave-3"
+
+    def test_set_current_rejects_unknown_wave(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """Unknown wave ID -> exit 1 with a listing of valid IDs."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+
+        rc, _, err = run_cli(["set-current", "wave-does-not-exist"], repo)
+        assert rc == 1
+        assert "Error:" in err
+        # Valid IDs should be listed to guide recovery.
+        assert "wave-1" in err
+
+    def test_set_current_rejects_completed_wave(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """Target wave already completed -> exit 1 (no status corruption)."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+
+        # Manually mark wave-1 as completed.
+        state_path = repo / ".claude" / "status" / "state.json"
+        st = json.loads(state_path.read_text(encoding="utf-8"))
+        st["waves"]["wave-1"]["status"] = "completed"
+        state_path.write_text(json.dumps(st), encoding="utf-8")
+
+        rc, _, err = run_cli(["set-current", "wave-1"], repo)
+        assert rc == 1
+        assert "Error:" in err
+        assert "already completed" in err
+        # Completed status must not have been flipped to anything else.
+        assert _state(repo)["waves"]["wave-1"]["status"] == "completed"
+
+    def test_set_current_regenerates_dashboard(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """``set-current`` regenerates the status panel (state mutation)."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        html = repo / ".status-panel.html"
+        assert html.exists()
+        mtime_before = html.stat().st_mtime_ns
+
+        time.sleep(0.05)
+        rc, _, _ = run_cli(["set-current", "wave-2"], repo)
+        assert rc == 0
+        assert html.stat().st_mtime_ns >= mtime_before
+
+
+class TestWavemachineFlag:
+    """Verify ``wavemachine-start`` / ``wavemachine-stop`` flip state flags."""
+
+    def test_start_sets_active_flag(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """``wavemachine-start`` writes wavemachine_active=true + metadata."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+
+        rc, _, err = run_cli(
+            ["wavemachine-start", "--launcher", "task-abc"], repo
+        )
+        assert rc == 0, f"wavemachine-start failed: {err}"
+
+        st = _state(repo)
+        assert st["wavemachine_active"] is True
+        assert "wavemachine_started_at" in st
+        assert st["wavemachine_launcher"] == "task-abc"
+
+    def test_start_rejects_when_already_active(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """Second ``wavemachine-start`` fails — one plan at a time."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        run_cli(["wavemachine-start"], repo)
+
+        rc, _, err = run_cli(["wavemachine-start"], repo)
+        assert rc == 1
+        assert "Error:" in err
+        assert "already active" in err
+
+    def test_stop_clears_all_wavemachine_keys(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """``wavemachine-stop`` removes all three wavemachine keys."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        run_cli(["wavemachine-start", "--launcher", "task-xyz"], repo)
+
+        rc, _, err = run_cli(["wavemachine-stop"], repo)
+        assert rc == 0, f"wavemachine-stop failed: {err}"
+
+        st = _state(repo)
+        assert "wavemachine_active" not in st
+        assert "wavemachine_started_at" not in st
+        assert "wavemachine_launcher" not in st
+
+    def test_stop_is_idempotent(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """Calling ``wavemachine-stop`` on a clean state succeeds (exit 0)."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+
+        # No wavemachine-start first — should still succeed.
+        rc, _, err = run_cli(["wavemachine-stop"], repo)
+        assert rc == 0, f"idempotent stop failed: {err}"
+
+    def test_start_preserves_other_state_keys(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """``wavemachine-start`` leaves current_wave, waves, issues untouched."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        before = _state(repo)
+
+        run_cli(["wavemachine-start"], repo)
+        after = _state(repo)
+
+        assert after["current_wave"] == before["current_wave"]
+        assert after["waves"] == before["waves"]
+        assert after["issues"] == before["issues"]
+
+
+# ---------------------------------------------------------------------------
+# init --extend auto-advance current_wave (issue #382)
+# ---------------------------------------------------------------------------
+
+class TestExtendAutoAdvance:
+    """Verify ``init --extend`` auto-advances current_wave when prior done."""
+
+    # Phase 2 extension data — wave-6a, wave-6b with unique issue numbers.
+    _EXTEND_PLAN: dict = {
+        "phases": [
+            {
+                "name": "Extended",
+                "waves": [
+                    {
+                        "id": "wave-6a",
+                        "name": "Wave 6a",
+                        "issues": [
+                            {"number": 600, "title": "New 600", "deps": []},
+                        ],
+                    },
+                    {
+                        "id": "wave-6b",
+                        "name": "Wave 6b",
+                        "issues": [
+                            {"number": 601, "title": "New 601", "deps": [600]},
+                        ],
+                    },
+                ],
+            },
+        ],
+    }
+
+    def _complete_all_waves(self, repo: Path) -> None:
+        """Manually mark every wave and issue in the state as completed/closed."""
+        state_path = repo / ".claude" / "status" / "state.json"
+        st = json.loads(state_path.read_text(encoding="utf-8"))
+        for wid in st["waves"]:
+            st["waves"][wid]["status"] = "completed"
+        for iid in st["issues"]:
+            st["issues"][iid]["status"] = "closed"
+        st["current_wave"] = None
+        state_path.write_text(json.dumps(st), encoding="utf-8")
+
+    def test_extend_advances_from_none_to_first_new_wave(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """Prior plan fully done (current_wave=None) — extend sets it to the new wave."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        self._complete_all_waves(repo)
+
+        extend_path = repo / "extend.json"
+        extend_path.write_text(json.dumps(self._EXTEND_PLAN), encoding="utf-8")
+
+        rc, _, err = run_cli(["init", "--extend", "extend.json"], repo)
+        assert rc == 0, f"extend failed: {err}"
+        assert _state(repo)["current_wave"] == "wave-6a"
+
+    def test_extend_preserves_current_wave_when_prior_active(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """Prior plan still in progress — extend leaves current_wave alone."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        # current_wave is wave-1 after init, all pending — do NOT complete.
+
+        extend_path = repo / "extend.json"
+        extend_path.write_text(json.dumps(self._EXTEND_PLAN), encoding="utf-8")
+
+        rc, _, err = run_cli(["init", "--extend", "extend.json"], repo)
+        assert rc == 0, f"extend failed: {err}"
+        # Prior phase still has pending waves, so current_wave should not jump.
+        assert _state(repo)["current_wave"] == "wave-1"
+
+    def test_extend_advances_from_completed_pointer(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """current_wave stuck on last completed wave (not None) — extend advances."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+
+        # Simulate a plan that ended with the pointer still on the last
+        # completed wave rather than being advanced to None (possible via
+        # manual state edit or a migration path that bypassed `complete`).
+        state_path = repo / ".claude" / "status" / "state.json"
+        st = json.loads(state_path.read_text(encoding="utf-8"))
+        for wid in st["waves"]:
+            st["waves"][wid]["status"] = "completed"
+        for iid in st["issues"]:
+            st["issues"][iid]["status"] = "closed"
+        st["current_wave"] = "wave-3"
+        state_path.write_text(json.dumps(st), encoding="utf-8")
+
+        extend_path = repo / "extend.json"
+        extend_path.write_text(json.dumps(self._EXTEND_PLAN), encoding="utf-8")
+
+        rc, _, err = run_cli(["init", "--extend", "extend.json"], repo)
+        assert rc == 0, f"extend failed: {err}"
+        assert _state(repo)["current_wave"] == "wave-6a"
+
+
+# ---------------------------------------------------------------------------
 # No external dependencies test [CT-01]
 # ---------------------------------------------------------------------------
 
