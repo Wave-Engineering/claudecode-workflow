@@ -106,7 +106,7 @@ What each skill calls under the hood.
 | `/jfail` | `ci_run_status`, `ci_failed_jobs`, `ci_run_logs` |
 | `/mmr` | `pr_status`, `pr_diff`, `pr_wait_ci`, `pr_merge`, `ci_wait_run` |
 | `/nerf` | `nerf_status`, `nerf_mode`, `nerf_darts`, `nerf_budget`, `nerf_scope` |
-| `/nextwave` | `spec_validate_structure`, `wave_preflight`, `wave_planning`, `wave_flight`, `wave_flight_plan`, `wave_flight_done`, `wave_close_issue`, `wave_record_mr`, `wave_review`, `wave_complete`, `wave_waiting`, `wave_defer`, `wave_next_pending`, `wave_previous_merged`, `wave_show`, `flight_overlap`, `flight_partition`, `drift_files_changed`, `drift_check_path_exists`, `drift_check_symbol_exists` |
+| `/nextwave` | `spec_validate_structure`, `wave_preflight`, `wave_planning`, `wave_flight`, `wave_flight_plan`, `wave_flight_done`, `wave_close_issue`, `wave_record_mr`, `wave_review`, `wave_reconcile_mrs`, `wave_complete`, `wave_waiting`, `wave_defer`, `wave_next_pending`, `wave_previous_merged`, `wave_show`, `flight_overlap`, `flight_partition`, `commutativity_verify`, `pr_merge`, `pr_wait_ci`, `drift_files_changed`, `drift_check_path_exists`, `drift_check_symbol_exists` |
 | `/precheck` | `ibm`, `spec_validate_structure`, `disc_send` |
 | `/prepwaves` | `epic_sub_issues`, `spec_validate_structure`, `spec_dependencies`, `wave_compute`, `wave_topology`, `wave_init` |
 | `/review` | `pr_diff`, `pr_files` |

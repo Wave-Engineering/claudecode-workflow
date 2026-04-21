@@ -717,6 +717,62 @@ No arguments. It identifies the next pending wave from the task list and auto-de
 
 ---
 
+### `/wavemachine` -- Autopilot Wave Loop
+
+Top-level loop that drives `/nextwave` across every pending wave of the current plan, without per-wave human interaction. This is the "fire and forget" mode for wave execution: once started, it continues until the plan is exhausted, a wave fails, or `wave_health_check` trips the circuit breaker.
+
+**When to use it:**
+- When a wave plan has multiple pending waves and you trust CI to gate merges (see `wave_ci_trust_level`)
+- When you want the full plan executed end-to-end without approving each wave individually
+- For dogfood runs on throwaway epics
+
+**Examples:**
+
+```
+/wavemachine
+```
+
+No arguments. It reads the current wave plan, then iterates: call `/nextwave auto` -> wait for completion -> call `/nextwave auto` again, until no pending waves remain or a circuit breaker fires.
+
+**Key detail:** `/wavemachine` is a thin wrapper; `/nextwave(auto)` is the single-wave primitive and carries all of the planning/merge/reconcile logic. The "auto" mode skips the interactive approval gate that `/nextwave` uses by default -- CI status stands in for human approval. Use the interactive form (`/nextwave` on its own) if you want to inspect each wave before remote state changes.
+
+---
+
+### Agent Architecture -- Orchestrator / Prime / Flight
+
+Wave execution uses three distinct agent roles. Knowing which role is which clarifies the tool distribution, the merge sequencing, and the forensic trail left on disk.
+
+**The three roles:**
+
+- **Orchestrator Agent** -- the top-level Claude Code session that chats with you. It has the `Agent` tool, drives the wave loop directly (whether from `/nextwave` or `/wavemachine`), and is the only agent that can spawn sub-agents in parallel.
+- **Prime Agent** -- one sub-agent per wave. Handles pre-wave planning (reads specs, runs `flight_overlap` / `flight_partition`, writes the flight prompts) and post-flight merge/CI/reconcile work. Cannot spawn further sub-agents; returns paths and status tokens only.
+- **Flight Agent** -- one sub-agent per issue in a flight. Reads its prompt from a file, implements a single issue in its assigned worktree, runs the mechanical half of `/precheck`, writes results to a file, and returns only a result path plus `PASS|FAIL`.
+
+**Where parallelism lives:** the Orchestrator spawns N Flight Agents in a single tool-use block. Flights are siblings of each other, not grandchildren. Prime is sequential per wave (one pre-wave, one post-flight per flight, one post-wave).
+
+**Filesystem message bus.** Agents communicate by writing files under a namespaced bus root, not by passing content through Orchestrator context:
+
+```
+/tmp/wavemachine/{repo-slug}/wave-{N}/
+├── plan.md                                 # Prime pre-wave plan
+├── merge-report.md                         # Prime post-wave report
+├── flight-{M}/
+│   ├── merge-report.md                     # Prime post-flight report
+│   └── issue-{X}/
+│       ├── prompt.md                       # Flight input (written by Prime)
+│       ├── results.md.partial              # Flight writes here first
+│       ├── results.md                      # atomic rename target
+│       └── DONE                            # contents: "PASS" or "FAIL"
+```
+
+The bus root is namespaced under `/tmp/wavemachine/` so `wave-cleanup` can safely refuse paths outside that prefix, and `ls /tmp/wavemachine/` enumerates active waves across all repos. The `flight-{M}` level is preserved even when a wave has a single flight -- it keeps forensic archaeology straightforward.
+
+**How `/wavemachine` relates to `/nextwave`.** `/wavemachine` is a thin top-level loop that calls `/nextwave(auto)` once per pending wave. All of the Prime + Flight orchestration lives inside `/nextwave`; `/wavemachine` only decides when to stop (plan exhausted, wave failure, or circuit breaker). The parallelism lives in the Orchestrator's tool-use blocks inside `/nextwave`, not inside `/wavemachine`.
+
+**Why this split exists.** Claude Code sub-agents do not have the `Agent` tool, so nested parallelism is impossible -- the top-level session is the only place N Flights can be spawned concurrently. See `~/.claude/projects/-home-bakerb-sandbox-github-claudecode-workflow/memory/lesson_cc_subagent_tools.md` for the bisect evidence and the design implication. Full architecture rationale is in `~/.claude/projects/-home-bakerb-sandbox-github-claudecode-workflow/memory/decision_wavemachine_v2.md`.
+
+---
+
 ## Tools / CLI
 
 ### `campaign-status` -- SDLC Campaign Lifecycle CLI
