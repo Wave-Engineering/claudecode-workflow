@@ -3,117 +3,235 @@ name: nextwave
 description: Execute the next pending wave of spec-driven sub-agents, using flight-based conflict avoidance for parallel flights and a streamlined fast-path for serial flights
 ---
 
-# NextWave — Execute One Wave with Flight-Based Conflict Avoidance
+# NextWave — Execute One Wave with the Orchestrator/Prime/Flight Protocol
 
-Execute the next pending wave from a plan created by `/prepwaves`. Two modes, detected automatically: **parallel flights** (2+ issues, worktree isolation) and **serial flights** (1 issue, fast-path). Merges via PR/MR only — never direct-to-main.
+Execute the next pending wave created by `/prepwaves`. Single-wave primitive. The top-level session is the **Orchestrator**; it spawns a **Prime** sub-agent for planning and post-flight merge work, and N **Flight** sub-agents in parallel for per-issue implementation. All inter-agent data flows through a filesystem message bus under `/tmp/wavemachine/{repo-slug}/wave-{N}/` — Orchestrator context holds only paths and status tokens.
+
+Two modes:
+
+- `/nextwave` — **interactive**. Approval gate fires after Flights return and before Prime(post-flight) pushes anything to remote.
+- `/nextwave auto` — **auto**. Skips the approval gate. Called by `/wavemachine`. `wave_ci_trust_level` stands in for human judgement.
+
+Merges always go through PR/MR — never direct-to-main.
+
+## Why this shape
+
+CC sub-agents do not have the `Agent`/`Task` tool. Only the top-level session can spawn parallel sub-agents. That means the Orchestrator *must* own the parallel Flight spawn; Prime cannot do it. Prime is a sequential planner and merge-driver; Flights are the workers. Filesystem bus keeps Orchestrator tokens O(1) per flight regardless of flight content size. See `lesson_cc_subagent_tools.md` and `decision_wavemachine_v2.md`.
 
 ## Tools Used
 
-- Lifecycle: `wave_preflight`, `wave_planning`, `wave_flight`, `wave_flight_plan`, `wave_flight_done`, `wave_close_issue`, `wave_record_mr`, `wave_review`, `wave_complete`, `wave_waiting`, `wave_defer`
-- Queries: `wave_next_pending`, `wave_previous_merged`, `wave_show`
-- Flight partitioning: `flight_overlap`, `flight_partition`
-- Drift: `drift_files_changed`, `drift_check_path_exists`, `drift_check_symbol_exists`
-- Spec: `spec_validate_structure`
-- Commutativity: `commutativity_verify`
+- Lifecycle: `wave_preflight`, `wave_next_pending`, `wave_previous_merged`, `wave_flight_plan`, `wave_flight`, `wave_flight_done`, `wave_close_issue`, `wave_record_mr`, `wave_reconcile_mrs`, `wave_review`, `wave_complete`, `wave_waiting`, `wave_defer`, `wave_show`
+- Flight partitioning (used by Prime): `flight_overlap`, `flight_partition`
+- Drift (used by Prime post-wave): `drift_files_changed`, `drift_check_path_exists`, `drift_check_symbol_exists`
+- Spec: `spec_validate_structure`, `spec_get`, `spec_acceptance_criteria`
+- Commutativity + merge (used by Prime post-flight): `commutativity_verify`, `pr_create`, `pr_wait_ci`, `pr_merge`
+- CI trust (auto mode): `wave_ci_trust_level`
+- Bus primitives (bash): `scripts/wavebus/wave-init`, `scripts/wavebus/flight-finalize`, `scripts/wavebus/wave-cleanup`
 - Notifications: `mcp__disc-server__disc_send` — post wave status to `#wave-status` (`1487386934094462986`)
 
 ## Concepts
 
-- **Wave**: issues whose deps are satisfied by prior waves (from `/prepwaves`).
-- **Flight**: subset of a wave's issues that can execute in parallel without file conflicts. Single-issue flights take the fast-path.
-- **Planning Agent**: read-only; reports what files/functions it would touch. Skipped for single-issue flights.
-- **Execution Agent**: SPEC EXECUTOR — implements exactly what the issue says. No design decisions, no improvisation. Escalates on blockers.
+- **Orchestrator** — this session. Has `Agent`. Drives the Step 1–6 loop below. Parses canonical status lines. Owns the approval gate in interactive mode.
+- **Prime** — `general-purpose` sub-agent. One per wave (re-spawned per role: pre-wave / post-flight / post-wave). Reads/writes bus files; runs MCP tools. Does NOT commit. Does NOT have `Agent`.
+- **Flight** — `general-purpose` sub-agent. One per issue in a flight. Reads `prompt.md` from the bus, works in an assigned worktree, runs mechanical precheck, commits in the worktree, writes `results.md.partial`, calls `flight-finalize`, returns the canonical line as its last message.
+- **Canonical Flight return regex:** `^(/tmp/wavemachine/[^\s]+/results\.md) (PASS|FAIL)$`. Anything else → Orchestrator treats as FAIL (malformed).
+- **Bus path scheme:**
 
-Flow (parallel): `pre-flight → plan → flight 1 (exec+merge) → re-validate → flight 2 → ... → drift → complete`. Serial: skip the plan/re-validate steps.
+  ```
+  /tmp/wavemachine/{repo-slug}/wave-{N}/
+  ├── plan.md                                 # Prime(pre-wave) writes
+  ├── merge-report.md                         # Prime(post-wave) writes
+  ├── flight-{M}/
+  │   ├── merge-report.md                     # Prime(post-flight) writes
+  │   └── issue-{X}/
+  │       ├── prompt.md                       # Prime(pre-wave) writes
+  │       ├── results.md.partial              # Flight writes first
+  │       ├── results.md                      # atomic rename target
+  │       └── DONE                            # "PASS" or "FAIL"
+  ```
 
-## Step 1: Pre-Flight
+## Step 1 — Orchestrator pre-flight
 
-`wave_preflight()` → `wave_next_pending()` identifies the wave → verify main clean → `wave_previous_merged()` confirms prior wave landed → `spec_validate_structure(N)` for each issue in the wave → create feature branches from current main (`git checkout main && git pull && git checkout -b feature/<N>-<desc> && git push -u origin`) → post to `#wave-status` (`1487386934094462986`): `"🏄 **Wave <id> started** — <project>, <N> issues in <M> flights. Agent: **<dev-name>** <dev-avatar>"`. Resolve identity from `/tmp/claude-agent-<md5>.json`. If `disc_send` fails, log and continue.
+1. `wave_preflight()` → `wave_next_pending()` → resolve wave id `N`. If none, report and exit.
+2. Resolve **target repo slug** for the bus path. Same-repo waves: use the current repo's slug. Cross-repo waves (wave plan lives in this repo, stories live elsewhere): use the target repo's slug per `lesson_cross_repo_wave_orchestration.md`.
+3. Verify main is clean in the target repo; `wave_previous_merged()` confirms prior wave landed; `spec_validate_structure(issue)` for each issue in the wave.
+4. Call `scripts/wavebus/wave-init <repo-slug> <N> 1`. Flight count is `1` initially — Prime may re-invoke it with the real count (script is idempotent). Capture the printed wave root.
+5. Pre-create worktrees per issue. Same-repo: `Agent` calls in Step 3 can use `isolation: "worktree"`. Cross-repo: create them now via `git -C <target-repo> worktree add /tmp/wt-<slug>-<issue> -b feature/<issue>-<desc>` (one per issue).
+6. Resolve identity from `/tmp/claude-agent-<md5>.json`; post to `#wave-status` (`1487386934094462986`): `"🏄 **Wave <N> started** — <project>, <issue-count> issues. Agent: **<dev-name>** <dev-avatar>"`. If `disc_send` fails, log and continue.
+7. Spawn **Prime(pre-wave)** — single `Agent` call, `subagent_type: general-purpose`. Prompt template below.
 
-If any check fails: **stop and report.** Do not launch agents on a bad foundation.
+## Step 2 — Prime(pre-wave) prompt contract
 
-## Step 2: Planning
+Prime(pre-wave) is a sub-agent. It does NOT have `Agent`; it cannot spawn Flights. Its job is to plan the wave into the bus.
 
-**Serial fast-path** (1 issue, or topology is serial): `wave_planning()` → build a trivial one-issue-per-flight plan → `wave_flight_plan(plan)` → Step 3.
+Prompt template (fill in `<repo-slug>`, `<N>`, `<wave-root>`, and the issue list):
 
-**Parallel path:** `wave_planning()` → launch one planning agent per issue **in a single message** (parallel tool calls). Each returns a target manifest: files to CREATE, files to MODIFY (with function/class names), test files, config/migration files. PRECISE paths and function names. → `flight_overlap(manifests)` + `flight_partition(manifests)` compute the flight plan (Flight 1 maximizes issue count; later flights resolve conflicts). → Present the plan; proceed without re-approval (the wave was approved during `/prepwaves`); flag unusual partitions. → `wave_flight_plan(plan)`.
+> You are the Prime agent for wave `<N>` of `<repo-slug>`. You plan the wave into the filesystem bus at `<wave-root>`.
+>
+> Inputs:
+> - Wave id: `<N>`
+> - Issues in this wave: `<list-of-issue-numbers>`
+> - Wave root: `<wave-root>`
+> - Target repo: `<target-repo>`
+>
+> Steps:
+> 1. For each issue, fetch the spec via `spec_get` and acceptance criteria via `spec_acceptance_criteria`. Summarize files-to-create / files-to-modify / test files per issue.
+> 2. Run `flight_overlap` + `flight_partition` on the per-issue manifests to determine flight structure. Flight 1 maximizes issue count; later flights resolve file-level conflicts. When in doubt, sequence.
+> 3. If the partition needs more flights than the bus was pre-created for, call `scripts/wavebus/wave-init <repo-slug> <N> <final-flight-count>` (idempotent).
+> 4. Write `<wave-root>/plan.md` summarizing the flight structure (flight M → issues, per-issue file manifest, rationale).
+> 5. For each flight M and each issue X in it, write `<wave-root>/flight-<M>/issue-<X>/prompt.md` containing the full Flight instructions (see "Flight stub prompt" in the caller's skill body — reproduce verbatim, fill placeholders).
+> 6. Register the plan via `wave_flight_plan`.
+> 7. If any issue's spec is unbuildable (missing AC, structural contradiction, etc.), mark the plan `BLOCKED` and name the failing issue + reason in `plan.md`.
+>
+> Final message — exactly one line, no prose, no fences:
+>
+> ```
+> {"plan_path":"<absolute-path-to-plan.md>","status":"READY|BLOCKED","flights":[{"flight":1,"issues":[N,N,N]},{"flight":2,"issues":[N]}]}
+> ```
 
-**Default to safe:** when in doubt, sequence conflicting issues.
+Orchestrator parses that JSON. If `status=BLOCKED`, print the blocker from `plan.md`, post a BLOCKED notice to `#wave-status`, exit (leave bus in place for forensics). Else continue.
 
-## Step 3: Execute Flight
+## Step 3 — Per-flight execution loop
 
-`wave_flight(N)`. Serial flight: execute directly on the feature branch. Parallel flight: launch one execution agent per issue **in a single message** on isolated worktrees.
+For each flight M in the plan, in order:
 
-**Execution agent rules (preserve verbatim):**
+### 3a. `wave_flight(flight_number=M)` — register flight start.
 
-- Implement EXACTLY what the issue specifies. If the spec is wrong or needs a design change, STOP and report — do NOT improvise.
-- Do NOT commit. Leave changes uncommitted.
-- CI/CD: no more than 5 lines in any `run:`/`script:` block — extract shell scripts to `scripts/ci/`. No hardcoded secrets.
-- Tests exercise REAL code paths. Mocks only for true external boundaries (network/fs/APIs). Every new function needs coverage. Assert meaningful outcomes. >2 mocks in one test = wrong approach.
-- Report: what was implemented, files, test results, review findings, AC status, concerns. Do NOT report success on failing tests or unmet AC.
+### 3b. Spawn parallel Flights in ONE tool-use block.
 
-**Parent quality review (you — not the sub-agent):** **Read the actual files in each worktree.** Do not trust self-reports.
+The Orchestrator issues one `Agent` tool-use block containing N `Agent` calls — one per issue in flight M — **in the same assistant message**. This is the only place in the skill where parallelism actually happens. Do NOT issue the calls in separate messages; do NOT use `run_in_background`; do NOT shell out.
 
-- **CI/CD compliance**: for each modified workflow/CI file, check every `run:`/`script:` block (≤5 lines), hardcoded values, anti-patterns (missing `set -e`, `latest` tags). Fix in the worktree before the checklist.
-- **Test quality**: read every new/modified test. Flag over-mocking (mocking the module under test), coverage gaps, trivial tests (only "not None" / "isinstance"), and whether tests actually ran. Re-run if suspicious. Fix in the worktree.
-- Append `[parent-review]` to the checklist: CI, tests, coverage status.
+Each Agent call: `subagent_type: general-purpose`, prompt = the Flight stub below (filled in), and for same-repo waves `isolation: "worktree"` (for cross-repo, omit — worktrees were pre-created in Step 1.5 and are referenced by path in the prompt).
 
-**Pre-commit checklist (per agent):** present the full CLAUDE.md checklist — commit context (project, issue, branch, flight), checklist items, change summary, `[fixed]`/`[deferred]` findings, `[parent-review]`. **Wait for explicit user approval on each agent's work before committing.**
+### 3c. Collect returns.
 
-**Commit, push, merge:** commit with `type(scope): desc\n\nCloses #N` → push → create PR/MR (Summary / Changes / Test Results / `Closes #N`) → wait for CI green → **commutativity verification (multi-issue flights only)** → merge → `wave_close_issue(N)` + `wave_record_mr(N, url)` per issue → `wave_flight_done(N)` when all flight merges land → `git checkout main && git pull` → clean worktrees.
+Each Flight's last message is exactly one line matching `^(/tmp/wavemachine/[^\s]+/results\.md) (PASS|FAIL)$`. Orchestrator:
 
-### Merge-Time Commutativity Verification (multi-issue flights only)
+- Parses each line. Malformed → record as FAIL, note "malformed return".
+- Verifies the `DONE` sentinel (`/tmp/wavemachine/.../issue-<X>/DONE`) exists and contains `PASS` or `FAIL` matching the returned line. Mismatch → FAIL.
+- Reads each `results.md` into context (small, summary + checklist).
 
-After all execution agents in a multi-issue flight complete and CI is green on all PRs, call `commutativity_verify` before merging:
+### 3d. Approval gate (interactive mode only — SKIP in auto mode).
 
-1. **Build changesets.** For each PR in the flight, create a changeset: `{ id: "<issue_ref>", head_ref: "<branch_name>" }`.
-2. **Call `commutativity_verify`** with `repo_path` (project root), `base_ref` (`main`), and the changeset array.
-3. **Interpret the verdict:**
+Present a per-Flight summary table (issue, worktree, PASS/FAIL, results.md excerpt). Wait for explicit user approval before Step 3e. If rejected: leave the bus in place, report the wave root path, exit. Nothing touches remote.
 
-| `group_verdict` | Merge strategy |
-|---|---|
-| **STRONG** | `pr_merge(skip_train=true)` for all PRs — safe to bypass merge queue |
-| **MEDIUM** | `pr_merge(skip_train=true)` for all PRs — safe to bypass merge queue |
-| **WEAK** | Sequential merge via merge queue (existing behavior) |
-| **ORACLE_REQUIRED** | Sequential merge via merge queue (existing behavior) |
+In **auto mode**: call `wave_ci_trust_level`; if trust is sufficient, skip the gate and proceed directly to Step 3e. If trust drops below threshold (e.g. recent CI instability), pause and surface to the parent `/wavemachine` caller.
 
-4. **Single-issue flights** skip `commutativity_verify` entirely — no change to current behavior. Merge directly via queue.
+### 3e. Spawn Prime(post-flight).
 
-This verification is the safety net for relaxed flight partitioning (#169 manifest discount). Even when the partitioner allows overlapping issues in the same flight, verify catches real conflicts at merge time.
+One `Agent` call, `subagent_type: general-purpose`. Prompt template:
 
-## Step 4: Inter-Flight Re-Validation (before each flight after Flight 1)
+> You are the Prime(post-flight) agent for wave `<N>`, flight `<M>` of `<repo-slug>`. Flights have already committed in their worktrees. You push, PR, wait CI, verify commutativity, and merge.
+>
+> Inputs:
+> - Wave root: `<wave-root>`
+> - Flight: `<M>`
+> - Issues in this flight: `<list>`
+> - Target repo: `<target-repo>`
+>
+> Steps:
+> 1. For each issue X in this flight, read `<wave-root>/flight-<M>/issue-<X>/results.md` and verify `DONE` contains `PASS`. If any FAIL, stop and write a `BLOCKED` report naming the failing issues.
+> 2. For each issue, push the Flight's commit from its worktree (`git -C <worktree> push -u origin <branch>`), create a PR via `pr_create`, wait for CI via `pr_wait_ci`.
+> 3. If this flight has multiple issues, run `commutativity_verify` on the changesets `{id, head_ref}`. Interpret the group verdict:
+>    - `STRONG` / `MEDIUM` → `pr_merge(skip_train=true)` for all.
+>    - `WEAK` / `ORACLE_REQUIRED` → sequential merge via the merge queue (no skip).
+>    Single-issue flights skip commutativity entirely.
+> 4. Merge all flight PRs via `pr_merge`. On merge, call `wave_close_issue(X)` and `wave_record_mr(X, url)` per issue. Call `wave_flight_done(M)` after all merges land.
+> 5. `git checkout main && git pull` in the target repo.
+> 6. Write `<wave-root>/flight-<M>/merge-report.md` (per-issue PR URL, CI status, merge strategy, anomalies).
+>
+> Final message — exactly one line:
+>
+> ```
+> {"report_path":"<absolute-path-to-merge-report.md>","status":"PASS|FAIL|BLOCKED"}
+> ```
 
-`drift_files_changed(prev_sha, HEAD)` → for each issue in the next flight, a re-validation agent re-reads only the intersecting files and reports `PLAN VALID` / `PLAN VALID (minor)` / `PLAN INVALIDATED` / `ESCALATE`. Process: VALID → proceed; INVALIDATED → re-plan that issue; new conflict → bump to a later flight; ESCALATE → stop and present. Rebase feature branches onto updated main before the next flight.
+### 3f. Parse Prime(post-flight) return.
 
-**Serial fast-path:** when both flights are single-issue, re-validation is optional — execution agents re-read fresh anyway. Judgment call: small/local changes → skip; structural → run.
+- `PASS` → continue to the next flight. If the next flight exists, perform the inter-flight re-validation step 3g before spawning its Flights.
+- `FAIL` / `BLOCKED` → stop the per-flight loop. Leave the bus in place. Surface to user with the `report_path`.
 
-## CRITICAL: Between-Wave Lifecycle Tasks
+### 3g. Inter-flight re-validation (before flight M+1, M ≥ 1).
 
-**After the last flight is merged, IMMEDIATELY create these tasks on the task list** — persistent memory across conversational interruptions:
+`drift_files_changed(prev_sha, HEAD)` on the target repo. If the changeset intersects any file in flight M+1's manifest, spawn a small re-validation Flight per affected issue (same mechanism as Step 3b, one `Agent` call per issue in a single tool-use block). Each returns `PLAN VALID` / `PLAN VALID (minor)` / `PLAN INVALIDATED` / `ESCALATE`. INVALIDATED → re-plan via a fresh Prime(pre-wave) narrowed to the affected issues; ESCALATE → stop and surface. Rebase feature branches onto updated main before the next flight.
 
-1. Drift check for Wave N+1 (Step 5)
-2. Close issues + record MRs (blocked by 1)
-3. Fire `wave_complete` (blocked by 2)
-4. Report results + deferrals (blocked by 3)
-5. Fire `wave_waiting` for N+1 (blocked by 4)
-6. Vox announcement (blocked by 5)
-7. Wave N+1: awaiting user go-ahead (blocked by 6)
+Serial fast-path: when both flights are single-issue and the changed file set is small/local, skip the re-validation Flight spawn. Judgment call — the next Flight will re-read fresh anyway.
 
-Without these, you WILL lose your place when the user asks questions between waves. @final-cut learned it the hard way.
+## Step 4 — Post-wave Prime (terminal)
 
-## Step 5: Wave-Boundary Drift Check (not optional; every wave)
+After every flight has merged:
 
-`wave_review()` → read the next wave's issue specs → for each issue, call `drift_check_path_exists(path)` on every file path referenced and `drift_check_symbol_exists(file, symbol)` on every function/class. Optionally launch a drift-check agent for deeper API-alignment / anti-pattern / scope-creep review.
+1. Spawn **Prime(post-wave)** — one `Agent` call, `subagent_type: general-purpose`. Prompt:
 
-- `SPEC CURRENT` → Step 6.
-- `SPEC STALE` → mechanical fix: update the issue with corrected paths/names. Report changes. No per-fix approval.
-- `SPEC BROKEN` → **stop and present.** Issue may need rewriting, descoping, or splitting.
-- Hotspot / anti-pattern → create a chore issue for the refactor, recommend inserting it into the next wave, get user approval.
+   > You are the Prime(post-wave) agent for wave `<N>` of `<repo-slug>`. The wave is fully merged. You reconcile state and emit the terminal report.
+   >
+   > Steps:
+   > 1. `wave_review()` — confirm every wave issue is closed.
+   > 2. `wave_reconcile_mrs()` — reconcile recorded MRs against actual PR state.
+   > 3. Drift check against wave N+1: read the next wave's issue specs; for each file path referenced call `drift_check_path_exists`, for each symbol call `drift_check_symbol_exists`, and `drift_files_changed(prev_sha, HEAD)` for summary.
+   >    - `SPEC CURRENT` → note in report; move on.
+   >    - `SPEC STALE` → mechanical fix: update the issue with corrected paths/names; list changes in the report.
+   >    - `SPEC BROKEN` → leave the issue alone; flag for user attention in the report.
+   > 4. `wave_complete()` (marks the current wave complete — takes no args; the server uses the active wave from state).
+   > 5. Write `<wave-root>/merge-report.md` (issues closed, PR URLs, flight breakdown, drift findings, deferred items, next-wave preview).
+   >
+   > Final message — exactly one line:
+   >
+   > ```
+   > {"report_path":"<absolute-path-to-merge-report.md>","status":"PASS|FAIL|BLOCKED"}
+   > ```
 
-## Step 6: Wave Complete
+2. Orchestrator reads the report, surfaces a human-readable summary, and — in interactive mode — prompts: "Wave N complete. Run `/nextwave` for Wave N+1, or `/cryo` to preserve state."
+3. Post to `#wave-status` (`1487386934094462986`): `"✅ **Wave <N> complete** — <project>, <merged> merged, <deferred> deferred. Agent: **<dev-name>** <dev-avatar>"`, then vox announcement (conversational: name, team, project, wave, counts).
 
-`wave_complete()` → mark wave task done → verify main clean → confirm all wave issues closed (`wave_show()`) → report (issues closed vs. deferred, PR/MR URLs, flight breakdown, drift findings, next wave preview) → **deferred items report** (table: item / reason / risk / tracking-issue link; every deferral MUST be tracked via `work_item` as `type::chore` or `type::docs`) → **Discord + vox announcement** (resolve identity from `/tmp/claude-agent-<md5>.json`): post to `#wave-status` (`1487386934094462986`): `"✅ **Wave <id> complete** — <project>, <N> issues merged, <M> deferred. Agent: **<dev-name>** <dev-avatar>"` then vox (conversational, name/team/project/wave/counts) → prompt: "Wave N complete. Drift check for Wave N+1 is done. Run `/nextwave` for Wave N+1, or `/cryo` to preserve state."
+## Step 5 — Cleanup
+
+- **Success path** (Prime(post-wave) returned `PASS`): call `scripts/wavebus/wave-cleanup <wave-root>`. Report "bus cleaned" in the final summary.
+- **Failure / abort path**: DO NOT cleanup. Leave the bus in place. Tell the user the exact wave root path so they can inspect `plan.md`, each `prompt.md`, each `results.md`, and each flight's `merge-report.md`.
+
+## Flight stub prompt (template — Prime writes this into each `prompt.md`)
+
+This prompt is what each Flight sub-agent receives. Preserve the SPEC EXECUTOR block verbatim; it is load-bearing policy from v1.
+
+> You are a Flight agent for wave `<N>`, flight `<M>`, issue `<X>` of `<repo-slug>`.
+>
+> Your working directory is `<worktree-path>` (use absolute paths or `cd` into it before any git/file operations).
+> Your branch is `<branch-name>` (already checked out in the worktree).
+> Full instructions for this issue are at `<wave-root>/flight-<M>/issue-<X>/prompt.md` — re-read that file now; this block is only the contract for your return.
+>
+> **SPEC EXECUTOR rules (preserve verbatim):**
+>
+> - Implement EXACTLY what the issue specifies. If the spec is wrong or needs a design change, STOP and report — do NOT improvise.
+> - Do NOT commit. Leave changes uncommitted.
+> - CI/CD: no more than 5 lines in any `run:`/`script:` block — extract shell scripts to `scripts/ci/`. No hardcoded secrets.
+> - Tests exercise REAL code paths. Mocks only for true external boundaries (network/fs/APIs). Every new function needs coverage. Assert meaningful outcomes. >2 mocks in one test = wrong approach.
+> - Report: what was implemented, files, test results, review findings, AC status, concerns. Do NOT report success on failing tests or unmet AC.
+>
+> **After implementation, run the mechanical half of `/precheck` in the worktree:**
+>
+> 1. `./scripts/ci/validate.sh` (or the project's equivalent)
+> 2. Project test suite
+> 3. Code-reviewer agent review of your diff
+> 4. AC verification — re-read the issue, walk every acceptance criterion, confirm each is met
+>
+> **If all mechanical checks pass, commit in your worktree:**
+>
+> ```
+> git -C <worktree-path> add <files>
+> git -C <worktree-path> commit -m "type(scope): description\n\nCloses #<X>"
+> ```
+>
+> (Do NOT push. Prime(post-flight) pushes after Orchestrator's approval gate.)
+>
+> **Write your results file:**
+>
+> 1. Write `<wave-root>/flight-<M>/issue-<X>/results.md.partial` with: commit SHA, files changed, test results, code-reviewer findings, AC checklist status, any deferred items, any concerns.
+> 2. Call `scripts/wavebus/flight-finalize <wave-root>/flight-<M>/issue-<X>/results.md.partial <PASS|FAIL>`.
+>    - `PASS` if every AC is met and all mechanical checks are green.
+>    - `FAIL` otherwise. `results.md.partial` must still be non-empty — explain the failure.
+>
+> **Your LAST message must be exactly one line — the stdout of `flight-finalize` — nothing else. No prose, no fences.** The line must match `^(/tmp/wavemachine/[^\s]+/results\.md) (PASS|FAIL)$`. Anything else is a protocol violation and the Orchestrator will record this Flight as FAIL.
 
 ## Non-Negotiables
 
-EXECUTION skill — NO design decisions. Sub-agents are SPEC EXECUTORS. Default to safe: latency beats broken code. Flights prevent merge conflicts; planning is cheap, conflict resolution is expensive; single-issue flights take the fast-path. **NEVER merge directly to main.** NEVER skip the pre-commit checklist. NEVER commit without user approval, even on all-green. One wave per invocation — the user controls the pace. When waiting: `wave_waiting("<reason>")`. When deferring: `wave_defer(desc, risk)` then accept after user approval. If compaction is imminent: `/cryo` first — the task list survives. Pair: `/prepwaves` plans, `/nextwave` executes.
+EXECUTION skill — NO design decisions. Flight sub-agents are SPEC EXECUTORS. Default to safe: latency beats broken code. Flights prevent merge conflicts; planning is cheap, conflict resolution is expensive; single-issue flights take the fast-path. **NEVER merge directly to main.** NEVER skip the pre-commit checklist. **Interactive mode: NEVER commit or push without user approval** — the approval gate in Step 3d is the one human checkpoint; do not bypass it. One wave per invocation — the user controls the pace in interactive mode; `/wavemachine` controls it in auto mode. When waiting: `wave_waiting("<reason>")`. When deferring: `wave_defer(desc, risk)` then accept after user approval. If compaction is imminent: `/cryo` first — the task list survives. Pair: `/prepwaves` plans, `/nextwave` executes, `/wavemachine` drives the loop.
