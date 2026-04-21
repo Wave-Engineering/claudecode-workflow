@@ -37,7 +37,7 @@ On any refusal: explain the failure, suggest the remediation, **do not spawn**.
 
 Once pre-flight passes:
 
-1. **Set the active flag.** Write `wavemachine_active: true` to `.claude/status/state.json` (preserving all other keys). This is the signal the statusline 🌊 indicator reads.
+1. **Set the active flag.** Run `python3 -m wave_status wavemachine-start --launcher main` to stamp `wavemachine_active: true` into `state.json` (plus `wavemachine_started_at` and `wavemachine_launcher`). This is the signal the statusline 🌊 indicator reads, and the CLI guarantees atomic writes via `save_json`. Do **not** `Edit` `state.json` directly — the harness denies direct writes to `.claude/status/**` from background sub-agents, so all flag transitions must flow through this CLI for parity.
 2. **Regenerate and open the status panel.** Run `./scripts/generate-status-panel` then open `.status-panel.html` with `xdg-open` (Linux) or `open` (macOS). This happens here — not inside the background worker — so it costs zero sub-agent tokens and guarantees the panel is visible before work begins.
 3. **Detect CI trust.** Call `wave_ci_trust_level()` once and cache the result for the background worker. Drives whether `wave_health_check()` treats post-merge main CI as a separate gate.
 4. **Post to Discord.** `disc_send` to `#wave-status` (`1487386934094462986`): `"🌊 **Wavemachine started** — <project>, <N> waves pending. Agent: **<dev-name>** <dev-avatar>"`. Resolve identity from `/tmp/claude-agent-<md5>.json`. If `disc_send` fails, log and continue — Discord is informational, not a gate.
@@ -106,8 +106,11 @@ NOT on the abort list:
 
 1. Call `wave_waiting("wavemachine aborted: <one-line summary>")` to mark the plan
    as awaiting human attention.
-2. Write `wavemachine_active: false` to `.claude/status/state.json` (clears the 🌊
-   indicator).
+2. Run `python3 -m wave_status wavemachine-stop` to clear `wavemachine_active`,
+   `wavemachine_started_at`, and `wavemachine_launcher` (clears the 🌊 indicator).
+   Use the CLI — background sub-agents cannot write `.claude/status/state.json`
+   directly. `wavemachine-stop` is idempotent, so running it on an already-cleared
+   state is safe.
 3. Post to `#wave-status` (`1487386934094462986`): `"🛑 **Wavemachine aborted** —
    <project>, wave <id>: <one-line blocker summary>. Agent: **<dev-name>** <dev-avatar>"`.
 4. Report to the parent session with a structured summary:
@@ -118,7 +121,8 @@ NOT on the abort list:
 
 ## On Clean Completion
 
-1. Write `wavemachine_active: false` to `.claude/status/state.json`.
+1. Run `python3 -m wave_status wavemachine-stop` to clear `wavemachine_active`
+   (via CLI — background sub-agents cannot write state files directly).
 2. Post to `#wave-status` (`1487386934094462986`): `"✅ **Wavemachine complete** —
    <project>, all <N> waves merged. Run /dod to verify. Agent: **<dev-name>** <dev-avatar>"`.
 3. Report to the parent session:

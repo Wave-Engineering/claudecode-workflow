@@ -37,11 +37,14 @@ from wave_status.state import (
     record_mr,
     review,
     save_json,
+    set_current_wave,
     show,
     status_dir,
     store_flight_plan,
     waiting,
     waiting_ci,
+    wavemachine_start,
+    wavemachine_stop,
 )
 
 
@@ -194,6 +197,27 @@ def _cmd_defer_accept(args: argparse.Namespace) -> None:
     _regenerate_dashboard(root)
 
 
+def _cmd_set_current(args: argparse.Namespace) -> None:
+    """Handle ``set-current <wave-id>``."""
+    root = get_project_root()
+    set_current_wave(args.wave_id, root)
+    _regenerate_dashboard(root)
+
+
+def _cmd_wavemachine_start(args: argparse.Namespace) -> None:
+    """Handle ``wavemachine-start [--launcher <tag>]``."""
+    root = get_project_root()
+    wavemachine_start(root, launcher=args.launcher or "")
+    _regenerate_dashboard(root)
+
+
+def _cmd_wavemachine_stop(args: argparse.Namespace) -> None:
+    """Handle ``wavemachine-stop``."""
+    root = get_project_root()
+    wavemachine_stop(root)
+    _regenerate_dashboard(root)
+
+
 def _cmd_show(args: argparse.Namespace) -> None:
     """Handle ``show`` — print summary, NO dashboard regen."""
     root = get_project_root()
@@ -226,7 +250,7 @@ def _read_json_source(source: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Construct the argparse parser with all 14 subcommands."""
+    """Construct the argparse parser with all subcommands."""
     parser = argparse.ArgumentParser(
         prog="wave-status",
         description="Wave execution lifecycle CLI",
@@ -310,6 +334,33 @@ def _build_parser() -> argparse.ArgumentParser:
     p_da = sub.add_parser("defer-accept", help="Accept a pending deferral")
     p_da.add_argument("index", type=int, help="1-based deferral index")
     p_da.set_defaults(func=_cmd_defer_accept)
+
+    # set-current
+    p_sc = sub.add_parser(
+        "set-current",
+        help="Set current_wave to <wave-id> (must exist in the plan)",
+    )
+    p_sc.add_argument("wave_id", help="Wave ID (e.g. 'wave-6a')")
+    p_sc.set_defaults(func=_cmd_set_current)
+
+    # wavemachine-start
+    p_ws = sub.add_parser(
+        "wavemachine-start",
+        help="Mark the plan as driven by wavemachine (sets wavemachine_active)",
+    )
+    p_ws.add_argument(
+        "--launcher",
+        default="",
+        help="Optional label identifying who started the run (e.g. agent task ID)",
+    )
+    p_ws.set_defaults(func=_cmd_wavemachine_start)
+
+    # wavemachine-stop
+    p_wst = sub.add_parser(
+        "wavemachine-stop",
+        help="Clear wavemachine_active (call from worker on abort or clean exit)",
+    )
+    p_wst.set_defaults(func=_cmd_wavemachine_stop)
 
     # show
     p_sh = sub.add_parser("show", help="Print status summary (read-only)")
