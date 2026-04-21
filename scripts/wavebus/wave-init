@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# wavebus: create the bus tree for a wave — idempotent; prints wave root on success.
+#
+# Usage: wave-init <repo-slug> <wave-id> <flight-count>
+#
+# Creates /tmp/wavemachine/<repo-slug>/wave-<wave-id>/ and flight-1/ … flight-N/
+# subdirectories.  Per-issue subdirs are NOT created here; Prime creates each
+# issue-<N>/ when it writes prompt.md.
+#
+# Exit codes:
+#   0  success (including no-op on existing tree)
+#   1  usage error
+
+set -euo pipefail
+
+if [[ $# -ne 3 ]]; then
+	echo "usage: wave-init <repo-slug> <wave-id> <flight-count>" >&2
+	exit 1
+fi
+
+repo_slug="$1"
+wave_id="$2"
+flight_count="$3"
+
+if [[ -z "$repo_slug" || -z "$wave_id" || -z "$flight_count" ]]; then
+	echo "error: arguments must be non-empty" >&2
+	exit 1
+fi
+
+if ! [[ "$flight_count" =~ ^[0-9]+$ ]] || [[ "$flight_count" -lt 1 ]]; then
+	echo "error: flight-count must be a positive integer, got '$flight_count'" >&2
+	exit 1
+fi
+
+wave_root="/tmp/wavemachine/${repo_slug}/wave-${wave_id}"
+mkdir -p "$wave_root"
+
+for ((i = 1; i <= flight_count; i++)); do
+	mkdir -p "${wave_root}/flight-${i}"
+done
+
+echo "$wave_root"

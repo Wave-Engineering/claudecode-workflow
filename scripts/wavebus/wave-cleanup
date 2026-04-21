@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# wavebus: safely tear down a wave's bus subtree — refuses unsafe paths.
+#
+# Usage: wave-cleanup <wave-root-path>
+#
+# Validates the path matches /tmp/wavemachine/<slug>/wave-<id> exactly, refuses
+# any path containing '..' or not under /tmp/wavemachine/, then rm -rf's the
+# wave root.  Missing wave root is a no-op.
+#
+# Exit codes:
+#   0  success (including no-op on missing tree)
+#   1  usage error
+#   4  unsafe path (traversal, outside namespace, or wrong shape)
+
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+	echo "usage: wave-cleanup <wave-root-path>" >&2
+	exit 1
+fi
+
+wave_root="$1"
+
+if [[ -z "$wave_root" ]]; then
+	echo "error: wave-root must be non-empty" >&2
+	exit 1
+fi
+
+# Refuse traversal anywhere in the path.
+if [[ "$wave_root" == *".."* ]]; then
+	echo "error: path contains '..': $wave_root" >&2
+	exit 4
+fi
+
+# Refuse anything not under /tmp/wavemachine/.
+if [[ "$wave_root" != /tmp/wavemachine/* ]]; then
+	echo "error: path not under /tmp/wavemachine/: $wave_root" >&2
+	exit 4
+fi
+
+# Must match canonical shape: /tmp/wavemachine/<slug>/wave-<id>
+shape_re='^/tmp/wavemachine/[^/]+/wave-[^/]+/?$'
+if ! [[ "$wave_root" =~ $shape_re ]]; then
+	echo "error: path does not match canonical wave-root shape: $wave_root" >&2
+	exit 4
+fi
+
+# Idempotent: missing tree is a no-op.
+if [[ ! -e "$wave_root" ]]; then
+	echo "cleaned $wave_root"
+	exit 0
+fi
+
+rm -rf "$wave_root"
+echo "cleaned $wave_root"
