@@ -110,7 +110,7 @@ usage() {
 
 		Setup flags:
 		  --non-interactive  Don't prompt; use --pick to select
-		  --pick NAME        Provider name (silent|openai-endpoint|piper-local|espeak|macos-say)
+		  --pick NAME        Provider name (silent|openai-endpoint|openai-qwen|piper-local|espeak|macos-say)
 
 		Message can be passed as arguments or piped via stdin.
 
@@ -161,6 +161,7 @@ do_setup() {
 		echo "Available providers:"
 		echo "  silent           — no-op (writes 0.1s silence; safe default)"
 		echo "  openai-endpoint  — any OpenAI-compatible TTS API (VOX_ENDPOINT)"
+		echo "  openai-qwen      — OpenAI-extended TTS (qwen3-tts, Chatterbox) — adds VOX_EMOTION"
 		echo "  piper-local      — local piper binary (VOX_PIPER_MODEL)"
 		echo "  espeak           — espeak-ng fallback (no network)"
 		echo "  macos-say        — macOS say(1)"

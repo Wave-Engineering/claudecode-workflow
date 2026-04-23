@@ -30,6 +30,7 @@ Each is a copy-and-adapt template. They ship executable so `vox --setup --pick=<
 |---|---|---|
 | `silent.sh` | no-op (valid WAV of 0.1s silence) | — |
 | `openai-endpoint.sh` | OpenAI-compatible TTS API (POST JSON, WAV response) | `VOX_ENDPOINT`, `VOX_VOICE`, `VOX_MODEL` |
+| `openai-qwen.sh` | OpenAI-extended TTS (qwen3-tts, Chatterbox-over-HTTP, any server that accepts extra payload fields) — adds optional `emotion` field | `VOX_ENDPOINT`, `VOX_VOICE`, `VOX_MODEL`, optional `VOX_EMOTION` |
 | `piper-local.sh` | local [piper](https://github.com/rhasspy/piper) binary | `VOX_PIPER_MODEL` (path to `.onnx`) |
 | `espeak.sh` | `espeak` / `espeak-ng` (zero-deps fallback) | — |
 | `macos-say.sh` | macOS `say(1)` + `afconvert` for WAV | — |
@@ -84,6 +85,30 @@ TEXT="${1:-$(cat)}"
 
 # ... synthesize $TEXT into $VOX_OUTPUT_FILE ...
 ```
+
+### Extending the JSON payload (HTTP backends)
+
+Many OpenAI-compatible servers accept additional fields beyond the canonical `{model, input, voice, response_format}` set — `emotion`, `speed`, `pitch`, `style`, custom `metadata`, etc. Handle these via **new `VOX_*` env vars**, not by baking flags into `VOX_COMMAND`. The pattern:
+
+```python
+# inside your provider's payload builder
+payload = {
+    "model": os.environ["MODEL"],
+    "input": os.environ["TEXT"],
+    "voice": os.environ["VOICE"],
+    "response_format": "wav",
+}
+emotion = os.environ.get("EMOTION", "")
+if emotion:
+    payload["emotion"] = emotion     # include only when set
+```
+
+**Two rules the contract enforces:**
+
+1. **MAY honor, MUST ignore.** Providers whose backend doesn't support a field MUST silently ignore it. `espeak.sh` doesn't use `VOX_EMOTION`; that's fine — it must not error when it sees one set.
+2. **Unset = field omitted.** When `VOX_EMOTION` is unset or empty, the provider MUST NOT send `"emotion": ""` or `"emotion": null`. Omit the key entirely. This keeps extended-field payloads compatible with strict endpoints.
+
+See `openai-qwen.sh` for a worked example: same wire protocol as `openai-endpoint.sh` but includes `emotion` in the payload when `VOX_EMOTION` is set. Prefer copying that one when your server accepts extended fields; copy `openai-endpoint.sh` when you need strict OpenAI-spec compliance.
 
 ## Troubleshooting
 
