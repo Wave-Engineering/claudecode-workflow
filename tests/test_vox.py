@@ -28,6 +28,7 @@ PROVIDERS_DIR = REPO_ROOT / "scripts" / "vox-providers"
 SILENT = PROVIDERS_DIR / "silent.sh"
 ESPEAK = PROVIDERS_DIR / "espeak.sh"
 OPENAI = PROVIDERS_DIR / "openai-endpoint.sh"
+OPENAI_QWEN = PROVIDERS_DIR / "openai-qwen.sh"
 PIPER = PROVIDERS_DIR / "piper-local.sh"
 MACOS_SAY = PROVIDERS_DIR / "macos-say.sh"
 
@@ -293,7 +294,7 @@ def test_silent_sh_without_output_file_errors(tmp_path):
 
 @pytest.mark.parametrize(
     "provider",
-    [SILENT, ESPEAK, OPENAI, PIPER, MACOS_SAY],
+    [SILENT, ESPEAK, OPENAI, OPENAI_QWEN, PIPER, MACOS_SAY],
     ids=lambda p: p.name,
 )
 def test_shipped_provider_shellcheck_clean(provider):
@@ -307,6 +308,167 @@ def test_shipped_provider_shellcheck_clean(provider):
     )
     if r.returncode != 0:
         pytest.fail(f"shellcheck failed on {provider.name}:\n{r.stdout}{r.stderr}")
+
+
+# ---------------------------------------------------------------------------
+# openai-qwen.sh payload construction
+# ---------------------------------------------------------------------------
+
+
+def _install_fake_curl(tmp_path: Path) -> tuple[Path, Path]:
+    """Install a fake `curl` earlier on PATH that captures -d payload for assertions.
+
+    Returns (fake-bin-dir, payload-sentinel-file). The fake curl writes the
+    JSON payload it received via `-d <payload>` to FAKE_CURL_PAYLOAD_OUT,
+    writes a minimal dummy WAV to the `-o` file so the provider's post-curl
+    `[[ -s "$VOX_OUTPUT_FILE" ]]` check passes, and prints "200" on stdout
+    so the `%{http_code}` capture succeeds.
+
+    This means the provider's real code path runs end-to-end — argv parsing,
+    payload construction, curl invocation — with zero network activity and
+    no test-only hooks baked into the provider itself.
+    """
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir()
+    sentinel = tmp_path / "curl-payload.json"
+    fake = bin_dir / "curl"
+    fake.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+out_file=""
+payload=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o) out_file="$2"; shift 2;;
+        -d) payload="$2"; shift 2;;
+        -X|-H|--connect-timeout|--max-time|-w) shift 2;;
+        -sS) shift;;
+        *) shift;;
+    esac
+done
+[[ -n "${FAKE_CURL_PAYLOAD_OUT:-}" ]] && printf '%s' "$payload" > "$FAKE_CURL_PAYLOAD_OUT"
+[[ -n "$out_file" ]] && printf 'RIFFfakewavdata' > "$out_file"
+printf '200'
+"""
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return bin_dir, sentinel
+
+
+def _run_qwen_payload_capture(
+    tmp_path: Path,
+    extra_env: dict[str, str],
+    text: str = "hello",
+) -> dict:
+    """Run openai-qwen.sh end-to-end with a fake curl on PATH; return the
+    parsed JSON payload the provider would have POSTed.
+
+    The provider's production code path runs unmodified — no `VOX_DEBUG_*`
+    hooks, no mocking of the script itself. Only `curl` is replaced, via the
+    PATH-interposition pattern.
+    """
+    import json as _json
+
+    fake_bin, sentinel = _install_fake_curl(tmp_path)
+    out_path = tmp_path / "out.wav"
+    env = {
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "VOX_OUTPUT_FILE": str(out_path),
+        "VOX_ENDPOINT": "http://example.invalid/v1/audio/speech",
+        "FAKE_CURL_PAYLOAD_OUT": str(sentinel),
+        **extra_env,
+    }
+    r = subprocess.run(
+        [str(OPENAI_QWEN), text],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert r.returncode == 0, f"provider exited {r.returncode}: {r.stderr}"
+    assert sentinel.exists(), "fake curl did not capture payload"
+    return _json.loads(sentinel.read_text())
+
+
+def test_openai_qwen_omits_emotion_when_unset(tmp_path):
+    payload = _run_qwen_payload_capture(tmp_path, extra_env={})
+    assert "emotion" not in payload, f"emotion field leaked: {payload}"
+    assert payload["model"] == "tts-1"
+    assert payload["voice"] == "alloy"
+    assert payload["input"] == "hello"
+    assert payload["response_format"] == "wav"
+
+
+def test_openai_qwen_omits_emotion_when_empty_string(tmp_path):
+    payload = _run_qwen_payload_capture(tmp_path, extra_env={"VOX_EMOTION": ""})
+    assert "emotion" not in payload, f"emotion='' should be omitted, got: {payload}"
+
+
+def test_openai_qwen_includes_emotion_when_set(tmp_path):
+    payload = _run_qwen_payload_capture(
+        tmp_path,
+        extra_env={"VOX_EMOTION": "cheerful"},
+    )
+    assert payload.get("emotion") == "cheerful"
+
+
+def test_openai_qwen_includes_free_form_emotion(tmp_path):
+    """qwen3-tts accepts natural-language emotion prompts, not just single tokens."""
+    phrase = "the speaker's voice is very young and warm"
+    payload = _run_qwen_payload_capture(
+        tmp_path,
+        extra_env={"VOX_EMOTION": phrase},
+    )
+    assert payload.get("emotion") == phrase
+
+
+def test_openai_qwen_honors_voice_and_model_overrides(tmp_path):
+    payload = _run_qwen_payload_capture(
+        tmp_path,
+        extra_env={"VOX_VOICE": "clone:Stephi", "VOX_MODEL": "qwen3-tts"},
+    )
+    assert payload["voice"] == "clone:Stephi"
+    assert payload["model"] == "qwen3-tts"
+
+
+def test_openai_qwen_errors_without_endpoint(tmp_path):
+    out = tmp_path / "out.wav"
+    r = subprocess.run(
+        [str(OPENAI_QWEN), "hi"],
+        env={"PATH": os.environ["PATH"], "VOX_OUTPUT_FILE": str(out)},
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode != 0
+    assert "VOX_ENDPOINT" in r.stderr
+
+
+def test_openai_qwen_errors_without_output_file(tmp_path):
+    r = subprocess.run(
+        [str(OPENAI_QWEN), "hi"],
+        env={
+            "PATH": os.environ["PATH"],
+            "VOX_ENDPOINT": "http://example.invalid/",
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode != 0
+    assert "VOX_OUTPUT_FILE" in r.stderr
+
+
+# --- vox --setup --pick=openai-qwen ---
+
+
+def test_setup_accepts_openai_qwen_pick(env, tmp_path):
+    r = _run(
+        [str(VOX), "--setup", "--non-interactive", "--pick", "openai-qwen"],
+        env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    link = Path(env["XDG_CONFIG_HOME"]) / "vox" / "provider"
+    assert link.is_symlink()
+    assert link.resolve() == OPENAI_QWEN.resolve()
 
 
 # ---------------------------------------------------------------------------
