@@ -1,80 +1,183 @@
 #!/usr/bin/env bash
 # vox — Text-to-speech announcements for Claude Code agents
 #
+# vox resolves a user-supplied *provider* (synthesis) and *player* (playback)
+# via the hook pattern. Providers live at ~/.config/vox/provider; examples for
+# common setups ship in scripts/vox-providers/. Run `vox --setup` to pick one.
+#
 # Usage:
 #   vox "Hey BJ, deployment is done"
-#   echo "Build failed on line 42" | vox
+#   echo "Build failed" | vox
 #   vox --voice Jade "Tests are passing"
 #   vox --output /tmp/memo.wav "Voice memo for Discord"
-#   vox --list-voices
+#   vox --setup                             # interactive first-run setup
+#   vox --setup --non-interactive --pick=silent
+#   vox --help
 #
-# Audio generation is delegated to a TTS engine script (default: vox-tts).
-# Replace vox-tts or set VOX_TTS to use a different engine. The engine
-# contract is:
+# Provider contract (see scripts/vox-providers/README.md):
+#   Input:  text as $1 (or stdin if $1 is empty)
+#   Output: audio file written to $VOX_OUTPUT_FILE
+#   Exit:   0 success, non-zero failure
 #
-#   stdin  → text to speak
-#   --output FILE → where to write WAV audio
-#   --voice NAME  → voice selection (optional)
-#   --list-voices → list available voices and exit
+# Resolution (first match wins):
+#   Provider: $VOX_PROVIDER → ~/.config/vox/provider → bundled silent.sh
+#   Player:   $VOX_PLAYER   → ~/.config/vox/player   → autodetect (afplay/paplay/aplay/ffplay)
 #
-# Environment:
-#   VOX_TTS        Path to TTS engine script (default: vox-tts from PATH)
-#   VOX_VOICE      Default voice name (passed through to engine)
-#   VOX_ENDPOINT   Passed through to engine
-#   VOX_MODEL      Passed through to engine
-#   VOX_COMMAND    Passed through to engine
+# Environment passed through to the provider:
+#   VOX_VOICE, VOX_MODEL, VOX_ENDPOINT, VOX_* (anything else prefixed VOX_)
+#
+# Special:
+#   VOX_DISABLED=1   No audio, clean exit 0 (CI/headless/debug)
 #
 # Exit codes:
-#   0  Audio played (or backgrounded) successfully
-#   1  No TTS engine found or generation/playback failed
+#   0  Success (or disabled)
+#   1  Provider failed, player failed, or bad arguments
 
 set -euo pipefail
 
-# --- Resolve TTS engine -------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+USER_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vox"
+BUNDLED_PROVIDERS_DIR="$SCRIPT_DIR/vox-providers"
 
-TTS_ENGINE="${VOX_TTS:-}"
-if [[ -z "$TTS_ENGINE" ]]; then
-	if command -v vox-tts &>/dev/null; then
-		TTS_ENGINE="vox-tts"
-	else
-		# Look next to this script (pre-install, running from repo)
-		SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-		if [[ -x "$SCRIPT_DIR/vox-tts" ]]; then
-			TTS_ENGINE="$SCRIPT_DIR/vox-tts"
-		else
-			echo "vox: TTS engine not found." >&2
-			echo "" >&2
-			echo "  Setup options:" >&2
-			echo "    1. Install vox-tts to PATH (e.g., ~/.local/bin/vox-tts)" >&2
-			echo "    2. Set VOX_TTS=/path/to/your/tts-engine" >&2
-			echo "    3. Set VOX_ENDPOINT=http://host:port/v1/audio/speech" >&2
-			echo "    4. Install espeak-ng: sudo apt install espeak-ng" >&2
-			echo "" >&2
-			echo "  Run: vox --help" >&2
-			exit 1
-		fi
+# --- Resolve provider ---------------------------------------------------------
+
+resolve_provider() {
+	local p=""
+	if [[ -n "${VOX_PROVIDER:-}" ]]; then
+		p="$VOX_PROVIDER"
+		[[ -x "$p" ]] || {
+			echo "vox: \$VOX_PROVIDER ($p) is not executable" >&2
+			return 1
+		}
+		echo "$p"
+		return 0
 	fi
-fi
+	if [[ -x "$USER_CONFIG_DIR/provider" ]]; then
+		echo "$USER_CONFIG_DIR/provider"
+		return 0
+	fi
+	if [[ -x "$BUNDLED_PROVIDERS_DIR/silent.sh" ]]; then
+		echo "$BUNDLED_PROVIDERS_DIR/silent.sh"
+		return 0
+	fi
+	echo "vox: no provider found (tried \$VOX_PROVIDER, $USER_CONFIG_DIR/provider, $BUNDLED_PROVIDERS_DIR/silent.sh)" >&2
+	return 1
+}
 
-# --- Usage --------------------------------------------------------------------
+# --- Resolve player -----------------------------------------------------------
+
+resolve_player() {
+	if [[ -n "${VOX_PLAYER:-}" ]]; then
+		echo "$VOX_PLAYER"
+		return 0
+	fi
+	if [[ -x "$USER_CONFIG_DIR/player" ]]; then
+		echo "$USER_CONFIG_DIR/player"
+		return 0
+	fi
+	if [[ "$(uname -s)" == "Darwin" ]] && command -v afplay &>/dev/null; then
+		echo "afplay"
+		return 0
+	fi
+	if command -v paplay &>/dev/null; then
+		echo "paplay"
+		return 0
+	fi
+	if command -v aplay &>/dev/null; then
+		echo "aplay -q"
+		return 0
+	fi
+	if command -v ffplay &>/dev/null; then
+		echo "ffplay -nodisp -autoexit -loglevel quiet"
+		return 0
+	fi
+	echo ""
+	return 0
+}
+
+# --- Usage / help -------------------------------------------------------------
 
 usage() {
-	cat <<-USAGE
+	cat <<-'USAGE'
 		Usage: vox [OPTIONS] [MESSAGE...]
 
 		Options:
-		  --voice NAME    Voice to use (default: \$VOX_VOICE)
-		  --list-voices   List available voices from the TTS engine
-		  --bg            Background playback (don't wait for audio to finish)
+		  --voice NAME       Voice name (exported as VOX_VOICE to the provider)
+		  --bg               Background playback (don't wait for audio to finish)
 		  --output, -o FILE  Write audio to FILE instead of playing
-		  -h, --help      Show this help
+		  --setup [FLAGS]    Interactive first-run setup; picks a provider
+		  -h, --help         Show this help
+
+		Setup flags:
+		  --non-interactive  Don't prompt; use --pick to select
+		  --pick NAME        Provider name (silent|openai-endpoint|piper-local|espeak|macos-say)
 
 		Message can be passed as arguments or piped via stdin.
 
-		TTS engine: ${TTS_ENGINE}
-		Override:   Set VOX_TTS to a custom engine script.
+		Provider: see ~/.config/vox/provider; contract in scripts/vox-providers/README.md.
+		Set VOX_DISABLED=1 to no-op cleanly (for CI / headless).
 	USAGE
-	exit 0
+}
+
+# --- Setup subcommand ---------------------------------------------------------
+
+do_setup() {
+	local non_interactive=false
+	local pick=""
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--non-interactive)
+			non_interactive=true
+			shift
+			;;
+		--pick)
+			pick="${2:-}"
+			shift 2
+			;;
+		--pick=*)
+			pick="${1#--pick=}"
+			shift
+			;;
+		*)
+			echo "vox --setup: unknown flag '$1'" >&2
+			return 1
+			;;
+		esac
+	done
+
+	if $non_interactive && [[ -z "$pick" ]]; then
+		echo "vox --setup --non-interactive requires --pick NAME" >&2
+		return 1
+	fi
+
+	if [[ ! -d "$BUNDLED_PROVIDERS_DIR" ]]; then
+		echo "vox --setup: bundled providers dir not found at $BUNDLED_PROVIDERS_DIR" >&2
+		return 1
+	fi
+
+	if ! $non_interactive; then
+		echo "vox setup"
+		echo ""
+		echo "Available providers:"
+		echo "  silent           — no-op (writes 0.1s silence; safe default)"
+		echo "  openai-endpoint  — any OpenAI-compatible TTS API (VOX_ENDPOINT)"
+		echo "  piper-local      — local piper binary (VOX_PIPER_MODEL)"
+		echo "  espeak           — espeak-ng fallback (no network)"
+		echo "  macos-say        — macOS say(1)"
+		echo ""
+		printf "Pick one: "
+		read -r pick
+	fi
+
+	local src="$BUNDLED_PROVIDERS_DIR/${pick}.sh"
+	if [[ ! -x "$src" ]]; then
+		echo "vox --setup: no provider named '$pick' (looked for $src)" >&2
+		return 1
+	fi
+
+	mkdir -p "$USER_CONFIG_DIR"
+	ln -sf "$src" "$USER_CONFIG_DIR/provider"
+	echo "vox: $USER_CONFIG_DIR/provider → $src"
 }
 
 # --- Parse args ---------------------------------------------------------------
@@ -82,8 +185,8 @@ usage() {
 VOICE="${VOX_VOICE:-}"
 BACKGROUND=false
 OUTPUT_FILE=""
-
 args=()
+
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--voice)
@@ -93,10 +196,6 @@ while [[ $# -gt 0 ]]; do
 			exit 1
 		}
 		shift 2
-		;;
-	--list-voices)
-		"$TTS_ENGINE" --list-voices
-		exit $?
 		;;
 	--bg)
 		BACKGROUND=true
@@ -110,8 +209,14 @@ while [[ $# -gt 0 ]]; do
 		}
 		shift 2
 		;;
+	--setup)
+		shift
+		do_setup "$@"
+		exit $?
+		;;
 	-h | --help)
 		usage
+		exit 0
 		;;
 	--)
 		shift
@@ -129,6 +234,12 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
+# --- VOX_DISABLED short-circuit -----------------------------------------------
+
+if [[ "${VOX_DISABLED:-0}" == "1" ]]; then
+	exit 0
+fi
+
 # --- Collect message text -----------------------------------------------------
 
 if [[ ${#args[@]} -gt 0 ]]; then
@@ -145,58 +256,29 @@ if [[ -z "${TEXT//[$' \t\n\r']/}" ]]; then
 	exit 1
 fi
 
-# --- Build TTS engine args ----------------------------------------------------
+# --- Resolve + invoke provider ------------------------------------------------
 
-tts_args=(--output)
+PROVIDER="$(resolve_provider)" || exit 1
 
 if [[ -n "$OUTPUT_FILE" ]]; then
-	# Write directly to the user's requested output — no playback needed
-	tts_args+=("$OUTPUT_FILE")
+	audio_out="$OUTPUT_FILE"
 else
-	tmpfile="$(mktemp --suffix=.wav)"
-	trap 'rm -f "$tmpfile"' EXIT
-	tts_args+=("$tmpfile")
+	audio_out="$(mktemp --suffix=.wav)"
+	trap 'rm -f "$audio_out"' EXIT
 fi
 
-if [[ -n "$VOICE" ]]; then
-	tts_args+=(--voice "$VOICE")
-fi
-
-# --- Generate audio -----------------------------------------------------------
-
-printf '%s\n' "$TEXT" | "$TTS_ENGINE" "${tts_args[@]}" || {
-	echo "Error: TTS engine failed" >&2
+VOX_OUTPUT_FILE="$audio_out" VOX_VOICE="$VOICE" "$PROVIDER" "$TEXT" || {
+	echo "Error: provider '$PROVIDER' failed" >&2
 	exit 1
 }
 
 # If --output was requested, we're done (audio is already at OUTPUT_FILE)
 if [[ -n "$OUTPUT_FILE" ]]; then
+	trap - EXIT
 	exit 0
 fi
 
-# --- Detect audio player ------------------------------------------------------
-
-detect_player() {
-	if [[ "$(uname -s)" == "Darwin" ]]; then
-		echo "afplay"
-	elif command -v paplay &>/dev/null; then
-		echo "paplay"
-	elif command -v ffplay &>/dev/null; then
-		echo "ffplay -nodisp -autoexit -loglevel quiet -af adelay=200|200"
-	elif command -v aplay &>/dev/null; then
-		echo "aplay -q"
-	else
-		echo ""
-	fi
-}
-
-PLAYER=$(detect_player)
-if [[ -z "$PLAYER" ]]; then
-	echo "Error: no audio player found (need aplay, paplay, afplay, or ffplay)" >&2
-	exit 1
-fi
-
-# --- Wake noise (Bluetooth A2DP preamble) ------------------------------------
+# --- Wake noise preamble ------------------------------------------------------
 
 # Prepend ~500ms of low-amplitude white noise to a WAV file. This wakes up
 # Bluetooth audio sinks that sleep when idle, preventing the first syllable
@@ -211,8 +293,8 @@ with wave.open(sys.argv[1], "rb") as w:
 sw = p.sampwidth
 n = int(p.framerate * 0.5) * p.nchannels
 max_amp = (1 << (8 * sw - 1)) - 1
-scale = max(1, max_amp // 55)  # ~-35 dB below full scale
-bias = 128 if sw == 1 else 0  # 8-bit WAV is unsigned (silence=128)
+scale = max(1, max_amp // 55)
+bias = 128 if sw == 1 else 0
 raw = b"".join(
     ((random.randint(-scale, scale) + bias) & ((1 << (8 * sw)) - 1))
     .to_bytes(sw, "little") for _ in range(n)
@@ -220,23 +302,29 @@ raw = b"".join(
 with wave.open(sys.argv[1], "wb") as w:
     w.setparams(p)
     w.writeframes(raw + frames)
-' "$wavfile" 2>/dev/null || true # best-effort — play unmodified if python3 fails
+' "$wavfile" 2>/dev/null || true
 }
 
-prepend_wake_noise "$tmpfile"
+prepend_wake_noise "$audio_out"
 
-# --- Playback -----------------------------------------------------------------
+# --- Resolve + invoke player --------------------------------------------------
+
+PLAYER=$(resolve_player)
+if [[ -z "$PLAYER" ]]; then
+	echo "Error: no audio player found. Set \$VOX_PLAYER, symlink ~/.config/vox/player, or install aplay/paplay/afplay/ffplay." >&2
+	exit 1
+fi
 
 if $BACKGROUND; then
 	bgfile="$(mktemp --suffix=.wav)"
-	cp "$tmpfile" "$bgfile"
+	cp "$audio_out" "$bgfile"
 	(
+		trap 'rm -f "$bgfile"' EXIT
 		# shellcheck disable=SC2086
-		timeout 60 $PLAYER "$bgfile"
-		rm -f "$bgfile"
+		timeout 60 $PLAYER "$bgfile" || true
 	) &>/dev/null &
 	disown
 else
 	# shellcheck disable=SC2086
-	$PLAYER "$tmpfile"
+	$PLAYER "$audio_out"
 fi

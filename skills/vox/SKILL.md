@@ -13,6 +13,10 @@ description: Speak to the user via text-to-speech — one-way voice announcement
 
 Use `vox` to speak to the user when they need to hear something. One-way audio — no mic input, just announcements.
 
+## Setup (one-time per machine)
+
+Run `vox --setup` to pick a TTS provider. Contract and examples live in `scripts/vox-providers/README.md`. The default (no setup) is silent — safe but inaudible.
+
 ## When to Use
 
 - **Approval needed** — "Hey BJ, the build passed and I'm ready for your review on PR 91"
@@ -34,10 +38,10 @@ vox "Hey BJ, tests are green and the PR is ready for review"
 ```
 
 Options:
-- `--voice NAME` — pick a voice (default: aiden)
+- `--voice NAME` — voice name (exported to the provider as `VOX_VOICE`)
 - `--bg` — background playback so it doesn't block your work
-- `--output FILE` / `-o FILE` — write audio to a file instead of playing it (useful for attachments)
-- `--list-voices` — show available voices
+- `--output FILE` / `-o FILE` — write audio to a file instead of playing it
+- `--setup` — pick a provider interactively
 
 ## Tone
 
@@ -51,29 +55,12 @@ Options:
 
 Keep it to 1-2 sentences. Summarize, don't enumerate.
 
-## Paralinguistic Tags
-
-Chatterbox supports expressive tags — use sparingly for personality:
-
-`[laugh]`, `[sigh]`, `[gasp]`, `[chuckle]`, `[groan]`, `[clear throat]`
-
-Example: `vox "[clear throat] Attention please — the build is on fire."`
-
 ## Best-Effort
 
-If `vox` fails (no backend, network down, no speakers), **continue normally**. Never block on audio. Never retry. Let the error message through so the user sees how to configure it.
+If `vox` fails (no backend, network down, no speakers), **continue normally**. Never block on audio. Never retry.
 
 ```bash
 vox "Done!" || true
 ```
 
-## Voice Selection
-
-28 voices available. Some suggestions:
-- **Taylor** (default) — BJ's pick
-- **Emily** — clear, neutral
-- **Jade** — warm
-- **Adrian** — deep
-- **Olivia** — bright
-
-Use `vox --list-voices` to see all options, or `--voice NAME` to pick one.
+Set `VOX_DISABLED=1` to no-op cleanly (CI, remote sessions, or temporary silence).

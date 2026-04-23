@@ -89,7 +89,7 @@ Key features:
 | `slackbot-send` | `curl`, `jq`, Slack bot token | Send Slack messages as a named Claude Code agent |
 | `job-fetch` | `glab`, `python3` | Fetch GitLab CI job traces for analysis |
 | `file-opener` | `xdg-open` / `open` | Cross-platform file/URL opener for `/view` and `/edit` |
-| `vox` | `curl`, audio player (`aplay`/`afplay`) | Text-to-speech via Chatterbox API, with local fallback (espeak/piper/say) |
+| `vox` | audio player (`aplay`/`afplay`/`paplay`/`ffplay`); provider of your choice (see `vox --setup`) | Text-to-speech via user-supplied provider hook. Examples in `scripts/vox-providers/`; contract in that dir's README |
 | `statusline-command.sh` | `jq`, `git` | Custom status line: git branch, dirty state, context window remaining, model |
 | `cc-inspector` | `python3`, `mitmproxy` | Context window inspector — proxy + Flask UI for API payload capture |
 | `discord-lock` | `flock`, `jq` | Advisory lock for serializing Discord channel writes across agents |

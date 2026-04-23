@@ -202,7 +202,7 @@ The full skill reference is in [Skill Reference](skill-reference.md) with detail
 | `/nerf` | Context budget management -- check usage, adjust limits, launch scope monitor |
 | `/ibm` | Quick reminder of the Issue-Branch-PR/MR workflow when you need to reset your mental model |
 | `/disc` | Send and read Discord messages, check in to `#roll-call`, manage channels |
-| `/vox` | Text-to-speech announcements ("Hey, the build passed") |
+| `/vox` | Text-to-speech announcements ("Hey, the build passed") — run `vox --setup` first to pick a provider |
 | `/jfail` | Fetch and analyze a failed CI job or workflow run |
 
 ### Advanced: Wave-Pattern Execution
