@@ -87,6 +87,11 @@ def _cmd_init(args: argparse.Namespace) -> None:
     root = get_project_root()
     raw = _read_json_source(args.file)
     plan_data = json.loads(raw)
+    # --repo flag overrides plan-level default repo for qualified issue keys
+    # (v3 schema).  Per-issue ``repo`` in the plan JSON still wins over this
+    # default because _issue_repo() consults the issue's own repo first.
+    if getattr(args, "repo", None):
+        plan_data["repo"] = args.repo
     if args.extend:
         extend_state(plan_data, root)
     else:
@@ -269,6 +274,12 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Add phases to an existing plan instead of overwriting")
     p_init.add_argument("--force", action="store_true",
                         help="Overwrite an existing plan (default: refuse)")
+    p_init.add_argument(
+        "--repo",
+        default=None,
+        help="Default '{owner}/{repo}' for qualified issue keys (v3 schema). "
+             "Per-issue 'repo' in the plan JSON still wins over this.",
+    )
     p_init.set_defaults(func=_cmd_init)
 
     # flight-plan
@@ -313,13 +324,21 @@ def _build_parser() -> argparse.ArgumentParser:
     p_wci.set_defaults(func=_cmd_waiting_ci)
 
     # close-issue
-    p_ci = sub.add_parser("close-issue", help="Close an issue by number")
-    p_ci.add_argument("n", type=int, help="Issue number")
+    p_ci = sub.add_parser("close-issue", help="Close an issue by number or qualified ref")
+    p_ci.add_argument(
+        "n",
+        type=str,
+        help="Issue number (e.g. 13) or qualified ref (e.g. owner/repo#13)",
+    )
     p_ci.set_defaults(func=_cmd_close_issue)
 
     # record-mr
     p_mr = sub.add_parser("record-mr", help="Record an MR/PR for an issue")
-    p_mr.add_argument("issue", type=int, help="Issue number")
+    p_mr.add_argument(
+        "issue",
+        type=str,
+        help="Issue number (e.g. 13) or qualified ref (e.g. owner/repo#13)",
+    )
     p_mr.add_argument("mr", help="MR/PR reference (e.g. '#14')")
     p_mr.set_defaults(func=_cmd_record_mr)
 
