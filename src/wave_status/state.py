@@ -130,7 +130,7 @@ def save_json(path: Path, data: dict) -> None:
 # Schema versioning and migration
 # ---------------------------------------------------------------------------
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 def migrate_state(data: dict) -> dict:
@@ -142,14 +142,29 @@ def migrate_state(data: dict) -> dict:
       last completed wave.
     - **v1**: has ``waves`` but no ``schema_version`` (Phase 2 dict-based).
       Stamp only — no structural changes.
-    - **v2**: has ``schema_version: 2``.  No-op.
+    - **v2**: has ``schema_version: 2``.  Bump to v3 stamp only — v3 is a
+      lazy-migration schema that adds support for ``{owner}/{repo}#N`` issue
+      keys alongside bare ``N`` keys (see ``close_issue``/``record_mr``
+      dual-read logic).  No batch rewrite of existing keys — they're
+      upgraded opportunistically when next written.
+    - **v3**: has ``schema_version: 3``.  No-op.
 
     Unknown keys (e.g. ``wavemachine_active``) are always preserved.
     """
     version = data.get("schema_version", 0)
 
+    # Forward-compat guard: refuse to operate on state from a newer schema.
+    # Silently returning would let the rest of the tool mutate data it doesn't
+    # understand, risking corruption. Raise so the user knows to upgrade.
+    if version > CURRENT_SCHEMA_VERSION:
+        raise ValueError(
+            f"Error: state.json has schema_version {version}, "
+            f"but this tool only supports up to {CURRENT_SCHEMA_VERSION}. "
+            "Upgrade wave-status to read this state file."
+        )
+
     # Already current — no-op.
-    if version >= CURRENT_SCHEMA_VERSION:
+    if version == CURRENT_SCHEMA_VERSION:
         return data
 
     # v0 → v2: structural migration from Phase 1 list-based layout.
@@ -211,13 +226,157 @@ def _all_wave_ids(plan_data: dict) -> list[str]:
 
 
 def _all_issue_numbers(plan_data: dict) -> set[int]:
-    """Return a set of every issue number in the plan."""
+    """Return a set of every issue number in the plan.
+
+    Kept for back-compat with callers that only need the bare numeric set.
+    For cross-repo collision checks, prefer :func:`_all_issue_refs`.
+    """
     nums: set[int] = set()
     for phase in plan_data.get("phases", []):
         for wave in phase.get("waves", []):
             for issue in wave.get("issues", []):
                 nums.add(issue["number"])
     return nums
+
+
+def _plan_default_repo(plan_data: dict) -> str | None:
+    """Return the plan-level default ``repo`` (``owner/name``) or None."""
+    repo = plan_data.get("repo")
+    if isinstance(repo, str) and repo:
+        return repo
+    return None
+
+
+def _issue_repo(plan_data: dict, issue: dict) -> str | None:
+    """Resolve the effective repo for *issue* — per-issue overrides plan-level."""
+    per_issue = issue.get("repo")
+    if isinstance(per_issue, str) and per_issue:
+        return per_issue
+    return _plan_default_repo(plan_data)
+
+
+def _compose_issue_key(n: int | str, repo: str | None) -> str:
+    """Compose a state-dict issue key.
+
+    When *repo* is set, returns ``f"{repo}#{n}"``.  Otherwise returns
+    ``str(n)`` — bare numeric form, back-compat with pre-v3 state.
+    """
+    if repo:
+        return f"{repo}#{n}"
+    return str(n)
+
+
+def _parse_issue_key(key: str) -> tuple[str | None, int | None]:
+    """Parse a state-dict issue key into ``(repo, number)``.
+
+    - ``"13"`` → ``(None, 13)``
+    - ``"owner/repo#13"`` → ``("owner/repo", 13)``
+    - anything else → ``(None, None)``
+    """
+    if "#" in key:
+        repo_part, _, num_part = key.rpartition("#")
+        try:
+            return (repo_part or None, int(num_part))
+        except ValueError:
+            return (None, None)
+    try:
+        return (None, int(key))
+    except ValueError:
+        return (None, None)
+
+
+def _all_issue_refs(plan_data: dict, default_repo: str | None = None) -> set[str]:
+    """Return a set of every issue ref in the plan.
+
+    Refs are qualified as ``{owner}/{repo}#N`` when the issue has a
+    resolvable repo (per-issue override, else plan-level ``repo``, else
+    *default_repo* argument).  Otherwise bare ``str(N)``.
+    """
+    refs: set[str] = set()
+    plan_default = default_repo or _plan_default_repo(plan_data)
+    for phase in plan_data.get("phases", []):
+        for wave in phase.get("waves", []):
+            for issue in wave.get("issues", []):
+                repo = issue.get("repo") if isinstance(issue.get("repo"), str) and issue.get("repo") else plan_default
+                refs.add(_compose_issue_key(issue["number"], repo))
+    return refs
+
+
+def _resolve_issue_key(
+    state_data: dict,
+    ref: int | str,
+    *,
+    container: str = "issues",
+    wave_id: str | None = None,
+) -> str | None:
+    """Dual-read: resolve *ref* to an existing key in *state_data*.
+
+    *container* selects the dict to search:
+    - ``"issues"``: ``state_data["issues"]``
+    - ``"mr_urls"``: ``state_data["waves"][wave_id]["mr_urls"]`` (requires
+      *wave_id*).
+
+    Resolution order:
+    1. If *ref* is a ``str`` containing ``#``, treat as qualified — return
+       as-is when present in the container, else None.
+    2. Otherwise try ``str(ref)`` (bare form).
+    3. Otherwise iterate container keys, returning any whose numeric
+       portion (after ``#`` or the whole bare integer) equals ``int(ref)``.
+       Prefers qualified keys on tie.
+
+    Returns the key string if found, else None.
+    """
+    if container == "issues":
+        bag = state_data.get("issues", {})
+    elif container == "mr_urls":
+        if wave_id is None:
+            return None
+        bag = state_data.get("waves", {}).get(wave_id, {}).get("mr_urls", {})
+    else:
+        return None
+
+    # Form 1: qualified ref passed directly.
+    if isinstance(ref, str) and "#" in ref:
+        return ref if ref in bag else None
+
+    # Normalize to numeric.
+    try:
+        n = int(ref)
+    except (TypeError, ValueError):
+        return None
+
+    # Form 2: bare key direct lookup.
+    bare = str(n)
+    bare_hit = bare in bag
+
+    # Form 3: scan ALL qualified suffix matches. If more than one repo's
+    # qualified key matches the bare number, the input is ambiguous — raise
+    # instead of silently picking whichever Python dict-iteration yields
+    # first. Caller must supply a qualified ref to disambiguate.
+    qualified_hits: list[str] = []
+    for key in bag:
+        if "#" not in key:
+            continue
+        _, _, num_part = key.rpartition("#")
+        try:
+            if int(num_part) == n:
+                qualified_hits.append(key)
+        except ValueError:
+            continue
+
+    if len(qualified_hits) > 1:
+        raise ValueError(
+            f"Error: bare issue #{n} is ambiguous — found in multiple repos: "
+            f"{', '.join(sorted(qualified_hits))}. "
+            "Pass a qualified ref (owner/repo#N) to disambiguate."
+        )
+
+    # Prefer qualified on conflict (v3 semantics).
+    if qualified_hits:
+        return qualified_hits[0]
+    if bare_hit:
+        return bare
+    return None
 
 
 def _find_next_pending_wave(state_data: dict, wave_ids: list[str]) -> str | None:
@@ -347,11 +506,14 @@ def init_state(plan_data: dict, root: Path, *, force: bool = False) -> None:
     for phase in plan_data["phases"]:
         for wave in phase.get("waves", []):
             for issue in wave.get("issues", []):
-                issues_state[str(issue["number"])] = {"status": "open"}
+                repo = _issue_repo(plan_data, issue)
+                key = _compose_issue_key(issue["number"], repo)
+                issues_state[key] = {"status": "open"}
 
     first_wave = wave_ids[0] if wave_ids else None
 
     state_data: dict = {
+        "schema_version": CURRENT_SCHEMA_VERSION,
         "current_wave": first_wave,
         "current_action": {"action": "idle", "label": "idle", "detail": ""},
         "waves": waves_state,
@@ -401,10 +563,13 @@ def extend_state(plan_data: dict, root: Path) -> None:
             "Use unique wave IDs for new phases."
         )
 
-    # Check for issue number collisions
-    existing_issue_nums = _all_issue_numbers(existing_plan)
-    new_issue_nums = _all_issue_numbers(plan_data)
-    issue_collisions = existing_issue_nums & new_issue_nums
+    # Check for issue ref collisions — use qualified refs when a repo is
+    # resolvable so two different repos with the same bare number don't
+    # falsely collide.  Fall back to bare numeric compare when neither
+    # side has a repo.
+    existing_refs = _all_issue_refs(existing_plan)
+    new_refs = _all_issue_refs(plan_data)
+    issue_collisions = existing_refs & new_refs
     if issue_collisions:
         raise ValueError(
             f"Error: issue number collision — {issue_collisions} already exist in the plan. "
@@ -420,12 +585,19 @@ def extend_state(plan_data: dict, root: Path) -> None:
         if wid not in existing_state["waves"]:
             existing_state["waves"][wid] = {"status": "pending", "mr_urls": {}}
 
+    # For issue keys, prefer qualified form when we have a repo — but
+    # dedup against the bare form too so a pre-v3 state doesn't grow a
+    # duplicate entry.
+    existing_issues = existing_state.setdefault("issues", {})
     for phase in plan_data["phases"]:
         for wave in phase.get("waves", []):
             for issue in wave.get("issues", []):
-                issue_key = str(issue["number"])
-                if issue_key not in existing_state["issues"]:
-                    existing_state["issues"][issue_key] = {"status": "open"}
+                repo = _issue_repo(plan_data, issue)
+                qualified = _compose_issue_key(issue["number"], repo)
+                bare = str(issue["number"])
+                if qualified in existing_issues or bare in existing_issues:
+                    continue
+                existing_issues[qualified] = {"status": "open"}
 
     # Auto-advance current_wave when the prior plan has been fully worked off
     # and new pending waves now exist. Without this, running `init --extend`
@@ -739,8 +911,12 @@ def complete(root: Path) -> dict:
     return state_data
 
 
-def close_issue(n: int, root: Path) -> dict:
+def close_issue(n: int | str, root: Path) -> dict:
     """Set issue *n* to ``closed`` in ``state.json`` [R-07, R-14].
+
+    Accepts either a bare integer/digit-string (e.g. ``13`` or ``"13"``)
+    or a qualified ref (``"owner/repo#13"``).  Dual-read lookup: tries
+    the direct key first, then scans for a qualified suffix match.
 
     Raises ``ValueError`` if the issue does not exist in the plan.
     """
@@ -748,26 +924,74 @@ def close_issue(n: int, root: Path) -> dict:
     state_data = load_state(d / "state.json")
     plan_data = load_json(d / "phases-waves.json")
 
-    valid_issues = _all_issue_numbers(plan_data)
-    if n not in valid_issues:
-        raise ValueError(
-            f"Error: issue #{n} does not exist in the plan. "
-            f"Check the issue number and try again."
-        )
+    # Normalize the incoming ref to (repo, number) for plan validation.
+    if isinstance(n, str) and "#" in n:
+        ref_repo, ref_num = _parse_issue_key(n)
+        if ref_num is None:
+            raise ValueError(
+                f"Error: '{n}' is not a valid issue reference. "
+                "Use an integer or 'owner/repo#N' form."
+            )
+    else:
+        ref_repo = None
+        try:
+            ref_num = int(n)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"Error: '{n}' is not a valid issue reference. "
+                "Use an integer or 'owner/repo#N' form."
+            )
 
-    issue_key = str(n)
-    if issue_key not in state_data.get("issues", {}):
-        state_data.setdefault("issues", {})[issue_key] = {}
+    # Validate against the plan. When the caller supplied a qualified ref,
+    # check the FULL ref (so `other-org/other-repo#13` is rejected even if the
+    # plan has `Wave-Engineering/sdlc#13`). When bare, fall back to the
+    # number-set check (preserves pre-v3 behavior for single-repo plans).
+    if ref_repo:
+        all_refs = _all_issue_refs(plan_data)
+        qualified_ref = f"{ref_repo}#{ref_num}"
+        if qualified_ref not in all_refs:
+            raise ValueError(
+                f"Error: issue {qualified_ref} does not exist in the plan. "
+                "Check the qualified ref and try again."
+            )
+    else:
+        valid_nums = _all_issue_numbers(plan_data)
+        if ref_num not in valid_nums:
+            raise ValueError(
+                f"Error: issue #{ref_num} does not exist in the plan. "
+                f"Check the issue number and try again."
+            )
 
-    state_data["issues"][issue_key]["status"] = "closed"
+    # Resolve to an existing key (dual-read), else compose one.
+    resolved = _resolve_issue_key(state_data, n, container="issues")
+    if resolved is None:
+        # Not yet in state — compose the preferred key shape.
+        if ref_repo:
+            resolved = _compose_issue_key(ref_num, ref_repo)
+        else:
+            # Infer from the plan if possible.
+            plan_repo = _plan_default_repo(plan_data)
+            for phase in plan_data.get("phases", []):
+                for wave in phase.get("waves", []):
+                    for issue in wave.get("issues", []):
+                        if issue["number"] == ref_num:
+                            plan_repo = _issue_repo(plan_data, issue) or plan_repo
+                            break
+            resolved = _compose_issue_key(ref_num, plan_repo)
+        state_data.setdefault("issues", {})[resolved] = {}
+
+    state_data["issues"][resolved]["status"] = "closed"
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
     return state_data
 
 
-def record_mr(issue: int, mr: str, root: Path) -> dict:
+def record_mr(issue: int | str, mr: str, root: Path) -> dict:
     """Record an MR/PR reference for *issue* in the current wave's
     ``mr_urls`` [R-08].
+
+    Accepts either a bare integer/digit-string or a qualified ref
+    (``"owner/repo#N"``).  Dual-read lookup on existing ``mr_urls`` keys.
     """
     d = status_dir(root)
     state_data = load_state(d / "state.json")
@@ -785,7 +1009,46 @@ def record_mr(issue: int, mr: str, root: Path) -> dict:
             "Run 'init' before recording an MR."
         )
 
-    waves[current_wave].setdefault("mr_urls", {})[str(issue)] = mr
+    # Normalize to (repo, number).
+    if isinstance(issue, str) and "#" in issue:
+        ref_repo, ref_num = _parse_issue_key(issue)
+        if ref_num is None:
+            raise ValueError(
+                f"Error: '{issue}' is not a valid issue reference. "
+                "Use an integer or 'owner/repo#N' form."
+            )
+    else:
+        ref_repo = None
+        try:
+            ref_num = int(issue)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"Error: '{issue}' is not a valid issue reference. "
+                "Use an integer or 'owner/repo#N' form."
+            )
+
+    resolved = _resolve_issue_key(
+        state_data, issue, container="mr_urls", wave_id=current_wave
+    )
+    if resolved is None:
+        if ref_repo:
+            resolved = _compose_issue_key(ref_num, ref_repo)
+        else:
+            # Infer repo from plan for the preferred key shape.
+            try:
+                plan_data = load_json(d / "phases-waves.json")
+                plan_repo = _plan_default_repo(plan_data)
+                for phase in plan_data.get("phases", []):
+                    for wave in phase.get("waves", []):
+                        for iss in wave.get("issues", []):
+                            if iss["number"] == ref_num:
+                                plan_repo = _issue_repo(plan_data, iss) or plan_repo
+                                break
+                resolved = _compose_issue_key(ref_num, plan_repo)
+            except FileNotFoundError:
+                resolved = str(ref_num)
+
+    waves[current_wave].setdefault("mr_urls", {})[resolved] = mr
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
     return state_data
@@ -819,16 +1082,31 @@ def show(root: Path) -> dict:
             running_flight = fi + 1
             break
 
-    # Issue counts.
+    # Issue counts — dual-read: try qualified key first (composed from the
+    # issue's resolved repo), then fall back to bare numeric.
     total_issues = 0
     closed_issues = 0
+    issues_bag = state_data.get("issues", {})
     for phase in plan_data.get("phases", []):
         for wave in phase.get("waves", []):
             for issue in wave.get("issues", []):
                 total_issues += 1
-                istate = state_data.get("issues", {}).get(
-                    str(issue["number"]), {}
-                )
+                repo = _issue_repo(plan_data, issue)
+                istate: dict = {}
+                if repo:
+                    istate = issues_bag.get(
+                        _compose_issue_key(issue["number"], repo), {}
+                    )
+                if not istate:
+                    istate = issues_bag.get(str(issue["number"]), {})
+                if not istate:
+                    # Last-ditch scan — state may carry a different repo
+                    # prefix (e.g. imported from another plan variant).
+                    resolved = _resolve_issue_key(
+                        state_data, issue["number"], container="issues"
+                    )
+                    if resolved is not None:
+                        istate = issues_bag.get(resolved, {})
                 if istate.get("status") == "closed":
                     closed_issues += 1
     pct = round(100 * closed_issues / total_issues) if total_issues else 0

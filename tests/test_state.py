@@ -26,6 +26,7 @@ from wave_status.state import (
     close_issue,
     complete,
     ensure_status_dir,
+    extend_state,
     flight,
     flight_done,
     get_project_root,
@@ -262,18 +263,33 @@ class TestMigrateState:
         assert result["waves"]["w1"]["status"] == "in_progress"
         assert result["issues"]["10"]["status"] == "open"
 
-    def test_v2_to_v2_noop(self) -> None:
-        """v2 → v2: no changes."""
+    def test_v2_to_v3_stamp_only(self) -> None:
+        """v2 → v3: version bumped, structure otherwise unchanged (lazy migration)."""
         v2 = {
             "schema_version": 2,
+            "current_wave": "w1",
+            "waves": {"w1": {"status": "pending", "mr_urls": {}}},
+            "issues": {"13": {"status": "open"}},
+            "current_action": {"action": "idle", "label": "idle", "detail": ""},
+        }
+        result = migrate_state(v2)
+        assert result["schema_version"] == CURRENT_SCHEMA_VERSION == 3
+        # Structure unchanged — lazy migration on writes only.
+        assert result["waves"] == {"w1": {"status": "pending", "mr_urls": {}}}
+        assert result["issues"] == {"13": {"status": "open"}}
+
+    def test_v3_to_v3_noop(self) -> None:
+        """v3 → v3: no changes."""
+        v3 = {
+            "schema_version": 3,
             "current_wave": "w1",
             "waves": {"w1": {"status": "pending", "mr_urls": {}}},
             "issues": {},
             "current_action": {"action": "idle", "label": "idle", "detail": ""},
         }
         import copy
-        original = copy.deepcopy(v2)
-        result = migrate_state(v2)
+        original = copy.deepcopy(v3)
+        result = migrate_state(v3)
         assert result == original
 
     def test_write_back(self, project_root: Path) -> None:
@@ -411,6 +427,78 @@ class TestInitState:
         bad_plan = {"project": "x", "phases": "not-a-list"}
         with pytest.raises(ValueError, match="Error:.*phases"):
             init_state(bad_plan, tmp_path)
+
+    # --- Cross-repo qualified-key tests (#198, v3 schema) -----------------
+
+    def test_issues_keyed_with_qualified_ref_when_repo_supplied(
+        self, tmp_path: Path
+    ) -> None:
+        """When plan has ``repo``, state issues are keyed ``{repo}#{N}``."""
+        plan = {
+            "project": "test",
+            "repo": "Wave-Engineering/sdlc",
+            "phases": [
+                {
+                    "name": "P1",
+                    "waves": [
+                        {
+                            "id": "wave-1",
+                            "name": "W1",
+                            "issues": [{"number": 13, "title": "t", "deps": []}],
+                        }
+                    ],
+                }
+            ],
+        }
+        init_state(plan, tmp_path)
+        state = load_json(status_dir(tmp_path) / "state.json")
+        assert "Wave-Engineering/sdlc#13" in state["issues"]
+        assert "13" not in state["issues"]
+        assert state["issues"]["Wave-Engineering/sdlc#13"]["status"] == "open"
+
+    def test_issues_keyed_bare_when_no_repo(self, tmp_path: Path) -> None:
+        """Without ``repo``, state issues keep the bare numeric key (back-compat)."""
+        init_state(SAMPLE_PLAN, tmp_path)
+        state = load_json(status_dir(tmp_path) / "state.json")
+        for num in (13, 1, 2, 3, 5):
+            assert str(num) in state["issues"]
+
+    def test_per_issue_repo_overrides_plan_default(self, tmp_path: Path) -> None:
+        """Per-issue ``repo`` wins over plan-level ``repo``."""
+        plan = {
+            "project": "test",
+            "repo": "Wave-Engineering/sdlc",
+            "phases": [
+                {
+                    "name": "P1",
+                    "waves": [
+                        {
+                            "id": "wave-1",
+                            "name": "W1",
+                            "issues": [
+                                {"number": 13, "title": "t", "deps": []},
+                                {
+                                    "number": 14,
+                                    "title": "t2",
+                                    "deps": [],
+                                    "repo": "other-org/other-repo",
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        init_state(plan, tmp_path)
+        state = load_json(status_dir(tmp_path) / "state.json")
+        assert "Wave-Engineering/sdlc#13" in state["issues"]
+        assert "other-org/other-repo#14" in state["issues"]
+
+    def test_init_stamps_schema_v3(self, tmp_path: Path) -> None:
+        """Fresh init writes ``schema_version: 3`` to state.json."""
+        init_state(SAMPLE_PLAN, tmp_path)
+        state = load_json(status_dir(tmp_path) / "state.json")
+        assert state["schema_version"] == CURRENT_SCHEMA_VERSION == 3
 
 
 # ---------------------------------------------------------------------------
@@ -666,6 +754,75 @@ class TestCloseIssue:
         with pytest.raises(ValueError, match=r"Error:.*\..+\."):
             close_issue(999, project_root)
 
+    # --- Cross-repo qualified-key tests (#198) ----------------------------
+
+    def test_bare_close_resolves_qualified_key(self, tmp_path: Path) -> None:
+        """close_issue(13) finds and closes ``Wave-Engineering/sdlc#13``."""
+        plan = {
+            "project": "test",
+            "repo": "Wave-Engineering/sdlc",
+            "phases": [
+                {
+                    "name": "P1",
+                    "waves": [
+                        {
+                            "id": "wave-1",
+                            "name": "W1",
+                            "issues": [{"number": 13, "title": "t", "deps": []}],
+                        }
+                    ],
+                }
+            ],
+        }
+        init_state(plan, tmp_path)
+        # State has only the qualified key.
+        state_before = load_json(status_dir(tmp_path) / "state.json")
+        assert "Wave-Engineering/sdlc#13" in state_before["issues"]
+        assert "13" not in state_before["issues"]
+
+        close_issue(13, tmp_path)  # bare integer
+
+        state_after = load_json(status_dir(tmp_path) / "state.json")
+        assert state_after["issues"]["Wave-Engineering/sdlc#13"]["status"] == "closed"
+        # No stray bare-key entry was created.
+        assert "13" not in state_after["issues"]
+
+    def test_qualified_close_ref(self, tmp_path: Path) -> None:
+        """close_issue('Wave-Engineering/sdlc#13') direct-key lookup."""
+        plan = {
+            "project": "test",
+            "repo": "Wave-Engineering/sdlc",
+            "phases": [
+                {
+                    "name": "P1",
+                    "waves": [
+                        {
+                            "id": "wave-1",
+                            "name": "W1",
+                            "issues": [{"number": 13, "title": "t", "deps": []}],
+                        }
+                    ],
+                }
+            ],
+        }
+        init_state(plan, tmp_path)
+        close_issue("Wave-Engineering/sdlc#13", tmp_path)
+
+        state = load_json(status_dir(tmp_path) / "state.json")
+        assert state["issues"]["Wave-Engineering/sdlc#13"]["status"] == "closed"
+
+    def test_bare_close_still_works_on_bare_state(self, project_root: Path) -> None:
+        """Back-compat: no repo, bare state, bare close arg — still works."""
+        close_issue(13, project_root)
+        state = load_json(status_dir(project_root) / "state.json")
+        assert state["issues"]["13"]["status"] == "closed"
+
+    def test_bare_close_string_digit_works(self, project_root: Path) -> None:
+        """close_issue('13') also works — CLI always hands us a string."""
+        close_issue("13", project_root)
+        state = load_json(status_dir(project_root) / "state.json")
+        assert state["issues"]["13"]["status"] == "closed"
+
 
 # ---------------------------------------------------------------------------
 # record_mr [R-08]
@@ -686,6 +843,174 @@ class TestRecordMr:
         save_json(d / "state.json", {"current_wave": None, "waves": {}})
         with pytest.raises(ValueError, match="Error:.*no current wave"):
             record_mr(1, "#2", tmp_path)
+
+    # --- Cross-repo qualified-key tests (#198) ----------------------------
+
+    def test_bare_mr_resolves_qualified_key(self, tmp_path: Path) -> None:
+        """record_mr(13, ...) updates ``Wave-Engineering/sdlc#13`` in mr_urls."""
+        plan = {
+            "project": "test",
+            "repo": "Wave-Engineering/sdlc",
+            "phases": [
+                {
+                    "name": "P1",
+                    "waves": [
+                        {
+                            "id": "wave-1",
+                            "name": "W1",
+                            "issues": [{"number": 13, "title": "t", "deps": []}],
+                        }
+                    ],
+                }
+            ],
+        }
+        init_state(plan, tmp_path)
+        # Seed an existing qualified mr_urls entry to exercise dual-read.
+        d = status_dir(tmp_path)
+        state = load_json(d / "state.json")
+        state["waves"]["wave-1"]["mr_urls"]["Wave-Engineering/sdlc#13"] = "#old"
+        save_json(d / "state.json", state)
+
+        record_mr(13, "#new", tmp_path)  # bare integer
+
+        state = load_json(d / "state.json")
+        assert state["waves"]["wave-1"]["mr_urls"]["Wave-Engineering/sdlc#13"] == "#new"
+        # No duplicate bare entry.
+        assert "13" not in state["waves"]["wave-1"]["mr_urls"]
+
+    def test_qualified_mr_ref(self, tmp_path: Path) -> None:
+        """record_mr accepts qualified ref directly."""
+        plan = {
+            "project": "test",
+            "repo": "Wave-Engineering/sdlc",
+            "phases": [
+                {
+                    "name": "P1",
+                    "waves": [
+                        {
+                            "id": "wave-1",
+                            "name": "W1",
+                            "issues": [{"number": 13, "title": "t", "deps": []}],
+                        }
+                    ],
+                }
+            ],
+        }
+        init_state(plan, tmp_path)
+        record_mr("Wave-Engineering/sdlc#13", "#14", tmp_path)
+        state = load_json(status_dir(tmp_path) / "state.json")
+        assert state["waves"]["wave-1"]["mr_urls"]["Wave-Engineering/sdlc#13"] == "#14"
+
+    def test_mr_new_key_uses_plan_repo(self, tmp_path: Path) -> None:
+        """When mr_urls has no matching entry, new key uses plan's repo."""
+        plan = {
+            "project": "test",
+            "repo": "Wave-Engineering/sdlc",
+            "phases": [
+                {
+                    "name": "P1",
+                    "waves": [
+                        {
+                            "id": "wave-1",
+                            "name": "W1",
+                            "issues": [{"number": 13, "title": "t", "deps": []}],
+                        }
+                    ],
+                }
+            ],
+        }
+        init_state(plan, tmp_path)
+        record_mr(13, "#14", tmp_path)
+        state = load_json(status_dir(tmp_path) / "state.json")
+        assert "Wave-Engineering/sdlc#13" in state["waves"]["wave-1"]["mr_urls"]
+
+
+# ---------------------------------------------------------------------------
+# extend_state — cross-repo key handling (#198)
+# ---------------------------------------------------------------------------
+
+
+class TestExtendState:
+    """Tests for extend_state() cross-repo semantics."""
+
+    def test_collision_check_handles_mixed_key_shapes(self, tmp_path: Path) -> None:
+        """Existing state has qualified keys; incoming plan bare — collision detected."""
+        # First plan: qualified state (plan has repo).
+        plan1 = {
+            "project": "test",
+            "repo": "Wave-Engineering/sdlc",
+            "phases": [
+                {
+                    "name": "P1",
+                    "waves": [
+                        {
+                            "id": "wave-1",
+                            "name": "W1",
+                            "issues": [{"number": 13, "title": "t", "deps": []}],
+                        }
+                    ],
+                }
+            ],
+        }
+        init_state(plan1, tmp_path)
+        # Same repo, same issue number in extend → collision.
+        plan2 = {
+            "project": "test",
+            "repo": "Wave-Engineering/sdlc",
+            "phases": [
+                {
+                    "name": "P2",
+                    "waves": [
+                        {
+                            "id": "wave-2",
+                            "name": "W2",
+                            "issues": [{"number": 13, "title": "dup", "deps": []}],
+                        }
+                    ],
+                }
+            ],
+        }
+        with pytest.raises(ValueError, match="Error:.*collision"):
+            extend_state(plan2, tmp_path)
+
+    def test_extend_same_number_different_repo_is_ok(self, tmp_path: Path) -> None:
+        """Same bare number in different repos is NOT a collision."""
+        plan1 = {
+            "project": "test",
+            "repo": "Wave-Engineering/sdlc",
+            "phases": [
+                {
+                    "name": "P1",
+                    "waves": [
+                        {
+                            "id": "wave-1",
+                            "name": "W1",
+                            "issues": [{"number": 13, "title": "t", "deps": []}],
+                        }
+                    ],
+                }
+            ],
+        }
+        init_state(plan1, tmp_path)
+        plan2 = {
+            "repo": "other-org/other-repo",
+            "phases": [
+                {
+                    "name": "P2",
+                    "waves": [
+                        {
+                            "id": "wave-2",
+                            "name": "W2",
+                            "issues": [{"number": 13, "title": "ok", "deps": []}],
+                        }
+                    ],
+                }
+            ],
+        }
+        extend_state(plan2, tmp_path)
+        state = load_json(status_dir(tmp_path) / "state.json")
+        assert "Wave-Engineering/sdlc#13" in state["issues"]
+        assert "other-org/other-repo#13" in state["issues"]
 
 
 # ---------------------------------------------------------------------------
@@ -744,6 +1069,37 @@ class TestShow:
         flight(1, project_root)
         result = show(project_root)
         assert result["flight"] == "1/2"
+
+    # --- Cross-repo qualified-key tests (#198) ----------------------------
+
+    def test_show_counts_issues_with_qualified_keys(self, tmp_path: Path) -> None:
+        """show() counts closed/open correctly when keys are qualified."""
+        plan = {
+            "project": "test",
+            "repo": "Wave-Engineering/sdlc",
+            "phases": [
+                {
+                    "name": "P1",
+                    "waves": [
+                        {
+                            "id": "wave-1",
+                            "name": "W1",
+                            "issues": [
+                                {"number": 13, "title": "t1", "deps": []},
+                                {"number": 14, "title": "t2", "deps": []},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        init_state(plan, tmp_path)
+        # Close one issue — via bare arg to exercise dual-read end-to-end.
+        close_issue(13, tmp_path)
+
+        result = show(tmp_path)
+        assert "1/2" in result["progress"]
+        assert "50%" in result["progress"]
 
 
 # ---------------------------------------------------------------------------
