@@ -89,7 +89,7 @@ Prompt template (fill in `<repo-slug>`, `<N>`, `<wave-root>`, and the issue list
 > {"plan_path":"<absolute-path-to-plan.md>","status":"READY|BLOCKED","flights":[{"flight":1,"issues":[N,N,N]},{"flight":2,"issues":[N]}]}
 > ```
 
-Orchestrator parses that JSON. If `status=BLOCKED`, print the blocker from `plan.md`, post a BLOCKED notice to `#wave-status`, exit (leave bus in place for forensics). Else continue.
+Orchestrator parses that JSON. If `status=BLOCKED`, print the blocker from `plan.md`, post a BLOCKED notice to `#wave-status`, exit (leave bus in place for forensics). In **auto mode**, emit the canonical status line (see "Step 6 — Final status emission") before returning control. Else continue.
 
 ## Step 3 — Per-flight execution loop
 
@@ -149,7 +149,7 @@ One `Agent` call, `subagent_type: general-purpose`. Prompt template:
 ### 3f. Parse Prime(post-flight) return.
 
 - `PASS` → continue to the next flight. If the next flight exists, perform the inter-flight re-validation step 3g before spawning its Flights.
-- `FAIL` / `BLOCKED` → stop the per-flight loop. Leave the bus in place. Surface to user with the `report_path`.
+- `FAIL` / `BLOCKED` → stop the per-flight loop. Leave the bus in place. Surface to user with the `report_path`. In **auto mode**, emit the canonical status line (see "Step 6 — Final status emission") before returning control.
 
 ### 3g. Inter-flight re-validation (before flight M+1, M ≥ 1).
 
@@ -183,11 +183,34 @@ After every flight has merged:
 
 2. Orchestrator reads the report, surfaces a human-readable summary, and — in interactive mode — prompts: "Wave N complete. Run `/nextwave` for Wave N+1, or `/cryo` to preserve state."
 3. Post to `#wave-status` (`1487386934094462986`): `"✅ **Wave <N> complete** — <project>, <merged> merged, <deferred> deferred. Agent: **<dev-name>** <dev-avatar>"`, then vox announcement (conversational: name, team, project, wave, counts).
+4. In **auto mode**, emit the canonical status line (see "Step 6 — Final status emission") as the final assistant message. If Prime(post-wave) returned FAIL/BLOCKED, emit that status; otherwise emit OK.
 
 ## Step 5 — Cleanup
 
 - **Success path** (Prime(post-wave) returned `PASS`): call `scripts/wavebus/wave-cleanup <wave-root>`. Report "bus cleaned" in the final summary.
 - **Failure / abort path**: DO NOT cleanup. Leave the bus in place. Tell the user the exact wave root path so they can inspect `plan.md`, each `prompt.md`, each `results.md`, and each flight's `merge-report.md`.
+
+## Step 6 — Final status emission (auto mode only)
+
+When `/nextwave auto` is invoked by `/wavemachine`, the Orchestrator's **last assistant message** must be exactly one line of JSON — nothing else, no prose, no fences. `/wavemachine`'s loop parses this line to decide whether to iterate or abort.
+
+Mapping from Prime's terminal `status` to the wavemachine-facing status:
+
+| Prime return | Exit path | Emitted line |
+|---|---|---|
+| Step 4 Prime(post-wave) `PASS` | Wave merged cleanly | `{"status":"OK","wave_id":"<N>"}` |
+| Step 2 Prime(pre-wave) `BLOCKED` | Wave cannot start | `{"status":"BLOCKED","wave_id":"<N>","reason":"<one-line from plan.md>"}` |
+| Step 3f Prime(post-flight) `BLOCKED` | A flight rejected merge on policy grounds | `{"status":"BLOCKED","wave_id":"<N>","reason":"<one-line from merge-report.md>"}` |
+| Step 3f Prime(post-flight) `FAIL` | A flight hit an unrecoverable failure (CI red, merge conflict, etc.) | `{"status":"FAIL","wave_id":"<N>","reason":"<one-line from merge-report.md>"}` |
+| Step 4 Prime(post-wave) `FAIL` / `BLOCKED` | Drift / reconciliation failed after all flights merged | `{"status":"FAIL","wave_id":"<N>","reason":"<one-line from merge-report.md>"}` / `{"status":"BLOCKED","wave_id":"<N>","reason":"..."}` |
+
+`<N>` is the wave id (e.g. `W-4`). The `reason` field is required on BLOCKED and FAIL; OK never carries a reason.
+
+**Auto-mode approval gate fallback:** Step 3d says auto mode pauses and surfaces to the caller if `wave_ci_trust_level` drops below threshold. Treat that as BLOCKED: emit `{"status":"BLOCKED","wave_id":"<N>","reason":"ci_trust_level below threshold — manual approval required"}`.
+
+**Interactive mode:** Do NOT emit the JSON line. Interactive `/nextwave` ends with the human-readable prompt described in Step 4 — emitting a machine-parseable line would pollute the user-facing flow.
+
+**Ordering:** the JSON line comes AFTER the Discord announcement and the cleanup step, as the **final** assistant message of the auto-mode run. If any later output would follow (a summary table, a vox call), move it BEFORE the JSON emission.
 
 ## Flight stub prompt (template — Prime writes this into each `prompt.md`)
 
