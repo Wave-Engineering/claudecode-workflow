@@ -38,6 +38,7 @@ from wave_status.state import (
     review,
     save_json,
     set_current_wave,
+    set_kahuna_branch,
     show,
     status_dir,
     store_flight_plan,
@@ -209,6 +210,14 @@ def _cmd_set_current(args: argparse.Namespace) -> None:
     _regenerate_dashboard(root)
 
 
+def _cmd_set_kahuna_branch(args: argparse.Namespace) -> None:
+    """Handle ``set-kahuna-branch [<branch>]`` — empty arg clears the field."""
+    root = get_project_root()
+    branch = args.branch.strip() if args.branch else ""
+    set_kahuna_branch(branch or None, root)
+    _regenerate_dashboard(root)
+
+
 def _cmd_wavemachine_start(args: argparse.Namespace) -> None:
     """Handle ``wavemachine-start [--launcher <tag>]``."""
     root = get_project_root()
@@ -361,6 +370,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_sc.add_argument("wave_id", help="Wave ID (e.g. 'wave-6a')")
     p_sc.set_defaults(func=_cmd_set_current)
+
+    # set-kahuna-branch
+    p_skb = sub.add_parser(
+        "set-kahuna-branch",
+        help="Set or clear the active KAHUNA integration branch (devspec §5.1.4)",
+    )
+    p_skb.add_argument(
+        "branch",
+        nargs="?",
+        default="",
+        help="Branch name (e.g. 'kahuna/42-foo'); pass empty to clear",
+    )
+    p_skb.set_defaults(func=_cmd_set_kahuna_branch)
 
     # wavemachine-start
     p_ws = sub.add_parser(

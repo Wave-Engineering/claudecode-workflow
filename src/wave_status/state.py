@@ -733,6 +733,26 @@ def set_current_wave(wave_id: str, root: Path) -> dict:
     return state_data
 
 
+def set_kahuna_branch(branch: str | None, root: Path) -> dict:
+    """Set or clear ``kahuna_branch`` in ``state.json``.
+
+    Used by the sdlc-server ``wave_init`` handler (mcp-server-sdlc#206) when
+    the optional ``kahuna`` argument is passed — the handler creates the
+    integration branch via the platform API and then calls this CLI to record
+    the branch name in wave state. See devspec §5.1.4 for the schema.
+
+    Pass an empty string or ``None`` to clear the field (sets ``kahuna_branch``
+    to ``None`` in the JSON, which serializes as ``null``). Idempotent:
+    re-setting the same value is a no-op aside from ``last_updated``.
+    """
+    d = status_dir(root)
+    state_data = load_state(d / "state.json")
+    state_data["kahuna_branch"] = branch if branch else None
+    state_data["last_updated"] = _now_iso()
+    save_json(d / "state.json", state_data)
+    return state_data
+
+
 def wavemachine_start(root: Path, launcher: str = "") -> dict:
     """Mark the plan as actively driven by wavemachine.
 
