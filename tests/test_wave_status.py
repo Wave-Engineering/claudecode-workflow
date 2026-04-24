@@ -534,6 +534,89 @@ class TestSetCurrent:
         assert html.stat().st_mtime_ns >= mtime_before
 
 
+class TestSetKahunaBranch:
+    """Verify ``set-kahuna-branch`` writes/clears the KAHUNA branch field."""
+
+    def test_set_kahuna_branch_writes_field(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """``set-kahuna-branch kahuna/42-foo`` writes kahuna_branch to state."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+
+        rc, _, err = run_cli(["set-kahuna-branch", "kahuna/42-foo"], repo)
+        assert rc == 0, f"set-kahuna-branch failed: {err}"
+        assert _state(repo)["kahuna_branch"] == "kahuna/42-foo"
+
+    def test_set_kahuna_branch_empty_arg_clears(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """Empty string arg clears the field (sets to null)."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        run_cli(["set-kahuna-branch", "kahuna/42-foo"], repo)
+
+        rc, _, err = run_cli(["set-kahuna-branch", ""], repo)
+        assert rc == 0, f"clear failed: {err}"
+        assert _state(repo)["kahuna_branch"] is None
+
+    def test_set_kahuna_branch_no_arg_clears(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """Missing positional arg defaults to empty → clear."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        run_cli(["set-kahuna-branch", "kahuna/42-foo"], repo)
+
+        rc, _, err = run_cli(["set-kahuna-branch"], repo)
+        assert rc == 0, f"clear via no-arg failed: {err}"
+        assert _state(repo)["kahuna_branch"] is None
+
+    def test_set_kahuna_branch_idempotent(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """Re-setting the same value does not error and leaves state unchanged."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        run_cli(["set-kahuna-branch", "kahuna/42-foo"], repo)
+
+        rc, _, err = run_cli(["set-kahuna-branch", "kahuna/42-foo"], repo)
+        assert rc == 0, f"idempotent re-set failed: {err}"
+        assert _state(repo)["kahuna_branch"] == "kahuna/42-foo"
+
+    def test_set_kahuna_branch_regenerates_dashboard(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """``set-kahuna-branch`` triggers dashboard regeneration."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        html = repo / ".status-panel.html"
+        assert html.exists()
+        mtime_before = html.stat().st_mtime_ns
+
+        time.sleep(0.05)
+        rc, _, _ = run_cli(["set-kahuna-branch", "kahuna/42-foo"], repo)
+        assert rc == 0
+        assert html.stat().st_mtime_ns >= mtime_before
+
+    def test_set_kahuna_branch_replaces_previous(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """Setting a new branch overwrites the previous value."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        run_cli(["set-kahuna-branch", "kahuna/42-foo"], repo)
+        run_cli(["set-kahuna-branch", "kahuna/43-bar"], repo)
+
+        assert _state(repo)["kahuna_branch"] == "kahuna/43-bar"
+
+
 class TestWavemachineFlag:
     """Verify ``wavemachine-start`` / ``wavemachine-stop`` flip state flags."""
 
