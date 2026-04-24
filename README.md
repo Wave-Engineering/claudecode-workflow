@@ -118,7 +118,7 @@ The `context-crystallizer/` directory contains the hooks and libraries that powe
 - **Libraries** — `context-analyzer.sh` (parse API payloads for token counts), `crystallizer.sh` (write crystal files)
 - **CLI** — `cc-context` (watch token usage in a terminal), `cc-cleanup` (prune old crystal files)
 
-Install standalone with `./install.sh --crystallizer`.
+Install standalone with `./install --crystallizer`.
 
 ### Settings Template
 
@@ -174,7 +174,7 @@ This will:
 ./install.sh --scripts     # Install scripts only
 ./install.sh --config      # Install config files only
 ./install.sh --mcps         # Install MCP servers only (via mcps.json manifest)
-./install.sh --crystallizer # Install context-crystallizer only
+./install --crystallizer   # Install context-crystallizer only
 ./install.sh --no-mcps      # Install everything except MCP servers
 ```
 
