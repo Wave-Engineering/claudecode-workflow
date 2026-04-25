@@ -610,11 +610,12 @@ Today `gl-settings` manages branch protection, tag protection, MR approval rules
 
 **New operation — `kahuna-sandbox` (composite):**
 - For a given project, applies the settings that establish the kahuna sandbox property:
-  - `PUT /projects/:id/merge_request_approval_settings` — 0 approvals required on target branches matching `kahuna/*`
-  - `PUT /projects/:id/settings` — `only_allow_merge_if_pipeline_succeeds=true` (so kahuna merges still gate on CI), `squash_option=default_on` (per CT-02)
-  - Merge queue configuration: disabled for kahuna target branches (specific API TBD — GitLab's merge trains are controlled per-project; a per-branch overlay may be needed if that's not supported)
+  - `PUT /projects/:id/protected_branches` — protect the `kahuna/*` pattern (developer push + developer merge). Required as a prerequisite for the per-branch approval rule below: GitLab approval rules can only be scoped to *protected* branches.
+  - `POST /projects/:id/approval_rules` — create a `kahuna-zero-approvals` rule with `approvals_required: 0`, scoped via `protected_branch_ids: [<kahuna_pattern_id>]` to the protected branch above. **Must NOT use `merge_request_approval_settings`** — that endpoint is project-wide and would unprotect main.
+  - `PUT /projects/:id/settings` — `only_allow_merge_if_pipeline_succeeds=true` (so kahuna merges still gate on CI), `squash_option=default_on` (per CT-02), `merge_pipelines_enabled=true`, `merge_trains_enabled=true`. **Merge trains ENABLED**, not disabled — they batch flight-MRs into one pipeline run per train, which is the throughput story autonomous execution needs (R-08). The previous "disabled" wording was an error.
 - Provides a single-command bootstrap: `gl-settings kahuna-sandbox <project-url>`
-- Includes drift-check mode for auditing which projects have KAHUNA sandbox settings applied
+- Includes drift-check mode (via `--dry-run` and `action="would_apply"` per gl-settings convention) for auditing which projects have KAHUNA sandbox settings applied
+- As-shipped: `bakeb7j0/gitlab-settings-automation` PR #29 (commit `b2af3d7`)
 
 #### 5.3.2 GitHub — no `gh-settings` tool today
 
