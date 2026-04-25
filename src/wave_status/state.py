@@ -1137,10 +1137,18 @@ def show(root: Path) -> dict:
     accepted_count = sum(1 for d in deferrals if d.get("status") == "accepted")
 
     # Action.
-    action_obj = state_data.get("current_action", {})
+    action_obj = state_data.get("current_action", {}) or {}
     action_str = action_obj.get("action", "idle")
+    label_str = action_obj.get("label", "")
     detail = action_obj.get("detail", "")
-    action_display = f"{action_str} — {detail}" if detail else action_str
+    # The action display used to be a bare "action - detail" string, but
+    # the KAHUNA gate actions carry structured detail payloads (dict with
+    # "failures" / "signals") that render as gibberish when stringified.
+    # Fall back to the plain action when detail isn't a scalar.
+    if isinstance(detail, str) and detail:
+        action_display = f"{action_str} — {detail}"
+    else:
+        action_display = action_str
 
     flight_display: str
     if total_flights == 0:
@@ -1150,6 +1158,15 @@ def show(root: Path) -> dict:
     else:
         flight_display = f"\u2014/{total_flights}"
 
+    # Flight counts restricted to the current wave - used by the Kahuna
+    # section to report "merged / pending" per devspec 5.2.5.
+    kahuna_merged = sum(
+        1 for fl in wave_flights if fl.get("status") == "completed"
+    )
+    kahuna_pending = sum(
+        1 for fl in wave_flights if fl.get("status") != "completed"
+    )
+
     return {
         "project": plan_data.get("project", "unknown"),
         "phase": f"{current_phase_idx}/{total_phases}",
@@ -1157,6 +1174,14 @@ def show(root: Path) -> dict:
         "wave": f"{wave_in_phase}/{waves_in_current_phase} in phase {current_phase_idx}",
         "flight": flight_display,
         "action": action_display,
+        "action_key": action_str,
+        "action_label": label_str or action_str,
+        "action_detail": detail,
         "progress": f"{closed_issues}/{total_issues} issues ({pct}%)",
         "deferrals": f"{pending_count} pending, {accepted_count} accepted",
+        # Optional Kahuna fields - tolerate absence for legacy state files.
+        "kahuna_branch": state_data.get("kahuna_branch"),
+        "kahuna_branches": state_data.get("kahuna_branches", []) or [],
+        "kahuna_flights_merged": kahuna_merged,
+        "kahuna_flights_pending": kahuna_pending,
     }
