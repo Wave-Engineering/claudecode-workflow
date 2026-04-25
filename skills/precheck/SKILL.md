@@ -15,7 +15,7 @@ Mandatory verification before any commit. Checks compliance, runs code review, p
 - `mcp__disc-server__disc_send` — post approval request to `#precheck` (channel `1491195025198157834`)
 
 ## Procedure
-`ibm()` (stop on fail) → `spec_validate_structure(N)` → run repo validation (`validate.sh`/`make test`/`pytest`/`npm test`); fix failures first → **dependency vulnerability scan** (see below) → launch `feature-dev:code-reviewer` via Agent over all changed files, WAIT, fix high+ findings → present the checklist → **notify BJ** (see "The Notification" below): `disc_send` to `#precheck`, **then `vox`** — **ALWAYS do both** → **STOP.** Wait for `/scp`/`/scpmr`/`/scpmmr`/affirmative. Negative/rework → return to work. If `disc_send` fails (MCP unavailable, network), still do `vox` — still STOP and wait for approval. Never bypass the STOP on notification failure.
+`ibm()` (stop on fail) → `spec_validate_structure(N)` → run repo validation (`validate.sh`/`make test`/`pytest`/`npm test`); fix failures first → **dependency vulnerability scan** (see below) → launch `feature-dev:code-reviewer` via Agent over all changed files, WAIT, fix high+ findings → present the checklist → **notify BJ** (see "The Notification" below): `disc_send` to `#precheck`, **then `vox`** — **ALWAYS do both** → **sandbox-context detection** (see "Sandbox Auto-Approval" below): if the current branch's base ref matches `^kahuna/[0-9]+-`, emit the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invoke `/scpmmr` immediately with no wait; otherwise **STOP.** Wait for `/scp`/`/scpmr`/`/scpmmr`/affirmative. Negative/rework → return to work. If `disc_send` fails (MCP unavailable, network), still do `vox` — still apply the sandbox-vs-stop logic above. Never bypass the STOP on notification failure in non-sandbox contexts.
 
 ## Dependency Vulnerability Scan
 Run `trivy fs --scanners vuln --severity HIGH,CRITICAL --format json --quiet .` on the project root. Parse the JSON output (each finding has a `FixedVersion` field — empty string means no fix available).
@@ -52,6 +52,29 @@ Ready for `/scp` / `/scpmr` / `/scpmmr` or rework.
 ```
 
 **`vox`:** same info, conversational, 1-2 sentences, ending with "Ready for your call."
+
+## Sandbox Auto-Approval (KAHUNA Flight Agents)
+
+Flight Agents working inside a KAHUNA sandbox push to a per-wave integration branch (`kahuna/<N>-<slug>`), not to `main`. In that context the human gate is a redundant pause — the wave Orchestrator has already decided the wave runs autonomously and reviews aggregated results at the wave gate, not per-flight. The full checklist (validation, code-reviewer, trivy) and Discord/`vox` notifications still run; only the STOP-and-wait step is bypassed.
+
+**Detection:**
+```
+current_branch = git rev-parse --abbrev-ref HEAD
+base_branch    = parse base ref from most recent PR created by agent (or from context)
+
+if base_branch matches regex "^kahuna/[0-9]+-":
+    sandbox_context = true
+else:
+    sandbox_context = false
+```
+
+The detection regex is `^kahuna/[0-9]+-`. Resolve `base_branch` from the most recent PR opened by this agent against the current branch (`gh pr view --json baseRefName`), or from the spawning Orchestrator's context when no PR exists yet.
+
+**Behavior matrix:**
+- `sandbox_context == false` (default — feature branch targeting `main`): existing behavior preserved — present checklist, notify, **STOP** and wait for `/scp` / `/scpmr` / `/scpmmr` / affirmative. This is the IT-09 negative case.
+- `sandbox_context == true` (Flight Agent on a kahuna sandbox): full checklist runs, full notifications fire, then emit the sentinel line **`[AUTO-APPROVED: kahuna sandbox]`** on stdout, then invoke `/scpmmr` with no wait. The sentinel makes the auto-approval grep-able in transcripts and Discord scrollback.
+
+**Non-bypassable items:** validation, code-reviewer (high+ findings still block), trivy scan, Discord `#precheck` post, `vox` announcement. These run in full regardless of `sandbox_context`. Only the human-approval STOP is replaced by the sentinel + auto-`/scpmmr`.
 
 ## Rules
 No diff. No commit. No skipping code-reviewer. Honesty over speed — no checking items you haven't verified. **Linting is not testing** — passing lint/typecheck does not mean code works. **`vox` is ALWAYS called** — it is NOT a fallback for disc_send failure. Both notifications happen every time.
