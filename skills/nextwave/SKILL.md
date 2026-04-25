@@ -56,15 +56,16 @@ CC sub-agents do not have the `Agent`/`Task` tool. Only the top-level session ca
 2. Resolve **target repo slug** for the bus path. Same-repo waves: use the current repo's slug. Cross-repo waves (wave plan lives in this repo, stories live elsewhere): use the target repo's slug per `lesson_cross_repo_wave_orchestration.md`.
 3. Verify main is clean in the target repo; `wave_previous_merged()` confirms prior wave landed; `spec_validate_structure(issue)` for each issue in the wave.
 4. Call `scripts/wavebus/wave-init <repo-slug> <N> 1`. Flight count is `1` initially — Prime may re-invoke it with the real count (script is idempotent). Capture the printed wave root.
-5. Pre-create worktrees per issue. Same-repo: `Agent` calls in Step 3 can use `isolation: "worktree"`. Cross-repo: create them now via `git -C <target-repo> worktree add /tmp/wt-<slug>-<issue> -b feature/<issue>-<desc>` (one per issue).
-6. Resolve identity from `/tmp/claude-agent-<md5>.json`; post to `#wave-status` (`1487386934094462986`): `"🏄 **Wave <N> started** — <project>, <issue-count> issues. Agent: **<dev-name>** <dev-avatar>"`. If `disc_send` fails, log and continue.
-7. Spawn **Prime(pre-wave)** — single `Agent` call, `subagent_type: general-purpose`. Prompt template below.
+5. **Read `kahuna_branch` from wave state** via `wave_show()` (or by reading `.claude/status/state.json` in the target repo). If the field is present and non-empty, the wave is executing under KAHUNA — capture the value (e.g. `kahuna/<epic-id>-<slug>`) and pass it into the Prime(pre-wave) prompt as the `kahuna_branch` input. If absent or empty, the wave is a legacy non-KAHUNA execution — flights base off `main` as before. Pre-created worktree branches (Step 6, cross-repo path) and `pr_create` `base` (Step 3e) honor this same value. See Dev Spec §5.2.3 for the authoritative contract.
+6. Pre-create worktrees per issue. Same-repo: `Agent` calls in Step 3 can use `isolation: "worktree"`. Cross-repo: create them now via `git -C <target-repo> worktree add /tmp/wt-<slug>-<issue> -b feature/<issue>-<desc> origin/<base-ref>` (one per issue), where `<base-ref>` is `kahuna_branch` if set, else `main`.
+7. Resolve identity from `/tmp/claude-agent-<md5>.json`; post to `#wave-status` (`1487386934094462986`): `"🏄 **Wave <N> started** — <project>, <issue-count> issues. Agent: **<dev-name>** <dev-avatar>"`. If `disc_send` fails, log and continue.
+8. Spawn **Prime(pre-wave)** — single `Agent` call, `subagent_type: general-purpose`. Prompt template below.
 
 ## Step 2 — Prime(pre-wave) prompt contract
 
 Prime(pre-wave) is a sub-agent. It does NOT have `Agent`; it cannot spawn Flights. Its job is to plan the wave into the bus.
 
-Prompt template (fill in `<repo-slug>`, `<N>`, `<wave-root>`, and the issue list):
+Prompt template (fill in `<repo-slug>`, `<N>`, `<wave-root>`, the issue list, and `<kahuna_branch>` — leave `<kahuna_branch>` blank or omit the line entirely if wave state had no `kahuna_branch`):
 
 > You are the Prime agent for wave `<N>` of `<repo-slug>`. You plan the wave into the filesystem bus at `<wave-root>`.
 >
@@ -73,13 +74,14 @@ Prompt template (fill in `<repo-slug>`, `<N>`, `<wave-root>`, and the issue list
 > - Issues in this wave: `<list-of-issue-numbers>`
 > - Wave root: `<wave-root>`
 > - Target repo: `<target-repo>`
+> - Kahuna branch: `<kahuna_branch>` (omit or leave empty for legacy non-KAHUNA waves)
 >
 > Steps:
 > 1. For each issue, fetch the spec via `spec_get` and acceptance criteria via `spec_acceptance_criteria`. Summarize files-to-create / files-to-modify / test files per issue.
 > 2. Run `flight_overlap` + `flight_partition` on the per-issue manifests to determine flight structure. Flight 1 maximizes issue count; later flights resolve file-level conflicts. When in doubt, sequence.
 > 3. If the partition needs more flights than the bus was pre-created for, call `scripts/wavebus/wave-init <repo-slug> <N> <final-flight-count>` (idempotent).
 > 4. Write `<wave-root>/plan.md` summarizing the flight structure (flight M → issues, per-issue file manifest, rationale).
-> 5. For each flight M and each issue X in it, write `<wave-root>/flight-<M>/issue-<X>/prompt.md` containing the full Flight instructions (see "Flight stub prompt" in the caller's skill body — reproduce verbatim, fill placeholders).
+> 5. For each flight M and each issue X in it, write `<wave-root>/flight-<M>/issue-<X>/prompt.md` containing the full Flight instructions (see "Flight stub prompt" in the caller's skill body — reproduce verbatim, fill placeholders). **If `kahuna_branch` is set on this wave, pass it into each Flight prompt as `<kahuna_branch>` so the Flight bases its work on `origin/<kahuna_branch>` instead of `main`. If `kahuna_branch` is empty, omit the kahuna lines from the Flight prompt — flights branch off `main` as in legacy non-KAHUNA execution.**
 > 6. Register the plan via `wave_flight_plan`.
 > 7. If any issue's spec is unbuildable (missing AC, structural contradiction, etc.), mark the plan `BLOCKED` and name the failing issue + reason in `plan.md`.
 >
@@ -119,7 +121,7 @@ In **auto mode**: call `wave_ci_trust_level`; if trust is sufficient, skip the g
 
 ### 3e. Spawn Prime(post-flight).
 
-One `Agent` call, `subagent_type: general-purpose`. Prompt template:
+One `Agent` call, `subagent_type: general-purpose`. Pass the wave's `kahuna_branch` (captured in Step 1.5) into the prompt — set base for `pr_create`. Empty/absent → flights PR against `main` as in legacy execution. Prompt template:
 
 > You are the Prime(post-flight) agent for wave `<N>`, flight `<M>` of `<repo-slug>`. Flights have already committed in their worktrees. You push, PR, wait CI, verify commutativity, and merge.
 >
@@ -128,10 +130,11 @@ One `Agent` call, `subagent_type: general-purpose`. Prompt template:
 > - Flight: `<M>`
 > - Issues in this flight: `<list>`
 > - Target repo: `<target-repo>`
+> - Kahuna branch: `<kahuna_branch>` (omit or leave empty for legacy non-KAHUNA waves)
 >
 > Steps:
 > 1. For each issue X in this flight, read `<wave-root>/flight-<M>/issue-<X>/results.md` and verify `DONE` contains `PASS`. If any FAIL, stop and write a `BLOCKED` report naming the failing issues.
-> 2. For each issue, push the Flight's commit from its worktree (`git -C <worktree> push -u origin <branch>`), create a PR via `pr_create`, wait for CI via `pr_wait_ci`.
+> 2. For each issue, push the Flight's commit from its worktree (`git -C <worktree> push -u origin <branch>`), create a PR via `pr_create({base: <kahuna_branch>})` if `kahuna_branch` is set else `pr_create({base: "main"})`, then wait for CI via `pr_wait_ci`. **Every Flight PR in a KAHUNA wave targets the kahuna branch — never `main`. The kahuna→main MR is opened separately by `wave_finalize` per Dev Spec §5.2.2.**
 > 3. If this flight has multiple issues, run `commutativity_verify` on the changesets `{id, head_ref}`. Interpret the group verdict:
 >    - `STRONG` / `MEDIUM` → `pr_merge(skip_train=true)` for all.
 >    - `WEAK` / `ORACLE_REQUIRED` → sequential merge via the merge queue (no skip).
@@ -220,6 +223,7 @@ This prompt is what each Flight sub-agent receives. Preserve the SPEC EXECUTOR b
 >
 > Your working directory is `<worktree-path>` (use absolute paths or `cd` into it before any git/file operations).
 > Your branch is `<branch-name>` (already checked out in the worktree).
+> **Base your work on origin/`<kahuna_branch>`, not main.** This wave is executing under KAHUNA; your branch was created from `origin/<kahuna_branch>` and your PR will target `<kahuna_branch>`. *(Omit this line entirely when `kahuna_branch` is unset — flights then base off `main` as in legacy non-KAHUNA execution.)*
 > Full instructions for this issue are at `<wave-root>/flight-<M>/issue-<X>/prompt.md` — re-read that file now; this block is only the contract for your return.
 >
 > **SPEC EXECUTOR rules (preserve verbatim):**
