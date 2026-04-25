@@ -402,6 +402,8 @@ wave_finalize({
   state: "open" | "merged",
   created: boolean,         // true if newly created, false if already existed
   body_sha: string          // hash of the assembled body, for drift detection
+                            // (computed on EVERY call, including created:false —
+                            //  compare across successive calls to detect body drift)
 }
 ```
 
@@ -433,7 +435,11 @@ commutativity_verify({
   mode: "pairwise" | "single_target",  // NEW field — disambiguates behavior
   verdict: "STRONG" | "MEDIUM" | "WEAK" | "ORACLE_REQUIRED",
   pairwise_results?: Array<PairResult>,  // populated iff mode === "pairwise"
-  single_target_result?: SingleTargetResult  // populated iff mode === "single_target"
+  single_target_result?: SingleTargetResult,  // populated iff mode === "single_target"
+  warnings?: string[]       // optional; emitted when the probe returns an unknown
+                            // verdict OR when a defensive guard fires for an
+                            // unexpected single-target pair. Consumers should log
+                            // and surface these to the operator.
 }
 ```
 
