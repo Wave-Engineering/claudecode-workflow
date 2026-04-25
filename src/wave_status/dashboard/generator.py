@@ -25,7 +25,7 @@ from wave_status.dashboard.kahuna_section import render_kahuna_section
 from wave_status.dashboard.polling import render_polling_script
 from wave_status.dashboard.progress_rail import render_progress_rail
 from wave_status.dashboard.theme import ACTION_BANNER_STATES, render_base_css
-from wave_status.state import html_path
+from wave_status.state import html_path, status_dir
 
 
 def _render_header(phases_data: dict, state_data: dict) -> str:
@@ -140,7 +140,15 @@ def generate_dashboard(
     grid = render_execution_grid(phases_data, state_data, flights_data)
     accepted_deferrals = render_accepted_deferrals(state_data)
     footer = _render_footer(state_data)
-    script = render_polling_script()
+    # Polling URL is the path FROM the HTML's directory TO state.json. Both
+    # paths use the same status_dir resolution, so this is just the relative
+    # path between them. POSIX separators because the URL lives in a browser
+    # `fetch()`, not in fs APIs.
+    state_rel = os.path.relpath(
+        status_dir(root) / "state.json",
+        start=html_path(root).parent,
+    ).replace(os.sep, "/")
+    script = render_polling_script(state_rel)
 
     # Kahuna section sits between the action banner and the progress rail
     # when present.  Legacy state files (no kahuna_branch / kahuna_branches)
