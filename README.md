@@ -11,6 +11,7 @@ This repo packages the custom skills, utility scripts, and project instructions 
 | [Getting Started](docs/getting-started.md) | 15-minute walkthrough of your first session |
 | [Concepts](docs/concepts.md) | How the pieces fit together |
 | [Skill Reference](docs/skill-reference.md) | Detailed docs for every skill |
+| [KAHUNA Guide](docs/kahuna-guide.md) | Run `/wavemachine` autonomously on multi-issue epics |
 | [Discord Setup](docs/discord-config.md) | Bot token, watcher, inter-agent messaging |
 | [Statusline Indicators](docs/statusline-indicators.md) | Per-session indicator interface for skills and scripts |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and fixes |
