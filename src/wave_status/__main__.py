@@ -233,7 +233,15 @@ def _cmd_wavemachine_stop(args: argparse.Namespace) -> None:
 
 
 def _cmd_show(args: argparse.Namespace) -> None:
-    """Handle ``show`` — print summary, NO dashboard regen."""
+    """Handle ``show`` — print summary, NO dashboard regen.
+
+    When the state carries KAHUNA context (``kahuna_branch`` set, or
+    ``kahuna_branches`` history non-empty, or ``action`` is a gate state),
+    the summary is followed by a "Kahuna" section with branch + merged/
+    pending flight counts, a trust-signal summary for ``gate_evaluating``,
+    a failure detail block for ``gate_blocked``, and a collapsed history
+    table (last 10 entries) per devspec §5.2.5.
+    """
     root = get_project_root()
     summary = show(root)
     lines = [
@@ -245,7 +253,100 @@ def _cmd_show(args: argparse.Namespace) -> None:
         f"Progress:  {summary['progress']}",
         f"Deferrals: {summary['deferrals']}",
     ]
+    lines.extend(_render_kahuna_cli(summary))
     print("\n".join(lines))
+
+
+def _render_kahuna_cli(summary: dict) -> list[str]:
+    """Format the Kahuna CLI block from a ``state.show`` summary.
+
+    Returns an empty list when there is no Kahuna context to report so
+    legacy, non-KAHUNA output remains byte-identical.
+    """
+    branch = summary.get("kahuna_branch")
+    history = summary.get("kahuna_branches") or []
+    action_key = summary.get("action_key") or ""
+    detail = summary.get("action_detail")
+
+    has_context = bool(branch) or bool(history) or action_key in (
+        "gate_evaluating",
+        "gate_blocked",
+    )
+    if not has_context:
+        return []
+
+    out: list[str] = ["", "Kahuna:"]
+
+    if branch:
+        merged = summary.get("kahuna_flights_merged", 0)
+        pending = summary.get("kahuna_flights_pending", 0)
+        out.append(f"  Branch:   {branch}")
+        out.append(f"  Flights:  {merged} merged, {pending} pending")
+    else:
+        out.append("  Branch:   (none active)")
+
+    if action_key == "gate_evaluating":
+        signals: list[str] = []
+        if isinstance(detail, dict):
+            raw = detail.get("signals")
+            if isinstance(raw, list):
+                signals = [str(s) for s in raw]
+        if not signals:
+            signals = [
+                "commutativity_verify",
+                "ci_wait_run",
+                "code-reviewer",
+                "trivy vuln scan",
+            ]
+        out.append("  Trust signals evaluating:")
+        for s in signals:
+            out.append(f"    - {s}")
+
+    elif action_key == "gate_blocked":
+        failures: list[str] = []
+        if isinstance(detail, dict):
+            raw = detail.get("failures")
+            if isinstance(raw, list):
+                for entry in raw:
+                    if isinstance(entry, dict):
+                        sig = str(entry.get("signal", ""))
+                        reason = str(entry.get("reason", ""))
+                        failures.append(
+                            f"{sig}: {reason}" if reason else sig
+                        )
+                    else:
+                        failures.append(str(entry))
+        elif isinstance(detail, str) and detail:
+            failures.append(detail)
+        if not failures:
+            failures.append("Gate blocked — see wave state for details.")
+        out.append("  Gate blocked — failing signals:")
+        for f in failures:
+            out.append(f"    - {f}")
+
+    if history:
+        # Collapsible table — print a header and up to the last 10 rows.
+        shown = history[-10:]
+        out.append(f"  History (last {len(shown)} of {len(history)}):")
+        out.append(
+            "    BRANCH | EPIC | CREATED | RESOLVED | DISPOSITION | "
+            "MERGE_SHA | ABORT_REASON"
+        )
+        for entry in shown:
+            if not isinstance(entry, dict):
+                continue
+            b = str(entry.get("branch", ""))
+            epic = str(entry.get("epic_id", ""))
+            created = str(entry.get("created_at", ""))
+            resolved = str(entry.get("resolved_at", ""))
+            disp = str(entry.get("disposition", ""))
+            sha = str(entry.get("main_merge_sha", "-") or "-")
+            reason = str(entry.get("abort_reason", "-") or "-")
+            out.append(
+                f"    {b} | {epic} | {created} | {resolved} | {disp} | "
+                f"{sha} | {reason}"
+            )
+    return out
 
 
 # ---------------------------------------------------------------------------

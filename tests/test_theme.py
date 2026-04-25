@@ -148,7 +148,8 @@ class TestPhaseColors:
 
 
 class TestActionBannerStates:
-    """All 7 action banner states from PRD Appendix A."""
+    """Action banner states — 7 from PRD Appendix A + 2 from the KAHUNA
+    devspec §5.2.5 (``gate_evaluating``, ``gate_blocked``)."""
 
     EXPECTED_ACTIONS = [
         "pre-flight",
@@ -158,10 +159,12 @@ class TestActionBannerStates:
         "post-wave-review",
         "waiting-on-meatbag",
         "idle",
+        "gate_evaluating",
+        "gate_blocked",
     ]
 
-    def test_seven_states(self) -> None:
-        assert len(ACTION_BANNER_STATES) == 7
+    def test_nine_states(self) -> None:
+        assert len(ACTION_BANNER_STATES) == 9
 
     def test_all_actions_present(self) -> None:
         for action in self.EXPECTED_ACTIONS:
@@ -170,6 +173,22 @@ class TestActionBannerStates:
     def test_no_extra_actions(self) -> None:
         extra = set(ACTION_BANNER_STATES.keys()) - set(self.EXPECTED_ACTIONS)
         assert extra == set(), f"Unexpected actions: {extra}"
+
+    # --- KAHUNA additions (devspec §5.2.5) ---
+
+    def test_gate_evaluating_properties(self) -> None:
+        s = ACTION_BANNER_STATES["gate_evaluating"]
+        assert s["css_class"] == "action-gate-evaluating"
+        assert s["border_color"] == "var(--yellow)"
+        # Pulsing animation to indicate active concurrent scoring.
+        assert "pulse" in s["animation"]
+
+    def test_gate_blocked_properties(self) -> None:
+        s = ACTION_BANNER_STATES["gate_blocked"]
+        assert s["css_class"] == "action-gate-blocked"
+        assert s["border_color"] == "var(--red)"
+        # Red emphasis drives the eye; the throb reinforces urgency.
+        assert "throb" in s["animation"]
 
     def test_each_state_has_required_keys(self) -> None:
         for action, state in ACTION_BANNER_STATES.items():
@@ -297,6 +316,16 @@ class TestRenderBaseCSS:
 
     def test_glow_animation_reference(self) -> None:
         assert "glow 2s ease-in-out infinite" in self.css
+
+    def test_pulse_keyframes_for_gate_evaluating(self) -> None:
+        """KAHUNA gate_evaluating uses the pulse animation (devspec §5.2.5)."""
+        assert "@keyframes pulse" in self.css
+
+    def test_gate_blocked_has_red_emphasis(self) -> None:
+        """KAHUNA gate_blocked class must have red emphasis (devspec §5.2.5)."""
+        assert ".action-banner.action-gate-blocked" in self.css
+        # Red rgba or var(--red) on the label colors it red.
+        assert "var(--red)" in self.css
 
     # --- Component styles ---
 

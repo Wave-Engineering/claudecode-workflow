@@ -806,6 +806,157 @@ class TestExtendAutoAdvance:
 # No external dependencies test [CT-01]
 # ---------------------------------------------------------------------------
 
+class TestShowKahuna:
+    """``wave-status show`` KAHUNA section rendering (issue #415, AC-4/AC-6).
+
+    Legacy state files render unchanged; KAHUNA state files add a Kahuna
+    block with branch, flight counts, conditional trust/failure blocks, and
+    a history listing.
+    """
+
+    def _init_and_load_state(self, repo: Path, run_cli) -> dict:
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        run_cli(["flight-plan", "flights.json"], repo)
+        state_path = repo / ".claude" / "status" / "state.json"
+        return json.loads(state_path.read_text(encoding="utf-8"))
+
+    def _write_state(self, repo: Path, state: dict) -> None:
+        state_path = repo / ".claude" / "status" / "state.json"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    def test_legacy_state_show_has_no_kahuna_block(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """Legacy state (no kahuna_*) prints NO Kahuna section (AC-1/AC-2)."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+
+        rc, out, err = run_cli(["show"], repo)
+        assert rc == 0, f"show failed: {err}"
+        assert "Kahuna:" not in out
+        # But the standard fields remain.
+        assert "Project:" in out
+        assert "Progress:" in out
+
+    def test_kahuna_branch_show_renders_section(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """kahuna_branch set -> "Kahuna:" section with branch+counts (AC-4)."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        _write_flights(repo)
+        run_cli(["init", "plan.json"], repo)
+        run_cli(["flight-plan", "flights.json"], repo)
+        run_cli(["set-kahuna-branch", "kahuna/42-foo"], repo)
+
+        rc, out, err = run_cli(["show"], repo)
+        assert rc == 0, f"show failed: {err}"
+        assert "Kahuna:" in out
+        assert "kahuna/42-foo" in out
+        # One pending flight (from _SAMPLE_FLIGHTS) -> "0 merged, 1 pending".
+        assert "0 merged, 1 pending" in out
+
+    def test_kahuna_branches_history_in_show(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """Populated kahuna_branches history appears in show output."""
+        repo = temp_git_repo
+        state = self._init_and_load_state(repo, run_cli)
+        state["kahuna_branch"] = "kahuna/42-foo"
+        state["kahuna_branches"] = [
+            {
+                "branch": "kahuna/41-prior",
+                "epic_id": 41,
+                "created_at": "2026-04-23T10:00:00Z",
+                "resolved_at": "2026-04-24T02:15:00Z",
+                "disposition": "merged",
+                "main_merge_sha": "abc123",
+            },
+            {
+                "branch": "kahuna/40-aborted",
+                "epic_id": 40,
+                "created_at": "2026-04-22T08:00:00Z",
+                "resolved_at": "2026-04-22T09:30:00Z",
+                "disposition": "aborted",
+                "abort_reason": "code_reviewer_findings",
+            },
+        ]
+        self._write_state(repo, state)
+
+        rc, out, err = run_cli(["show"], repo)
+        assert rc == 0, f"show failed: {err}"
+        assert "History" in out
+        assert "kahuna/41-prior" in out
+        assert "kahuna/40-aborted" in out
+        assert "code_reviewer_findings" in out
+
+    def test_gate_evaluating_shows_trust_signals(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """action=gate_evaluating prints the Trust signals evaluating list."""
+        repo = temp_git_repo
+        state = self._init_and_load_state(repo, run_cli)
+        state["kahuna_branch"] = "kahuna/42-foo"
+        state["current_action"] = {
+            "action": "gate_evaluating",
+            "label": "gate_evaluating",
+            "detail": {
+                "signals": ["commutativity_verify", "ci_wait_run"],
+            },
+        }
+        self._write_state(repo, state)
+
+        rc, out, err = run_cli(["show"], repo)
+        assert rc == 0, f"show failed: {err}"
+        assert "Trust signals evaluating" in out
+        assert "commutativity_verify" in out
+        assert "ci_wait_run" in out
+
+    def test_gate_blocked_shows_failures(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """action=gate_blocked prints Gate blocked failure reasons."""
+        repo = temp_git_repo
+        state = self._init_and_load_state(repo, run_cli)
+        state["kahuna_branch"] = "kahuna/42-foo"
+        state["current_action"] = {
+            "action": "gate_blocked",
+            "label": "gate_blocked",
+            "detail": {
+                "failures": [
+                    {
+                        "signal": "commutativity_verify",
+                        "reason": "WEAK verdict",
+                    },
+                ],
+            },
+        }
+        self._write_state(repo, state)
+
+        rc, out, err = run_cli(["show"], repo)
+        assert rc == 0, f"show failed: {err}"
+        assert "Gate blocked" in out
+        assert "commutativity_verify" in out
+        assert "WEAK verdict" in out
+
+    def test_dashboard_html_has_kahuna_section(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """Dashboard HTML renders the Kahuna section (AC-5, MV-02)."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        _write_flights(repo)
+        run_cli(["init", "plan.json"], repo)
+        run_cli(["flight-plan", "flights.json"], repo)
+        run_cli(["set-kahuna-branch", "kahuna/42-foo"], repo)
+
+        html = (repo / ".status-panel.html").read_text(encoding="utf-8")
+        assert 'class="kahuna-section"' in html
+        assert "kahuna/42-foo" in html
+
+
 class TestNoExternalDependencies:
     """Verify wave_status can be imported without pip install."""
 

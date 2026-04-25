@@ -115,6 +115,23 @@ ACTION_BANNER_STATES: dict[str, dict[str, str]] = {
         "border_color": "var(--border)",
         "animation": "none",
     },
+    # Kahuna trust-score gate evaluating — pulsing yellow to signal active
+    # concurrent scoring (devspec §5.1.4, §5.2.5; R-23, MV-03).
+    "gate_evaluating": {
+        "icon": "&#x1F6A6;",  # vertical traffic light
+        "css_class": "action-gate-evaluating",
+        "border_color": "var(--yellow)",
+        "animation": "pulse 1.5s ease-in-out infinite",
+    },
+    # Kahuna trust-score gate blocked — red emphasis, one or more signals
+    # failed (devspec §5.1.4, §5.2.5; R-23, MV-03). Also gets an outer throb
+    # so the blocked state reads clearly against the other red failure cues.
+    "gate_blocked": {
+        "icon": "&#x1F6D1;",  # stop sign
+        "css_class": "action-gate-blocked",
+        "border_color": "var(--red)",
+        "animation": "throb 2.5s ease-in-out infinite",
+    },
 }
 
 
@@ -243,6 +260,25 @@ body {{
 @keyframes glow {{
     0%, 100% {{ box-shadow: 0 0 5px var(--fuchsia-dim); }}
     50% {{ box-shadow: 0 0 20px var(--fuchsia), 0 0 40px var(--fuchsia-dim); }}
+}}
+
+@keyframes pulse {{
+    0%, 100% {{ box-shadow: 0 0 4px var(--yellow), inset 0 0 0 rgba(255, 204, 0, 0); }}
+    50%      {{ box-shadow: 0 0 16px var(--yellow), inset 0 0 0 rgba(255, 204, 0, 0.15); }}
+}}
+
+/* === Kahuna gate emphasis (devspec §5.2.5) === */
+
+.action-banner.action-gate-blocked {{
+    background: rgba(255, 68, 68, 0.08);
+}}
+
+.action-banner.action-gate-blocked .label {{
+    color: var(--red);
+}}
+
+.action-banner.action-gate-evaluating .label {{
+    color: var(--yellow);
 }}
 
 /* === Progress Rail === */
@@ -509,6 +545,120 @@ body {{
     color: var(--orange);
     margin-top: 8px;
     display: none;
+}}
+
+/* === Kahuna section (devspec §5.2.5) === */
+
+.kahuna-section {{
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--cyan);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin-bottom: 20px;
+}}
+
+.kahuna-section h2 {{
+    font-size: 0.95rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--cyan);
+    margin-bottom: 10px;
+}}
+
+.kahuna-section .kahuna-branch {{
+    font-family: var(--font-stack);
+    color: var(--text);
+    font-size: 0.95rem;
+    margin-bottom: 6px;
+    word-break: break-all;
+}}
+
+.kahuna-section .kahuna-counts {{
+    color: var(--text-dim);
+    font-size: 0.85rem;
+}}
+
+.kahuna-trust-signals,
+.kahuna-signal-failures {{
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+}}
+
+.kahuna-trust-signals h3,
+.kahuna-signal-failures h3 {{
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+}}
+
+.kahuna-signal-failures {{
+    color: var(--red);
+}}
+
+.kahuna-signal-list {{
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}}
+
+.kahuna-signal-list li {{
+    padding: 3px 0;
+    font-size: 0.85rem;
+}}
+
+.kahuna-history {{
+    margin-top: 12px;
+}}
+
+.kahuna-history summary {{
+    cursor: pointer;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 6px 0;
+}}
+
+.kahuna-history-table {{
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 6px;
+}}
+
+.kahuna-history-table th,
+.kahuna-history-table td {{
+    padding: 6px 10px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.8rem;
+}}
+
+.kahuna-history-table th {{
+    color: var(--text-dim);
+    font-weight: 500;
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 1px;
+}}
+
+.kahuna-history-table tr:last-child td {{
+    border-bottom: none;
+}}
+
+.kahuna-history-table .disposition-merged {{
+    color: var(--green);
+}}
+
+.kahuna-history-table .disposition-aborted {{
+    color: var(--red);
+}}
+
+.kahuna-history-table .disposition-abandoned {{
+    color: var(--orange);
 }}
 
 /* === Responsive === */

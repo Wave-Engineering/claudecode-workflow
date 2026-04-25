@@ -21,6 +21,7 @@ from wave_status.dashboard.deferral_sections import (
 )
 from wave_status.dashboard.execution_grid import render_execution_grid
 from wave_status.dashboard.gauge_cards import render_gauge_cards
+from wave_status.dashboard.kahuna_section import render_kahuna_section
 from wave_status.dashboard.polling import render_polling_script
 from wave_status.dashboard.progress_rail import render_progress_rail
 from wave_status.dashboard.theme import ACTION_BANNER_STATES, render_base_css
@@ -132,6 +133,7 @@ def generate_dashboard(
     css = render_base_css()
     header = _render_header(phases_data, state_data)
     banner = _render_action_banner(state_data)
+    kahuna = render_kahuna_section(state_data, flights_data)
     rail = render_progress_rail(phases_data, state_data)
     gauges = render_gauge_cards(phases_data, state_data, flights_data)
     pending_deferrals = render_pending_deferrals(state_data)
@@ -139,6 +141,11 @@ def generate_dashboard(
     accepted_deferrals = render_accepted_deferrals(state_data)
     footer = _render_footer(state_data)
     script = render_polling_script()
+
+    # Kahuna section sits between the action banner and the progress rail
+    # when present.  Legacy state files (no kahuna_branch / kahuna_branches)
+    # produce an empty string — we drop an empty line to keep output tidy.
+    kahuna_block = f"{kahuna}\n" if kahuna else ""
 
     html_content = (
         "<!DOCTYPE html>\n"
@@ -155,6 +162,7 @@ def generate_dashboard(
         '<div class="container">\n'
         f"{header}\n"
         f"{banner}\n"
+        f"{kahuna_block}"
         f"{rail}\n"
         f"{gauges}\n"
         f"{pending_deferrals}\n"
