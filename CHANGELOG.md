@@ -101,6 +101,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `afk-notify` Stop hook — replaced by kill switch on discord-watcher
 
+## [KAHUNA MVP] - 2026-04-25
+
+### Added
+
+- **KAHUNA — autonomous epic delivery via per-epic integration branches.** Lets `/wavemachine` ship a whole epic to `main` in one autonomous run instead of stopping for human review on every Flight MR/PR. All Flights for an epic merge into a short-lived `kahuna/<epic-id>-<slug>` branch (CI-gated, no human review); when the epic is fully assembled and the four-signal trust score is green (commutativity STRONG/MEDIUM, CI green, code-reviewer-clean, trivy zero HIGH/CRITICAL), the system opens a single kahuna→main MR/PR and auto-merges it. Main's existing branch protection, required reviews, and merge rules are unchanged — KAHUNA only relaxes rules on `kahuna/*` branches. cc-workflow surface area in this release:
+
+  - **`/precheck` sandbox awareness** — Detects when a Flight Agent is operating inside a Kahuna sandbox (current branch's base ref matches `^kahuna/[0-9]+-`). When the full checklist passes (validation, code-reviewer no high+ findings, trivy clean, Discord `#precheck` post, vox announcement), `/precheck` emits the sentinel `[AUTO-APPROVED: kahuna sandbox]` and invokes `/scpmmr` directly instead of STOP-and-wait. Outside the sandbox, behavior is unchanged.
+  - **`/wavemachine` trust-score gate** — Wavemachine integrates four-signal trust-score evaluation at the kahuna→main MR/PR. Any red signal pauses for human review; degraded-signal fallback to human is automatic, not configured.
+  - **`/nextwave` kahuna base-ref plumbing** — Flight sub-agents branch off the kahuna integration branch (not main) and target it as their MR/PR base. The base ref is propagated end-to-end through wave planning, worktree creation, and PR creation.
+  - **`wave-status` CLI additions** — New `set-kahuna-branch` subcommand for KAHUNA state writes; renderers for `kahuna_branch` / `kahuna_branches` fields; gate-action surfacing in the dashboard and Discord wave-status embed.
+  - **New documentation** — [`docs/kahuna-guide.md`](docs/kahuna-guide.md) (engineer-facing how-to) and [`docs/kahuna-devspec.md`](docs/kahuna-devspec.md) (architecture, rationale, constraints, requirements).
+
+Companion changes ship in `mcp-server-sdlc` (kahuna lifecycle tools, `wave_finalize`, schema relaxations) and `gitlab-settings-automation` (per-platform sandbox configuration). See those repos' CHANGELOGs for details.
+
 ## [0.1.0] - 2026-03-22
 
 ### Added

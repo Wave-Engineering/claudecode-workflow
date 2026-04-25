@@ -34,6 +34,12 @@ cd claudecode-workflow
 
 **New here?** Start with [Getting Started](docs/getting-started.md), then [Concepts](docs/concepts.md).
 
+## KAHUNA
+
+KAHUNA is a per-epic integration-branch pattern that lets `/wavemachine` ship a whole multi-issue epic to `main` in one autonomous run. Flights merge into a short-lived `kahuna/<epic-id>-<slug>` branch (CI-gated, no human review); a four-signal trust score (commutativity, CI, code-reviewer, trivy) gates the single kahuna→main MR/PR. Main's existing protection, required reviews, and merge rules are unchanged.
+
+See the [KAHUNA Guide](docs/kahuna-guide.md) for usage and the [Dev Spec](docs/kahuna-devspec.md) for architecture and rationale.
+
 ## What's Included
 
 ### CLAUDE.md Template
