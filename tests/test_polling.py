@@ -159,6 +159,46 @@ class TestRenderPollingScript:
 
 
 # ---------------------------------------------------------------------------
+# state_path parameterization (cc-workflow#444)
+# ---------------------------------------------------------------------------
+
+
+class TestStatePathParameter:
+    """The polling script must fetch from the path the generator passes in.
+
+    cc-workflow#444: when the HTML lives at the project root (no .sdlc/),
+    the state.json is at .claude/status/state.json — a relative path the
+    caller computes and passes in. The default ('state.json') preserves
+    the .sdlc/waves/ same-dir layout for backward compat.
+    """
+
+    def test_default_path_is_state_json_for_sdlc_layout(self) -> None:
+        script = render_polling_script()
+        # Default (no arg) keeps the .sdlc/waves/ same-dir behavior.
+        assert 'var STATE_URL = "state.json";' in script
+
+    def test_custom_path_is_emitted_into_state_url(self) -> None:
+        script = render_polling_script(".claude/status/state.json")
+        assert 'var STATE_URL = ".claude/status/state.json";' in script
+        # And nothing left over from the default
+        assert 'var STATE_URL = "state.json";' not in script
+
+    def test_fetch_uses_state_url_constant_not_literal(self) -> None:
+        """fetch() must reference the STATE_URL var, not a hardcoded literal."""
+        script = render_polling_script(".claude/status/state.json")
+        assert "fetch(STATE_URL)" in script
+        # Confirm no hardcoded literal sneaks in alongside
+        assert 'fetch("state.json")' not in script
+
+    def test_path_is_json_encoded_against_quote_injection(self) -> None:
+        """A path containing a quote character must be safely escaped."""
+        # Edge case — unlikely in practice but proves the json.dumps boundary
+        script = render_polling_script('weird"path/state.json')
+        # The literal " inside the path must appear as \" in the JS source
+        assert r'var STATE_URL = "weird\"path/state.json";' in script
+
+
+# ---------------------------------------------------------------------------
 # No external dependencies  [CT-01]
 # ---------------------------------------------------------------------------
 
@@ -185,9 +225,21 @@ class TestNoDependencies:
             if line.strip().startswith(("import ", "from "))
         ]
 
+        # Per CT-01: stdlib only. Allow `from __future__` and known stdlib
+        # modules; reject any third-party or wave_status-internal import that
+        # would create a runtime dependency.
+        STDLIB_ALLOWED = {
+            "json", "os", "sys", "pathlib", "datetime", "html", "tempfile",
+            "subprocess", "argparse", "enum", "dataclasses", "collections",
+            "typing", "re", "time", "uuid", "io", "shutil",
+        }
         for line in import_lines:
-            assert line.startswith("from __future__"), (
-                f"Non-stdlib import found: {line}"
+            if line.startswith("from __future__"):
+                continue
+            tokens = line.split()
+            mod = tokens[1].split(".")[0] if len(tokens) >= 2 else ""
+            assert mod in STDLIB_ALLOWED, (
+                f"Non-stdlib import found in polling.py: {line}"
             )
 
 

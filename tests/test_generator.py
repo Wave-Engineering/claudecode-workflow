@@ -539,6 +539,27 @@ class TestGenerateDashboard:
         content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
         assert "setInterval" in content
 
+    def test_legacy_layout_uses_relative_state_path(self, tmp_path: Path) -> None:
+        """No .sdlc/ → HTML at root, state at .claude/status/ → STATE_URL must
+        be the relative path from project root to state.json (cc-workflow#444).
+        """
+        generate_dashboard(
+            tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
+        )
+        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        assert 'var STATE_URL = ".claude/status/state.json";' in content
+        # And the bare-literal regression must not slip back in
+        assert 'fetch("state.json")' not in content
+
+    def test_sdlc_layout_uses_sibling_state_path(self, tmp_path: Path) -> None:
+        """With .sdlc/ present → HTML and state are siblings → STATE_URL = 'state.json'."""
+        (tmp_path / ".sdlc").mkdir()
+        generate_dashboard(
+            tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
+        )
+        content = (tmp_path / ".sdlc" / "waves" / "dashboard.html").read_text(encoding="utf-8")
+        assert 'var STATE_URL = "state.json";' in content
+
     def test_contains_footer(self, tmp_path: Path) -> None:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()

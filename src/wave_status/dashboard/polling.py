@@ -11,22 +11,39 @@ No external dependencies — Python 3.10+ stdlib only  [CT-01].
 from __future__ import annotations
 
 
-def render_polling_script() -> str:
+import json as _json
+
+
+def render_polling_script(state_path: str = "state.json") -> str:
     """Return a ``<script>`` block for dashboard live-update polling.
 
     The script:
-    - Uses ``setInterval`` to fetch ``state.json`` every 3 000 ms.
+    - Uses ``setInterval`` to fetch ``state_path`` every 3 000 ms. Caller
+      supplies the relative path from the HTML file's directory to
+      ``state.json`` so the same polling code works for both layouts:
+      ``.sdlc/waves/dashboard.html`` (sibling state.json → ``"state.json"``)
+      and ``.status-panel.html`` at project root (state under
+      ``.claude/status/`` → ``".claude/status/state.json"``).
     - On success, updates every element that has a ``data-field`` attribute
       with the corresponding value from the JSON response.
     - On fetch failure (e.g. ``file://`` CORS or network error), clears the
       interval and displays a fallback notice in the footer.
     """
-    return """\
+    # JSON-encode the path so it lands in the JS source as a safe quoted
+    # string regardless of operator-controlled characters in the project
+    # layout. Spliced via .replace() rather than an f-string so the rest of
+    # the JS body's `{`/`}` braces don't need escaping.
+    state_path_js = _json.dumps(state_path)
+    return _SCRIPT_TEMPLATE.replace("__STATE_URL__", state_path_js)
+
+
+_SCRIPT_TEMPLATE = """\
 <script>
 (function () {
   "use strict";
 
   var POLL_INTERVAL_MS = 3000;
+  var STATE_URL = __STATE_URL__;
   var timerId = null;
 
   /**
@@ -99,7 +116,7 @@ def render_polling_script() -> str:
   }
 
   function pollState() {
-    fetch("state.json")
+    fetch(STATE_URL)
       .then(function (response) {
         if (!response.ok) {
           throw new Error("HTTP " + response.status);
