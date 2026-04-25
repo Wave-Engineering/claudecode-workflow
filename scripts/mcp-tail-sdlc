@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2016
+# (jq filter literals use single-quoted '$var' syntax for jq-level variables,
+# which are passed via --argjson; they must NOT be shell-expanded here.)
+# scripts/mcp-tail-sdlc — live-tail the fleet logfile filtered to wave-pattern events.
+#
+# Shows mcp-server-sdlc tool_call events alongside cc-workflow orchestration
+# lifecycle events (wave_start, flight_plan, wave_complete, etc.) so you can
+# watch a wave in motion without drowning in discord-watcher poll noise.
+#
+# Usage:
+#   mcp-tail-sdlc [--since DURATION] [--level LEVEL] [--server NAME]...
+#
+# Examples:
+#   mcp-tail-sdlc                          # follow new events from now
+#   mcp-tail-sdlc --since 5m               # back up 5 min then follow
+#   mcp-tail-sdlc --since 1h --level warn  # back 1h, warnings+errors only
+#   mcp-tail-sdlc --server sdlc            # sdlc only (no skill events)
+
+set -euo pipefail
+
+usage() {
+	cat <<'EOF'
+Usage: mcp-tail-sdlc [--since DURATION] [--level LEVEL] [--server NAME]...
+
+Tail ${LOG_FILE:-~/.claude/logs/mcp.jsonl}, filtered to wave-pattern events.
+
+Options:
+  --since DURATION    Seek back into history before following.
+                      Examples: 5m, 30m, 1h, 2h, 1d
+  --level LEVEL       Minimum level to show: debug | info | warn | error
+                      (default: info — debug is suppressed)
+  --server NAME       Only show this server. Repeatable.
+                      (default: sdlc + wave)
+  -h, --help          Show this help
+
+Default filter: server in {sdlc, wave}, level >= info.
+EOF
+}
+
+since=""
+min_level="info"
+servers=()
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--since)
+		since="$2"
+		shift 2
+		;;
+	--level)
+		min_level="$2"
+		shift 2
+		;;
+	--server)
+		servers+=("$2")
+		shift 2
+		;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	*)
+		echo "unknown flag: $1" >&2
+		usage >&2
+		exit 2
+		;;
+	esac
+done
+
+if [[ ${#servers[@]} -eq 0 ]]; then
+	servers=(sdlc wave)
+fi
+
+LOG_FILE="${LOG_FILE:-$HOME/.claude/logs/mcp.jsonl}"
+LOG_FILE="${LOG_FILE/#\~/$HOME}"
+
+if [[ ! -f "$LOG_FILE" ]]; then
+	echo "logfile not found: $LOG_FILE" >&2
+	exit 1
+fi
+
+# Map level name → numeric severity for jq comparison.
+level_num() {
+	case "$1" in
+	debug) echo 0 ;;
+	info) echo 1 ;;
+	warn) echo 2 ;;
+	error) echo 3 ;;
+	*)
+		echo "unknown level: $1" >&2
+		exit 2
+		;;
+	esac
+}
+min_num=$(level_num "$min_level")
+
+# Build server-set as a JSON array, passed via --argjson (no shell interpolation
+# inside the jq filter, so shellcheck stays happy and the filter stays readable).
+server_set_json=$(printf '%s\n' "${servers[@]}" | jq -R . | jq -s .)
+
+# Static jq filter — all dynamic values come in via --argjson.
+jq_filter='
+  ({"debug":0,"info":1,"warn":2,"error":3}) as $lvls
+  | select(.server as $s | $server_set | index($s))
+  | select($lvls[.level] >= $min_level)
+  | (.ts | sub("\\..*Z$"; "Z")) as $t
+  | (. | del(.ts, .server, .level, .event)) as $rest
+  | "\($t)  [\(.server)]  \(.level)  \(.event)  \($rest | tojson)"
+'
+
+# Build a grep pattern matching the server set — runs before jq to discard
+# discord-watcher noise (~99% of lines) at the cheap text level.
+grep_pattern=""
+for s in "${servers[@]}"; do
+	grep_pattern+="\"server\":\"${s}\"|"
+done
+grep_pattern="${grep_pattern%|}"
+
+if [[ -n "$since" ]]; then
+	# Translate Nm/Nh/Nd shorthand to GNU date's expected form.
+	case "$since" in
+	*m) since_arg="${since%m} minutes ago" ;;
+	*h) since_arg="${since%h} hours ago" ;;
+	*d) since_arg="${since%d} days ago" ;;
+	*) since_arg="$since ago" ;;
+	esac
+
+	cutoff=$(date -u -d "$since_arg" +%Y-%m-%dT%H:%M:%S.000Z 2>/dev/null) || {
+		echo "could not parse --since '$since' (try 5m, 30m, 1h, 1d)" >&2
+		exit 2
+	}
+
+	# History phase: grep pre-filter, then jq with timestamp cutoff prepended.
+	history_filter='select(.ts >= $cutoff) | '"$jq_filter"
+	grep -aE "$grep_pattern" "$LOG_FILE" 2>/dev/null |
+		jq -rc \
+			--argjson server_set "$server_set_json" \
+			--argjson min_level "$min_num" \
+			--arg cutoff "$cutoff" \
+			"$history_filter" 2>/dev/null ||
+		true
+fi
+
+# Live-tail phase: same grep pre-filter, then jq.
+tail -F -n0 "$LOG_FILE" 2>/dev/null |
+	grep --line-buffered -aE "$grep_pattern" |
+	jq -rc --unbuffered \
+		--argjson server_set "$server_set_json" \
+		--argjson min_level "$min_num" \
+		"$jq_filter" 2>/dev/null

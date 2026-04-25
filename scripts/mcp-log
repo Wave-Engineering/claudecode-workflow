@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# scripts/mcp-log — emit a structured log line to the fleet logfile.
+#
+# Used by cc-workflow skills (/nextwave, /wavemachine) to log
+# orchestration-layer lifecycle events alongside MCP-server tool_call events,
+# so post-mortem correlation works by temporal window. Schema conforms to
+# docs/mcp-logging-standard.md.
+#
+# Usage:
+#   mcp-log [--level LEVEL] [--server NAME] EVENT [KEY=VALUE...]
+#
+# Defaults:
+#   --level info
+#   --server wave
+#   LOG_FILE ${LOG_FILE:-~/.claude/logs/mcp.jsonl}
+#
+# KEY=VALUE pairs become fields on the emitted object. Values that parse as
+# JSON keep their JSON types (numbers, booleans, arrays, objects); anything
+# else is a string.
+#
+# Exit codes:
+#   0  success
+#   1  emission failed (jq error, write error)
+#   2  usage error
+
+set -euo pipefail
+
+usage() {
+	cat <<'EOF'
+Usage: mcp-log [--level LEVEL] [--server NAME] EVENT [KEY=VALUE...]
+
+Append a single JSON line to the fleet logfile (default
+~/.claude/logs/mcp.jsonl, override with $LOG_FILE).
+
+Required:
+  EVENT               Event name (e.g. flight_plan, wave_complete)
+
+Optional:
+  --level LEVEL       debug | info | warn | error (default: info)
+  --server NAME       Producer name (default: wave)
+  KEY=VALUE...        Additional fields. JSON-typed if parseable, else string.
+
+Examples:
+  mcp-log flight_plan wave=3 flight=1 issues='[418,419,420]'
+  mcp-log --level warn approval_gate wave=3 reason="ci flaky"
+  mcp-log wave_complete wave=4 status=PASS merged=3 deferred=0
+EOF
+}
+
+level=info
+server=wave
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+	--level)
+		level="$2"
+		shift 2
+		;;
+	--server)
+		server="$2"
+		shift 2
+		;;
+	-h | --help)
+		usage
+		exit 0
+		;;
+	--)
+		shift
+		break
+		;;
+	-*)
+		echo "unknown flag: $1" >&2
+		usage >&2
+		exit 2
+		;;
+	*) break ;;
+	esac
+done
+
+if [[ $# -lt 1 ]]; then
+	echo "EVENT name required" >&2
+	usage >&2
+	exit 2
+fi
+
+event="$1"
+shift
+
+LOG_FILE="${LOG_FILE:-$HOME/.claude/logs/mcp.jsonl}"
+LOG_FILE="${LOG_FILE/#\~/$HOME}"
+
+mkdir -p "$(dirname "$LOG_FILE")"
+
+# ISO 8601 with millisecond precision. GNU date — this script runs on dev
+# machines, not in containers, so %3N is fine.
+ts=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ)
+
+# Build base JSON object.
+json=$(jq -n \
+	--arg ts "$ts" \
+	--arg server "$server" \
+	--arg level "$level" \
+	--arg event "$event" \
+	'{ts: $ts, server: $server, level: $level, event: $event}')
+
+# Merge in KEY=VALUE pairs. JSON-typed values keep their type; other values
+# become strings. Malformed (no =) entries are skipped with a warning.
+for kv in "$@"; do
+	if [[ "$kv" != *=* ]]; then
+		echo "mcp-log: skipping malformed KEY=VALUE: $kv" >&2
+		continue
+	fi
+	key="${kv%%=*}"
+	value="${kv#*=}"
+
+	if json_val=$(echo "$value" | jq -c . 2>/dev/null); then
+		json=$(echo "$json" | jq --arg k "$key" --argjson v "$json_val" '. + {($k): $v}')
+	else
+		json=$(echo "$json" | jq --arg k "$key" --arg v "$value" '. + {($k): $v}')
+	fi
+done
+
+# Append as single line.
+echo "$json" | jq -c . >>"$LOG_FILE"

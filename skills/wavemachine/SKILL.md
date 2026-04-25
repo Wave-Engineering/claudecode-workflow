@@ -74,6 +74,7 @@ Once pre-flight passes:
 3. **Detect CI trust** by calling `wave_ci_trust_level()` once. (The value is also cached by each `/nextwave auto` iteration; calling it here is informational — it shapes the start announcement.)
 4. **Pre-wave kahuna bootstrap** (see "Pre-Wave Kahuna Bootstrap" below). Runs exactly once per epic on first `/wavemachine` invocation. On resume invocations the wave state already carries `kahuna_branch` and this step is a no-op.
 5. **Post to Discord.** `disc_send` to `#wave-status` (`1487386934094462986`): `"🌊 **Wavemachine started** — <project>, <N> waves pending. Agent: **<dev-name>** <dev-avatar>"`. Resolve identity from `/tmp/claude-agent-<md5>.json`. If `disc_send` fails, log and continue — Discord is informational, not a gate.
+6. **Emit observability event.** `scripts/mcp-log wavemachine_start epic=<epic_id> waves=<N> kahuna=<kahuna_branch>` — timestamps autopilot start in the fleet logfile so post-mortem can correlate with sdlc-server tool_call events.
 
 ## Pre-Wave Kahuna Bootstrap
 
@@ -247,22 +248,26 @@ Preserve the v1 announcement surface — one Discord post per lifecycle event, o
 - This announcement runs AFTER the trust-score gate's all-green path (see "Trust-Score Gate and Auto-Merge"). In KAHUNA mode, the gate has already auto-merged kahuna→main and posted its own `✅ **Kahuna gate passed**` notification — this announcement closes out the wavemachine session.
 - In legacy non-KAHUNA mode (no `kahuna_branch` in wave state), the gate is skipped and this announcement runs directly when `wave_next_pending()` returns null.
 - Discord `#wave-status`: `"✅ **Wavemachine complete** — <project>, all <N> waves merged. Run /dod to verify. Agent: **<dev-name>** <dev-avatar>"`
+- `scripts/mcp-log wavemachine_complete epic=<epic_id> status=OK waves_merged=<N>`
 - Vox (conversational, brief): name, team, project, "wavemachine complete, all waves merged".
 
 **On gate-blocked completion** (KAHUNA mode, one or more trust signals failed):
 
 - Per Procedure C / "Trust-Score Gate and Auto-Merge" any-red path: `"🛑 **Kahuna gate blocked** — <project>, epic #<epic_id>: <failing-signals summary>. MR <url> open for review. Agent: **<dev-name>** <dev-avatar>"`
 - Vox alert: "Kahuna gate blocked for epic <epic_id>. <N> signals red. Ready for your review."
+- `scripts/mcp-log --level warn wavemachine_complete epic=<epic_id> status=BLOCKED reason="kahuna gate blocked: <signals>"`
 - `wave_waiting("kahuna gate blocked: <one-line summary>")` so the plan is explicitly marked paused.
 
 **On circuit-breaker trip** (`wave_health_check` non-HEALTHY):
 
 - Discord `#wave-status`: `"🛑 **Wavemachine aborted (circuit breaker)** — <project>: <one-line health summary>. Agent: **<dev-name>** <dev-avatar>"`
+- `scripts/mcp-log --level error wavemachine_complete epic=<epic_id> status=ABORTED reason="circuit breaker: <summary>"`
 - Call `wave_waiting("wavemachine aborted (circuit breaker): <one-line summary>")` so the plan is explicitly marked paused.
 
 **On per-wave BLOCKED or FAIL** (from `/nextwave auto` return):
 
 - Discord `#wave-status`: `"🛑 **Wavemachine aborted** — <project>, wave <id>: <one-line failure summary>. Agent: **<dev-name>** <dev-avatar>"`
+- `scripts/mcp-log --level error wavemachine_complete epic=<epic_id> status=ABORTED wave=<id> reason="<summary>"`
 - Call `wave_waiting("wavemachine aborted: <one-line summary>")`.
 
 **On user interrupt** (see "Interrupt Handling" above).

@@ -99,6 +99,60 @@ For servers that shell out to CLI tools (sdlc → `gh`/`glab`, commutativity →
 | `ms` | number | Cycle duration |
 | `via` | string | `direct` or `scream-hole` |
 
+### `wave_start` — Wave-pattern wave begins (cc-workflow skill)
+
+Emitted by `/nextwave` from `scripts/mcp-log` immediately after the wave id and target repo are resolved — before any per-issue `spec_validate_structure`, `wave_show`, or `wave_previous_merged` sdlc tool_call. The early emission is intentional: the anchor must precede the wave's sdlc calls so post-mortem temporal correlation finds the right window. Pairs with `wave_complete`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `wave` | number | Wave id (e.g., 3) |
+| `target` | string | Repo slug being executed against |
+| `issues` | array<number> | Issue numbers in this wave |
+| `kahuna` | string? | Kahuna integration branch if KAHUNA mode, else empty |
+
+### `flight_plan` — A flight has been planned (cc-workflow skill)
+
+Emitted by `/nextwave` once Prime(pre-wave) returns the plan. One event per flight in the wave. The temporal anchor for correlating sdlc-server `tool_call` events to a specific flight in post-mortem.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `wave` | number | Wave id |
+| `flight` | number | Flight number within the wave |
+| `issues` | array<number> | Issue numbers in this flight |
+
+### `wave_complete` — Wave-pattern wave terminal (cc-workflow skill)
+
+Emitted by `/nextwave` after Prime(post-wave) returns its terminal report. Pairs with `wave_start`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `wave` | number | Wave id |
+| `status` | string | `PASS` / `FAIL` / `BLOCKED` |
+| `merged` | number | Issues merged in this wave |
+| `deferred` | number | Issues deferred-and-accepted |
+
+### `wavemachine_start` — Autopilot loop entered (cc-workflow skill)
+
+Emitted by `/wavemachine` when the launch sequence completes and the loop begins. Pairs with `wavemachine_complete`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `epic` | string\|number | Epic ID for the autopiloted plan |
+| `waves` | number | Pending waves at start |
+| `kahuna` | string? | Kahuna integration branch if KAHUNA mode, else empty |
+
+### `wavemachine_complete` — Autopilot loop terminal (cc-workflow skill)
+
+Emitted by `/wavemachine` on every exit path (clean completion, gate block, circuit breaker, per-wave abort).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `epic` | string\|number | Epic ID |
+| `status` | string | `OK` / `BLOCKED` / `ABORTED` |
+| `reason` | string? | One-line cause when status ≠ OK |
+| `waves_merged` | number? | Successfully merged waves on OK paths |
+| `wave` | number? | The wave that aborted, on per-wave abort path |
+
 ### `startup` — Server initialization
 
 | Field | Type | Description |
