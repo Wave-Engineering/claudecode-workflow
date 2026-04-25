@@ -26,6 +26,8 @@ Git commit workflow with context awareness. Reasoning layer (commit message draf
 - If `/precheck` was run and the user approved (via `/scp`, `/scpmr`, `/scpmmr`, or an affirmative like "yes", "approved", "go ahead") → proceed to execution.
 - If `/precheck` has NOT been run → run it first and wait for approval before proceeding.
 
+**Sandbox auto-approval path.** When `/precheck` detects a KAHUNA sandbox context (base ref matches `^kahuna/[0-9]+-`), it emits the sentinel `[AUTO-APPROVED: kahuna sandbox]` and invokes `/scpmmr` directly — `/scp` is reached transitively through that auto-invocation, not by a human typing `/scp`. The approval here is structural (the wave Orchestrator dispatched a Flight Agent into a sandbox) rather than per-commit. See `skills/precheck/SKILL.md` and Dev Spec §5.2.1 for the rule. Non-sandbox behaviour is unchanged.
+
 ## Execution
 
 ### Step 1: Branch + Issue Gate

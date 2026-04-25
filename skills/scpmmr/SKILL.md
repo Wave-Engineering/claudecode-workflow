@@ -27,3 +27,5 @@ Requires `/precheck` first — invoking `/scpmmr` after `/precheck` is approval 
 - `/precheck` must run and be approved first
 - CI verification before merge is handled by `pr_wait_ci` inside `/mmr`
 - Any step failure → STOP and report, do NOT continue to the next step
+
+**Sandbox invocation path.** `/scpmmr` is the skill `/precheck` auto-invokes when a KAHUNA sandbox is detected (base ref matches `^kahuna/[0-9]+-`). The sentinel `[AUTO-APPROVED: kahuna sandbox]` printed by `/precheck` is the approval signal — there is no separate human STOP for Flight Agents inside the sandbox. The merge here lands the flight onto the per-wave integration branch (`kahuna/<N>-<slug>`), not `main`; the wave Orchestrator handles the eventual `main` merge at the wave gate. Non-sandbox callers (humans typing `/scpmmr`) continue to work exactly as before. See `skills/precheck/SKILL.md` and Dev Spec §5.2.1.
