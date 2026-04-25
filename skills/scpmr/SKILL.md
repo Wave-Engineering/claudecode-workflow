@@ -22,3 +22,5 @@ Requires `/precheck` first — invoking `/scpmr` after `/precheck` is approval t
 3. `vox` announcement (best-effort): identity from `/tmp/claude-agent-<md5>.json`, then name/team/project/issue/PR/"pushed and CI is running"
 
 Do NOT merge — that's the distinction from `/scpmmr`. Convenience shortcut; does NOT skip any safety checks.
+
+**Sandbox note.** In KAHUNA sandbox contexts `/precheck` auto-invokes `/scpmmr` (full merge), not `/scpmr`, because Flight Agents land into the per-wave integration branch and the wave gate — not the flight gate — is where review happens. `/scpmr` therefore retains its no-merge semantics for non-sandbox use. See `skills/precheck/SKILL.md` and Dev Spec §5.2.1.

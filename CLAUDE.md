@@ -39,6 +39,17 @@ When work is done, run `/precheck` immediately — don't ask permission, just ru
 
 The full procedure lives in `/precheck` (`skills/precheck/SKILL.md`).
 
+### Exception: Kahuna Sandbox Auto-Approval
+
+The "explicit user approval" requirement is **suspended** — and only suspended — when **both** of the following hold:
+
+1. The Flight Agent is operating inside a **Kahuna sandbox** — i.e. the current branch's base ref matches the regex `^kahuna/[0-9]+-` (a per-wave integration branch, not `main`).
+2. The full `/precheck` checklist has passed end-to-end: validation, code-reviewer (no unresolved high+ findings), trivy dependency scan, plus the Discord `#precheck` post and `vox` announcement.
+
+When both conditions are met, `/precheck` emits the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invokes `/scpmmr` directly — no human STOP. The exception is enforced **by `/precheck`'s own detection logic, not by agent discretion**: an agent on a `main`-targeted feature branch never qualifies, regardless of context. Outside the sandbox the original rule is unchanged — checklist, STOP, wait for `/scp` / `/scpmr` / `/scpmmr` / affirmative.
+
+Authoritative rule: Dev Spec §5.2.1. Mechanical detection + sentinel: `skills/precheck/SKILL.md` ("Sandbox Auto-Approval (KAHUNA Flight Agents)").
+
 ---
 
 ## MANDATORY: Story Completion Verification
