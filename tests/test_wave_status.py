@@ -801,6 +801,43 @@ class TestExtendAutoAdvance:
         assert rc == 0, f"extend failed: {err}"
         assert _state(repo)["current_wave"] == "wave-6a"
 
+    def test_extend_unblocks_flight_plan_on_completed_prior(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """Reproduces issue #320 source incident: after a fully-completed prior
+        plan, ``init --extend`` followed by ``flight-plan`` succeeds without
+        the "no current wave is set" error (previously required hand-editing
+        ``state.json``).
+        """
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        self._complete_all_waves(repo)
+
+        extend_path = repo / "extend.json"
+        extend_path.write_text(json.dumps(self._EXTEND_PLAN), encoding="utf-8")
+        rc, _, err = run_cli(["init", "--extend", "extend.json"], repo)
+        assert rc == 0, f"extend failed: {err}"
+
+        # The bug: flight-plan would error with "no current wave is set"
+        # because current_wave remained None / pointed at a completed wave.
+        flights_path = repo / "extend-flights.json"
+        flights_path.write_text(
+            json.dumps([{"issues": [600], "status": "pending"}]),
+            encoding="utf-8",
+        )
+        rc, _, err = run_cli(["flight-plan", "extend-flights.json"], repo)
+        assert rc == 0, f"flight-plan after extend failed: {err}"
+        assert "no current wave is set" not in err
+
+        # Verify the flight plan was stored under the new wave's key.
+        flights_state = json.loads(
+            (repo / ".claude" / "status" / "flights.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert "wave-6a" in flights_state["flights"]
+
 
 # ---------------------------------------------------------------------------
 # Cross-repo plan field round-trip (issue #319)
