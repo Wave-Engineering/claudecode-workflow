@@ -1,8 +1,9 @@
 ---
 name: issue
-description: Create structured issues (feature, bug, chore, docs, epic) with proper templates and labels. Supports both GitHub (gh) and GitLab (glab). Self-contained — does not depend on CLAUDE.md for templates.
+description: Create structured issues (feature, story, bug, chore, docs, epic) with proper templates and labels. Supports both GitHub (gh) and GitLab (glab). Self-contained — does not depend on CLAUDE.md for templates. Sub-issue templates (feature, story, chore, docs, bug) emit the H2 sections that `/prepwaves` and `spec_validate_structure` require, so issues are wave-pattern-ready on first try.
 usage: |
-  /issue feature <prompt>  Create a feature issue
+  /issue feature <prompt>  Create a feature issue (alias: story)
+  /issue story <prompt>    Create a story issue (alias: feature)
   /issue bug <prompt>      Create a bug issue
   /issue chore <prompt>    Create a chore issue
   /issue docs <prompt>     Create a docs issue
@@ -24,7 +25,8 @@ Create properly templated and labeled issues from a natural language prompt.
 ## Usage
 
 ```
-/issue feature <prompt>       Create a feature issue
+/issue feature <prompt>       Create a feature issue (alias: story)
+/issue story <prompt>          Create a story issue (alias: feature)
 /issue bug <prompt>            Create a bug issue
 /issue chore <prompt>          Create a chore issue
 /issue docs <prompt>           Create a docs issue
@@ -32,6 +34,32 @@ Create properly templated and labeled issues from a natural language prompt.
 /issue <prompt>                Infer type from the prompt
 /issue                         Infer from recent conversation context
 ```
+
+## Wave-Pattern-Ready Output Guarantee
+
+The sub-issue templates emitted by this skill (`feature`, `story`, `chore`,
+`docs`, `bug`) include the six H2 sections required for downstream wave
+execution:
+
+- `## Summary`
+- `## Implementation Steps` (alias accepted by parser: `## Changes`)
+- `## Test Procedures` (alias accepted by parser: `## Tests`)
+- `## Acceptance Criteria`
+- `## Dependencies`
+- `## Metadata`
+
+This means an issue created via `/issue` passes
+`mcp__sdlc-server__spec_validate_structure` on first try and is ready to be
+picked up by `/prepwaves` without mid-flight body fixes. If a particular
+section does not apply to a given issue, emit the heading with a single-line
+rationale (e.g. `None` or `N/A — because ...`); never omit the heading.
+
+The `epic` template is intentionally different — epics are parent issues
+that decompose into sub-issues, so they are not validated against the
+sub-issue grammar.
+
+See `docs/issue-body-grammar.md` in `mcp-server-sdlc` for the authoritative
+parser specification.
 
 ## Tools Used
 - `mcp__sdlc-server__work_item` — create issues cross-platform (handles GitHub/GitLab detection internally)
@@ -45,12 +73,13 @@ No arguments — infer the issue from the most recent topic of conversation. Det
 {{/if}}
 
 Extract two things:
-1. **Type** — the first word if it matches: `feature`, `bug`, `chore`, `docs`, `epic`. If it doesn't match a type, treat the entire argument as the prompt and infer the type.
+1. **Type** — the first word if it matches: `feature`, `story`, `bug`, `chore`, `docs`, `epic`. `feature` and `story` are aliases and use the same template. If it doesn't match a type, treat the entire argument as the prompt and infer the type.
 2. **Prompt** — everything after the type (or the entire argument if no type prefix).
 
 **Type inference rules** (when no explicit type):
 - Mentions broken, fails, crash, error, wrong → `bug`
 - Mentions add, create, build, implement, new → `feature`
+- Mentions story, user story, sub-issue under epic → `story`
 - Mentions update, fix, clean, refactor, rename, move, upgrade → `chore`
 - Mentions document, write docs, README, guide → `docs`
 - Mentions epic, phase, milestone, multi-part → `epic`
@@ -62,16 +91,23 @@ Use the prompt (or conversation context) to fill in the appropriate template bel
 
 **Quality standard:** Every issue should be detailed enough that a spec-driven agent can execute without making design decisions. Implementation steps should read like paint-by-numbers. Acceptance criteria should be evaluable before PR/MR merge.
 
-### Feature Template
+### Wave-Pattern Sub-Issue Templates
+
+The five templates below (`feature`, `story`, `chore`, `docs`, `bug`) all
+emit the same six required H2 sections so they are recognized by
+`spec_validate_structure` and ready for `/prepwaves`. The body inside each
+section is tailored to the issue type. **Always emit all six headings**, even
+when a section is `None` or `N/A` — the parser only sees H2s.
+
+### Feature Template (alias: Story)
 
 ```markdown
 ## Summary
 
-[1-2 sentences: what this feature delivers and why]
-
-## Context
-
-[Background, motivation, link to Epic or Dev Spec if applicable]
+[1-2 sentences: what this feature delivers and why. Include Context — background,
+motivation, link to Epic or Dev Spec if applicable — as a short sub-paragraph
+under the Summary heading rather than a separate H2, so the parser sees the
+canonical Summary section.]
 
 ## Implementation Steps
 
@@ -84,15 +120,15 @@ Use the prompt (or conversation context) to fill in the appropriate template bel
 
 ## Test Procedures
 
-### Unit Tests
+*Unit tests:*
 
 | Test Name | Purpose | File Location |
 |-----------|---------|---------------|
 | `test_function_name` | [what it verifies] | `tests/test_module.py` |
 
-### Integration/E2E Coverage
+*Integration coverage:*
 
-- [References to integration tests if applicable]
+- [IT-## or test reference, or `None` if not applicable]
 
 ## Acceptance Criteria
 
@@ -102,47 +138,81 @@ Use the prompt (or conversation context) to fill in the appropriate template bel
 
 ## Dependencies
 
-- None (or #NNN — description)
+- None
+- [or `[#NNN](url) — description` per dependency]
+
+## Metadata
+
+**Wave:** [N or N/A]
+**Parent Epic:** [#NNN or N/A]
+**Wave Master:** [#NNN or N/A]
 ```
+
+### Story Template
+
+The Story template is identical to the Feature template — `story` and
+`feature` are aliases. The underlying `mcp__sdlc-server__work_item` tool's
+`type` enum uses `story`; the `/issue` skill exposes both names so callers
+can use whichever matches their mental model.
 
 ### Bug Template
 
 ```markdown
 ## Summary
 
-[Concise description of the defect]
+[Concise description of the defect.]
 
-## Environment
+**Environment:** [page, component, CLI command, API endpoint]
+**Version/commit:** [git SHA or release tag]
+**Frequency:** intermittent | consistent
 
-- **Where observed:** [page, component, CLI command, API endpoint]
-- **Version/commit:** [git SHA or release tag]
-- **Frequency:** intermittent | consistent
-
-## Steps to Reproduce
+**Steps to reproduce:**
 
 1. [Step one]
 2. [Step two]
 3. [Step three]
 
-## Expected Behavior
+**Expected:** [What should happen]
+**Actual:** [What actually happens]
 
-[What should happen]
+## Implementation Steps
 
-## Actual Behavior
+[Paint-by-numbers fix steps. If root cause is unknown, state the diagnostic
+plan first, then the fix steps to be filled in once root cause is confirmed.]
 
-[What actually happens]
+1. [Locate offending code at exact path]
+2. [Describe the change]
+3. [Update or add the regression test]
 
-## Severity
+## Test Procedures
 
-[`severity::critical` | `severity::major` | `severity::minor` | `severity::cosmetic`]
+*Regression test:*
 
-## Artifacts
+| Test Name | Purpose | File Location |
+|-----------|---------|---------------|
+| `test_<bug_name>_regression` | reproduces the original failure and proves the fix | `tests/test_module.py` |
 
-- [Links to logs, screenshots, error traces]
+*Manual verification:* [steps to manually confirm the fix in the affected
+environment, or `N/A`]
 
-## Workaround
+## Acceptance Criteria
 
-[Describe workaround if known, or "None known"]
+- [ ] Regression test added and passing
+- [ ] Original repro steps produce expected behavior
+- [ ] No related regressions introduced
+- [ ] [Additional testable conditions]
+
+## Dependencies
+
+- None
+- [or `[#NNN](url) — description` per dependency]
+
+## Metadata
+
+**Severity:** [`severity::critical` | `severity::major` | `severity::minor` | `severity::cosmetic`]
+**Wave:** [N or N/A]
+**Artifacts:** [links to logs, screenshots, error traces, or `None`]
+**Workaround:** [describe if known, or `None known`]
 ```
 
 ### Chore Template
@@ -150,7 +220,7 @@ Use the prompt (or conversation context) to fill in the appropriate template bel
 ```markdown
 ## Summary
 
-[Description of the maintenance task and its rationale]
+[Description of the maintenance task and its rationale.]
 
 ## Implementation Steps
 
@@ -159,10 +229,27 @@ Use the prompt (or conversation context) to fill in the appropriate template bel
 1. [Step]
 2. [Step]
 
+## Test Procedures
+
+*Verification:*
+
+- [Command to run after the chore completes, or specific test file to confirm green]
+- [`N/A — chore is doc-only / config-only` if no executable verification applies]
+
 ## Acceptance Criteria
 
 - [ ] [Testable condition]
 - [ ] [Testable condition]
+
+## Dependencies
+
+- None
+- [or `[#NNN](url) — description` per dependency]
+
+## Metadata
+
+**Wave:** [N or N/A]
+**Parent Epic:** [#NNN or N/A]
 ```
 
 ### Docs Template
@@ -170,19 +257,26 @@ Use the prompt (or conversation context) to fill in the appropriate template bel
 ```markdown
 ## Summary
 
-[Which document(s) to create or update, and why]
+[Which document(s) to create or update, and why.]
 
-## Target Audience
+**Target audience:** [developers, operators, end users, agents]
+**What's missing, outdated, or incorrect:** [specific gaps or inaccuracies]
+**Source material:** [pointers to code, PRDs, conversations]
 
-[Who will read this — developers, operators, end users, agents]
+## Implementation Steps
 
-## What's Missing, Outdated, or Incorrect
+1. [File path to create or update]
+2. [Outline of sections to add or revise]
+3. [Cross-references to update elsewhere]
 
-[Specific gaps or inaccuracies]
+## Test Procedures
 
-## Source Material
+*Verification:*
 
-- [Pointers to code, PRDs, conversations]
+- [ ] Markdown lint passes (if a linter is configured)
+- [ ] All links resolve (manual or scripted check)
+- [ ] Code samples, if any, run as written against current `main`
+- [`N/A` for any item that does not apply]
 
 ## Acceptance Criteria
 
@@ -190,6 +284,16 @@ Use the prompt (or conversation context) to fill in the appropriate template bel
 - [ ] Coverage is complete for the stated scope
 - [ ] No broken links
 - [ ] [Additional testable conditions]
+
+## Dependencies
+
+- None
+- [or `[#NNN](url) — description` per dependency]
+
+## Metadata
+
+**Wave:** [N or N/A]
+**Parent Epic:** [#NNN or N/A]
 ```
 
 ### Epic Template
@@ -241,6 +345,7 @@ Labels use the `group::value` convention. Within each group, labels are mutually
 | Type | Label |
 |------|-------|
 | feature | `type::feature` |
+| story | `type::story` |
 | bug | `type::bug` |
 | chore | `type::chore` |
 | docs | `type::docs` |
