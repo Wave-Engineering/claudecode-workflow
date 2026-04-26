@@ -20,7 +20,7 @@ description: Autopilot for wave-pattern execution. Runs a top-level loop that ca
 - `mcp__sdlc-server__wave_finalize` — opens kahuna→main MR at epic completion
 - `mcp__sdlc-server__commutativity_verify` — trust-score signal; runs concurrently with the other three (R-23)
 - `mcp__sdlc-server__ci_wait_run` — trust-score signal; waits for CI on the kahuna branch
-- `mcp__sdlc-server__pr_merge` — auto-merge kahuna→main on all-green gate, with `skip_train: true`
+- `mcp__sdlc-server__pr_merge` — auto-merge kahuna→main on all-green gate, with `skip_train: true` (semantics differ by platform — see "Platform note: `skip_train` semantics" below)
 - `mcp__sdlc-server__wave_previous_merged` — pre-flight verification that prior wave is on main
 - `mcp__sdlc-server__wave_ci_trust_level` — cached by `/nextwave auto` for its internal gate decisions
 - `mcp__sdlc-server__wave_waiting` — mark the plan paused with a human-readable reason on any abort
@@ -172,7 +172,8 @@ The loop exits cleanly when any of the following happens:
    - Trivy: pass = no HIGH/CRITICAL findings with available fixes; fail otherwise.
 
 6. **All-green path** (every signal passes):
-   - Invoke `pr_merge({number: <kahuna_mr_number>, skip_train: true, squash_message: <assembled body from step 2>})`. `skip_train: true` is required because the kahuna→main MR has already been gated by the four signals — bypassing the project's standard merge train is the whole point of the autonomous gate.
+   - **Detect platform** before the merge call. Read `.claude-project.md`'s `Platform.Host` field (cached by `/ccfold`). On GitLab, additionally emit a one-line warning to `#wave-status` *before* invoking `pr_merge`: `"⚠️ **GitLab merge train detected** — <project>: \`skip_train: true\` is a no-op against GitLab merge trains; the kahuna→main MR will wait in the train regardless. Agent: **<dev-name>** <dev-avatar>"`. This sets operator expectations so "why is this taking so long?" doesn't surface as a surprise during the train wait. (See "Platform note: `skip_train` semantics" below for the full rationale.)
+   - Invoke `pr_merge({number: <kahuna_mr_number>, skip_train: true, squash_message: <assembled body from step 2>})`. `skip_train: true` is passed unconditionally — its platform-specific interpretation is the adapter's responsibility (`mcp-server-sdlc`'s `pr_merge`), not this skill's. On GitHub the flag bypasses the merge queue (the kahuna MR has already been gated by the four signals, so bypassing the queue is the whole point of the autonomous gate). On GitLab the flag is silently dropped by the platform — the merge train is enforced as a project-level merge method and there is no client-side bypass; the four-signal gate still ran, but the train wait still applies.
    - **Record disposition** in wave state's `kahuna_branches` history array: append `{branch: <kahuna_branch>, epic_id: <epic_id>, disposition: "merged", merged_at: <iso8601>, mr_number: <kahuna_mr_number>}`. (Schema per §5.1.)
    - **Delete the kahuna branch** from the platform (per R-03). On GitHub: `gh api -X DELETE repos/<owner>/<repo>/git/refs/heads/<kahuna_branch>` (or equivalent). On GitLab: `glab api -X DELETE projects/:id/repository/branches/<kahuna_branch_url_encoded>`.
    - **Emit `#wave-status` notification** (R-19): `"✅ **Kahuna gate passed** — <project>, epic #<epic_id> auto-merged to main. <N> flights, <M> commits. Agent: **<dev-name>** <dev-avatar>"`.
@@ -210,6 +211,22 @@ The crash-recovery contract (per Dev Spec §4.4.5):
 The re-entry path is therefore: detect `gate_evaluating`, jump to step 4, run the gate to completion. Document this so the loop driver knows the gate is safe to retry.
 
 **Cross-reference.** Dev Spec §5.2.2 (gate behavior), §4.4.4 (Procedure C — gate signal failure), §4.4.5 (Procedure D — orchestrator crash mid-epic), §7 (Definition of Done), R-23 (concurrency requirement), R-19 (notification requirement), R-03 (kahuna branch deletion on success).
+
+## Platform note: `skip_train` semantics
+
+`pr_merge`'s `skip_train` flag means different things on GitHub and GitLab. The kahuna→main merge in the all-green path passes `skip_train: true` unconditionally; this section documents what that flag actually does on each platform so operators and future agents are not surprised.
+
+**GitHub** (merge queue): `skip_train: true` requests a queue bypass. Wave-Engineering's GitHub repos enable merge-queue protection; under normal flow a PR enrolls in the queue and waits for serial validation. The four-signal trust gate above is an independent validation pipeline that gives equivalent (or stronger) guarantees, so once the gate is green the kahuna MR has earned the right to skip the queue. The adapter (`mcp-server-sdlc`'s `pr_merge`) translates `skip_train: true` into a direct GraphQL merge that bypasses the queue. Net effect: kahuna→main lands within seconds of the gate clearing.
+
+**GitLab** (merge train): `skip_train` is a **no-op**. GitLab enforces merge trains as a *project-level merge method*, not a per-MR client option — there is no API to bypass the train for a single MR. The flag is silently dropped by the adapter; the kahuna→main MR enrolls in the train and waits for the train cycle to complete. The four-signal trust gate still ran, so correctness is preserved — only the wall-clock latency differs. Net effect: kahuna→main lands when the train says it lands, typically several minutes after the gate clears.
+
+**Operator-visible behavior:**
+- On GitHub, no extra notification fires — the merge happens fast enough that the standard "✅ Kahuna gate passed" notification is the whole story.
+- On GitLab, the all-green path emits a `⚠️ GitLab merge train detected` warning to `#wave-status` *before* the `pr_merge` call, so operators know the autopilot is correctly waiting on the train rather than stuck.
+
+**Why the asymmetry lives in the skill body, not just the adapter.** Per `decision_skills_ownership.md`, the skill orchestrates and the adapter executes — so the *interpretation* of `skip_train` on each platform belongs in `mcp-server-sdlc`'s `pr_merge`. But the *operator-facing expectation* (when to expect a fast merge vs a train wait) belongs here, because spec-driven agents reading this skill need to know what the flag will and won't do. The deferral path: if a future GitLab API exposes per-MR train-skip (none today), the adapter gains real `skip_train` support on GitLab and this section's GitLab paragraph gets a happy update; no skill change needed beyond removing the warning. Until then, the warning stands as the skill's contribution to operator clarity.
+
+**Cross-reference.** `lesson_merge_queue_gh.md` documents the GitHub merge-queue gotcha (`gh pr merge` inconsistency) and points at `pr_merge` as the right tool. The GitLab side has no analogous lesson file because the platform's behavior is consistent — the train always wins.
 
 ## Circuit Breaker — `wave_health_check`
 
@@ -292,6 +309,7 @@ When waking up, re-enter the loop at step 1 (re-run `wave_health_check` from scr
 - **Circuit breaker before every iteration.** `wave_health_check` is called at the TOP of each loop iteration, not just the first.
 - **Leave the bus alone on abort.** On any non-happy exit, the in-flight wave's bus tree stays on disk for forensics. `wave-cleanup` runs only on PASS, inside `/nextwave auto`.
 - **Block on green CI.** `/nextwave auto` handles the per-wave CI gate; `/wavemachine` does not merge wave PRs directly and does not fast-path around it. The kahuna→main MR is the *only* PR `/wavemachine` merges, and only after the four-signal gate passes all-green.
+- **`skip_train` is platform-asymmetric.** On GitHub it bypasses the merge queue (the gate has earned that bypass). On GitLab it is a no-op — the merge train is a project-level merge method with no per-MR client bypass. The flag is passed unconditionally; the adapter handles the platform difference; the all-green path emits a warning notification on GitLab so operators know the kahuna→main MR is correctly waiting on the train rather than stuck. See "Platform note: `skip_train` semantics".
 - **R-23 — gate signals run concurrently in a single tool-use block.** The four trust signals (`commutativity_verify`, `ci_wait_run`, `feature-dev:code-reviewer` Agent, `trivy` Bash) MUST be issued in a single tool-use block — no signal sequenced behind another. Sequencing them silently would inflate the gate's wall-clock cost by ~4x and is a hard regression to catch in tests.
 - **Do not short-circuit the gate.** Collect all four signal results before evaluating pass/fail (Procedure C, §4.4.4). The operator needs the complete signal set to triage a blocked gate.
 - **`PROBE_UNAVAILABLE` is conservative-fail.** When `commutativity_verify` returns the synthesized `PROBE_UNAVAILABLE` verdict (probe binary not installed; cross-server contract per `mcp-server-sdlc#218`), the gate treats it identically to `ORACLE_REQUIRED` — no auto-merge. Document this so it cannot be silently relaxed.
