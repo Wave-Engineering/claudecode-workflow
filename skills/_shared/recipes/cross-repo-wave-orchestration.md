@@ -141,7 +141,13 @@ Flight PR targets the kahuna branch, never `main` (Dev Spec §5.2.2).
 ### Post-wave worktree cleanup
 
 ```bash
+# CC's worktree-isolation mechanism (and Flight sub-agents in general) leaves a
+# git lock file on the worktree (lock reason: "claude agent <id> (pid ...)").
+# Single `--force` is NOT enough — git refuses to remove a locked working tree.
+# Unlock first (no-op if not locked), then force-remove. Do not switch to `-f -f`
+# alone: the unlock branch is also a useful diagnostic if removal still fails.
 for wt in /tmp/wt-sdlc-*; do
+  git -C "$TARGET_REPO" worktree unlock "$wt" 2>/dev/null || true
   git -C "$TARGET_REPO" worktree remove "$wt" --force
 done
 ```

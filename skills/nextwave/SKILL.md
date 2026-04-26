@@ -138,7 +138,13 @@ For KAHUNA waves, swap `--base main` for `--base <kahuna_branch>` — every Flig
 #### Post-wave worktree cleanup
 
 ```bash
+# CC's worktree-isolation mechanism (and Flight sub-agents in general) leaves a
+# git lock file on the worktree (lock reason: "claude agent <id> (pid ...)").
+# Single `--force` is NOT enough — git refuses to remove a locked working tree.
+# Unlock first (no-op if not locked), then force-remove. Do not switch to `-f -f`
+# alone: the unlock branch is also a useful diagnostic if removal still fails.
 for wt in /tmp/wt-sdlc-*; do
+  git -C "$TARGET_REPO" worktree unlock "$wt" 2>/dev/null || true
   git -C "$TARGET_REPO" worktree remove "$wt" --force
 done
 ```
@@ -363,8 +369,20 @@ After every flight has merged:
 
 ## Step 5 — Cleanup
 
-- **Success path** (Prime(post-wave) returned `PASS`): call `scripts/wavebus/wave-cleanup <wave-root>`. Report "bus cleaned" in the final summary.
-- **Failure / abort path**: DO NOT cleanup. Leave the bus in place. Tell the user the exact wave root path so they can inspect `plan.md`, each `prompt.md`, each `results.md`, and each flight's `merge-report.md`.
+- **Success path** (Prime(post-wave) returned `PASS`): call `scripts/wavebus/wave-cleanup <wave-root>`. Report "bus cleaned" in the final summary. Then remove any worktrees the wave created — both same-repo (CC `isolation: "worktree"`) and cross-repo (orchestrator-created).
+
+  **Worktree-removal contract.** CC's worktree-isolation mechanism (and Flight sub-agents in general) leaves a git lock file on each Flight's worktree (`lock reason: "claude agent <id> (pid ...)"`). A single `git worktree remove --force` is NOT enough — git refuses to remove a locked working tree. The cleanup MUST unlock first (no-op if unlocked) and then force-remove:
+
+  ```bash
+  # Same-repo (CC isolation) — paths under /tmp matching the CC-managed scheme.
+  # Cross-repo — the explicit /tmp/wt-<slug>-<issue> paths the orchestrator created in Step 1.5.
+  git -C <repo> worktree unlock <worktree-path> 2>/dev/null || true
+  git -C <repo> worktree remove <worktree-path> --force
+  ```
+
+  Do NOT collapse to `git worktree remove -f -f` alone — the explicit unlock makes the intent legible, the diagnostic obvious if removal still fails, and survives any future change to git's double-force semantics. If the lock file is ever absent the unlock is a harmless no-op (suppressed by `|| true`).
+
+- **Failure / abort path**: DO NOT cleanup the bus. Leave both the bus and the worktrees in place. Tell the user the exact wave root path so they can inspect `plan.md`, each `prompt.md`, each `results.md`, and each flight's `merge-report.md`, and the worktree paths so they can inspect uncommitted changes if any.
 
 ## Step 6 — Final status emission (auto mode only)
 
