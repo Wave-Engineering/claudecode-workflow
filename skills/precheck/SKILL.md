@@ -93,3 +93,7 @@ The detection regex is `^kahuna/[0-9]+-`. Resolve `base_branch` from the most re
 
 ## Rules
 No diff. No commit. No skipping code-reviewer. Honesty over speed — no checking items you haven't verified. **Linting is not testing** — passing lint/typecheck does not mean code works. **`vox` is ALWAYS called** — it is NOT a fallback for disc_send failure. Both notifications happen every time.
+
+## New-Repo Onboarding (Merge Queue End-to-End Dry-Run)
+
+Out of scope for the per-commit gate, but called out here because this skill is the closest thing to an institutional checklist we have: **when enabling GitHub Merge Queue on a new repo, configuration verification is not enough — you MUST open a throwaway PR (e.g., README typo fix) and watch it merge through the queue end-to-end before any real work is enrolled.** "Configuration exists" is not the same as "configuration works." The full runbook lives in `docs/operations/merge-queue-checklist.md`; the most common silent failure is a workflow file missing `merge_group:` in its `on:` block, which leaves the required check never firing and PRs sitting in the queue forever. Same principle as the runtime smoke test in `mcp-server-sdlc` `validate.sh`: verify behavior, not declarations.
