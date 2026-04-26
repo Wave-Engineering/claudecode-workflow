@@ -58,12 +58,21 @@ def load_discord_config() -> dict:
 
 
 def get_discord_channel(role: str, env_var: str, default: str) -> str:
-    """Resolve a channel ID: config file -> env var -> hardcoded default."""
+    """Resolve a channel ID: config file -> env var -> hardcoded default.
+
+    The ``channels`` map in ``~/.claude/discord.json`` may either be:
+      - ``{role: "<id>"}`` — flat string form (current canonical shape), or
+      - ``{role: {"id": "<id>", ...}}`` — nested-dict form (legacy / extended).
+
+    Both are accepted; anything else for the role entry is treated as missing.
+    """
     config = load_discord_config()
     # 1. Config file
     channels = config.get("channels", {})
-    ch = channels.get(role, {})
-    if ch.get("id"):
+    ch = channels.get(role)
+    if isinstance(ch, str) and ch:
+        return ch
+    if isinstance(ch, dict) and ch.get("id"):
         return ch["id"]
     # 2. Environment variable
     env_val = os.environ.get(env_var, "")
