@@ -352,3 +352,236 @@ class TestIT09ProxyDocumented:
             "The 'Never bypass STOP on notification failure' invariant "
             "must remain in the Procedure section (non-sandbox contexts)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #462: Platform-specific enforcement prerequisite is documented
+#
+# The sandbox auto-approval depends on platform-side configuration that
+# constrains what a Flight Agent can push to. GitHub uses branch-protection
+# rules / rulesets; GitLab uses approval rules scoped via
+# `protected_branch_ids`. The skill body and CLAUDE.md exception clause must
+# name BOTH platforms' enforcement mechanisms so an operator does not assume
+# the safety is platform-symmetric.
+# ---------------------------------------------------------------------------
+
+
+CLAUDE_MD_PATH = _ROOT / "CLAUDE.md"
+
+
+@pytest.fixture(scope="module")
+def claude_md_text() -> str:
+    """Read the project CLAUDE.md file."""
+    return CLAUDE_MD_PATH.read_text(encoding="utf-8")
+
+
+class TestPlatformPrerequisiteDocumented:
+    """Issue #462: skill must name both GitHub and GitLab enforcement.
+
+    Verifies that the Sandbox Auto-Approval section explicitly documents
+    the platform-side configuration prerequisite for both platforms — and
+    that the skill mentions a detection / warning path so a missing
+    prerequisite surfaces to the operator rather than silently allowing
+    a phantom auto-approval.
+    """
+
+    def test_sandbox_section_names_github_branch_protection(
+        self, skill_text: str
+    ) -> None:
+        """The sandbox section names GitHub's branch-protection rule
+        mechanism as the load-bearing GitHub prerequisite."""
+        body = _section_body(
+            skill_text, "Sandbox Auto-Approval (KAHUNA Flight Agents)"
+        )
+        body_lower = body.lower()
+        assert "github" in body_lower
+        # The GitHub mechanism is "branch protection" / "rulesets"
+        assert "branch-protection" in body_lower or "branch protection" in body_lower or "ruleset" in body_lower, (
+            "Sandbox section must name GitHub's branch-protection / "
+            "ruleset mechanism"
+        )
+
+    def test_sandbox_section_names_gitlab_approval_rules(
+        self, skill_text: str
+    ) -> None:
+        """The sandbox section names GitLab's `protected_branch_ids`
+        approval-rule mechanism as the load-bearing GitLab prerequisite."""
+        body = _section_body(
+            skill_text, "Sandbox Auto-Approval (KAHUNA Flight Agents)"
+        )
+        body_lower = body.lower()
+        assert "gitlab" in body_lower
+        # The GitLab mechanism is approval rules scoped via
+        # `protected_branch_ids`. Both terms must appear.
+        assert "protected_branch_ids" in body, (
+            "Sandbox section must name `protected_branch_ids` — the "
+            "load-bearing GitLab scoping field"
+        )
+        assert "approval" in body_lower, (
+            "Sandbox section must mention GitLab's approval rules"
+        )
+
+    def test_sandbox_section_references_gl_settings(self, skill_text: str) -> None:
+        """The skill points operators at the deployment automation
+        (`gl-settings kahuna-sandbox` / gl-settings#27) so a missing
+        prerequisite has an actionable remediation."""
+        body = _section_body(
+            skill_text, "Sandbox Auto-Approval (KAHUNA Flight Agents)"
+        )
+        assert "gl-settings" in body, (
+            "Sandbox section must reference gl-settings (the GitLab "
+            "deployment automation)"
+        )
+
+    def test_sandbox_section_warns_against_project_wide_endpoint(
+        self, skill_text: str
+    ) -> None:
+        """The skill explicitly calls out that
+        `merge_request_approval_settings` MUST NOT be used — that
+        project-wide endpoint would unprotect main and is a known
+        footgun documented in `docs/kahuna-devspec.md` §5.3.1."""
+        body = _section_body(
+            skill_text, "Sandbox Auto-Approval (KAHUNA Flight Agents)"
+        )
+        assert "merge_request_approval_settings" in body, (
+            "Skill must warn against `merge_request_approval_settings` "
+            "(would unprotect main)"
+        )
+
+    def test_sandbox_section_documents_detection_or_warning(
+        self, skill_text: str
+    ) -> None:
+        """AC-3: skill either detects the missing prerequisite or emits
+        a warning. The current contract is best-effort detection +
+        non-blocking warning. Verify the section documents the warning
+        sentinel pattern for both platforms."""
+        body = _section_body(
+            skill_text, "Sandbox Auto-Approval (KAHUNA Flight Agents)"
+        )
+        body_lower = body.lower()
+        # The detection step must be documented
+        assert "detection" in body_lower or "detect" in body_lower
+        # And there must be a warning sentinel pattern (so missing
+        # prerequisites surface to the operator)
+        assert "[WARNING:" in body or "WARNING" in body, (
+            "Skill must document a warning emission for missing "
+            "prerequisite detection"
+        )
+
+    def test_sandbox_section_warning_is_non_blocking(
+        self, skill_text: str
+    ) -> None:
+        """The warning is documented as non-blocking — the wave
+        Orchestrator and operator are the final safety net. We assert
+        the doc is explicit so a future maintainer doesn't introduce a
+        hard-block that would break legitimate flights when the
+        platform CLI is missing or returns 403."""
+        body = _section_body(
+            skill_text, "Sandbox Auto-Approval (KAHUNA Flight Agents)"
+        )
+        body_lower = body.lower()
+        assert "non-blocking" in body_lower or "not block" in body_lower or "do not block" in body_lower, (
+            "Skill must document the prerequisite-detection warning as "
+            "non-blocking"
+        )
+
+    def test_github_behavior_preserved_no_regression(self, skill_text: str) -> None:
+        """AC-4: existing GitHub behavior is preserved. The original
+        sentinel + `/scpmmr` invocation flow on a kahuna sandbox must
+        still be present and unconditional — the new platform-detection
+        warning must NOT have replaced the auto-approval emission."""
+        body = _section_body(
+            skill_text, "Sandbox Auto-Approval (KAHUNA Flight Agents)"
+        )
+        # Original sentinel still emitted (guards against regression
+        # where someone replaces the auto-approval with a hard prereq
+        # check)
+        assert SENTINEL_LITERAL in body
+        # /scpmmr still invoked
+        assert "/scpmmr" in body
+
+
+class TestClaudeMdExceptionDocumentsBothPlatforms:
+    """Issue #462 AC-2: CLAUDE.md exception clause documents the GitLab
+    equivalent of GitHub's branch-protection model."""
+
+    def test_claude_md_exception_clause_present(
+        self, claude_md_text: str
+    ) -> None:
+        """The CLAUDE.md "Exception: Kahuna Sandbox Auto-Approval"
+        clause exists (precondition for the rest of the assertions)."""
+        assert "Exception: Kahuna Sandbox Auto-Approval" in claude_md_text
+
+    def test_claude_md_exception_names_github_mechanism(
+        self, claude_md_text: str
+    ) -> None:
+        """The CLAUDE.md exception clause names GitHub's
+        branch-protection / ruleset mechanism."""
+        # Scope to the exception clause body
+        match = re.search(
+            r"### Exception: Kahuna Sandbox Auto-Approval\s*\n(.*?)(?=\n---|\n##\s|\Z)",
+            claude_md_text,
+            re.DOTALL,
+        )
+        assert match, "Exception clause body could not be located"
+        body = match.group(1)
+        body_lower = body.lower()
+        assert "github" in body_lower
+        assert (
+            "branch-protection" in body_lower
+            or "branch protection" in body_lower
+            or "ruleset" in body_lower
+        ), (
+            "CLAUDE.md exception must name GitHub's branch-protection "
+            "/ ruleset mechanism"
+        )
+
+    def test_claude_md_exception_names_gitlab_mechanism(
+        self, claude_md_text: str
+    ) -> None:
+        """The CLAUDE.md exception clause names GitLab's
+        `protected_branch_ids`-scoped approval rule mechanism."""
+        match = re.search(
+            r"### Exception: Kahuna Sandbox Auto-Approval\s*\n(.*?)(?=\n---|\n##\s|\Z)",
+            claude_md_text,
+            re.DOTALL,
+        )
+        assert match, "Exception clause body could not be located"
+        body = match.group(1)
+        body_lower = body.lower()
+        assert "gitlab" in body_lower
+        assert "protected_branch_ids" in body, (
+            "CLAUDE.md exception must name `protected_branch_ids` — "
+            "the load-bearing GitLab scoping field"
+        )
+
+    def test_claude_md_exception_references_gl_settings(
+        self, claude_md_text: str
+    ) -> None:
+        """The CLAUDE.md exception clause points operators at the
+        deployment automation."""
+        match = re.search(
+            r"### Exception: Kahuna Sandbox Auto-Approval\s*\n(.*?)(?=\n---|\n##\s|\Z)",
+            claude_md_text,
+            re.DOTALL,
+        )
+        assert match
+        body = match.group(1)
+        assert "gl-settings" in body
+
+    def test_claude_md_exception_preserves_existing_github_path(
+        self, claude_md_text: str
+    ) -> None:
+        """AC-4: the CLAUDE.md exception still describes the unchanged
+        GitHub auto-approval flow (sentinel + /scpmmr). The platform
+        documentation addition must not have deleted the original
+        contract."""
+        match = re.search(
+            r"### Exception: Kahuna Sandbox Auto-Approval\s*\n(.*?)(?=\n---|\n##\s|\Z)",
+            claude_md_text,
+            re.DOTALL,
+        )
+        assert match
+        body = match.group(1)
+        assert SENTINEL_LITERAL in body
+        assert "/scpmmr" in body
