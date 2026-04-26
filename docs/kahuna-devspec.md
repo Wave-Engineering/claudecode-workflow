@@ -901,6 +901,8 @@ Three phases, each containing 1–2 waves. Cross-repo: stories tagged with scope
 
 Skeleton at finalization. Backfilled during Wave 4 Story 4.7 with per-item verification evidence (test pass IDs, commit SHAs, review links).
 
+**Status note (2026-04-25):** Backward trace structure populated and forward trace validated. Evidence columns marked `PENDING` reference open issues that will execute the corresponding test runs and supply pass timestamps + run-log links once executed. IT-09 has partial implementation evidence from Wave 3 Story 3.1 (sandbox-detection logic landed); a final IT-09 pass record from a proving-ground run is still pending under #420. No R-## was found unverified; every R-## still maps to at least one verification item.
+
 **Forward trace (requirement → verification):**
 
 | R-## | Verification items |
@@ -929,7 +931,36 @@ Skeleton at finalization. Backfilled during Wave 4 Story 4.7 with per-item verif
 | R-22 | MV-07 |
 | R-23 | IT-01, IT-03 |
 
-**Backward trace (verification → requirements):** filled during backfill; every test case documents which requirement(s) it covers as part of its pass evidence.
+**Backward trace (verification → requirements):**
+
+The Pass Status column captures the most recent verification outcome. `PENDING` means the verification item has been specified and (for IT-## driven by code that has shipped) is implementable, but the actual run on the proving-ground project has not yet been executed. The Evidence column links to the issue that owns the run. Once a run completes, replace `PENDING <YYYY-MM-DD>` with `PASS <YYYY-MM-DD>` (or `FAIL <YYYY-MM-DD>` + linked defect) and append the run-log artifact link, the SHA of the kahuna→main merge under test, and the PR/MR where any associated fix landed.
+
+Backward trace is derived by inverting §6.5 Requirement-to-Test Traceability. Where §6.2 IT-## "Verifies" cells list a broader R-## set than §6.5 attributes to that same IT-## (a known forward-trace inconsistency at finalization), this table follows §6.5 — it is the canonical forward trace and is the spec's authoritative source. The §6.2 cells will be reconciled separately.
+
+| Verification | Requirements Covered | Pass Status | Evidence |
+|---|---|---|---|
+| IT-01 | R-01, R-03, R-05, R-06, R-08, R-11, R-12, R-13, R-14, R-15, R-17, R-19, R-23 | PENDING 2026-04-25 | Execution owned by #420 (single-flight proving-ground run). Implementation shipped: #450 `f61eb98` (precheck sandbox detection), #451 `3c63ddc` (nextwave kahuna base-ref plumbing), #454 `c9354eb` (wavemachine gate evaluation + auto-merge). Run-log link, kahuna→main merge SHA, and Discord/vox capture to be appended on first green run. |
+| IT-02 | R-05, R-06 | PENDING 2026-04-25 | Execution owned by #420 (multi-flight, multi-wave proving-ground run). Same Wave 3 implementation set as IT-01. Pass evidence will include parallel-flight timestamp delta < 5s. |
+| IT-03 | R-04, R-12, R-16, R-23 | PENDING 2026-04-25 | Execution owned by #420. Setup via `wave-fixture-gen --scenario conflicting-functions` (fixture generator landed under Story 2.1). Pass evidence will include `commutativity_verify` WEAK return, `#wave-status` notification text, kahuna branch persistence check. |
+| IT-04 | R-04, R-15, R-16 | PENDING 2026-04-25 | Execution owned by #420. Setup via `wave-fixture-gen --scenario trivy-dep-vuln`. Pass evidence will include trivy CVE in notification body. |
+| IT-05 | R-04, R-14, R-16 | PENDING 2026-04-25 | Execution owned by #420. Setup via `wave-fixture-gen --scenario critical-code-smell`. Pass evidence will include code-reviewer critical finding in notification body. |
+| IT-06 | R-16 | PENDING 2026-04-25 | Execution owned by #420. Manual drift injection during a live proving-ground run. Pass evidence will include the drifted MR SHA on main and the gate-block notification. |
+| IT-07 | R-01, R-02, R-04, R-17 | PENDING 2026-04-25 | Execution owned by #420. Procedure D (crash recovery) drill. Pass evidence will include pre-kill wave-state JSON snapshot, post-resume `kahuna_branch` reuse, and zero duplicate MRs check. |
+| IT-08 | R-21 | PENDING 2026-04-25 | Execution owned by #420. Setup via `wave-fixture-gen --scenario rebase-conflict-setup`. Pass evidence will include the FAIL return from the conflicted Flight and kahuna preservation check. |
+| IT-09 | R-05, R-07 | PARTIAL 2026-04-25 | Implementation landed: PR #450 (`f61eb98`) — `/precheck` sandbox detection + auto-approval. Negative-case prose committed in `skills/precheck/SKILL.md`. Final IT-09 proving-ground run (positive + negative case) owned by #420. Pass evidence will include the `[AUTO-APPROVED: kahuna sandbox]` sentinel from a real flight and the STOP-and-wait observation from a `main`-based flight. |
+| IT-10 | R-20 | PENDING 2026-04-25 | Execution owned by #420. Concurrent-invocation refusal drill. Pass evidence will include the second-invocation refusal message text. |
+| IT-11 | R-09 | PENDING 2026-04-25 | Execution owned by #420. Pass evidence shared with MV-06 (separate-terminal feature MR opened during a live `/wavemachine` run). |
+| IT-12 | R-08, R-10 | PENDING 2026-04-25 | Execution owned by #420. Setup: `gl-settings kahuna-sandbox --check <project-url>` against a partially-drifted project. Pass evidence will include the drift-item list output. |
+| IT-13 | R-19 | PENDING 2026-04-25 | Execution owned by #420; piggybacks on the IT-01 run. Pass evidence will include the captured subprocess message-substring assertion ("merged into main") and exit-code 0. |
+| E2E-01 | R-01, R-02, R-03, R-05, R-06, R-08, R-11, R-12, R-13, R-14, R-15, R-17, R-19, R-23 | PENDING 2026-04-25 | Execution owned by #421 (full overnight 5-story, 3-wave realistic run). Covers IT-01's R-set plus R-02 (re-invocation reuse) by virtue of the multi-wave/multi-day run profile. Pass evidence will include start/end timestamps, total elapsed, list of merged flight SHAs, kahuna→main merge SHA, full Discord transcript. No human input between invocation and morning check. |
+| MV-01 | R-19 | PENDING 2026-04-25 | Execution owned by #422; observed during the IT-01 run. Pass evidence will include the captured `#wave-status` channel transcript with notification ordering verified. |
+| MV-02 | R-18 | PENDING 2026-04-25 | Execution owned by #422; observed during the IT-01 run. Pass evidence will include screenshots of the wave-status dashboard HTML showing active `kahuna_branch`, accurate flight counts, and action-label transitions. |
+| MV-03 | R-16 | PENDING 2026-04-25 | Execution owned by #422; observed during the IT-03 run. Pass evidence will include screenshots of the status panel showing `gate_evaluating` → `gate_blocked` with failure-reason field rendered. |
+| MV-05 | R-03 | PENDING 2026-04-25 | Execution owned by #422; observed after the IT-01 run. Pass evidence will include the post-run `git branch -a --remotes` output confirming the kahuna branch was deleted. |
+| MV-06 | R-09 | PENDING 2026-04-25 | Execution owned by #422; observed during IT-11. Pass evidence will include the unrelated MR's normal-flow merge record. |
+| MV-07 | R-22 | PENDING 2026-04-25 | Execution owned by #422. Setup: synthetic wave-state with `kahuna_branch.created_at` > 48h ago. Pass evidence will include the captured `wave_health_check` warning output and the confirmation that wave execution was not blocked. |
+
+**Coverage check:** every R-## (R-01 through R-23) appears in the Requirements Covered column of at least one verification row. No unverified R-## was found, so no follow-up bug is required at this time. Final disposition (PASS/FAIL per row) and the global "every R-## has at least one PASSING verification item" claim will be confirmed when #420, #421, #422 close.
 
 ### Appendix D: Glossary
 
