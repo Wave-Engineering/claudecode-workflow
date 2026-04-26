@@ -70,11 +70,33 @@ Clears `wavemachine_active` and the related metadata. Idempotent — safe to cal
 Once pre-flight passes:
 
 1. **Set the active flag** (see above).
-2. **Regenerate and open the status panel.** Run `./scripts/generate-status-panel`, then open `.status-panel.html` with `xdg-open` (Linux) or `open` (macOS). The panel is visible before work begins and updates as waves land.
+2. **Regenerate and open the status panel — REQUIRED.** This step is **not optional** — the panel is the operator's primary visibility surface and MUST be open before the loop starts. Run the exact invocation:
+
+   ```bash
+   ./scripts/generate-status-panel
+   xdg-open .status-panel.html   # Linux; substitute `open` on macOS
+   ```
+
+   The first command writes a self-contained HTML snapshot of current wave state to `.status-panel.html` at the repo root. The second command opens it in the operator's default browser. Do not skip either half — the panel is the visual contract this skill maintains with the human, and a /wavemachine launch without an open panel is malformed. (See "Status Panel Lifecycle" below for what the panel does and does NOT do after launch.)
 3. **Detect CI trust** by calling `wave_ci_trust_level()` once. (The value is also cached by each `/nextwave auto` iteration; calling it here is informational — it shapes the start announcement.)
 4. **Pre-wave kahuna bootstrap** (see "Pre-Wave Kahuna Bootstrap" below). Runs exactly once per epic on first `/wavemachine` invocation. On resume invocations the wave state already carries `kahuna_branch` and this step is a no-op.
 5. **Post to Discord.** `disc_send` to `#wave-status` (`1487386934094462986`): `"🌊 **Wavemachine started** — <project>, <N> waves pending. Agent: **<dev-name>** <dev-avatar>"`. Resolve identity from `/tmp/claude-agent-<md5>.json`. If `disc_send` fails, log and continue — Discord is informational, not a gate.
 6. **Emit observability event.** `scripts/mcp-log wavemachine_start epic=<epic_id> waves=<N> kahuna=<kahuna_branch>` — timestamps autopilot start in the fleet logfile so post-mortem can correlate with sdlc-server tool_call events.
+
+## Status Panel Lifecycle
+
+`.status-panel.html` is a **point-in-time snapshot** of wave state, not a live dashboard. The generator (`scripts/generate-status-panel`) reads `.claude/status/{phases-waves,state,flights}.json`, renders a self-contained HTML file (inline CSS/JS, no external deps), and exits. There is **no** JavaScript polling, **no** WebSocket, **no** background refresher — the open browser tab will keep displaying the snapshot from whenever the file was last written until the operator hits Cmd-R / F5 (or the file is regenerated and the operator refreshes).
+
+This is a deliberate design choice: a static file has zero runtime cost, no auth surface, and can be opened from anywhere — including after the wavemachine session has exited. The cost is that the panel is only as fresh as the last `generate-status-panel` invocation.
+
+**Auto-regeneration policy.** To keep the panel close to live without introducing a polling loop, `/wavemachine` re-invokes `./scripts/generate-status-panel` at the two lifecycle events that change wave state most visibly:
+
+1. **After every `wave_complete` event** — i.e. immediately after `/nextwave auto` returns OK and before the loop iterates. The wave's `done` action and any merged-MR metadata are now in `state.json`; regeneration reflects them.
+2. **After every `wave_flight_done` event** — i.e. as flights complete within an in-flight wave. This is owned by `/nextwave auto`'s flight-completion handler (the loop body here does not see individual flight completions), so the regeneration call lives there. `/wavemachine` is responsible only for the post-`wave_complete` regeneration in its own loop body; the flight-grain regeneration is `/nextwave`'s contract.
+
+In both cases the regeneration is **fire-and-forget** — we do NOT block the loop on it, we do NOT open a new browser tab (the operator's tab from launch is still pointed at the file), and a regeneration failure is logged but does not abort the loop. The operator refreshes when they want fresh data; the file is current within ~1 second of each lifecycle event.
+
+**What this is NOT.** This is not a live dashboard. If you want live-updating telemetry, look at `scripts/discord-status-post` (the embed it posts to `#wave-status` is PATCHed in place on every call) or the Discord notifications in the "Announcements" section below. The HTML panel is for at-a-glance overview; Discord is for the live timeline.
 
 ## Pre-Wave Kahuna Bootstrap
 
@@ -127,7 +149,9 @@ loop:
      status JSON:
          {"status": "OK" | "BLOCKED" | "FAIL", "wave_id": "<id>", ...}
 
-     - "OK"      → wave landed, loop back to step 1
+     - "OK"      → run `./scripts/generate-status-panel` (fire-and-forget;
+                    auto-regen on wave_complete per "Status Panel Lifecycle"),
+                    then loop back to step 1
      - "BLOCKED" → stop; announce abort with the blocker detail
      - "FAIL"    → stop; announce abort with the failure detail
      - malformed / missing → treat as FAIL ("malformed /nextwave return"); stop
@@ -249,12 +273,25 @@ In every interrupt case:
 
 - Run `python3 -m wave_status wavemachine-stop` immediately to clear the flag (the statusline must match reality).
 - **Leave the in-flight wave's bus tree in place** (`/tmp/wavemachine/<repo-slug>/wave-<N>/`). Do NOT call `wave-cleanup` on an interrupted wave — the partial state is forensic evidence for the human.
-- Announce the interrupt to `#wave-status` (`1487386934094462986`): `"⏸ **Wavemachine interrupted** — <project>, wave <id> mid-flight, bus preserved at <path>. Agent: **<dev-name>** <dev-avatar>"`.
+- Regenerate `.status-panel.html` synchronously before announcing so the attachment captures the interrupted state: `./scripts/generate-status-panel`.
+- Announce the interrupt to `#wave-status` (`1487386934094462986`) with the panel attached: `disc_send(channel_id="1487386934094462986", message="⏸ **Wavemachine interrupted** — <project>, wave <id> mid-flight, bus preserved at <path>. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`.
 - Report to the user: which wave was interrupted, the bus root path, what was merged successfully before the interrupt, how to resume (re-run `/wavemachine` after reviewing the bus).
 
 ## Announcements (Discord + vox)
 
-Preserve the v1 announcement surface — one Discord post per lifecycle event, optional vox on the terminal ones:
+Preserve the v1 announcement surface — one Discord post per lifecycle event, optional vox on the terminal ones.
+
+**Decision: `.status-panel.html` IS posted as a Discord attachment at terminal events.** The HTML file is self-contained (inline CSS/JS, no external deps), typically well under 1 MB, and well within Discord's 25 MB upload ceiling. Attaching it gives `#wave-status` subscribers a portable forensic snapshot of wave state at the moment of completion or abort — they can download it, open it locally, and see exactly what the operator saw, without needing repo access. The attachment is added via `disc_send`'s `attach_path` parameter at the **terminal** lifecycle events only:
+
+- **wavemachine-complete (clean completion)** — see "On clean completion" below
+- **kahuna-gate-blocked (any-red gate)** — handled in "Trust-Score Gate and Auto-Merge"; the gate's `🛑 Kahuna gate blocked` notification SHOULD include `attach_path=".status-panel.html"`
+- **circuit-breaker-trip** — see "On circuit-breaker trip" below
+- **per-wave BLOCKED / FAIL** — see "On per-wave BLOCKED or FAIL" below
+- **user-interrupt** — see "Interrupt Handling" above
+
+The non-terminal events (`wavemachine-started`, intermediate `wave_complete` text posts) do NOT attach the HTML — they fire too frequently and the panel is more useful as the closing-frame snapshot. If `disc_send` fails to upload the attachment (network, permissions, Discord transient), the text portion still posts and the failure is logged — Discord is informational, never a gate.
+
+Before each terminal-event `disc_send` that includes `attach_path`, make sure the file is fresh: re-invoke `./scripts/generate-status-panel` synchronously so the attachment captures the actual moment of completion/abort, not a stale snapshot from before the terminal transition.
 
 **On loop start** (see "Launch Sequence" above):
 
@@ -264,26 +301,30 @@ Preserve the v1 announcement surface — one Discord post per lifecycle event, o
 
 - This announcement runs AFTER the trust-score gate's all-green path (see "Trust-Score Gate and Auto-Merge"). In KAHUNA mode, the gate has already auto-merged kahuna→main and posted its own `✅ **Kahuna gate passed**` notification — this announcement closes out the wavemachine session.
 - In legacy non-KAHUNA mode (no `kahuna_branch` in wave state), the gate is skipped and this announcement runs directly when `wave_next_pending()` returns null.
-- Discord `#wave-status`: `"✅ **Wavemachine complete** — <project>, all <N> waves merged. Run /dod to verify. Agent: **<dev-name>** <dev-avatar>"`
+- Regenerate `.status-panel.html` synchronously before posting so the attachment is current: `./scripts/generate-status-panel`.
+- Discord `#wave-status`: `disc_send(channel_id="1487386934094462986", message="✅ **Wavemachine complete** — <project>, all <N> waves merged. Run /dod to verify. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
 - `scripts/mcp-log wavemachine_complete epic=<epic_id> status=OK waves_merged=<N>`
 - Vox (conversational, brief): name, team, project, "wavemachine complete, all waves merged".
 
 **On gate-blocked completion** (KAHUNA mode, one or more trust signals failed):
 
-- Per Procedure C / "Trust-Score Gate and Auto-Merge" any-red path: `"🛑 **Kahuna gate blocked** — <project>, epic #<epic_id>: <failing-signals summary>. MR <url> open for review. Agent: **<dev-name>** <dev-avatar>"`
+- Regenerate `.status-panel.html` synchronously before posting so the attachment captures the gate-blocked state: `./scripts/generate-status-panel`.
+- Per Procedure C / "Trust-Score Gate and Auto-Merge" any-red path: `disc_send(channel_id="1487386934094462986", message="🛑 **Kahuna gate blocked** — <project>, epic #<epic_id>: <failing-signals summary>. MR <url> open for review. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
 - Vox alert: "Kahuna gate blocked for epic <epic_id>. <N> signals red. Ready for your review."
 - `scripts/mcp-log --level warn wavemachine_complete epic=<epic_id> status=BLOCKED reason="kahuna gate blocked: <signals>"`
 - `wave_waiting("kahuna gate blocked: <one-line summary>")` so the plan is explicitly marked paused.
 
 **On circuit-breaker trip** (`wave_health_check` non-HEALTHY):
 
-- Discord `#wave-status`: `"🛑 **Wavemachine aborted (circuit breaker)** — <project>: <one-line health summary>. Agent: **<dev-name>** <dev-avatar>"`
+- Regenerate `.status-panel.html` synchronously before posting: `./scripts/generate-status-panel`.
+- Discord `#wave-status`: `disc_send(channel_id="1487386934094462986", message="🛑 **Wavemachine aborted (circuit breaker)** — <project>: <one-line health summary>. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
 - `scripts/mcp-log --level error wavemachine_complete epic=<epic_id> status=ABORTED reason="circuit breaker: <summary>"`
 - Call `wave_waiting("wavemachine aborted (circuit breaker): <one-line summary>")` so the plan is explicitly marked paused.
 
 **On per-wave BLOCKED or FAIL** (from `/nextwave auto` return):
 
-- Discord `#wave-status`: `"🛑 **Wavemachine aborted** — <project>, wave <id>: <one-line failure summary>. Agent: **<dev-name>** <dev-avatar>"`
+- Regenerate `.status-panel.html` synchronously before posting: `./scripts/generate-status-panel`.
+- Discord `#wave-status`: `disc_send(channel_id="1487386934094462986", message="🛑 **Wavemachine aborted** — <project>, wave <id>: <one-line failure summary>. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
 - `scripts/mcp-log --level error wavemachine_complete epic=<epic_id> status=ABORTED wave=<id> reason="<summary>"`
 - Call `wave_waiting("wavemachine aborted: <one-line summary>")`.
 
