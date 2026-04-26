@@ -93,6 +93,12 @@ Discover the project's tooling rather than assuming a stack. Check in order: `Ma
 
 ---
 
+## Infrastructure Verification: Config Existence ≠ Config Works
+
+When changing GitHub Actions workflows, branch protection, merge queue rulesets, or any CI/CD plumbing: verifying the configuration is in place (API returns the ruleset ID, ruleset is active, required checks are listed) is **necessary but not sufficient**. The contract is end-to-end behavior — open a throwaway PR and watch it merge. The 2026-04-07 merge-queue outage (postmortem #299) is the canonical example: 6 repos had correctly-configured rulesets that silently broke every PR for hours because the workflow producing the required check was missing `merge_group:` in its `on:` block. Runbook: `docs/operations/merge-queue-checklist.md`.
+
+---
+
 ## CRITICAL: No Procedural Logic in CI/CD YAML
 
 **If you are about to add more than 5 lines to any `run:` or `script:` section in CI/CD configuration (GitHub Actions workflows or `.gitlab-ci.yml`), STOP IMMEDIATELY.**
