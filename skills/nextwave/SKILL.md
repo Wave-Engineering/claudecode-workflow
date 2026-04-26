@@ -138,14 +138,15 @@ One `Agent` call, `subagent_type: general-purpose`. Pass the wave's `kahuna_bran
 >
 > Steps:
 > 1. For each issue X in this flight, read `<wave-root>/flight-<M>/issue-<X>/results.md` and verify `DONE` contains `PASS`. If any FAIL, stop and write a `BLOCKED` report naming the failing issues.
-> 2. For each issue, push the Flight's commit from its worktree (`git -C <worktree> push -u origin <branch>`), create a PR via `pr_create({base: <kahuna_branch>})` if `kahuna_branch` is set else `pr_create({base: "main"})`, then wait for CI via `pr_wait_ci`. **Every Flight PR in a KAHUNA wave targets the kahuna branch — never `main`. The kahuna→main MR is opened separately by `wave_finalize` per Dev Spec §5.2.2.**
-> 3. If this flight has multiple issues, run `commutativity_verify` on the changesets `{id, head_ref}`. Interpret the group verdict:
+> 2. **Code-reviewer pass (per issue, parallel).** Flights cannot dispatch the reviewer themselves — sub-agents lack the `Agent`/`Task` tool (see `lesson_cc_subagent_tools.md`). Prime runs it now, before push. In a SINGLE tool-use block, issue one `Agent` call per issue X in this flight, `subagent_type: feature-dev:code-reviewer`. Each call's prompt: "Review the diff for issue #<X> against the SPEC EXECUTOR rubric. Worktree: `<worktree-path>`. Diff: run `git -C <worktree-path> diff origin/<base-ref>...HEAD`. Report any high-confidence findings (correctness bugs, security issues, AC mismatches)." Collect results. **If ANY issue surfaces a high-confidence finding, abort the flight push: write a `BLOCKED` report naming the failing issue(s) and the finding summary, do NOT proceed to step 3. Do NOT push or PR.** If all reviewers return clean (or only low-confidence/style notes), proceed.
+> 3. For each issue, push the Flight's commit from its worktree (`git -C <worktree> push -u origin <branch>`), create a PR via `pr_create({base: <kahuna_branch>})` if `kahuna_branch` is set else `pr_create({base: "main"})`, then wait for CI via `pr_wait_ci`. **Every Flight PR in a KAHUNA wave targets the kahuna branch — never `main`. The kahuna→main MR is opened separately by `wave_finalize` per Dev Spec §5.2.2.**
+> 4. If this flight has multiple issues, run `commutativity_verify` on the changesets `{id, head_ref}`. Interpret the group verdict:
 >    - `STRONG` / `MEDIUM` → `pr_merge(skip_train=true)` for all.
 >    - `WEAK` / `ORACLE_REQUIRED` → sequential merge via the merge queue (no skip).
 >    Single-issue flights skip commutativity entirely.
-> 4. Merge all flight PRs via `pr_merge`. On merge, call `wave_close_issue(X)` and `wave_record_mr(X, url)` per issue. Call `wave_flight_done(M)` after all merges land.
-> 5. `git checkout main && git pull` in the target repo.
-> 6. Write `<wave-root>/flight-<M>/merge-report.md` (per-issue PR URL, CI status, merge strategy, anomalies).
+> 5. Merge all flight PRs via `pr_merge`. On merge, call `wave_close_issue(X)` and `wave_record_mr(X, url)` per issue. Call `wave_flight_done(M)` after all merges land.
+> 6. `git checkout main && git pull` in the target repo.
+> 7. Write `<wave-root>/flight-<M>/merge-report.md` (per-issue PR URL, CI status, merge strategy, reviewer-pass summary per issue, anomalies).
 >
 > Final message — exactly one line:
 >
@@ -243,7 +244,7 @@ This prompt is what each Flight sub-agent receives. Preserve the SPEC EXECUTOR b
 >
 > 1. `./scripts/ci/validate.sh` (or the project's equivalent)
 > 2. Project test suite
-> 3. Code-reviewer agent review of your diff
+> 3. **SKIP code-reviewer agent dispatch** — Flight context lacks the `Agent`/`Task` tool (CC sub-agents cannot spawn sub-sub-agents; see `lesson_cc_subagent_tools.md`). The reviewer pass runs from Prime(post-flight) instead (Step 3e). Do a thorough self-review against the SPEC EXECUTOR rubric and document findings in `results.md`.
 > 4. AC verification — re-read the issue, walk every acceptance criterion, confirm each is met
 >
 > **If all mechanical checks pass, commit in your worktree:**
@@ -257,7 +258,7 @@ This prompt is what each Flight sub-agent receives. Preserve the SPEC EXECUTOR b
 >
 > **Write your results file:**
 >
-> 1. Write `<wave-root>/flight-<M>/issue-<X>/results.md.partial` with: commit SHA, files changed, test results, code-reviewer findings, AC checklist status, any deferred items, any concerns.
+> 1. Write `<wave-root>/flight-<M>/issue-<X>/results.md.partial` with: commit SHA, files changed, test results, self-review findings (note that reviewer-agent dispatch is skipped per Step 3e — the Prime-side reviewer pass is the gate), AC checklist status, any deferred items, any concerns.
 > 2. Call `scripts/wavebus/flight-finalize <wave-root>/flight-<M>/issue-<X>/results.md.partial <PASS|FAIL>`.
 >    - `PASS` if every AC is met and all mechanical checks are green.
 >    - `FAIL` otherwise. `results.md.partial` must still be non-empty — explain the failure.
