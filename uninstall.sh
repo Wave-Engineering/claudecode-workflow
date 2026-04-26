@@ -120,12 +120,28 @@ if [[ "$REMOVE_SCRIPTS" == true ]]; then
 	echo ""
 	echo "Removing scripts from $SCRIPTS_DIR"
 	echo "──────────────────────────────────────────"
-	for script in "$REPO_DIR"/scripts/*; do
-		[[ -f "$script" ]] || continue
-		[[ -d "$script" ]] && continue
-		script_name="$(basename "$script")"
-		do_remove "$SCRIPTS_DIR/$script_name"
-	done
+	# Mirror the install-side recursive walk: remove every scripts/<rel>
+	# (excluding ci/ and noise subtrees) from $SCRIPTS_DIR/<rel>.
+	while IFS= read -r rel; do
+		[[ "$rel" == ci/* ]] && continue
+		do_remove "$SCRIPTS_DIR/$rel"
+	done < <(
+		cd "$REPO_DIR" && find scripts -type f \
+			-not -path '*/tests/*' \
+			-not -path '*/fixtures/*' \
+			-not -path '*/__pycache__/*' \
+			-not -path '*/.pytest_cache/*' \
+			-printf '%P\n' | sort
+	)
+	# Clean up the install manifest written by ./install.
+	do_remove "$SCRIPTS_DIR/.cc-workflow-manifest"
+	# Best-effort: remove now-empty subdirs we created (e.g. vox-providers/).
+	if [[ "$DRY_RUN" != true ]]; then
+		for sub in "$SCRIPTS_DIR"/*/; do
+			[[ -d "$sub" ]] || continue
+			rmdir "$sub" 2>/dev/null || true
+		done
+	fi
 fi
 
 # --- Remove packages ----------------------------------------------------------

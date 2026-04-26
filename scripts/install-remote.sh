@@ -261,14 +261,29 @@ do_install() {
 	echo "Scripts -> $SCRIPTS_DIR"
 	echo "--------------------------------------------"
 	mkdir -p "$SCRIPTS_DIR"
-	for script in "$release_dir"/scripts/*; do
-		[[ -f "$script" ]] || continue
-		local script_name
-		script_name="$(basename "$script")"
-		cp "$script" "$SCRIPTS_DIR/$script_name"
-		chmod +x "$SCRIPTS_DIR/$script_name"
-		ok "$script_name"
-	done
+	# Recursive walk: scripts/<rel> -> $SCRIPTS_DIR/<rel>, preserving nested
+	# subdirs like vox-providers/. ci/ and well-known noise subtrees are
+	# excluded.
+	while IFS= read -r rel; do
+		[[ "$rel" == ci/* ]] && continue
+		local src_path="$release_dir/scripts/$rel"
+		local dest_path="$SCRIPTS_DIR/$rel"
+		mkdir -p "$(dirname "$dest_path")"
+		cp "$src_path" "$dest_path"
+		# Preserve executable bit: top-level scripts always +x (legacy);
+		# nested files only +x if the source had it.
+		if [[ "$rel" != */* ]] || [[ -x "$src_path" ]]; then
+			chmod +x "$dest_path"
+		fi
+		ok "$rel"
+	done < <(
+		cd "$release_dir" && find scripts -type f \
+			-not -path '*/tests/*' \
+			-not -path '*/fixtures/*' \
+			-not -path '*/__pycache__/*' \
+			-not -path '*/.pytest_cache/*' \
+			-printf '%P\n' | sort
+	)
 	echo ""
 
 	# --- Install pre-built packages ---

@@ -435,6 +435,194 @@ class TestUninstallDryRun:
 
 
 @_SKIP_NO_BASH
+class TestInstallSyntheticTree:
+    """End-to-end install behavior on a synthetic ``scripts/`` layout.
+
+    Builds a throwaway "repo" containing a stub install + scripts/ tree,
+    then exercises recursion, executable preservation, and exclusion of
+    noise subtrees (tests/, fixtures/, __pycache__, .pytest_cache).
+    """
+
+    def _build_synthetic_repo(self, tmp_path: Path) -> Path:
+        """Materialize a minimal repo at ``tmp_path/repo`` with just scripts/.
+
+        Strips the install script down to the script-copy block alone so the
+        test stays fast and doesn't pull in skills/config/MCP machinery.
+        """
+        repo = tmp_path / "repo"
+        scripts = repo / "scripts"
+        scripts.mkdir(parents=True)
+
+        # Top-level (flat) script.
+        (scripts / "foo").write_text("#!/bin/bash\necho foo\n")
+        os.chmod(scripts / "foo", 0o755)
+
+        # Nested executable.
+        sub = scripts / "sub"
+        sub.mkdir()
+        (sub / "bar").write_text("#!/bin/bash\necho bar\n")
+        os.chmod(sub / "bar", 0o755)
+
+        # Doubly-nested executable.
+        baz = sub / "baz"
+        baz.mkdir()
+        (baz / "qux").write_text("#!/bin/bash\necho qux\n")
+        os.chmod(baz / "qux", 0o755)
+
+        # Non-executable doc.
+        (sub / "README.md").write_text("# sub\n")
+
+        # Excluded noise subtree.
+        excluded = scripts / "excluded" / "__pycache__"
+        excluded.mkdir(parents=True)
+        (excluded / "y").write_text("compiled\n")
+
+        # The real install script sources scripts/ci/check-deps.sh at the end
+        # for the post-install dep gate. Stub it so the synthetic repo doesn't
+        # need the full ci/ tree.
+        ci_dir = scripts / "ci"
+        ci_dir.mkdir()
+        (ci_dir / "check-deps.sh").write_text("check_deps() { return 0; }\n")
+
+        # Drop in a copy of the real install script so we run the actual code.
+        shutil.copy(_REPO_DIR / "install", repo / "install")
+        os.chmod(repo / "install", 0o755)
+        return repo
+
+    def test_recursive_install_with_exclusions(self, tmp_path: Path) -> None:
+        repo = self._build_synthetic_repo(tmp_path)
+        home = tmp_path / "home"
+        (home / ".local" / "bin").mkdir(parents=True)
+        (home / ".claude" / "skills").mkdir(parents=True)
+
+        env = os.environ.copy()
+        env["HOME"] = str(home)
+        # --scripts skips skills/config/mcps/crystallizer; depcheck still
+        # runs but is harmless on an empty repo.
+        result = subprocess.run(
+            ["bash", str(repo / "install"), "--scripts"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+        )
+        assert result.returncode == 0, (
+            f"install failed (rc={result.returncode}):\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+        bin_dir = home / ".local" / "bin"
+        # Flat + nested + doubly-nested all landed.
+        assert (bin_dir / "foo").exists(), "flat top-level script missing"
+        assert (bin_dir / "sub" / "bar").exists(), "single-nested script missing"
+        assert (bin_dir / "sub" / "baz" / "qux").exists(), (
+            "double-nested script missing"
+        )
+        # Executable bits preserved.
+        assert os.access(str(bin_dir / "foo"), os.X_OK)
+        assert os.access(str(bin_dir / "sub" / "bar"), os.X_OK)
+        assert os.access(str(bin_dir / "sub" / "baz" / "qux"), os.X_OK)
+        # Non-executable doc copied, NOT marked executable.
+        readme = bin_dir / "sub" / "README.md"
+        assert readme.exists(), "non-executable doc not copied"
+        assert not os.access(str(readme), os.X_OK), (
+            "non-executable doc was incorrectly chmod'd +x"
+        )
+        # Excluded subtree not copied.
+        assert not (bin_dir / "excluded" / "__pycache__" / "y").exists(), (
+            "excluded __pycache__ subtree was copied"
+        )
+
+    def test_prune_removes_orphan(self, tmp_path: Path) -> None:
+        """--prune removes installed files whose source no longer exists."""
+        repo = self._build_synthetic_repo(tmp_path)
+        home = tmp_path / "home"
+        (home / ".local" / "bin").mkdir(parents=True)
+        (home / ".claude" / "skills").mkdir(parents=True)
+
+        env = os.environ.copy()
+        env["HOME"] = str(home)
+
+        # Install once.
+        rc = subprocess.run(
+            ["bash", str(repo / "install"), "--scripts"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+        ).returncode
+        assert rc == 0, "first install failed"
+
+        # Plant an orphan (the manifest will pick it up since we'll add it).
+        bin_dir = home / ".local" / "bin"
+        orphan = bin_dir / "ghost"
+        orphan.write_text("#!/bin/bash\necho gone\n")
+        os.chmod(orphan, 0o755)
+        manifest = bin_dir / ".cc-workflow-manifest"
+        with manifest.open("a") as fh:
+            fh.write("ghost\n")
+
+        # Prune (non-interactive).
+        result = subprocess.run(
+            ["bash", str(repo / "install"), "--prune", "--yes"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+        )
+        assert result.returncode == 0, (
+            f"prune failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert not orphan.exists(), "orphan was not pruned"
+        # Backup retained.
+        assert (bin_dir / "ghost.bak").exists(), "orphan backup missing"
+        # Real files still present.
+        assert (bin_dir / "foo").exists(), "prune removed live top-level script"
+        assert (bin_dir / "sub" / "bar").exists(), (
+            "prune removed live nested script"
+        )
+
+    def test_check_reports_nested_drift(self, tmp_path: Path) -> None:
+        """--check reports drift for missing nested files (not just top-level)."""
+        repo = self._build_synthetic_repo(tmp_path)
+        home = tmp_path / "home"
+        (home / ".local" / "bin").mkdir(parents=True)
+        (home / ".claude" / "skills").mkdir(parents=True)
+
+        env = os.environ.copy()
+        env["HOME"] = str(home)
+
+        rc = subprocess.run(
+            ["bash", str(repo / "install"), "--scripts"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+        ).returncode
+        assert rc == 0, "install failed"
+
+        # Delete a nested file; --check should flag the drift.
+        target = home / ".local" / "bin" / "sub" / "bar"
+        assert target.exists()
+        target.unlink()
+
+        result = subprocess.run(
+            ["bash", str(repo / "install"), "--check"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+        )
+        assert result.returncode == 0, "check exited non-zero"
+        assert "sub/bar" in result.stdout, (
+            f"--check did not report missing nested file:\n{result.stdout}"
+        )
+        assert "out of sync" in result.stdout.lower(), (
+            f"--check did not flag drift:\n{result.stdout}"
+        )
+
+
+@_SKIP_NO_BASH
 @_SKIP_NO_PYTHON3
 class TestReinstallOverwrites:
     """Installing twice succeeds without errors (second install overwrites)."""

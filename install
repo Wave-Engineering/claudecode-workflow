@@ -5,15 +5,21 @@
 # into the correct locations on the local machine.
 #
 # Usage:
-#   ./install.sh              Install everything
-#   ./install.sh --dry-run    Show what would be done without doing it
-#   ./install.sh --check      Show drift between repo and installed versions
-#   ./install.sh --skills     Install skills only
-#   ./install.sh --scripts    Install scripts only (also builds packages from src/)
-#   ./install.sh --config     Install config files only (smart-merges settings.json)
-#   ./install.sh --mcps       Install MCP servers only (via mcps.json manifest)
-#   ./install.sh --crystallizer Install context-crystallizer only
-#   ./install.sh --no-mcps    Install everything except MCP servers
+#   ./install                 Install everything
+#   ./install --dry-run       Show what would be done without doing it
+#   ./install --check         Show drift between repo and installed versions
+#   ./install --skills        Install skills only
+#   ./install --scripts       Install scripts only (also builds packages from src/)
+#   ./install --config        Install config files only (smart-merges settings.json)
+#   ./install --mcps          Install MCP servers only (via mcps.json manifest)
+#   ./install --crystallizer  Install context-crystallizer only
+#   ./install --no-mcps       Install everything except MCP servers
+#   ./install --prune         Remove installed files whose source no longer exists
+#   ./install --yes           Non-interactive (assume yes for --prune confirmations)
+#
+# Recursion: scripts/ is walked recursively. Files at scripts/<sub>/path are
+# mirrored to ~/.local/bin/<sub>/path with executable bit preserved. Excluded
+# subtree names: tests, fixtures, __pycache__, .pytest_cache.
 #
 # Targets:
 #   Skills       → ~/.claude/skills/<name>/SKILL.md
@@ -35,11 +41,16 @@ SCRIPTS_DIR="$HOME/.local/bin"
 CLAUDE_DIR="$HOME/.claude"
 DRY_RUN=false
 CHECK_MODE=false
+PRUNE_MODE=false
+ASSUME_YES=false
 INSTALL_SKILLS=true
 INSTALL_SCRIPTS=true
 INSTALL_CONFIG=true
 INSTALL_MCPS=true
 INSTALL_CRYSTALLIZER=true
+
+# Subtree names excluded from the recursive scripts/ walk.
+SCRIPTS_EXCLUDE_NAMES=(tests fixtures __pycache__ .pytest_cache)
 
 # --- Parse args ---------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
@@ -91,6 +102,14 @@ while [[ $# -gt 0 ]]; do
 		INSTALL_MCPS=false
 		shift
 		;;
+	--prune)
+		PRUNE_MODE=true
+		shift
+		;;
+	--yes | -y)
+		ASSUME_YES=true
+		shift
+		;;
 	--help | -h)
 		grep '^#' "$0" | sed 's/^# \?//' | tail -n +2
 		exit 0
@@ -108,6 +127,64 @@ ok() { echo "  [✓] $*"; }
 warn() { echo "  [!] $*"; }
 skip() { echo "  [-] $*"; }
 drift() { echo "  [~] $*"; }
+
+# Print the relative paths (rooted at scripts/) of every file under
+# scripts/, excluding well-known noise subtrees (tests/, fixtures/, etc.).
+# One path per line, e.g. "vox-providers/silent.sh" or "ci/build.sh".
+enumerate_scripts() {
+	local find_args=(scripts -type f)
+	local name
+	for name in "${SCRIPTS_EXCLUDE_NAMES[@]}"; do
+		find_args+=(-not -path "*/$name/*")
+	done
+	# Strip the leading "scripts/" so output is rel-to-scripts. Avoids GNU
+	# find's -printf '%P\n', which BSD find lacks.
+	(cd "$REPO_DIR" && find "${find_args[@]}" | sed 's|^scripts/||' | sort)
+}
+
+# Manifest path: a newline-delimited list of files (relative to ~/.local/bin/)
+# that this installer last wrote. Used by --prune to detect orphans.
+MANIFEST_FILE="$SCRIPTS_DIR/.cc-workflow-manifest"
+
+# Print the union of: (1) every script we WOULD install right now, (2) every
+# entry from the previous install's manifest (if any). Entries are paths
+# relative to $SCRIPTS_DIR. Used as the candidate set for orphan detection.
+enumerate_installed_candidates() {
+	{
+		# Current source set (excluding ci/) — these are what install would write.
+		while IFS= read -r rel; do
+			[[ "$rel" == ci/* ]] && continue
+			echo "$rel"
+		done < <(enumerate_scripts)
+		# Previously-installed set from manifest (if present).
+		if [[ -f "$MANIFEST_FILE" ]]; then
+			grep -v '^[[:space:]]*$' "$MANIFEST_FILE" || true
+		fi
+	} | sort -u
+}
+
+# List orphans: files referenced by enumerate_installed_candidates whose source
+# under scripts/<rel> no longer exists. Output is paths relative to $SCRIPTS_DIR.
+enumerate_orphans() {
+	while IFS= read -r rel; do
+		[[ -z "$rel" ]] && continue
+		if [[ ! -f "$REPO_DIR/scripts/$rel" ]] && [[ -f "$SCRIPTS_DIR/$rel" ]]; then
+			echo "$rel"
+		fi
+	done < <(enumerate_installed_candidates)
+}
+
+# Write the install manifest from the current scripts/ source tree.
+write_manifest() {
+	[[ "$DRY_RUN" == true ]] && return 0
+	mkdir -p "$SCRIPTS_DIR"
+	{
+		while IFS= read -r rel; do
+			[[ "$rel" == ci/* ]] && continue
+			echo "$rel"
+		done < <(enumerate_scripts)
+	} >"$MANIFEST_FILE"
+}
 
 do_copy() {
 	local src="$1" dest="$2"
@@ -232,6 +309,66 @@ merge_settings() {
 	fi
 }
 
+# --- Prune mode ---------------------------------------------------------------
+# Walk previously-installed files (manifest + current source set), remove the
+# ones whose source under scripts/ no longer exists. Backed-up to <file>.bak
+# unless --dry-run. Interactive by default; --yes skips the prompt.
+if [[ "$PRUNE_MODE" == true ]]; then
+	echo ""
+	echo "Prune: orphaned scripts in $SCRIPTS_DIR"
+	echo "══════════════════════════════════════════"
+	orphans=()
+	while IFS= read -r o; do
+		[[ -z "$o" ]] && continue
+		orphans+=("$o")
+	done < <(enumerate_orphans)
+
+	if [[ ${#orphans[@]} -eq 0 ]]; then
+		info "No orphans found."
+	else
+		for o in "${orphans[@]}"; do
+			info "$SCRIPTS_DIR/$o"
+		done
+		if [[ "$DRY_RUN" == true ]]; then
+			info "(dry-run) Would remove ${#orphans[@]} orphan(s)."
+		else
+			confirm=true
+			if [[ "$ASSUME_YES" != true ]]; then
+				read -r -p "Remove these ${#orphans[@]} file(s)? [y/N] " reply || reply=""
+				case "$reply" in
+				y | Y | yes | YES) confirm=true ;;
+				*) confirm=false ;;
+				esac
+			fi
+			if [[ "$confirm" == true ]]; then
+				for o in "${orphans[@]}"; do
+					path="$SCRIPTS_DIR/$o"
+					[[ -f "$path" ]] || continue
+					cp "$path" "${path}.bak"
+					rm -f "$path"
+					info "Removed $path (backup at ${path}.bak)"
+					# If parent directory is now empty, remove it too — but
+					# never $SCRIPTS_DIR itself.
+					parent="$(dirname "$path")"
+					while [[ "$parent" != "$SCRIPTS_DIR" && "$parent" != "/" ]]; do
+						rmdir "$parent" 2>/dev/null || break
+						parent="$(dirname "$parent")"
+					done
+				done
+				# Refresh manifest so the next run doesn't re-flag what we
+				# just removed.
+				write_manifest
+			else
+				skip "Aborted — no files removed."
+			fi
+		fi
+	fi
+	echo ""
+	echo "──────────────────────────────────────────"
+	echo "Prune complete."
+	exit 0
+fi
+
 # --- Check mode ---------------------------------------------------------------
 if [[ "$CHECK_MODE" == true ]]; then
 	echo ""
@@ -280,14 +417,21 @@ if [[ "$CHECK_MODE" == true ]]; then
 	echo ""
 	echo "Scripts"
 	echo "──────────────────────────────────────────"
-	for script in "$REPO_DIR"/scripts/*; do
-		[[ -f "$script" ]] || continue
-		[[ -d "$script" ]] && continue
-		script_name="$(basename "$script")"
-		dest="$SCRIPTS_DIR/$script_name"
+	while IFS= read -r rel; do
+		[[ "$rel" == ci/* ]] && continue
+		src="$REPO_DIR/scripts/$rel"
+		dest="$SCRIPTS_DIR/$rel"
 		total=$((total + 1))
-		do_check "$script" "$dest" "$script_name" || drifted=$((drifted + 1))
-	done
+		do_check "$src" "$dest" "$rel" || drifted=$((drifted + 1))
+	done < <(enumerate_scripts)
+	# Orphans: installed files whose source under scripts/ no longer exists.
+	# (Detected via union of source set + previous-install manifest.)
+	while IFS= read -r orphan; do
+		[[ -z "$orphan" ]] && continue
+		total=$((total + 1))
+		drift "$orphan — ORPHAN (run ./install --prune to remove)"
+		drifted=$((drifted + 1))
+	done < <(enumerate_orphans)
 
 	echo ""
 	echo "Config"
@@ -439,16 +583,27 @@ if [[ "$INSTALL_SCRIPTS" == true ]]; then
 	echo ""
 	echo "Scripts → $SCRIPTS_DIR"
 	echo "──────────────────────────────────────────"
-	for script in "$REPO_DIR"/scripts/*; do
-		[[ -f "$script" ]] || continue
-		[[ -d "$script" ]] && continue
-		script_name="$(basename "$script")"
-		dest="$SCRIPTS_DIR/$script_name"
-		do_copy "$script" "$dest"
+	# Skip ci/ — internal tooling, not for installation. Everything else under
+	# scripts/ (including nested subdirs like vox-providers/, wavebus/) gets
+	# mirrored into ~/.local/bin/, preserving relative paths.
+	while IFS= read -r rel; do
+		[[ "$rel" == ci/* ]] && continue
+		src="$REPO_DIR/scripts/$rel"
+		dest="$SCRIPTS_DIR/$rel"
+		do_copy "$src" "$dest"
+		# Preserve the source's executable bit. Top-level scripts have
+		# always been chmod'd +x unconditionally; preserve that behavior
+		# for backward compatibility while honoring source bits in subdirs.
 		if [[ "$DRY_RUN" != true ]]; then
-			chmod +x "$dest"
+			if [[ "$rel" != */* ]]; then
+				chmod +x "$dest"
+			elif [[ -x "$src" ]]; then
+				chmod +x "$dest"
+			fi
 		fi
-	done
+	done < <(enumerate_scripts)
+	# Refresh manifest of what we just installed — used by --prune later.
+	write_manifest
 fi
 
 # --- Install config -----------------------------------------------------------
