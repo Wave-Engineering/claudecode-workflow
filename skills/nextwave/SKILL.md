@@ -9,7 +9,7 @@ Execute the next pending wave created by `/prepwaves`. Single-wave primitive. Th
 
 Two modes:
 
-- `/nextwave` — **interactive**. Approval gate fires after Flights return and before Prime(post-flight) pushes anything to remote.
+- `/nextwave` — **interactive**. A single consolidated approval gate fires per flight (= per wave for the dominant single-flight case) after Flights return and after the orchestrator's reviewer pass, before Prime(post-flight) pushes anything to remote. One approval covers every issue in the batch; there are no per-sub-agent prompts.
 - `/nextwave auto` — **auto**. Skips the approval gate. Called by `/wavemachine`. `wave_ci_trust_level` stands in for human judgement.
 
 Merges always go through PR/MR — never direct-to-main.
@@ -227,9 +227,66 @@ Each Flight's last message is exactly one line matching `^(/tmp/wavemachine/[^\s
 - Verifies the `DONE` sentinel (`/tmp/wavemachine/.../issue-<X>/DONE`) exists and contains `PASS` or `FAIL` matching the returned line. Mismatch → FAIL.
 - Reads each `results.md` into context (small, summary + checklist).
 
-### 3d. Approval gate (interactive mode only — SKIP in auto mode).
+### 3c.5. Reviewer pass (Orchestrator dispatches — runs before the gate).
 
-Present a per-Flight summary table (issue, worktree, PASS/FAIL, results.md excerpt). Wait for explicit user approval before Step 3e. If rejected: leave the bus in place, report the wave root path, exit. Nothing touches remote.
+Code-reviewer findings must be in hand at gate time so the human sees them in the batched checklist. Flights cannot dispatch the reviewer themselves (sub-agents lack the `Agent`/`Task` tool — see `lesson_cc_subagent_tools.md`). The Orchestrator does have `Agent`, so it dispatches the reviewer pass here, BEFORE the consolidated approval gate.
+
+In a SINGLE tool-use block, issue one `Agent` call per issue X in this flight, `subagent_type: feature-dev:code-reviewer`. Each call's prompt: `"Review the diff for issue #<X> against the SPEC EXECUTOR rubric. Worktree: <worktree-path>. Diff: run git -C <worktree-path> diff origin/<base-ref>...HEAD. Report any high-confidence findings (correctness bugs, security issues, AC mismatches)."`
+
+Collect the reviewer outputs and stash them keyed by issue — they feed directly into the per-issue rows of the gate's batch checklist (Step 3d) and into the Prime(post-flight) prompt (Step 3e). If ANY issue surfaces a high-confidence finding, the gate at 3d still fires (so the human sees the finding in context), but the orchestrator must surface the finding prominently and recommend rejection.
+
+### 3d. Consolidated approval gate (per-wave / per-flight; interactive mode only — SKIP in auto mode).
+
+**One gate, one approval, batched.** This is the only human checkpoint between local Flight commits and any remote-touching action (push / PR / merge). It fires AFTER all of the flight's Flights have returned AND the Step 3c.5 reviewer pass is complete, and BEFORE Prime(post-flight) is spawned. A single approval covers EVERY issue in the flight — no per-issue / per-sub-agent prompts, no sequential pile-up of N approvals for an N-issue flight.
+
+**Rationale (why per-wave/per-flight, not per-agent):** the real signal that work is correct comes from three already-completed checks — the worktree's `validate.sh` + full test suite (run by the Flight before commit), parent review (the Step 3c.5 code-reviewer pass over each diff), and the Flight's self-report against the spec's acceptance criteria. Once those three are green, a per-agent human gate is ceremony — the human cannot realistically read 1800+ lines of TypeScript across N handlers and catch something the reviewer missed. The human's value is sanity-checking aggregate outcomes (did the scope match the spec? does anything look weird?), and that's done once per batch, not N times. Batched approval also matches how the gate is used in practice: orchestrators have been approving multi-issue flights en bloc anyway. This rule formalizes the established practice and removes the per-sub-agent friction that scaled poorly past ~3 issues.
+
+**Note on multi-flight waves:** when a wave has multiple flights, inter-flight dependencies force flight 1 to merge before flight 2's Flights can run (flight 2 may rebase onto flight 1's changes — see Step 3g). The gate therefore fires once per flight in those waves; for the single-flight case (the dominant shape), this collapses to exactly one gate per wave. Either way, the gate is **never per-issue / per-sub-agent** — it batches every issue in the flight into one decision.
+
+**Batch checklist format.** Present the following block, then STOP:
+
+```
+═══════════════════════════════════════════════════════════════
+WAVE <N> · FLIGHT <M> — APPROVAL GATE (<I> issues, batched)
+═══════════════════════════════════════════════════════════════
+
+PER-ISSUE SUMMARY
+| Issue | Subject              | Files | Tests | AC  | Reviewer |
+|-------|----------------------|-------|-------|-----|----------|
+| #418  | feat(x): handler A   |   4   |  +12  | 6/6 | clean    |
+| #419  | feat(x): handler B   |   3   |  +8   | 4/4 | clean    |
+| #420  | fix(y): drift check  |   2   |  +3   | 3/3 | 1 note   |
+...
+
+AGGREGATE SIGNALS
+- validate.sh (per worktree): N/N green
+- Full test-suite delta vs HEAD: +<count> tests, all passing
+- Parent code-reviewer pass: <clean | N notes | M high-confidence findings>
+- Coverage concerns: <none | summary>
+
+PER-ISSUE PARENT-REVIEW FINDINGS
+- #418: clean
+- #419: clean
+- #420: [note] suggested rename — non-blocking
+...
+
+[fixed] / [deferred] PER ISSUE
+- #418: [fixed] typo in error message during review
+- #420: [deferred] rename to follow-up — opened #501
+...
+
+[parent-review] OVERALL
+- CI: <green | <details>>
+- Tests: <green | <details>>
+- Coverage: <ok | concerns>
+- Reviewer: <clean | high-confidence findings present — see above>
+
+═══════════════════════════════════════════════════════════════
+APPROVE this batch (one decision covers all <I> issues) — y/n?
+═══════════════════════════════════════════════════════════════
+```
+
+**STOP and wait for explicit user input.** Do not proceed autonomously. Approval responses: `y` / `yes` / `/scp` / `approve` → continue to Step 3e; `n` / `no` / `reject` / specific rework instructions → leave the bus in place, surface the wave root path, exit (nothing touches remote). The skill cannot continue past this point without explicit human input — re-read `feedback_precheck_no_ask.md` and `feedback_take_initiative.md`: those allow taking initiative on routine execution decisions, but **NOT on bypassing the human approval gate for a remote-touching batch of commits**.
 
 In **auto mode**: call `wave_ci_trust_level`; if trust is sufficient, skip the gate and proceed directly to Step 3e. If trust drops below threshold (e.g. recent CI instability), pause and surface to the parent `/wavemachine` caller.
 
@@ -248,7 +305,7 @@ One `Agent` call, `subagent_type: general-purpose`. Pass the wave's `kahuna_bran
 >
 > Steps:
 > 1. For each issue X in this flight, read `<wave-root>/flight-<M>/issue-<X>/results.md` and verify `DONE` contains `PASS`. If any FAIL, stop and write a `BLOCKED` report naming the failing issues.
-> 2. **Code-reviewer pass (per issue, parallel).** Flights cannot dispatch the reviewer themselves — sub-agents lack the `Agent`/`Task` tool (see `lesson_cc_subagent_tools.md`). Prime runs it now, before push. In a SINGLE tool-use block, issue one `Agent` call per issue X in this flight, `subagent_type: feature-dev:code-reviewer`. Each call's prompt: "Review the diff for issue #<X> against the SPEC EXECUTOR rubric. Worktree: `<worktree-path>`. Diff: run `git -C <worktree-path> diff origin/<base-ref>...HEAD`. Report any high-confidence findings (correctness bugs, security issues, AC mismatches)." Collect results. **If ANY issue surfaces a high-confidence finding, abort the flight push: write a `BLOCKED` report naming the failing issue(s) and the finding summary, do NOT proceed to step 3. Do NOT push or PR.** If all reviewers return clean (or only low-confidence/style notes), proceed.
+> 2. **Reviewer findings already in hand.** The Orchestrator dispatched the code-reviewer pass at Step 3c.5 (before the consolidated approval gate at Step 3d) and the human has already approved this batch in light of those findings. Do NOT re-dispatch the reviewer here. Reviewer-pass summaries per issue are recorded in the Step 3d batch checklist; surface them in the merge-report (step 7) for traceability.
 > 3. For each issue, push the Flight's commit from its worktree (`git -C <worktree> push -u origin <branch>`), create a PR via `pr_create({base: <kahuna_branch>})` if `kahuna_branch` is set else `pr_create({base: "main"})`, then wait for CI via `pr_wait_ci`. **Every Flight PR in a KAHUNA wave targets the kahuna branch — never `main`. The kahuna→main MR is opened separately by `wave_finalize` per Dev Spec §5.2.2.**
 > 4. If this flight has multiple issues, run `commutativity_verify` on the changesets `{id, head_ref}`. Interpret the group verdict:
 >    - `STRONG` / `MEDIUM` → `pr_merge(skip_train=true)` for all.
@@ -256,7 +313,7 @@ One `Agent` call, `subagent_type: general-purpose`. Pass the wave's `kahuna_bran
 >    Single-issue flights skip commutativity entirely.
 > 5. Merge all flight PRs via `pr_merge`. On merge, call `wave_close_issue(X)` and `wave_record_mr(X, url)` per issue. Call `wave_flight_done(M)` after all merges land.
 > 6. `git checkout main && git pull` in the target repo.
-> 7. Write `<wave-root>/flight-<M>/merge-report.md` (per-issue PR URL, CI status, merge strategy, reviewer-pass summary per issue, anomalies).
+> 7. Write `<wave-root>/flight-<M>/merge-report.md` (per-issue PR URL, CI status, merge strategy, reviewer-pass summary per issue from the Step 3c.5 dispatch, anomalies).
 >
 > Final message — exactly one line:
 >
@@ -354,7 +411,7 @@ This prompt is what each Flight sub-agent receives. Preserve the SPEC EXECUTOR b
 >
 > 1. `./scripts/ci/validate.sh` (or the project's equivalent)
 > 2. Project test suite
-> 3. **SKIP code-reviewer agent dispatch** — Flight context lacks the `Agent`/`Task` tool (CC sub-agents cannot spawn sub-sub-agents; see `lesson_cc_subagent_tools.md`). The reviewer pass runs from Prime(post-flight) instead (Step 3e). Do a thorough self-review against the SPEC EXECUTOR rubric and document findings in `results.md`.
+> 3. **SKIP code-reviewer agent dispatch** — Flight context lacks the `Agent`/`Task` tool (CC sub-agents cannot spawn sub-sub-agents; see `lesson_cc_subagent_tools.md`). The reviewer pass runs from the Orchestrator instead (Step 3c.5), so its findings can feed the consolidated batch approval gate (Step 3d). Do a thorough self-review against the SPEC EXECUTOR rubric and document findings in `results.md`.
 > 4. AC verification — re-read the issue, walk every acceptance criterion, confirm each is met
 >
 > **If all mechanical checks pass, commit in your worktree:**
@@ -364,11 +421,11 @@ This prompt is what each Flight sub-agent receives. Preserve the SPEC EXECUTOR b
 > git -C <worktree-path> commit -m "type(scope): description\n\nCloses #<X>"
 > ```
 >
-> (Do NOT push. Prime(post-flight) pushes after Orchestrator's approval gate.)
+> (Do NOT push. Prime(post-flight) pushes after the Orchestrator's consolidated batch approval gate at Step 3d.)
 >
 > **Write your results file:**
 >
-> 1. Write `<wave-root>/flight-<M>/issue-<X>/results.md.partial` with: commit SHA, files changed, test results, self-review findings (note that reviewer-agent dispatch is skipped per Step 3e — the Prime-side reviewer pass is the gate), AC checklist status, any deferred items, any concerns.
+> 1. Write `<wave-root>/flight-<M>/issue-<X>/results.md.partial` with: commit SHA, files changed, test results, self-review findings (note that reviewer-agent dispatch is skipped here — the Orchestrator runs the reviewer pass at Step 3c.5 and folds its findings into the consolidated batch approval gate at Step 3d), AC checklist status, any deferred items, any concerns.
 > 2. Call `scripts/wavebus/flight-finalize <wave-root>/flight-<M>/issue-<X>/results.md.partial <PASS|FAIL>`.
 >    - `PASS` if every AC is met and all mechanical checks are green.
 >    - `FAIL` otherwise. `results.md.partial` must still be non-empty — explain the failure.
@@ -377,4 +434,4 @@ This prompt is what each Flight sub-agent receives. Preserve the SPEC EXECUTOR b
 
 ## Non-Negotiables
 
-EXECUTION skill — NO design decisions. Flight sub-agents are SPEC EXECUTORS. Default to safe: latency beats broken code. Flights prevent merge conflicts; planning is cheap, conflict resolution is expensive; single-issue flights take the fast-path. **NEVER merge directly to main.** NEVER skip the pre-commit checklist. **Interactive mode: NEVER commit or push without user approval** — the approval gate in Step 3d is the one human checkpoint; do not bypass it. One wave per invocation — the user controls the pace in interactive mode; `/wavemachine` controls it in auto mode. When waiting: `wave_waiting("<reason>")`. When deferring: `wave_defer(desc, risk)` then accept after user approval. If compaction is imminent: `/cryo` first — the task list survives. Pair: `/prepwaves` plans, `/nextwave` executes, `/wavemachine` drives the loop.
+EXECUTION skill — NO design decisions. Flight sub-agents are SPEC EXECUTORS. Default to safe: latency beats broken code. Flights prevent merge conflicts; planning is cheap, conflict resolution is expensive; single-issue flights take the fast-path. **NEVER merge directly to main.** NEVER skip the pre-commit checklist. **Interactive mode: NEVER push, PR, or merge without explicit user approval at the consolidated batch gate (Step 3d).** The gate is **per-wave / per-flight, batched** — one approval covers every issue in the batch — and **never per-issue / per-sub-agent**. Do not bypass it; do not split it; do not infer approval from silence. One wave per invocation — the user controls the pace in interactive mode; `/wavemachine` controls it in auto mode. When waiting: `wave_waiting("<reason>")`. When deferring: `wave_defer(desc, risk)` then accept after user approval. If compaction is imminent: `/cryo` first — the task list survives. Pair: `/prepwaves` plans, `/nextwave` executes, `/wavemachine` drives the loop.
