@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 from wave_status import deferrals
+from wave_status.dashboard.derived_state import compute_derived_state
 from wave_status.dashboard.generator import generate_dashboard
 from wave_status.state import (
     close_issue,
@@ -54,11 +55,25 @@ from wave_status.state import (
 # ---------------------------------------------------------------------------
 
 def _regenerate_dashboard(root: Path) -> None:
-    """Load all three JSON files fresh from disk and regenerate the dashboard."""
+    """Load all three JSON files fresh from disk and regenerate the dashboard.
+
+    Before generating HTML, splice the computed ``gauges`` and ``rail``
+    snapshots into ``state.json`` so the polling cycle (which only fetches
+    ``state.json``) can resolve the gauge-card and progress-rail bindings
+    without a full HTML regen.  See issue #447.
+    """
     d = status_dir(root)
     phases_data = load_json(d / "phases-waves.json")
     state_data = load_json(d / "state.json")
     flights_data = load_json(d / "flights.json")
+
+    # Refresh derived fields and persist back to state.json so the polling
+    # cycle (the *only* path that doesn't get an HTML regen) sees them.
+    derived = compute_derived_state(phases_data, state_data, flights_data)
+    state_data["gauges"] = derived["gauges"]
+    state_data["rail"] = derived["rail"]
+    save_json(d / "state.json", state_data)
+
     generate_dashboard(root, phases_data, state_data, flights_data)
     # Best-effort Discord status update
     try:

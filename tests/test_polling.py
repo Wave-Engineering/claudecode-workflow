@@ -255,3 +255,38 @@ class TestConsistency:
         a = render_polling_script()
         b = render_polling_script()
         assert a == b
+
+
+# ---------------------------------------------------------------------------
+# Issue #447: data-bind-width handling for gauge fills + rail segments
+# ---------------------------------------------------------------------------
+
+
+class TestBindWidthHandler:
+    """The polling JS must update ``style.width`` for elements bound via
+    ``data-bind-width="<dotted.path>"``.  This is the live-update mechanism
+    for gauge-card progress fills and progress-rail per-phase segments
+    that issue #447 fixes (the bare ``data-field="fill"`` was a no-op)."""
+
+    def setup_method(self) -> None:
+        self.script = render_polling_script()
+
+    def test_script_queries_data_bind_width(self) -> None:
+        assert 'querySelectorAll("[data-bind-width]")' in self.script
+
+    def test_script_reads_data_bind_width_attribute(self) -> None:
+        assert 'getAttribute("data-bind-width")' in self.script
+
+    def test_script_writes_style_width(self) -> None:
+        assert "style.width" in self.script
+
+    def test_script_appends_percent_unit(self) -> None:
+        # The handler appends "%" so the resolved 0..100 number renders as
+        # a CSS percentage. Without the unit, `style.width = 42` is invalid.
+        assert '+ "%"' in self.script
+
+    def test_script_guards_non_numeric_values(self) -> None:
+        # Non-numeric / non-finite resolved values must be silently skipped
+        # so missing-derived-state doesn't blow up the dashboard.
+        assert "isFinite" in self.script
+        assert 'typeof widthValue === "number"' in self.script

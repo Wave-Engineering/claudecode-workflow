@@ -71,6 +71,21 @@ _SCRIPT_TEMPLATE = """\
       }
     }
 
+    /* Update style.width for elements bound via data-bind-width.
+       The resolved value is expected to be a number in 0..100 representing
+       a percentage. Cosmetic-only — silent no-op when the value is missing
+       or not finite. Used by gauge-fill bars and progress-rail segments
+       (issue #447). */
+    var widthEls = document.querySelectorAll("[data-bind-width]");
+    for (var w = 0; w < widthEls.length; w++) {
+      var widthEl = widthEls[w];
+      var widthField = widthEl.getAttribute("data-bind-width");
+      var widthValue = resolve(state, widthField);
+      if (typeof widthValue === "number" && isFinite(widthValue)) {
+        widthEl.style.width = widthValue + "%";
+      }
+    }
+
     /* Update action banner class if current_action is present */
     var banner = document.querySelector("[data-action-banner]");
     if (banner && state.current_action) {

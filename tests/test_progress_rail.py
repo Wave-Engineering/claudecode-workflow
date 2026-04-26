@@ -300,12 +300,22 @@ class TestDataAttributes:
         assert 'data-rail-phase="phase-2"' in result
         assert 'data-rail-phase="phase-3"' in result
 
-    def test_data_field_fill_on_fill_elements(self) -> None:
-        """Fill divs carry data-field="fill"  [R-29]."""
+    def test_data_bind_width_on_fill_elements(self) -> None:
+        """Fill divs carry a dotted-path data-bind-width binding  [R-29].
+
+        Issue #447: the legacy ``data-field="fill"`` attribute was a bare
+        path that ``resolve(state, "fill")`` could never find — silent
+        no-op in the polling cycle.  The completed/remaining segments now
+        bind via ``data-bind-width="rail.<phase_label>.{completed,remaining}_pct"``
+        so the polling JS can update ``style.width`` from the live state.
+        """
         phases_data = _make_phases_data([[1, 2]])
         state_data = _make_state_data([1])
         result = render_progress_rail(phases_data, state_data)
-        assert 'data-field="fill"' in result
+        assert 'data-bind-width="rail.phase-1.completed_pct"' in result
+        assert 'data-bind-width="rail.phase-1.remaining_pct"' in result
+        # Legacy bare path must not regress.
+        assert 'data-field="fill"' not in result
 
     def test_data_rail_phase_on_all_phases(self) -> None:
         """Four phases → data-rail-phase attributes for all four."""
