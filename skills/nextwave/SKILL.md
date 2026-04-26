@@ -317,7 +317,7 @@ One `Agent` call, `subagent_type: general-purpose`. Pass the wave's `kahuna_bran
 >    - `STRONG` / `MEDIUM` → `pr_merge(skip_train=true)` for all.
 >    - `WEAK` / `ORACLE_REQUIRED` → sequential merge via the merge queue (no skip).
 >    Single-issue flights skip commutativity entirely.
-> 5. Merge all flight PRs via `pr_merge`. On merge, call `wave_close_issue(X)` and `wave_record_mr(X, url)` per issue. Call `wave_flight_done(M)` after all merges land.
+> 5. Merge all flight PRs via `pr_merge`. On merge, call `wave_close_issue(X)` and `wave_record_mr(issue_number=X, mr_ref=<url>)` per issue. Call `wave_flight_done(M)` after all merges land.
 > 6. `git checkout main && git pull` in the target repo.
 > 7. Write `<wave-root>/flight-<M>/merge-report.md` (per-issue PR URL, CI status, merge strategy, reviewer-pass summary per issue from the Step 3c.5 dispatch, anomalies).
 >
