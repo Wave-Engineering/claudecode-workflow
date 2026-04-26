@@ -387,6 +387,83 @@ class TestEdgeCases:
 
 
 # ---------------------------------------------------------------------------
+# get_discord_channel() — both schema shapes (regression: #434)
+# ---------------------------------------------------------------------------
+
+
+class TestGetDiscordChannel:
+    """Regression coverage for #434.
+
+    ``~/.claude/discord.json`` may store channel entries as either a bare
+    string (``{"name": "<id>"}``) or a nested dict (``{"name": {"id": "<id>"}}``).
+    Both must resolve cleanly; neither shape may crash module import.
+    """
+
+    def _write_discord_config(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, payload: dict,
+    ) -> None:
+        """Redirect Path.home() to tmp_path, write tmp_path/.claude/discord.json."""
+        cfg_dir = tmp_path / ".claude"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "discord.json").write_text(json.dumps(payload))
+        monkeypatch.setattr(dsp.Path, "home", lambda: tmp_path)
+
+    def test_get_discord_channel_dict_shape(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Legacy nested shape: {role: {"id": "<id>"}} returns "<id>"."""
+        self._write_discord_config(
+            monkeypatch, tmp_path,
+            {"channels": {"wave-status": {"id": "123"}}},
+        )
+        monkeypatch.delenv("DISCORD_WAVE_STATUS_CHANNEL", raising=False)
+        result = dsp.get_discord_channel(
+            "wave-status", "DISCORD_WAVE_STATUS_CHANNEL", "FALLBACK",
+        )
+        assert result == "123"
+
+    def test_get_discord_channel_string_shape(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Current canonical shape: {role: "<id>"} returns "<id>" (no AttributeError)."""
+        self._write_discord_config(
+            monkeypatch, tmp_path,
+            {"channels": {"wave-status": "123"}},
+        )
+        monkeypatch.delenv("DISCORD_WAVE_STATUS_CHANNEL", raising=False)
+        result = dsp.get_discord_channel(
+            "wave-status", "DISCORD_WAVE_STATUS_CHANNEL", "FALLBACK",
+        )
+        assert result == "123"
+
+    def test_module_imports_with_string_channel(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Re-importing the script against a string-shape discord.json must not crash.
+
+        This is the head-on regression check for #434: the AttributeError
+        was raised at module-load time (via the WAVE_STATUS_CHANNEL_ID
+        constant), so a fresh exec of the script is what proves the fix.
+        """
+        self._write_discord_config(
+            monkeypatch, tmp_path,
+            {"channels": {"wave-status": "999"}},
+        )
+        monkeypatch.delenv("DISCORD_WAVE_STATUS_CHANNEL", raising=False)
+
+        loader = importlib.machinery.SourceFileLoader(
+            "discord_status_post_reimport", SCRIPT_PATH,
+        )
+        re_spec = importlib.util.spec_from_file_location(
+            "discord_status_post_reimport", SCRIPT_PATH, loader=loader,
+        )
+        re_mod = importlib.util.module_from_spec(re_spec)
+        # Must not raise AttributeError: 'str' object has no attribute 'get'
+        re_spec.loader.exec_module(re_mod)
+        assert re_mod.WAVE_STATUS_CHANNEL_ID == "999"
+
+
+# ---------------------------------------------------------------------------
 # No external dependencies [CT-01]
 # ---------------------------------------------------------------------------
 
