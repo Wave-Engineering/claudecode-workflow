@@ -1,5 +1,6 @@
 stages:
   - validate
+  - release
 
 validate:
   stage: validate
@@ -11,3 +12,42 @@ validate:
     - ./scripts/ci/validate.sh
   rules:
     - if: $CI_MERGE_REQUEST_IID
+
+# Build the cc-workflow.tar.gz release artifact on v* tag push.
+# Mirrors .github/workflows/release.yml — same scripts, same artifact.
+release-build:
+  stage: release
+  image: ubuntu:24.04
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq python3 > /dev/null 2>&1
+  script:
+    - ./scripts/ci/build.sh
+    - ./scripts/ci/package-release.sh "$CI_COMMIT_TAG"
+  artifacts:
+    paths:
+      - cc-workflow.tar.gz
+    expire_in: never
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
+
+# Publish a GitLab Release entry pointing at the artifact from release-build.
+# release-cli ships on the GitLab-provided release-cli image.
+release-publish:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  needs:
+    - job: release-build
+      artifacts: true
+  script:
+    - echo "Publishing GitLab Release for $CI_COMMIT_TAG"
+  release:
+    tag_name: "$CI_COMMIT_TAG"
+    name: "Release $CI_COMMIT_TAG"
+    description: "cc-workflow $CI_COMMIT_TAG — see CHANGELOG.md for details."
+    assets:
+      links:
+        - name: "cc-workflow.tar.gz"
+          url: "$CI_PROJECT_URL/-/jobs/artifacts/$CI_COMMIT_TAG/raw/cc-workflow.tar.gz?job=release-build"
+          link_type: "package"
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v/
