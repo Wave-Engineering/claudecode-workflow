@@ -98,13 +98,21 @@ def _render_card(
     pct_clamped = max(0.0, min(1.0, pct))
     fill_pct = round(pct_clamped * 100, 1)
 
+    # data-field uses a full dotted path so the polling JS's resolve()
+    # can walk into state.gauges.<gauge_name>.value during the polling
+    # cycle.  Bare "value" used to silently no-op (issue #447).  The
+    # gauge_name is escaped to keep the attribute well-formed for any
+    # future caller-supplied identifier.
+    safe_gauge = _html.escape(gauge_name)
     return (
-        f'<div class="gauge-card" data-gauge="{_html.escape(gauge_name)}">\n'
+        f'<div class="gauge-card" data-gauge="{safe_gauge}">\n'
         f'  <div class="gauge-label">{_html.escape(label)}</div>\n'
-        f'  <div class="gauge-value" data-field="value">{_html.escape(value)}</div>\n'
+        f'  <div class="gauge-value" data-field="gauges.{safe_gauge}.value">'
+        f'{_html.escape(value)}</div>\n'
         f'  <div class="gauge-sub">{_html.escape(sub_line)}</div>\n'
         f'  <div class="gauge-bar">'
-        f'<div class="gauge-fill" style="width: {fill_pct}%"></div>'
+        f'<div class="gauge-fill" data-bind-width="gauges.{safe_gauge}.pct" '
+        f'style="width: {fill_pct}%"></div>'
         f"</div>\n"
         f"</div>"
     )

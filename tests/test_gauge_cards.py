@@ -288,7 +288,10 @@ class TestRenderCard:
         assert 'data-gauge="phase"' in self.html
 
     def test_data_field_value_on_value_element(self) -> None:
-        assert 'data-field="value"' in self.html
+        # Issue #447: bare data-field="value" never resolved in the polling
+        # cycle (state.value is undefined). Bindings now use the dotted path
+        # gauges.<gauge_name>.value so applyState's resolve() can walk it.
+        assert 'data-field="gauges.phase.value"' in self.html
 
     def test_label_present(self) -> None:
         assert ">Phase<" in self.html
@@ -375,7 +378,18 @@ class TestRenderGaugeCards:
         assert self.html.count("data-gauge=") == 4
 
     def test_four_data_field_value_attributes(self) -> None:
-        assert self.html.count('data-field="value"') == 4
+        # Issue #447: bare data-field="value" never resolved in the polling
+        # cycle. Each card now binds via the dotted path
+        # gauges.<gauge_name>.value — one per card, four cards, four
+        # bindings (containment count via str.count would otherwise miss
+        # because each gauge_name differs).
+        for gauge_name in ("phase", "wave", "flight", "deferrals"):
+            assert (
+                f'data-field="gauges.{gauge_name}.value"' in self.html
+            ), f"missing dotted-path binding for {gauge_name!r}"
+        # Four cards × one value-binding each = four total occurrences of
+        # the prefix.
+        assert self.html.count('data-field="gauges.') == 4
 
     # --- Phase card content ---
 

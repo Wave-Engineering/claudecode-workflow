@@ -86,10 +86,14 @@ def render_progress_rail(phases_data: dict, state_data: dict) -> str:
         phase_label = f"phase-{phase_index + 1}"
 
         # Completed (solid) fill  [R-21]
+        # data-bind-width gives the polling JS a dotted path into
+        # state.rail.<phase>.completed_pct so the live cycle can update
+        # the segment's width.  The legacy bare data-field="fill" was a
+        # silent no-op (issue #447).
         completed_fill = (
             f'<div class="segment" '
             f'data-rail-phase="{phase_label}" '
-            f'data-field="fill" '
+            f'data-bind-width="rail.{phase_label}.completed_pct" '
             f'style="width:{completed_pct:.4f}%;'
             f'background:{completed_color};'
             f'flex-shrink:0;"></div>'
@@ -99,7 +103,7 @@ def render_progress_rail(phases_data: dict, state_data: dict) -> str:
         remaining_fill = (
             f'<div class="segment" '
             f'data-rail-phase="{phase_label}" '
-            f'data-field="fill" '
+            f'data-bind-width="rail.{phase_label}.remaining_pct" '
             f'style="width:{remaining_pct:.4f}%;'
             f'background:{remaining_color};'
             f'flex-shrink:0;"></div>'
