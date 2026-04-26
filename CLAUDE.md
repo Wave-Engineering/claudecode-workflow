@@ -48,7 +48,14 @@ The "explicit user approval" requirement is **suspended** — and only suspended
 
 When both conditions are met, `/precheck` emits the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invokes `/scpmmr` directly — no human STOP. The exception is enforced **by `/precheck`'s own detection logic, not by agent discretion**: an agent on a `main`-targeted feature branch never qualifies, regardless of context. Outside the sandbox the original rule is unchanged — checklist, STOP, wait for `/scp` / `/scpmr` / `/scpmmr` / affirmative.
 
-Authoritative rule: Dev Spec §5.2.1. Mechanical detection + sentinel: `skills/precheck/SKILL.md` ("Sandbox Auto-Approval (KAHUNA Flight Agents)").
+**Platform prerequisite** (load-bearing — without it, the auto-approval is unsafe):
+
+- **GitHub:** branch-protection rules / rulesets scoped to the `kahuna/*` pattern must permit the Flight Agent's auto-merge path while leaving `main`'s required reviews intact. Standard Wave-Engineering merge-config policy provisions this.
+- **GitLab:** a `kahuna-zero-approvals` MR approval rule with `approvals_required: 0`, scoped via `protected_branch_ids` to the protected `kahuna/*` pattern, must exist. **Must NOT use `merge_request_approval_settings`** (that endpoint is project-wide and would unprotect main). Standard deployment: `gl-settings kahuna-sandbox <project-url>` (composite operation from `gl-settings#27`).
+
+If the platform-specific config is not in place, `/precheck` emits a `[WARNING: kahuna sandbox — ... not detected]` checklist line; the wave Orchestrator and operator are the final safety net for missing prerequisites.
+
+Authoritative rule: Dev Spec §5.2.1. Mechanical detection + sentinel + per-platform prerequisite check: `skills/precheck/SKILL.md` ("Sandbox Auto-Approval (KAHUNA Flight Agents)").
 
 ---
 
