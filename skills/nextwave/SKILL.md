@@ -155,6 +155,15 @@ Run this after `wave_complete()` lands and the bus has been cleaned (Step 5).
 ## Step 1 — Orchestrator pre-flight
 
 1. `wave_preflight()` → `wave_next_pending()` → resolve wave id `N` and the issue list. If none, report and exit.
+1a. **Cross-repo recipe re-emit.** Read the active phase from `.claude/status/phases-waves.json` (the phase containing wave `N`). If the phase has `cross_repo: true`, `cat` `skills/_shared/recipes/cross-repo-wave-orchestration.md` into your context now and emit it as a preflight section formatted as:
+
+   ```
+   ## Cross-Repo Recipe (auto-loaded because Wave <N> spans repos: <target_repos>)
+
+   <recipe content here>
+   ```
+
+   This handles the multi-session case: `/prepwaves` may have run in a different session and its scrollback is gone. The recipe content lives in one place — both skills `cat` from the same file. Single-repo waves skip this step entirely.
 2. Resolve **target repo slug** for the bus path. Same-repo waves: use the current repo's slug. Cross-repo waves (wave plan lives in this repo, stories live elsewhere): use the target repo's slug per `lesson_cross_repo_wave_orchestration.md`.
 3. **Emit observability anchor.** Run `scripts/mcp-log wave_start wave=<N> target=<repo-slug> issues=<COMPACT JSON array, no spaces, e.g. [418,419,420]>` so this anchor *precedes* every per-issue `spec_validate_structure`, `wave_show`, and `wave_previous_merged` call below — that ordering is what makes post-mortem temporal correlation work. The `kahuna` field is added later (Step 1.5) once `wave_show` has been called; it is fine for the initial `wave_start` to omit it.
 4. Verify main is clean in the target repo; `wave_previous_merged()` confirms prior wave landed; `spec_validate_structure(issue)` for each issue in the wave.

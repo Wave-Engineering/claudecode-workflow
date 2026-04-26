@@ -803,6 +803,190 @@ class TestExtendAutoAdvance:
 
 
 # ---------------------------------------------------------------------------
+# Cross-repo plan field round-trip (issue #319)
+# ---------------------------------------------------------------------------
+
+class TestCrossRepoPlanRoundTrip:
+    """``wave-status init`` accepts and round-trips ``cross_repo`` and
+    ``target_repos`` fields on phases without dropping or modifying them.
+
+    These fields are populated by ``/prepwaves``' cross-repo detection step
+    so that ``/nextwave`` can read them back at preflight and conditionally
+    inject the cross-repo orchestration recipe. The CLI must persist them
+    to ``phases-waves.json`` verbatim — no schema gate, no rewrite.
+    """
+
+    _CROSS_REPO_PLAN: dict = {
+        "project": "test-cross-repo",
+        "base_branch": "main",
+        "master_issue": 200,
+        "phases": [
+            {
+                "name": "Cross-Repo Phase",
+                "cross_repo": True,
+                "target_repos": ["Wave-Engineering/mcp-server-sdlc"],
+                "waves": [
+                    {
+                        "id": "wave-1",
+                        "name": "Wave 1",
+                        "issues": [
+                            {
+                                "number": 76,
+                                "title": "Cross-repo issue 76",
+                                "deps": [],
+                                "repo": "Wave-Engineering/mcp-server-sdlc",
+                            },
+                        ],
+                    },
+                ],
+            },
+            {
+                "name": "Same-Repo Phase",
+                "waves": [
+                    {
+                        "id": "wave-2",
+                        "name": "Wave 2",
+                        "issues": [
+                            {"number": 7, "title": "Local issue 7", "deps": []},
+                        ],
+                    },
+                ],
+            },
+        ],
+    }
+
+    _MULTI_TARGET_PLAN: dict = {
+        "project": "test-multi-target",
+        "base_branch": "main",
+        "master_issue": 300,
+        "phases": [
+            {
+                "name": "Multi-Target Cross-Repo Phase",
+                "cross_repo": True,
+                "target_repos": [
+                    "Wave-Engineering/mcp-server-sdlc",
+                    "Wave-Engineering/mcp-server-nerf",
+                ],
+                "waves": [
+                    {
+                        "id": "wave-1",
+                        "name": "Wave 1",
+                        "issues": [
+                            {
+                                "number": 10,
+                                "title": "Issue in sdlc",
+                                "deps": [],
+                                "repo": "Wave-Engineering/mcp-server-sdlc",
+                            },
+                            {
+                                "number": 20,
+                                "title": "Issue in nerf",
+                                "deps": [],
+                                "repo": "Wave-Engineering/mcp-server-nerf",
+                            },
+                        ],
+                    },
+                ],
+            },
+        ],
+    }
+
+    def _read_phases(self, repo: Path) -> dict:
+        phases_path = repo / ".claude" / "status" / "phases-waves.json"
+        return json.loads(phases_path.read_text(encoding="utf-8"))
+
+    def test_init_round_trips_cross_repo_fields(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """init persists cross_repo + target_repos verbatim on the cross-repo
+        phase, leaves the same-repo phase unchanged (no spurious fields)."""
+        repo = temp_git_repo
+        _write_plan(repo, self._CROSS_REPO_PLAN)
+
+        rc, _, err = run_cli(["init", "plan.json"], repo)
+        assert rc == 0, f"init failed: {err}"
+
+        persisted = self._read_phases(repo)
+        assert persisted["phases"][0]["cross_repo"] is True
+        assert persisted["phases"][0]["target_repos"] == [
+            "Wave-Engineering/mcp-server-sdlc",
+        ]
+        # Same-repo phase MUST NOT be polluted with the new fields.
+        assert "cross_repo" not in persisted["phases"][1]
+        assert "target_repos" not in persisted["phases"][1]
+
+    def test_init_round_trips_multi_target_repos(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """A phase with multiple target repos round-trips the full list in
+        order, no de-dup or sort the agent didn't ask for."""
+        repo = temp_git_repo
+        _write_plan(repo, self._MULTI_TARGET_PLAN)
+
+        rc, _, err = run_cli(["init", "plan.json"], repo)
+        assert rc == 0, f"init failed: {err}"
+
+        persisted = self._read_phases(repo)
+        assert persisted["phases"][0]["cross_repo"] is True
+        assert persisted["phases"][0]["target_repos"] == [
+            "Wave-Engineering/mcp-server-sdlc",
+            "Wave-Engineering/mcp-server-nerf",
+        ]
+
+    def test_init_extend_round_trips_cross_repo_fields(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """init --extend appending a cross-repo phase preserves both
+        new-phase cross_repo fields and the existing phases verbatim."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        rc, _, err = run_cli(["init", "plan.json"], repo)
+        assert rc == 0, f"init failed: {err}"
+
+        # Extend with a cross-repo phase that has no wave/issue overlap
+        # against the sample plan (sample uses wave-1..3, issues 1..13;
+        # extension uses wave-9 and issue 999).
+        extend_plan: dict = {
+            "phases": [
+                {
+                    "name": "Late-Added Cross-Repo Phase",
+                    "cross_repo": True,
+                    "target_repos": ["Wave-Engineering/mcp-server-sdlc"],
+                    "waves": [
+                        {
+                            "id": "wave-9",
+                            "name": "Wave 9",
+                            "issues": [
+                                {
+                                    "number": 999,
+                                    "title": "Late issue",
+                                    "deps": [],
+                                    "repo": "Wave-Engineering/mcp-server-sdlc",
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        }
+        extend_path = repo / "extend.json"
+        extend_path.write_text(json.dumps(extend_plan), encoding="utf-8")
+
+        rc, _, err = run_cli(["init", "--extend", "extend.json"], repo)
+        assert rc == 0, f"extend failed: {err}"
+
+        persisted = self._read_phases(repo)
+        # Original two phases unchanged (no cross_repo).
+        assert "cross_repo" not in persisted["phases"][0]
+        assert "cross_repo" not in persisted["phases"][1]
+        # Newly-appended phase carries both fields verbatim.
+        assert persisted["phases"][2]["cross_repo"] is True
+        assert persisted["phases"][2]["target_repos"] == [
+            "Wave-Engineering/mcp-server-sdlc",
+        ]
+
+
+# ---------------------------------------------------------------------------
 # No external dependencies test [CT-01]
 # ---------------------------------------------------------------------------
 
