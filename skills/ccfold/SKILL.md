@@ -202,6 +202,104 @@ After writing `.claude-project.md`, show:
 
 ---
 
+## Step 10: Pin Per-Project Git Identity by Org
+
+After writing `.claude-project.md`, detect the project's git platform/org and pin a repo-local committer identity if the org requires a verified email that differs from the agent's global default.
+
+### Why
+
+Some git hosting orgs (notably AnalogicDev on GitLab) enforce a verified-email push-rule. The default global git identity many agents have set (e.g. `bakerb@waveeng.com`) is not verified on those accounts, so pushes are rejected with:
+
+```
+remote: GitLab: You cannot push commits for 'bakerb@waveeng.com'. You can only push commits if the committer email is one of your own verified emails.
+```
+
+This step automates the previously-manual `git config user.email <verified-email>` fix. See `lesson_analogicdev_gitlab_setup.md` for the discovery story.
+
+### Storage choice — `~/.claude/identity-map.json` (per-user)
+
+The org → identity mapping lives in **`~/.claude/identity-map.json`**, not in `.claude-project.md`.
+
+**Rationale:**
+- **Per-user, shared across projects.** Every clone of every analogicdev project gets the same identity; we don't want to reproduce the mapping in every `.claude-project.md`.
+- **Cleanly extensible.** Users add new orgs by editing one JSON file, not by editing SKILL.md or every project's config.
+- **Hybrid baseline.** The skill ships with a hard-coded fallback (currently just `analogicdev`) so first-clone agents get the right behavior even before the file exists. The user's JSON, if present, overrides the baseline.
+
+### File format
+
+```json
+{
+  "analogicdev": {
+    "name": "Brian Baker",
+    "email": "brbaker@analogic.com"
+  }
+}
+```
+
+Org keys are lower-case. If `~/.claude/identity-map.json` does not exist, the skill falls back to the baseline mapping documented above.
+
+### Procedure
+
+1. **Parse the org from `git remote get-url origin`.** Both SSH and HTTPS forms must be handled.
+
+   ```bash
+   ORIGIN=$(git remote get-url origin 2>/dev/null || true)
+   # SSH:    git@github.com:owner/repo.git           or  git@gitlab.com:group/sub/repo.git
+   # HTTPS:  https://github.com/owner/repo[.git]     or  https://gitlab.com/group/sub/repo[.git]
+   ORG=$(echo "$ORIGIN" \
+     | sed -E 's#^git@[^:]+:([^/]+)/.*#\1#; s#^https?://[^/]+/([^/]+)/.*#\1#' \
+     | tr '[:upper:]' '[:lower:]')
+   ```
+
+   For nested GitLab groups (`gitlab.com/analogicdev/internal/tools/...`), the **top-level group** is the org. The sed expression above takes the first path segment after the host, which is correct.
+
+2. **Look up the org.** Read `~/.claude/identity-map.json` if present; otherwise use the baseline below. If the org has no entry, **do nothing and emit no output** (silent for unmapped orgs — see ACs).
+
+   Baseline (hard-coded fallback when `~/.claude/identity-map.json` is missing or doesn't contain the org):
+
+   | Org | Name | Email |
+   |---|---|---|
+   | `analogicdev` | Brian Baker | `brbaker@analogic.com` |
+
+3. **Check the existing repo-local identity.** Distinguish three cases:
+
+   - **No repo-local override** — `git config --local --get user.email` returns empty (or non-zero exit). The repo currently inherits from global config.
+   - **Repo-local override matches the mapping** — already correct, do nothing, suppress output.
+   - **Repo-local override differs from the mapping** — the user has explicitly chosen something else. Do **NOT** overwrite. Emit a warning instead.
+
+   The check must use `git config --local --get` (not the unscoped `git config user.email`, which folds in global config and would mask whether a local override exists).
+
+4. **Decide the action:**
+
+   | Repo-local | Global identity matches mapping | Action |
+   |---|---|---|
+   | unset | yes | nothing (already correct via global) |
+   | unset | no  | set `user.email` and `user.name` repo-locally; print confirmation |
+   | matches mapping | — | nothing (already correct via local) |
+   | differs from mapping | — | emit warning; do not override |
+
+5. **When pinning, set both name and email repo-locally:**
+
+   ```bash
+   git config --local user.email "<mapped-email>"
+   git config --local user.name "<mapped-name>"
+   ```
+
+6. **Output:**
+
+   - On successful pin: `→ pinned identity for <org>: <name> <email>`
+   - On warning (local override differs from mapping): `Repo-local identity differs from <org>'s expected committer email; pushes may be rejected if email is unverified.`
+   - On no-op (already correct, or org not in mapping): no output
+
+### Test scenarios (verified during implementation)
+
+- Fresh clone of an `analogicdev/*` repo with global `user.email=bakerb@waveeng.com` → repo-local set to `brbaker@analogic.com`, confirmation printed.
+- Wave-Engineering clone → no mapping, silent.
+- Repo-local already manually set to a non-mapping value → warning printed, no override.
+- Repo-local already set to the mapping value → silent no-op.
+
+---
+
 ## Notes
 
 - This skill does NOT commit changes. The user handles git workflow after merge.
