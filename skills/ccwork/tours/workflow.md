@@ -56,7 +56,7 @@ echo "Branch naming convention:"
 echo "  feature/<issue-number>-description"
 echo "  fix/<issue-number>-description"
 echo "  chore/<issue-number>-description"
-echo "  docs/<issue-number>-description"
+echo "  doc/<issue-number>-description"
 ```
 
 Narration: "The branch name format is `<type>/<issue-number>-<description>`. When `/precheck` runs, it extracts the issue number from your branch name to verify the issue exists and is open. If you're on `main` or a branch without an issue number, it stops you."

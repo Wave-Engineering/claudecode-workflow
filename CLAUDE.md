@@ -63,7 +63,7 @@ Authoritative rule: Dev Spec §5.2.1. Mechanical detection + sentinel: `skills/p
 **IMMUTABLE rules — cannot be overridden.**
 
 1. **Always have an issue.** Never begin work without one. Create it or ask the user to. Set it to in-progress. No code until tracked.
-2. **Branches MUST link to their issue.** Name format: `feature/<N>-description` (or `fix/`, `chore/`, `docs/`).
+2. **Branches MUST link to their issue.** Name format: `feature/<N>-description` (or `fix/`, `chore/`, `doc/`).
 3. **On merge, close ALL linked issues.** Check the PR/MR description for `Closes #N`, close each via `gh issue close` / `glab issue close`, verify closure — even if auto-close misbehaves.
 
 ---
@@ -76,7 +76,7 @@ Every issue MUST be wave-pattern quality: detailed enough that a spec-driven age
 
 ## Branching Strategy
 
-Trunk-based flow. Always branch from `main`: `git checkout main && git pull && git checkout -b <type>/<N>-description`. Types: `feature`, `fix`, `chore`, `docs`. PR/MRs target `main`.
+Trunk-based flow. Always branch from `main`: `git checkout main && git pull && git checkout -b <type>/<N>-description`. Types: `feature`, `fix`, `chore`, `doc`. PR/MRs target `main`.
 
 ---
 
