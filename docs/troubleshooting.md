@@ -85,7 +85,7 @@ Common causes:
 
 - **Branch created without issue number.** If you created a branch like `feature/add-retry-logic` instead of `feature/42-add-retry-logic`, there is no issue number to extract.
 - **Issue was closed.** If someone closed the issue while you were working, `/precheck` detects it as invalid.
-- **Wrong branch prefix.** The branch must start with one of the recognized prefixes (`feature/`, `fix/`, `chore/`, `docs/`). Other prefixes may not parse correctly.
+- **Wrong branch prefix.** The branch must start with one of the recognized prefixes (`feature/`, `fix/`, `chore/`, `doc/`). Other prefixes may not parse correctly.
 - **On a protected branch.** If you are on `main` or `release/*`, `/precheck` stops immediately and tells you to switch to a feature branch.
 
 **Fix:**
