@@ -326,10 +326,15 @@ class TestUpshiftTemplate:
         assert "epic" in upshift.lower()
         assert "phase" in upshift.lower()
 
-    def test_upshift_epic_includes_dod(self, skill_text: str) -> None:
-        """The upshift template includes Phase DoD in epic acceptance criteria."""
+    def test_upshift_phase_dod_lives_in_phases_waves_json(self, skill_text: str) -> None:
+        """Phase DoD lives in phases-waves.json (not a per-Phase epic issue)
+        per phase-epic-taxonomy R-02: Phases are internal to phases-waves.json
+        only; they are not platform issues."""
         upshift = _extract_template(skill_text, "devspec-upshift")
-        assert "DoD" in upshift or "Definition of Done" in upshift
+        # The upshift template must carry the phases-waves.json schema and
+        # show a `dod` field nested under each phase object.
+        assert "phases-waves.json" in upshift
+        assert "dod" in upshift.lower()
 
     def test_upshift_creates_story_issues(self, skill_text: str) -> None:
         """The upshift template creates one issue per Story."""
@@ -357,15 +362,31 @@ class TestUpshiftTemplate:
         upshift = _extract_template(skill_text, "devspec-upshift")
         assert "wave" in upshift.lower()
 
-    def test_upshift_creates_wave_masters(self, skill_text: str) -> None:
-        """The upshift template creates wave master issues."""
+    def test_upshift_waves_are_internal_to_phases_waves_json(
+        self, skill_text: str
+    ) -> None:
+        """Waves are internal to phases-waves.json — they do NOT get their
+        own platform issues. Per phase-epic-taxonomy R-03: 'Wave' is a
+        concurrency unit within a Phase, visible only inside
+        phases-waves.json, not represented as platform issues.
+        """
         upshift = _extract_template(skill_text, "devspec-upshift")
-        assert "Wave" in upshift and "Master" in upshift
+        # The waves key must appear in the phases-waves.json schema section.
+        assert "waves" in upshift.lower()
+        assert "phases-waves.json" in upshift
 
-    def test_upshift_wave_master_links_stories(self, skill_text: str) -> None:
-        """The upshift template links constituent stories in wave master issues."""
+    def test_upshift_phases_waves_json_has_plan_id(self, skill_text: str) -> None:
+        """Per R-07 and Story 3.4 AC-4: phases-waves.json uses plan_id
+        (never epic_id). The legacy epic_id shape is retired.
+        """
         upshift = _extract_template(skill_text, "devspec-upshift")
-        assert "Constituent Stories" in upshift or "constituent" in upshift.lower()
+        assert "plan_id" in upshift
+
+    def test_upshift_each_story_has_depends_on(self, skill_text: str) -> None:
+        """Per R-18 and Story 3.4 AC-4: every Story in phases-waves.json
+        has a depends_on field (may be empty)."""
+        upshift = _extract_template(skill_text, "devspec-upshift")
+        assert "depends_on" in upshift
 
     def test_upshift_reports_summary(self, skill_text: str) -> None:
         """The upshift template reports a creation summary."""
@@ -389,10 +410,19 @@ class TestUpshiftTemplate:
         upshift = _extract_template(skill_text, "devspec-upshift")
         assert "docs/*-devspec.md" in upshift or "*-devspec.md" in upshift
 
-    def test_upshift_links_stories_to_epics(self, skill_text: str) -> None:
-        """The upshift template links story issues to parent epic."""
+    def test_upshift_stories_reference_plan(self, skill_text: str) -> None:
+        """Stories carry a Plan reference in their Metadata block — the Plan
+        issue (type::plan) is the top-level container per the 2026-04-26
+        Plan/Phase/Wave/Story taxonomy. The optional PM-layer Epic tracker
+        (type::epic) is separately available but not required.
+        """
         upshift = _extract_template(skill_text, "devspec-upshift")
-        assert "parent epic" in upshift.lower() or "Parent Epic" in upshift
+        # Story metadata must cite Plan; optional PM-layer Epic must be
+        # documented as optional, not mandatory.
+        assert "Plan" in upshift
+        # The optional PM-layer Epic path must be explicitly marked optional.
+        lower = upshift.lower()
+        assert "optional" in lower and ("pm-layer" in lower or "epic::" in lower)
 
 
 # ---------------------------------------------------------------------------
