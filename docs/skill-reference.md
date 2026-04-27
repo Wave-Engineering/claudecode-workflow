@@ -541,7 +541,9 @@ A structured workflow for domain modeling using event storming. Guides you throu
 
 ### `/devspec` -- Interactive Dev Spec Creation
 
-Creates Development Specifications through an interactive, section-by-section workflow. Instead of generating a Dev Spec in one shot, it walks each section collaboratively -- drafting, presenting, and waiting for feedback before moving on. Manages a unified Deliverables Manifest (Tier 1 required defaults, Tier 2 conditional triggers, Tier 3 opt-in) and runs a mechanical finalization checklist. Includes an approval gate and backlog population (upshift) for the full concept-to-execution pipeline.
+Creates Development Specifications through an interactive, section-by-section workflow. Instead of generating a Dev Spec in one shot, it walks each section collaboratively -- drafting, presenting, and waiting for feedback before moving on. Appends a Decision-Ledger comment to the Plan tracking issue after each section the Pair approves. Manages a unified Deliverables Manifest (Tier 1 required defaults, Tier 2 conditional triggers, Tier 3 opt-in) and runs a mechanical finalization checklist. Includes an approval gate and backlog population (upshift) for the full concept-to-execution pipeline.
+
+**Pipeline taxonomy (locked 2026-04-26):** Plan (tracking issue, `type::plan`) → Phase (internal to `phases-waves.json`) → Wave (internal to `phases-waves.json`) → Story (issue with `type::feature`/`type::bug`/`type::chore`/`type::docs`). Epic is an optional PM-layer label only; the pipeline never reads it.
 
 **When to use it:**
 - After `/ddd accept` produces a domain model and you need to create a Dev Spec from it
@@ -560,36 +562,39 @@ Creates Development Specifications through an interactive, section-by-section wo
 /devspec              # Show help
 ```
 
-**The pipeline:** `/ddd accept` (domain model) or concept doc or verbal description → `/devspec create` (interactive Dev Spec generation → `docs/<project>-devspec.md`) → `/devspec finalize` (verify completeness) → `/devspec approve` (human approval gate) → `/devspec upshift` (backlog population) → `/prepwaves` (plan execution waves).
+**The pipeline:** `/issue plan` (creates Plan tracking issue) → `/ddd accept` (domain model) or concept doc or verbal description → `/devspec create` (interactive Dev Spec generation → `docs/<project>-devspec.md`; appends ledger comments to Plan issue) → `/devspec finalize` (verify completeness) → `/devspec approve` (human approval gate) → `/devspec upshift` (backlog population + `phases-waves.json`) → `/prepwaves` (plan execution waves).
 
 **`/devspec create` flow:**
-1. Determine input source (DDD domain model, external doc, or verbal description)
-2. Walk each Dev Spec section (1-9) interactively -- draft, present, get feedback, iterate
-3. After Section 5: walk Tier 1 Deliverables Manifest defaults, confirm or N/A each row
-4. Scan for Tier 2 triggers, add conditional rows
-5. After Section 8: verify every manifest row has a wave assignment
-6. Write the Dev Spec file
+1. Resolve the Plan tracking issue number (prerequisite — run `/issue plan` first if none exists)
+2. Determine input source (DDD domain model, external doc, or verbal description)
+3. Walk each Dev Spec section (1-9) interactively -- draft, present, get feedback, iterate
+4. After each section the Pair approves, append a `[ledger D-NNN]` comment to the Plan issue via `pr_comment` (schema per Dev Spec §5.2.1: source, Decision, Rationale, signature)
+5. After Section 5: walk Tier 1 Deliverables Manifest defaults, confirm or N/A each row
+6. Scan for Tier 2 triggers, add conditional rows
+7. After Section 8: verify every manifest row has a wave assignment
+8. Write the Dev Spec file; post a reference comment on the Plan issue
 
 **`/devspec finalize` flow:**
 Run the Section 7.2 Finalization Checklist mechanically against an existing Dev Spec. Reports pass/fail per item (Tier 1 file paths, Tier 2 triggers, wave assignments, MV-XX coverage, verb-only deliverables, audience-facing docs, DoD references). Summary: "X/7 checks passed. Dev Spec is ready / not ready for approval."
 
 **`/devspec approve` flow:**
 1. Run the finalization checklist automatically (rejects if any checks fail)
-2. Present a Dev Spec summary: section count, story count, wave count, deliverable count
+2. Present a Dev Spec summary: section count, Story count, Wave count, deliverable count
 3. Hard stop: "Approve this Dev Spec? (yes/no)" -- waits for human response
-4. On approval: records approval timestamp, approver, and finalization score in Dev Spec metadata
+4. On approval: records approval timestamp, approver, and finalization score in Dev Spec metadata; appends a final `[ledger D-NNN]` entry to the Plan issue recording the approval
 5. On rejection: lists failing items, suggests fixes, stops
 
 **`/devspec upshift` flow:**
 1. Verify Dev Spec has approval metadata (`approved: true`)
-2. Parse Section 8 (Phased Implementation Plan) for phases, waves, and stories
-3. Create one epic issue per phase with Phase DoD as acceptance criteria
-4. Create one story issue per story with implementation steps, test procedures, and AC from Dev Spec
-5. Create wave master issues linking constituent story issues
-6. Report summary: "Created N epics, M stories, P wave master issues"
-7. Backfill issue numbers into the Dev Spec (e.g., `### Phase 1: Foundation (#NNN)`)
+2. Resolve the Plan issue number (the `plan_id`)
+3. Parse Section 8 (Phased Implementation Plan) for phases, waves, and stories
+4. Create one Story issue per Story with implementation steps, test procedures, and AC from Dev Spec; each body has a Metadata block citing Plan / Phase / Wave / Depends on
+5. Optionally create a PM-layer Epic parent tracker (`type::epic`) if the Pair requests one; apply `epic::<N>` labels to the Stories. This is ignored by the pipeline.
+6. Write `phases-waves.json` at `.claude/status/phases-waves.json` with `plan_id`, per-Story `issue`, and per-Story `depends_on` (possibly empty `[]`)
+7. Backfill Story numbers into the Dev Spec (`#### Story 3.4: ... (#515)`) and into the Plan issue's Phases checklist
+8. Report summary and post it as a plain comment on the Plan issue
 
-**Key detail:** Tier 1 deliverables are opt-OUT (must provide "N/A -- because [reason]" to skip). The Deliverables Manifest (Section 5.A) is the single source of truth for all project outputs -- there is no separate Artifact Manifest or Documentation Kit.
+**Key detail:** Tier 1 deliverables are opt-OUT (must provide "N/A -- because [reason]" to skip). The Deliverables Manifest (Section 5.A) is the single source of truth for all project outputs -- there is no separate Artifact Manifest or Documentation Kit. `phases-waves.json` uses `plan_id` exclusively — the legacy `epic_id` field is retired.
 
 ---
 
