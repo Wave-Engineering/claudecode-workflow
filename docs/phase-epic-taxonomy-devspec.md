@@ -1422,11 +1422,15 @@ Update the existing memory file to reference the §5.1 body/comments split and t
 **Repository:** `Wave-Engineering/claudecode-workflow`
 **Dependencies:** Phase 2 complete (parallel with 3.1)
 
-Same pattern as 3.1, applied to `skills/nextwave/SKILL.md`.
+Same pattern as Story 3.1, applied to `skills/nextwave/SKILL.md` instead of `skills/wavemachine/SKILL.md`.
 
 **Implementation Steps:**
 
-1-5: Same as Story 3.1 substituting `/nextwave`.
+1. Read `skills/nextwave/SKILL.md` in full.
+2. Grep for `\bepic\b` (case-insensitive); replace each occurrence with "Plan" or "Phase" per semantic, or annotate as PM-layer.
+3. Insert a new `## Exhaustive Legal Exits` section per the §5.3.3 worked example verbatim (7 numbered exits + 7 bulleted non-exits + cross-reference to memory files). The content is identical to what Story 3.1 inserts into `/wavemachine` — both autonomy-loop skills share the same closed-list contract.
+4. Review narrative consistency — particularly the per-flight dispatch loop and the Prime(post-flight) reconciliation section.
+5. Commit with message `refactor(nextwave): rename epic→Plan/Phase; add Exhaustive Legal Exits`.
 
 **Test Procedures:**
 
@@ -1434,12 +1438,17 @@ Same pattern as 3.1, applied to `skills/nextwave/SKILL.md`.
 
 | Test Name | Purpose | File Location |
 |-----------|---------|---------------|
-| `test_nextwave_no_unqualified_epic.sh` | Same check, nextwave | `tests/skills/test_nextwave_structure.sh` |
-| `test_nextwave_exhaustive_legal_exits.sh` | Same check, nextwave | `tests/skills/test_nextwave_structure.sh` |
+| `test_nextwave_no_unqualified_epic.sh` | Grep `\bepic\b` in pipeline contexts returns zero | `tests/skills/test_nextwave_structure.sh` |
+| `test_nextwave_exhaustive_legal_exits.sh` | `## Exhaustive Legal Exits` section present with required sub-sections | `tests/skills/test_nextwave_structure.sh` |
 
 *Integration/E2E Coverage:* MV-01, MV-03, MV-06, E2E-01.
 
-**Acceptance Criteria:** Mirror Story 3.1, applied to `/nextwave`. [R-10, R-17]
+**Acceptance Criteria:**
+
+- [ ] Zero unqualified "epic" in `/nextwave/SKILL.md` pipeline contexts [R-10]
+- [ ] `## Exhaustive Legal Exits` section present matching §5.3.2 [R-17]
+- [ ] Cross-reference to `principle_user_attention_is_the_cost.md` + `principle_cost_asymmetry_continue_vs_exit.md` present
+- [ ] Unit tests pass
 
 ---
 
@@ -1452,13 +1461,26 @@ Same pattern as 3.1, applied to `skills/nextwave/SKILL.md`.
 **Implementation Steps:**
 
 1. Read `skills/prepwaves/SKILL.md` in full.
-2. Grep for `\bepic\b`; replace per semantic or annotate as PM-layer.
-3. `/prepwaves` does NOT need an Exhaustive Legal Exits section (it's not an autonomy-loop skill).
-4. Commit with message `refactor(prepwaves): rename epic→Plan/Phase`.
+2. Grep for `\bepic\b` (case-insensitive); replace each occurrence with "Plan" or "Phase" per semantic, or annotate as PM-layer.
+3. `/prepwaves` does NOT need an Exhaustive Legal Exits section (it is not an autonomy-loop skill; it's a pre-wave planning tool that runs once per Plan).
+4. Review narrative consistency — particularly the sections that describe how the skill reads the Plan tracking issue and writes `phases-waves.json`.
+5. Commit with message `refactor(prepwaves): rename epic→Plan/Phase`.
 
-**Test Procedures:** Unit test grepping for unqualified "epic." Integration: MV-01, E2E-01.
+**Test Procedures:**
 
-**Acceptance Criteria:** Zero unqualified "epic" [R-11]; unit tests pass.
+*Unit Tests:*
+
+| Test Name | Purpose | File Location |
+|-----------|---------|---------------|
+| `test_prepwaves_no_unqualified_epic.sh` | Grep `\bepic\b` in pipeline contexts returns zero | `tests/skills/test_prepwaves_structure.sh` |
+
+*Integration/E2E Coverage:* MV-01, E2E-01.
+
+**Acceptance Criteria:**
+
+- [ ] Zero unqualified "epic" in `/prepwaves/SKILL.md` pipeline contexts [R-11]
+- [ ] Every remaining "epic" explicitly annotated as PM-layer
+- [ ] Unit tests pass
 
 ---
 
