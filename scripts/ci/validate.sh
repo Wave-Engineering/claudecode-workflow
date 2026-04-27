@@ -240,6 +240,22 @@ for install_script in "$REPO_DIR/install" "$REPO_DIR/scripts/install-remote.sh";
 	fi
 done
 
+# --- Regression tests --------------------------------------------------------
+echo ""
+echo "Regression tests"
+echo "──────────────────────────────────────────"
+for test_script in "$REPO_DIR"/tests/regression/*.sh; do
+	[[ -f "$test_script" ]] || continue
+	rel="${test_script#"$REPO_DIR/"}"
+	if bash "$test_script"; then
+		info "$rel"
+		PASS=$((PASS + 1))
+	else
+		err "$rel"
+		FAIL=$((FAIL + 1))
+	fi
+done
+
 # --- Summary ------------------------------------------------------------------
 echo ""
 echo "──────────────────────────────────────────"

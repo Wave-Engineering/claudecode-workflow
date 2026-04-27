@@ -13,6 +13,21 @@ description: Interactive Development Specification creation with Deliverables Ma
 
 This skill provides a structured, interactive workflow for creating Development Specifications. It walks each Dev Spec section collaboratively, manages the Deliverables Manifest, and runs a mechanical finalization checklist.
 
+## Pipeline Taxonomy (authoritative — locked 2026-04-26)
+
+The wave-pattern pipeline is built from four primitives. This skill teaches them explicitly so every Pair walking a Dev Spec shares the same vocabulary (per `docs/phase-epic-taxonomy-devspec.md` R-02..R-04, R-12):
+
+| Primitive | Platform shape | Role |
+|-----------|----------------|------|
+| **Plan** | GitHub/GitLab issue with `type::plan` label | The top-level container. One issue per Plan; its number is the `plan_id`. Its body holds frozen scope (Goal / Scope / DoD / Phases checklist); its comments hold the Decision Ledger and lifecycle events. `/devspec create` anchors its walk on the Plan issue. |
+| **Phase** | Internal to `phases-waves.json` — NO platform issue | A sequential ordering unit within a Plan. Phases partition the Dev Spec's §8 Implementation Plan. They exist only in `phases-waves.json`; they are not issues, not labels. |
+| **Wave** | Internal to `phases-waves.json` — NO platform issue | A concurrency unit within a Phase. Stories in the same Wave are parallelizable (by dependency); Waves within a Phase run in order. |
+| **Story** | GitHub/GitLab issue with `type::feature` / `type::bug` / `type::chore` / `type::docs` | The smallest execution unit. One issue per Story. Every Story declares its `depends_on` in `phases-waves.json`. |
+
+**Epic is NOT a pipeline primitive.** Epic is an **optional PM-layer label** (`type::epic` on a parent tracker issue; `epic::N` label on child Stories) that a Pair may use to group Stories thematically for program-management rollups. The pipeline (`/prepwaves`, `/nextwave`, `/wavemachine`) does not read `type::epic` or `epic::N`; they read `phases-waves.json`. Treating "Epic" as a pipeline container is the old vocabulary and is explicitly retired.
+
+The rest of this skill body uses Plan / Phase / Wave / Story throughout. When "Epic" appears, it is always qualified as the PM-layer label.
+
 ## Platform Detection
 
 Before proceeding, detect the platform:
@@ -22,10 +37,10 @@ Before proceeding, detect the platform:
 
 ## Commands
 
-- **`/devspec create`** — Interactive Dev Spec generation (walk each section, build Deliverables Manifest)
+- **`/devspec create`** — Interactive Dev Spec generation (walk each section, build Deliverables Manifest, append Decision-Ledger comments to the Plan issue)
 - **`/devspec finalize`** — Mechanical finalization checklist (verify Dev Spec completeness)
 - **`/devspec approve`** — Approval gate (run finalization, present summary, record approval)
-- **`/devspec upshift`** — Backlog population (create epics, stories, and wave master issues from approved Dev Spec)
+- **`/devspec upshift`** — Backlog population (create Story issues from approved Dev Spec, write `phases-waves.json` with `plan_id` + per-Story `depends_on`)
 
 ## Usage
 
@@ -66,20 +81,22 @@ Before proceeding, detect the platform:
 You've invoked `/devspec` without a command. Use one of:
 
 ### `/devspec create` — Interactive Dev Spec Generation
-Walk each Dev Spec section collaboratively. I'll generate a draft for each section, present it for review, and wait for your feedback before moving to the next. After Section 5 (Detailed Design), we'll walk the Deliverables Manifest defaults together.
+Walk each Dev Spec section collaboratively. I'll generate a draft for each section, present it for review, wait for your feedback, and — after each section the Pair approves — append a `[ledger D-NNN]` comment to the Plan tracking issue recording the decision. After Section 5 (Detailed Design), we'll walk the Deliverables Manifest defaults together.
 
 **Input sources:** DDD domain model, external document, or verbal description.
+
+**Prerequisite:** A Plan tracking issue (run `/issue plan "<name>"` first if one doesn't exist).
 
 ### `/devspec finalize` — Finalization Checklist
 Run the Section 7.2 finalization checklist mechanically against an existing Dev Spec. Reports pass/fail per item with explanation.
 
 ### `/devspec approve` — Approval Gate
-Run the finalization checklist, present a Dev Spec summary (section count, story count, wave count, deliverable count), and hard-stop for human approval. On approval, records approval metadata in the Dev Spec. On rejection, lists failing items with suggested fixes.
+Run the finalization checklist, present a Dev Spec summary (section count, Story count, Wave count, deliverable count), and hard-stop for human approval. On approval, records approval metadata in the Dev Spec and appends a `[ledger D-NNN]` comment to the Plan issue. On rejection, lists failing items with suggested fixes.
 
 **Prerequisite:** A finalized Dev Spec that passes all checklist items.
 
 ### `/devspec upshift` — Backlog Population
-Create backlog issues from an approved Dev Spec's Section 8 (Phased Implementation Plan). Creates epic issues per phase, story issues with full acceptance criteria, and wave master issues linking constituent stories. Backfills issue numbers into the Dev Spec.
+Create backlog issues from an approved Dev Spec's Section 8 (Phased Implementation Plan). Creates one Story issue per Story from §8, writes `phases-waves.json` with `plan_id` (the Plan issue number) and per-Story `depends_on`, and backfills Story issue numbers into the Dev Spec and the Plan issue's Phases checklist. Optionally creates a PM-layer Epic parent tracker (`type::epic`) if the Pair requests one.
 
 **Prerequisite:** An approved Dev Spec (must have approval metadata from `/devspec approve`).
 
@@ -89,7 +106,16 @@ Create backlog issues from an approved Dev Spec's Section 8 (Phased Implementati
 <!-- BEGIN TEMPLATE: devspec-create -->
 ## Interactive Dev Spec Generation
 
-I'll guide you through creating a complete Dev Spec, section by section. For each section, I'll generate a draft, present it for review, and wait for your feedback before proceeding.
+I'll guide you through creating a complete Dev Spec, section by section. For each section, I'll generate a draft, present it for review, wait for your feedback, and — once you approve — append a `[ledger D-NNN]` comment to the Plan tracking issue recording the decision. The Decision Ledger (per `docs/phase-epic-taxonomy-devspec.md` §5.1, §5.2) is the authoritative record of decided matters across the Plan's lifecycle.
+
+### Step 0: Resolve the Plan Issue
+
+Before walking the Dev Spec, identify the **Plan tracking issue** this Dev Spec is anchored to:
+
+1. **Ask the user:** "What is the Plan tracking issue number for this Dev Spec?" (e.g., `#499`)
+2. If the user does not yet have a Plan issue, tell them: "Create one first with `/issue plan \"<name>\"` — the returned issue number is your `plan_id`. Then re-run `/devspec create`."
+3. Record the Plan issue number as `plan_id` for the rest of the walk. Every `[ledger D-NNN]` comment this session appends will target this issue.
+4. Determine the starting Ledger ID: fetch the Plan issue's existing comments, find the highest `[ledger D-NNN]` prefix already posted (or zero if none), and continue monotonically from `D-(max+1)`. See Step 3.5 below.
 
 ### Step 1: Determine Input Source
 
@@ -132,7 +158,48 @@ For **each** Dev Spec section (1 through 9), follow this pattern:
 3. **Ask for feedback:** "Does this look right? Any changes before we move on?"
 4. **Wait for the user to approve or request changes**
 5. **Incorporate feedback** — iterate until the user is satisfied
-6. **Record the final version** and move to the next section
+6. **Append a `[ledger D-NNN]` comment to the Plan issue** (see Step 3.5 below) capturing the decisions locked in this section
+7. **Record the final version** and move to the next section
+
+### Step 3.5: Append Decision-Ledger Comment to the Plan Issue
+
+**This is the load-bearing step.** After the Pair approves each section, the skill appends a `[ledger D-NNN]` comment to the Plan tracking issue. Per Dev Spec §5.2.1 the entry MUST conform to this schema:
+
+```markdown
+[ledger D-NNN] /devspec §X.Y · <ISO-8601 UTC timestamp with seconds>
+**Decision:** <one sentence stating the decision definitively — no hedging>
+**Rationale:** <one or two sentences referencing concrete evidence: memory file, prior decision, platform constraint, Pair input>
+
+— **<Dev-Name>** <Dev-Avatar> (<Dev-Team>)
+```
+
+If the entry **corrects** a prior entry (new evidence, factual fix), include `**Supersedes:** D-MMM` on the line after the header (per §5.2.4 Correction workflow). Never edit the original `D-MMM` comment — append a new one.
+
+**Mechanics:**
+
+1. **Compute the next monotonic ID.** Re-read the Plan issue's comments just before posting (to catch concurrent writes); find the max existing `D-NNN`; post as `D-(max+1)`. The Tier 2 lint validator (cc-workflow#501) will flag collisions if two tools race.
+2. **Compose the body** following the §5.2.1 schema above. Source is the canonical `/devspec §X.Y` form; if the decision pins a specific requirement, use `/devspec §X.Y R-NN`.
+3. **Resolve agent identity.** Read the session identity file at `/tmp/claude-agent-<md5(repo-root)>.json` for `Dev-Name`, `Dev-Avatar`, and the project's `Dev-Team` from `CLAUDE.md`. These populate the signature line.
+4. **Post the comment** by invoking the `pr_comment` MCP tool (`mcp__sdlc-server__pr_comment`) with `{ number: <plan_id>, body: <rendered ledger entry> }`. On GitHub and GitLab the tool targets the unified issue/PR comment stream, so it works for issue comments too.
+5. **When to write entries** — per Dev Spec §5.2.2, write a `[ledger D-NNN]` comment for each of:
+   - Pair approves a §1.5 non-goal
+   - Pair approves a §2 constraint (Technical or Product)
+   - Pair approves a §3 requirement (EARS)
+   - Pair approves a §5 design choice
+   - `/devspec approve` completes (one summary entry)
+   Routine lifecycle events (Phase transitions, Wave completions, Story merges) do **not** get `[ledger]` comments — they use their own typed prefixes (`[phase-start]`, `[story-merge]`, etc. per §5.1.3).
+6. **If `pr_comment` fails** (network, permissions, rate-limit): retry once; on second failure tell the Pair "Could not append ledger entry D-NNN to Plan issue #<plan_id> — <error>. Paste this into the issue manually:" and render the entry for copy-paste. Do NOT abort the walk — the Dev Spec file is still the primary record; the Ledger is the append-only replay.
+
+**Example** (taken from `docs/phase-epic-taxonomy-devspec.md` §5.2.4):
+
+```
+[ledger D-011] /devspec §5.1 revised · 2026-04-26T19:40Z
+**Supersedes:** D-006
+**Decision:** Plan issue runtime state lives in ISSUE COMMENTS, not in mutable body sections.
+**Rationale:** BJ's insight during §5.1 walk. Comments are append-only at the PLATFORM level...
+
+— **Takashi** 🦔 (cc-workflow)
+```
 
 #### Section Walk Order
 
@@ -141,13 +208,13 @@ For **each** Dev Spec section (1 through 9), follow this pattern:
 - 1.2 Problem Statement
 - 1.3 Proposed Solution
 - 1.4 Target Users (if DDD input: translate from Actors responsibility matrix)
-- 1.5 Non-Goals
+- 1.5 Non-Goals → **append ledger entry per Non-Goal**
 
-**Section 2: Constraints**
+**Section 2: Constraints** → **append ledger entry per Constraint**
 - 2.1 Technical Constraints
 - 2.2 Product Constraints
 
-**Section 3: Requirements (EARS Format)**
+**Section 3: Requirements (EARS Format)** → **append ledger entry per Requirement**
 - If DDD input: translate policies to EARS requirements using the heuristic table
 - Group requirements by theme
 - Number sequentially: R-01, R-02, ...
@@ -156,7 +223,7 @@ For **each** Dev Spec section (1 through 9), follow this pattern:
 - 4.1 System Context
 - 4.X Operational flows (if DDD input: derive from commands and serial chains)
 
-**Section 5: Detailed Design**
+**Section 5: Detailed Design** → **append ledger entry per Design Choice**
 - 5.1+ Design topics (project-specific)
 - 5.A Deliverables Manifest → **see Step 4 below**
 - 5.B Installation & Deployment
@@ -173,7 +240,8 @@ For **each** Dev Spec section (1 through 9), follow this pattern:
 - 7.2 Dev Spec Finalization Checklist (pre-populated from template)
 
 **Section 8: Phased Implementation Plan**
-- Phase structure, stories, waves
+- **Phase** structure, **Stories** grouped into **Waves**
+- Each Story declares `depends_on` on other Story titles/IDs (may be empty `[]`)
 - After this section: verify manifest wave assignments (see Step 6)
 
 **Section 9: Appendices**
@@ -188,7 +256,7 @@ For **each** Tier 1 row (DM-01 through DM-09):
 1. **Present the row:** ID, deliverable, category, default file path
 2. **Ask:** "Confirm this deliverable? If not applicable, provide a rationale (N/A — because [reason])."
 3. **Record the response:** confirmed (with any file path adjustments) or N/A with rationale
-4. **If confirmed:** ask which wave/phase will produce it (fill "Produced In" column)
+4. **If confirmed:** ask which Wave/Phase will produce it (fill "Produced In" column)
 
 **Tier 1 defaults to walk:**
 
@@ -217,19 +285,19 @@ After walking Tier 1, scan the Dev Spec content for Tier 2 trigger conditions:
 
 For each trigger that fires:
 1. **Tell the user:** "Tier 2 trigger fired: [condition]. Adding [deliverable] to the manifest."
-2. **Ask for file path and wave assignment**
+2. **Ask for file path and Wave assignment**
 3. **Add the row** to the Deliverables Manifest
 
 ### Step 6: Verify Manifest Wave Assignments (After Section 8)
 
-After completing Section 8 (Implementation Plan), verify that **every** Deliverables Manifest row has a "Produced In" wave/phase assignment.
+After completing Section 8 (Implementation Plan), verify that **every** Deliverables Manifest row has a "Produced In" Wave/Phase assignment.
 
 For any row missing an assignment:
-1. **Flag it:** "DM-XX ([deliverable]) has no wave assignment yet."
-2. **Ask the user** which wave/phase should produce it
+1. **Flag it:** "DM-XX ([deliverable]) has no Wave assignment yet."
+2. **Ask the user** which Wave/Phase should produce it
 3. **Update the row**
 
-This is a hard gate — the Dev Spec cannot be finalized without complete wave assignments.
+This is a hard gate — the Dev Spec cannot be finalized without complete Wave assignments.
 
 ### Step 7: Write the Dev Spec
 
@@ -238,7 +306,8 @@ After all sections are walked and the manifest is complete:
 1. **Check for existing Dev Spec:** Call `devspec_locate` to see if a Dev Spec already exists for this project. If one is found, confirm with the user whether to overwrite or choose a different project name before proceeding.
 2. **Assemble the Dev Spec** from all approved sections
 3. **Write to** `docs/<project-name>-devspec.md`
-4. **Report:** "Dev Spec written to `docs/<project-name>-devspec.md`. Run `/devspec finalize` to verify completeness."
+4. **Post a reference comment to the Plan issue** (not a `[ledger]` entry — a plain informational comment): "Dev Spec written to `docs/<project-name>-devspec.md`. Run `/devspec finalize` to verify completeness."
+5. **Report to the Pair:** "Dev Spec written to `docs/<project-name>-devspec.md`. Decision Ledger accumulated N entries on Plan issue #<plan_id>. Run `/devspec finalize` to verify completeness."
 
 ---
 
@@ -250,6 +319,7 @@ After all sections are walked and the manifest is complete:
 - **Preserve traceability.** If the input is a DDD domain model, annotate requirements with policy IDs (`[P-XX]`), flows with command/event IDs, and AC items with requirement IDs.
 - **Use EARS format** for all requirements in Section 3.
 - **Fill in template placeholders.** Replace `[[...]]` guidance blocks with actual content — do not leave template instructions in the output.
+- **Append Ledger entries as you go.** Do not batch them at the end of the walk — write one per decision, as the decision is locked (per §5.2.2 trigger table). The append-only Ledger is the audit trail.
 
 <!-- END TEMPLATE: devspec-create -->
 
@@ -277,9 +347,9 @@ Format the `checks` array into a table (columns: #, Check, Result, Evidence). Re
 <!-- BEGIN TEMPLATE: devspec-approve -->
 ## Dev Spec Approval Gate
 
-Gate between Dev Spec creation and backlog population. No issues get created until the Dev Spec is explicitly approved by a human.
+Gate between Dev Spec creation and backlog population. No Story issues get created until the Dev Spec is explicitly approved by a human.
 
-**Tool chain:** `devspec_locate` → `devspec_finalize` → `devspec_summary` → **(hard stop — human approval)** → `devspec_approve`.
+**Tool chain:** `devspec_locate` → `devspec_finalize` → `devspec_summary` → **(hard stop — human approval)** → `devspec_approve` → `pr_comment` (ledger entry on Plan issue).
 
 ### Step 1: Locate the Dev Spec
 
@@ -317,7 +387,19 @@ Present the approval prompt and **stop**. Do not proceed until the user responds
 
 ### Step 5: Process Response
 
-**On approval (yes/approve/confirmed/y):** Call `devspec_approve(path, approved_by)`. **The TOOL writes the approval metadata block — do NOT hand-write it.** The agent's job is to invoke the tool and confirm the result.
+**On approval (yes/approve/confirmed/y):**
+
+1. Call `devspec_approve(path, approved_by)`. **The TOOL writes the approval metadata block — do NOT hand-write it.** The agent's job is to invoke the tool and confirm the result.
+
+2. Append a final `[ledger D-NNN]` comment to the Plan issue recording the approval. Per §5.2.2, `/devspec approve` completing is one of the canonical Ledger triggers. Example body:
+
+   ```
+   [ledger D-NNN] /devspec approve · <ISO-8601 UTC>
+   **Decision:** Dev Spec approved — N requirements, M Phases, K Waves, L Stories.
+   **Rationale:** All 7 finalization checks passed; Pair <approved_by> approved.
+
+   — **<Dev-Name>** <Dev-Avatar> (<Dev-Team>)
+   ```
 
 For reference, the block that `devspec_approve` writes into the Dev Spec file has this shape (so a future `devspec_verify_approved` call can locate it):
 
@@ -330,18 +412,22 @@ finalization_score: 7/7
 -->
 ```
 
-After the tool call succeeds, confirm to the user: "Dev Spec approved. Approval metadata recorded. Next step: run `/devspec upshift` to create backlog issues."
+After the tool call succeeds and the Ledger entry is posted, confirm to the user: "Dev Spec approved. Approval metadata recorded. Ledger entry D-NNN posted to Plan issue #<plan_id>. Next step: run `/devspec upshift` to create Story issues and write `phases-waves.json`."
 
-**On rejection (no/reject/n):** Ask what needs to change, list the finalization results as a starting point, tell the user "Make the requested changes and run `/devspec approve` again.", **stop.** Do not call `devspec_approve`.
+**On rejection (no/reject/n):** Ask what needs to change, list the finalization results as a starting point, tell the user "Make the requested changes and run `/devspec approve` again.", **stop.** Do not call `devspec_approve`. Do not post a Ledger entry.
 
 <!-- END TEMPLATE: devspec-approve -->
 
 <!-- BEGIN TEMPLATE: devspec-upshift -->
 ## Dev Spec Backlog Population (Upshift)
 
-Creates backlog issues from an approved Dev Spec's Section 8 (Phased Implementation Plan) — the bridge from Dev Spec to execution.
+Creates Story issues from an approved Dev Spec's Section 8 (Phased Implementation Plan) and writes `phases-waves.json` — the bridge from Dev Spec to execution.
 
-**Tool chain:** `devspec_locate` → `devspec_verify_approved` → `devspec_parse_section_8` → **loop** `work_item` for each epic/story/wave master → backfill issue numbers.
+**Key shape change (per `docs/phase-epic-taxonomy-devspec.md` R-07, R-12, 2026-04-26):** The Plan issue (created earlier by `/issue plan`) is the top-level pipeline container. **Phases do NOT get their own issues** — they live inside `phases-waves.json` only. Upshift creates one issue per Story, writes `phases-waves.json` with `plan_id` and per-Story `depends_on`, and backfills Story numbers into the Dev Spec's §8 and into the Plan issue's Phases checklist.
+
+An optional **PM-layer Epic** (the `type::epic` label, a thematic parent tracker) may be created if the Pair explicitly asks for one; this is purely a program-management convenience and is ignored by `/prepwaves`, `/nextwave`, and `/wavemachine`.
+
+**Tool chain:** `devspec_locate` → `devspec_verify_approved` → `devspec_parse_section_8` → **loop** `work_item` for each Story (type::feature / type::bug / type::chore / type::docs) → write `phases-waves.json` → backfill Story numbers into Dev Spec and Plan issue → post summary comment to Plan issue.
 
 ### Step 1: Locate and Verify
 
@@ -349,23 +435,83 @@ Call `devspec_locate` (path arg if provided; otherwise searches `docs/*-devspec.
 
 Then call `devspec_verify_approved(path)` — returns `{ ok, approved }` after inspecting the `<!-- DEV-SPEC-APPROVAL` comment block for the `approved: true` marker. If `approved` is not `true`, tell the user: "This Dev Spec has not been approved. Run `/devspec approve` first." and **stop here.** Do not create any issues.
 
-### Step 2: Parse Section 8
+### Step 2: Resolve the Plan Issue
 
-Call `devspec_parse_section_8(path)` — returns `{ ok, phases: [{ name, dod, waves: [{ name, stories: [{ title, summary, implementation_steps, test_procedures, acceptance_criteria, wave }] }] }] }`.
+Ask the user (or read from conversation context if previously established) for the Plan tracking issue number. This is the `plan_id` that gets embedded in `phases-waves.json` and referenced from every Story issue body.
 
-### Step 3: Create Epic Issues (one per Phase)
+### Step 3: Parse Section 8
 
-For each Phase, call `work_item(type: "epic", title: "Epic: Phase N — <name>", body, labels: ["type::epic"])`. The epic body includes the Phase Definition of Done (`phase.dod`) and a "Stories" placeholder to be filled after story creation. Record the returned epic issue number per phase.
+Call `devspec_parse_section_8(path)` — returns `{ ok, phases: [{ name, dod, waves: [{ name, stories: [{ id, title, summary, implementation_steps, test_procedures, acceptance_criteria, wave, depends_on }] }] }] }`. Each Story carries an `id` (stable identifier from §8, e.g. `3.4`), a `wave` label (e.g. `P3W2`), and a `depends_on` array of Story IDs (may be empty `[]`).
 
 ### Step 4: Create Story Issues (one per Story)
 
-For each Story, call `work_item(type: "feature", title: story.title, body, labels: ["type::feature"])`. The story body includes `## Summary`, `## Implementation Steps` (from `story.implementation_steps`), `## Test Procedures` (from `story.test_procedures`), `## Acceptance Criteria` (as checkboxes from `story.acceptance_criteria`), and a `## Metadata` block with **Wave**, **Phase**, and **Parent Epic:** #<epic issue number>. Record each returned issue number. After all stories for a phase land, update the parent epic's body to link them (`#NNN` references).
+For each Story in §8, call `work_item(type: <subtype>, title: story.title, body, labels: [<subtype label>])`. The subtype is the Story's declared kind: `type::feature` / `type::bug` / `type::chore` / `type::docs` (default `type::feature` if not declared).
 
-### Step 5: Create Wave Master Issues
+The Story issue body includes:
+- `## Summary` (from `story.summary`)
+- `## Implementation Steps` (from `story.implementation_steps`)
+- `## Test Procedures` (from `story.test_procedures`)
+- `## Acceptance Criteria` (as checkboxes from `story.acceptance_criteria`)
+- `## Metadata` block with **Plan:** #<plan_id>, **Phase:** <phase-name>, **Wave:** <wave-name>, **Depends on:** <story IDs or "none">
 
-For each Wave, call `work_item(type: "chore", title: "Wave N Master — <brief>", body, labels: ["type::chore"])`. The wave master body includes `## Constituent Stories` (checkbox list of story issue links) and `## Wave Metadata` with **Phase** and **Story count**. Record each returned issue number.
+Record each returned issue number (keyed by Story ID).
 
-### Step 6: Report Summary
+### Step 5 (Optional): Create a PM-Layer Epic Parent Tracker
+
+Ask the Pair: "Do you want a PM-layer Epic parent tracker to group these Stories thematically? This is optional and ignored by the pipeline — it's purely for program-management rollup. (yes/no)"
+
+- **If yes:** Call `work_item(type: "epic", title: "Epic: <theme>", body: <canonical Epic template>, labels: ["type::epic"])`. Then, for each Story issue created in Step 4, apply the `epic::<N>` label (where N is the Epic issue number). This is the sole place the optional Epic PM-layer is wired up; the pipeline itself never reads these labels.
+- **If no:** Skip this step. Stories live directly under the Plan issue via `phases-waves.json`.
+
+### Step 6: Write `phases-waves.json`
+
+Assemble a `phases-waves.json` document at `.claude/status/phases-waves.json` (create the directory if needed) with this canonical shape:
+
+```json
+{
+  "plan_id": 499,
+  "slug": "phase-epic-taxonomy",
+  "phases": [
+    {
+      "name": "Phase 1: Foundation",
+      "dod": ["..."],
+      "waves": [
+        {
+          "name": "P1W1",
+          "stories": [
+            { "id": "1.1", "issue": 501, "title": "...", "depends_on": [] },
+            { "id": "1.2", "issue": 502, "title": "...", "depends_on": ["1.1"] }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Invariants (per R-07, R-18):**
+- `plan_id` is the Plan issue number (never `epic_id` — that field is retired).
+- Every Story has a `depends_on` field, even if empty (`[]`). Absence is an error.
+- Every Story has an `issue` field linking to the Story issue number created in Step 4.
+- `slug` is the kebab-case slug used for kahuna branch naming (`kahuna/<plan_id>-<slug>`).
+
+Write the file. This is the authoritative input that `/prepwaves` will consume.
+
+### Step 7: Backfill Issue Numbers
+
+1. **Into the Dev Spec file:** append the Story issue number to each Story heading in §8 (e.g., `#### Story 3.4: ... (#515)`). Write the updated Dev Spec back to disk.
+2. **Into the Plan issue's Phases checklist:** the Plan issue body's Phases checklist (placeholder populated when the Plan was created) gets filled in with Story links. Use `gh issue edit <plan_id>` (or `glab issue update`) to replace the checklist placeholder with the resolved list, e.g.:
+
+   ```markdown
+   ## Phases
+   - [ ] Phase 1: Foundation
+     - [ ] Story 1.1: ... (#501)
+     - [ ] Story 1.2: ... (#502)
+   ```
+
+   Per §5.1.6 the Plan body is **frozen at `/devspec approve`**; this Phases-checklist backfill is the one permitted post-approval body edit (it's the resolution of a placeholder, not a scope change). Any other post-approval body change requires a `[ledger D-NNN]` comment documenting why.
+
+### Step 8: Report Summary
 
 Present a creation summary:
 
@@ -374,17 +520,22 @@ Present a creation summary:
 
 | Type | Count | Issue Numbers |
 |------|-------|---------------|
-| Epics (Phases) | N | #X, #Y |
 | Stories | N | #A, #B, #C, ... |
-| Wave Masters | N | #P, #Q |
+| PM-layer Epic (optional) | 0 or 1 | #E (if created) |
 | **Total issues created** | **N** | |
+
+phases-waves.json written to .claude/status/phases-waves.json
+  plan_id: <plan_id>
+  phases: N
+  waves: M
+  stories: K  (all with depends_on field)
+
+Plan issue #<plan_id> updated: Phases checklist backfilled.
 ```
 
-### Step 7: Backfill Issue Numbers into Dev Spec
+Also post this summary as a plain comment (not a `[ledger]` entry) on the Plan issue so the Pair has a single place to read the backlog state.
 
-Update the Dev Spec file to append created issue numbers to the Section 8 headings (skill-body work — no dedicated tool): append epic number to each `### Phase N:` heading, story number to each story, wave master number to each wave reference. Write the updated Dev Spec back to disk.
-
-Confirm to the user: "Backlog populated. N issues created. Dev Spec updated with issue references. Run `/prepwaves` to plan execution."
+Confirm to the user: "Backlog populated. N Story issues created. `phases-waves.json` written with plan_id=<plan_id> and per-Story depends_on. Dev Spec and Plan issue updated with Story references. Run `/prepwaves` to plan execution."
 
 <!-- END TEMPLATE: devspec-upshift -->
 
@@ -393,9 +544,11 @@ Confirm to the user: "Backlog populated. N issues created. Dev Spec updated with
 ## Important Rules
 
 1. **Never skip the interactive walk.** Every section must be presented and approved by the user. Do not generate the entire Dev Spec in one shot.
-2. **Tier 1 is opt-OUT.** Every Tier 1 deliverable must be explicitly confirmed or given an "N/A — because [reason]" rationale. Silence is not consent to skip.
-3. **Tier 2 triggers are mechanical.** Scan the Dev Spec content for trigger conditions — do not rely on the user to remember them.
-4. **Wave assignment is a hard gate.** Every active manifest row must have a "Produced In" wave before the Dev Spec is written.
-5. **The Deliverables Manifest is the single source of truth.** Do not create separate artifact manifests or documentation kits — everything goes in 5.A.
-6. **Finalization is mechanical.** `/devspec finalize` checks are deterministic — no judgment calls, no "looks good enough."
-7. **Traceability is non-negotiable.** If the input is a DDD domain model, every requirement must trace back to a policy, every flow to commands/events, every story AC to requirements.
+2. **Append Ledger entries in-flight.** `/devspec create` writes `[ledger D-NNN]` comments to the Plan issue as each section is approved — not in a batch at the end. Per §5.2.2 triggers.
+3. **Tier 1 is opt-OUT.** Every Tier 1 deliverable must be explicitly confirmed or given an "N/A — because [reason]" rationale. Silence is not consent to skip.
+4. **Tier 2 triggers are mechanical.** Scan the Dev Spec content for trigger conditions — do not rely on the user to remember them.
+5. **Wave assignment is a hard gate.** Every active manifest row must have a "Produced In" Wave before the Dev Spec is written.
+6. **The Deliverables Manifest is the single source of truth.** Do not create separate artifact manifests or documentation kits — everything goes in 5.A.
+7. **Finalization is mechanical.** `/devspec finalize` checks are deterministic — no judgment calls, no "looks good enough."
+8. **Traceability is non-negotiable.** If the input is a DDD domain model, every requirement must trace back to a policy, every flow to commands/events, every Story AC to requirements.
+9. **Epic is PM-layer only.** The pipeline reads Plan / Phase / Wave / Story from `phases-waves.json`. The `type::epic` label and `epic::N` labels are optional thematic groupings for program management only; they are never read by `/prepwaves`, `/nextwave`, or `/wavemachine`.

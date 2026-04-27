@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **wavemachine skill**: rename epic→Plan/Phase; add Exhaustive Legal Exits section per Dev Spec §5.3.3. [#512, Story 3.1]
+- **nextwave skill**: rename epic→Plan/Phase; add Exhaustive Legal Exits section per Dev Spec §5.3.3. [#513, Story 3.2]
+- **prepwaves skill**: rename epic→Plan/Phase; annotate surviving "epic" references as PM-layer. [#514, Story 3.3]
+- **devspec skill**: teach Plan/Phase/Wave/Story vocabulary; append Decision-Ledger comments to Plan issue during walk; `/devspec upshift` emits `phases-waves.json` with `plan_id` + per-Story `depends_on`. [#515, Story 3.4]
+- **issue skill**: add `type=plan` with Dev Spec §5.1.2 body template; add `--epic N` flag for Story creation; on-demand `label_create` for missing `type::plan` / `epic::N`. [#516, Story 3.5]
 - **Refactored `vox` around the provider-hook pattern.** The previous `scripts/vox-tts` embedded five coupled backends (VOX_COMMAND, VOX_ENDPOINT, espeak, piper, say) in one cascade; it has been removed. `scripts/vox` is now a thin dispatcher that resolves a *provider* (synthesis) and a *player* (playback) at runtime. Providers live in `~/.config/vox/provider`; copy-and-adapt examples ship in `scripts/vox-providers/` (`silent.sh`, `openai-endpoint.sh`, `piper-local.sh`, `espeak.sh`, `macos-say.sh`). Contract documented in `scripts/vox-providers/README.md` (VOX_PROVIDER_CONTRACT=1). Closes #398.
 
   **Migration (existing vox users)**: your prior `VOX_COMMAND` / `VOX_ENDPOINT` settings no longer auto-dispatch. Run `vox --setup` once to pick a provider, or manually:
@@ -21,6 +26,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `VOX_DISABLED=1` is a new escape hatch for clean no-op exit (CI / headless / temporary silence).
 
 - **Renamed `/prd` skill to `/devspec`** (Development Specification). The old name collided with PM usage of "PRD" (customer need, ROI, value prop); the skill produces an implementation spec for a coding agent, which is semantically distinct. Template renamed to `docs/devspec-template.md`, translation protocol to `docs/DDD-to-devspec-protocol.md`, and output files use the `-devspec.md` suffix. The approval metadata marker changed from `<!-- PRD-APPROVAL -->` to `<!-- DEV-SPEC-APPROVAL -->`. Internal campaign-status stage ID `prd` is preserved for backward compatibility with existing `.sdlc/` state files; only the user-facing display label is updated to "Dev Spec". Closes #327.
+
+### Chore
+
+- **regression test**: grep-based test enforcing R-19 (no pipeline reads of `epic::N` labels); wired into CI. [#517, Story 3.6]
+
+### Documentation
+
+- **phase-epic-taxonomy VRTM closed**: MV-01..MV-06 executed; all 18 active requirements traced to Pass verifications; Plan #499 flipped to `plan-complete`. [#518, Story 3.7 — closing story for cc-workflow#499]
 
 ### Added
 

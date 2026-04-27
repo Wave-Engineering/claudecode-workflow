@@ -53,7 +53,7 @@ CC sub-agents do not have the `Agent`/`Task` tool. Only the top-level session ca
 
 ## Cross-Repo Waves
 
-A **cross-repo wave** is a wave whose sub-issues live in a *different* repo than the orchestrator's working directory. Example: the wave plan lives in `claudecode-workflow` (because the epic does) but every story modifies code in `mcp-server-sdlc`. This is the standard shape for sdlc-mcp migration epics.
+A **cross-repo wave** is a wave whose sub-issues live in a *different* repo than the orchestrator's working directory. Example: the wave plan lives in `claudecode-workflow` (because the Plan does) but every story modifies code in `mcp-server-sdlc`. This is the standard shape for sdlc-mcp migration Plans.
 
 The default `/nextwave` flow assumes same-repo execution. Cross-repo waves require a handful of adjustments — none of them obvious the first time you hit them. Source-of-truth backing document: `lesson_cross_repo_wave_orchestration.md` (memory). Read it for the source incident and additional sibling patterns (orchestrator direct-write fallback, etc.).
 
@@ -65,7 +65,7 @@ The default `/nextwave` flow assumes same-repo execution. Cross-repo waves requi
 4. **The orchestrator (parent agent) must pre-create the worktrees.** Sub-agents must not create their own — race conditions and naming conflicts. Pre-create all N up front, one per issue, before spawning any execution agents.
 5. **Sub-agents are pointed at worktree paths via their prompt, not via `Agent` tool flags.** Each Flight prompt includes "Your working directory is `/tmp/wt-<slug>-<num>`. Use absolute paths or `cd` to that directory before any git/file operations." **No `isolation:` flag on the `Agent` call.**
 6. **`gh`/`glab` commands must be repo-scoped via `-R Wave-Engineering/<target-repo>`.** Since the orchestrator is not running from the target repo's directory, every `gh issue view`, `gh pr create`, `gh pr merge`, etc. needs `-R`. Do not rely on cwd-based repo detection.
-7. **`wave-status` state stays in the master plan repo** (where the epic lives), not the target repo. The wave-status CLI walks `.claude/status/phases-waves.json` from `CLAUDE_PROJECT_DIR`. Orchestrator and sub-agents have *different* working directories — that is correct and intentional.
+7. **`wave-status` state stays in the master plan repo** (where the Plan lives), not the target repo. The wave-status CLI walks `.claude/status/phases-waves.json` from `CLAUDE_PROJECT_DIR`. Orchestrator and sub-agents have *different* working directories — that is correct and intentional.
 
 ### Recipe
 
@@ -174,7 +174,7 @@ Run this after `wave_complete()` lands and the bus has been cleaned (Step 5).
 3. **Emit observability anchor.** Run `scripts/mcp-log wave_start wave=<N> target=<repo-slug> issues=<COMPACT JSON array, no spaces, e.g. [418,419,420]>` so this anchor *precedes* every per-issue `spec_validate_structure`, `wave_show`, and `wave_previous_merged` call below — that ordering is what makes post-mortem temporal correlation work. The `kahuna` field is added later (Step 1.5) once `wave_show` has been called; it is fine for the initial `wave_start` to omit it.
 4. Verify main is clean in the target repo; `wave_previous_merged()` confirms prior wave landed; `spec_validate_structure(issue)` for each issue in the wave.
 5. Call `scripts/wavebus/wave-init <repo-slug> <N> 1`. Flight count is `1` initially — Prime may re-invoke it with the real count (script is idempotent). Capture the printed wave root.
-6. **Read `kahuna_branch` from wave state** via `wave_show()` (or by reading `.claude/status/state.json` in the target repo). If the field is present and non-empty, the wave is executing under KAHUNA — capture the value (e.g. `kahuna/<epic-id>-<slug>`) and pass it into the Prime(pre-wave) prompt as the `kahuna_branch` input. If absent or empty, the wave is a legacy non-KAHUNA execution — flights base off `main` as before. Pre-created worktree branches (Step 7, cross-repo path) and `pr_create` `base` (Step 3e) honor this same value. See Dev Spec §5.2.3 for the authoritative contract.
+6. **Read `kahuna_branch` from wave state** via `wave_show()` (or by reading `.claude/status/state.json` in the target repo). If the field is present and non-empty, the wave is executing under KAHUNA — capture the value (e.g. `kahuna/<plan-id>-<slug>`) and pass it into the Prime(pre-wave) prompt as the `kahuna_branch` input. If absent or empty, the wave is a legacy non-KAHUNA execution — flights base off `main` as before. Pre-created worktree branches (Step 7, cross-repo path) and `pr_create` `base` (Step 3e) honor this same value. See Dev Spec §5.2.3 for the authoritative contract.
 7. Pre-create worktrees per issue. Same-repo: `Agent` calls in Step 3 can use `isolation: "worktree"`. Cross-repo: create them now via `git -C <target-repo> worktree add /tmp/wt-<slug>-<issue> -b feature/<issue>-<desc> origin/<base-ref>` (one per issue), where `<base-ref>` is `kahuna_branch` if set, else `main`.
 8. Resolve identity from `/tmp/claude-agent-<md5>.json`; post to `#wave-status` (`1487386934094462986`): `"🏄 **Wave <N> started** — <project>, <issue-count> issues. Agent: **<dev-name>** <dev-avatar>"`. If `disc_send` fails, log and continue.
 9. Spawn **Prime(pre-wave)** — single `Agent` call, `subagent_type: general-purpose`. Prompt template below.
@@ -449,6 +449,60 @@ This prompt is what each Flight sub-agent receives. Preserve the SPEC EXECUTOR b
 >    - `FAIL` otherwise. `results.md.partial` must still be non-empty — explain the failure.
 >
 > **Your LAST message must be exactly one line — the stdout of `flight-finalize` — nothing else. No prose, no fences.** The line must match `^(/tmp/wavemachine/[^\s]+/results\.md) (PASS|FAIL)$`. Anything else is a protocol violation and the Orchestrator will record this Flight as FAIL.
+
+## Exhaustive Legal Exits
+
+This loop halts if — and ONLY if — one of the following occurs. This list is closed: no other condition warrants stopping.
+
+`/nextwave` is itself an autonomy-loop skill: Step 3's per-flight dispatch iterates until every flight in the wave has merged, and the only interactive checkpoint is the consolidated batch approval gate at Step 3d (interactive mode only; skipped in `auto` mode). Every other branch point — "the next flight could conflict", "this wave has more issues than the last one", "the reviewer pass returned clean but the commit is large" — is NOT an exit. The list below is the complete enumeration. See `principle_user_attention_is_the_cost.md` and `principle_cost_asymmetry_continue_vs_exit.md` for the reasoning.
+
+### Mechanical exits (tool returns)
+
+1. **wave_preflight / wave_next_pending returns empty.** No wave pending; nothing to execute.
+   Detected by: `wave_preflight()` / `wave_next_pending()` returns no pending wave.
+   Action: report "no pending wave", exit skill cleanly (not an error).
+
+2. **Prime(pre-wave) returns BLOCKED.** The wave cannot be planned — spec unbuildable, missing AC, structural contradiction, partition infeasible.
+   Detected by: Step 2 Prime final JSON `{"status":"BLOCKED", ...}`.
+   Action: print blocker reason from `plan.md`, post BLOCKED notice to `#wave-status`, leave bus in place for forensics, exit loop. In auto mode, emit canonical status line (Step 6).
+
+3. **Prime(post-flight) returns FAIL.** A flight's CI failed, a merge conflict was unrecoverable, or commutativity verification required oracle fallback that the environment cannot provide.
+   Detected by: Step 3e Prime final JSON `{"status":"FAIL", ...}`.
+   Action: surface `report_path` to user, leave bus + worktrees in place, exit loop. In auto mode, emit canonical status line (Step 6).
+
+4. **Prime(post-flight) returns BLOCKED.** A flight declined to merge on policy grounds (e.g. reviewer finding not yet resolved, branch-protection rule rejected the merge).
+   Detected by: Step 3e Prime final JSON `{"status":"BLOCKED", ...}`.
+   Action: surface `report_path` to user, leave bus + worktrees in place, exit loop. In auto mode, emit canonical status line (Step 6).
+
+### Plan-reality drift exits
+
+5. **Scope divergence.** A Flight committed files outside the declared scope of the Story it was implementing.
+   Detected by: `drift_files_changed(story_id)` returns files not in the Story's declared-scope manifest.
+   Action: post `[drift-halt]` comment to the Plan issue citing the divergent files, halt loop, await Pair triage.
+
+6. **Story count or dependency violation.** The number of stories completed ≠ the number planned for the current wave, or a Story whose dependencies are unmet landed anyway.
+   Detected by: post-wave reconciliation against `phases-waves.json` (Prime(post-wave) Step 4 / `wave_review()`).
+   Action: post `[drift-halt]` comment citing the mismatch, halt loop, await Pair triage.
+
+7. **AC materially unmet by committed code.** A Story's acceptance criteria include testable conditions that the committed code fails (e.g. a required file doesn't exist, a required function isn't exported, a required section is missing).
+   Detected by: `dod_verify_deliverable(story_id)` returns failures.
+   Action: post `[drift-halt]` comment citing the failing AC, halt loop, await Pair triage.
+
+### Explicit non-exits (DO NOT halt for these)
+
+The following conditions look like checkpoints but are NOT exits. The loop continues past each:
+
+- **Phase transitions.** Wave-N of Phase 1 → wave-1 of Phase 2 is a routine lifecycle event, not a checkpoint. Phase DoDs are validated at phase-complete time via `[phase-complete ...]` comment; the loop does not pause for human review of the transition.
+- **First multi-issue wave.** The first wave with >1 story is not categorically different from the fifth. Multi-issue parallelism is the normal case, validated by `flight_partition` at Prime(pre-wave) time.
+- **Session elapsed time.** How long the loop has been running is not evidence of anything. Short runs can have drift; long runs can be clean.
+- **First-time execution of a known pattern.** If the skill body describes the event (inter-flight re-validation in Step 3g, cross-repo worktree creation in Step 1, kahuna base-ref plumbing, consolidated batch approval gate), it is precedented. "I've never actually done this before" is not a new category.
+- **Recent successes increasing anxiety.** Each merged flight makes the Orchestrator more confident *in the harness*, not less confident *in the next flight*. Loss-aversion dressed as caution is the specific failure mode this section exists to prevent.
+- **General caution / "what if something goes wrong?"** This framing invents a new checkpoint category. If something does go wrong, it shows up as mechanical exit #1-4 or drift exit #5-7. Absence of those is presumption of healthy operation.
+- **"Something feels off and I was about to halt."** If the observation doesn't match any numbered exit above, it is NOT an exit. Use the Concerns Channel (Dev Spec §5.3.7) — post a `[concern]` comment + Discord ping, continue the loop. Commits can be rolled back; wall-clock time cannot. See `principle_cost_asymmetry_continue_vs_exit.md`.
+
+### Cross-reference
+
+See memory files `principle_user_attention_is_the_cost.md` and `principle_cost_asymmetry_continue_vs_exit.md` for the reasoning that motivates this closed-list discipline. Stopping is a cost paid by the Pair's attention AND by unrecoverable wall-clock time; the list above enumerates the only costs worth paying. The consolidated batch approval gate at Step 3d is the ONE human checkpoint this skill deliberately preserves in interactive mode; everything else deferred to the human goes through the Concerns Channel, not a halt.
 
 ## Non-Negotiables
 

@@ -2,7 +2,7 @@
 
 Validates Dev Spec §5.2.2:
 - Pre-wave kahuna bootstrap step group exists, references ``wave_init`` with
-  ``kahuna: { epic_id, slug }``, is idempotent on resume.
+  ``kahuna: { plan_id, slug }``, is idempotent on resume.
 - Trust-score gate step group exists, lists the four signals, runs them
   CONCURRENTLY in a single tool-use block (R-23).
 - All-green path documents ``pr_merge`` with ``skip_train: true``,
@@ -128,7 +128,7 @@ class TestSkillFileShape:
 
 class TestAC1_PreWaveBootstrap:
     """Pre-wave kahuna bootstrap section exists and references ``wave_init``
-    with the ``kahuna: { epic_id, slug }`` argument, runs once per epic, is
+    with the ``kahuna: { plan_id, slug }`` argument, runs once per Plan, is
     idempotent on resume."""
 
     def test_bootstrap_section_exists(self, skill_text: str) -> None:
@@ -139,14 +139,16 @@ class TestAC1_PreWaveBootstrap:
         self, skill_text: str
     ) -> None:
         """The bootstrap step must name ``wave_init`` and pass the
-        ``kahuna: { epic_id, slug }`` argument shape from §5.1.2."""
+        ``kahuna: { plan_id, slug }`` argument shape per §5.1.2 (Plan/Phase
+        taxonomy locked 2026-04-26; the legacy ``epic_id`` parameter has
+        been renamed to ``plan_id``)."""
         bootstrap = _bootstrap(skill_text)
         assert "wave_init" in bootstrap
         # Tolerate small whitespace variations around the JSON-ish object.
         assert re.search(
-            r"kahuna:\s*\{\s*epic_id\s*,\s*slug\s*\}",
+            r"kahuna:\s*\{\s*plan_id\s*,\s*slug\s*\}",
             bootstrap,
-        ), "Bootstrap must call wave_init with `kahuna: { epic_id, slug }`"
+        ), "Bootstrap must call wave_init with `kahuna: { plan_id, slug }`"
 
     def test_bootstrap_skips_when_kahuna_branch_present(
         self, skill_text: str
@@ -160,14 +162,14 @@ class TestAC1_PreWaveBootstrap:
             re.IGNORECASE | re.DOTALL,
         ), "Bootstrap must skip when kahuna_branch is already present (resume path)"
 
-    def test_bootstrap_runs_once_per_epic(self, skill_text: str) -> None:
-        """Bootstrap is anchored as once-per-epic, not per-wave."""
+    def test_bootstrap_runs_once_per_plan(self, skill_text: str) -> None:
+        """Bootstrap is anchored as once-per-Plan, not per-wave."""
         bootstrap = _bootstrap(skill_text)
         assert re.search(
-            r"once per epic|first.*invocation",
+            r"once per (plan|epic)|first.*invocation",
             bootstrap,
             re.IGNORECASE,
-        ), "Bootstrap must declare once-per-epic semantics"
+        ), "Bootstrap must declare once-per-Plan semantics"
 
 
 # ---------------------------------------------------------------------------
@@ -184,16 +186,16 @@ class TestAC2_GateStepGroupAndConcurrency:
         gate = _gate(skill_text)
         assert gate, "Trust-Score Gate and Auto-Merge section not found"
 
-    def test_gate_runs_at_epic_completion(self, skill_text: str) -> None:
+    def test_gate_runs_at_plan_completion(self, skill_text: str) -> None:
         gate = _gate(skill_text)
         # The gate must be anchored to the loop's clean-completion path
         # (after wave_next_pending() returns null and DoD passes).
         assert re.search(
-            r"wave_next_pending.*null|epic completion|after.*final wave|"
-            r"clean.completion",
+            r"wave_next_pending.*null|plan completion|epic completion|"
+            r"after.*final wave|clean.completion",
             gate,
             re.IGNORECASE | re.DOTALL,
-        ), "Gate must be anchored at epic completion / clean completion path"
+        ), "Gate must be anchored at Plan completion / clean completion path"
 
     def test_gate_invokes_wave_finalize(self, skill_text: str) -> None:
         gate = _gate(skill_text)
@@ -549,3 +551,173 @@ class TestNonNegotiables:
             non_neg,
             re.IGNORECASE,
         ), "Non-Negotiables must encode 'do not short-circuit the gate'"
+
+
+# ---------------------------------------------------------------------------
+# Story 3.1 (#512) — Plan/Phase rename + Exhaustive Legal Exits section.
+# AC-1: zero unqualified "epic" in pipeline contexts [R-09].
+# AC-2: ``## Exhaustive Legal Exits`` section present matching §5.3.2 [R-17].
+# AC-3: cross-reference to the two principle_* memory files present.
+# ---------------------------------------------------------------------------
+
+
+class TestAC1_NoUnqualifiedEpic:
+    """R-09: the skill body contains zero unqualified 'epic' in
+    pipeline-operational contexts. Allowed exceptions:
+
+    - PM-layer annotations (``type::plan``/``type::epic`` label family names,
+      the ``Plan/Phase/Epic taxonomy`` proper-noun reference).
+    - Nothing else. ``epic_id`` is specifically forbidden — Phase 2 renamed
+      the sdlc-server handler parameter to ``plan_id``.
+    """
+
+    def test_no_epic_id_parameter(self, skill_text: str) -> None:
+        assert "epic_id" not in skill_text, (
+            "epic_id is forbidden — Phase 2 renamed to plan_id (R-05..R-07)"
+        )
+
+    def test_no_unqualified_epic_in_body(self, skill_text: str) -> None:
+        """Every residual ``epic`` occurrence must be inside a PM-layer
+        annotation. The whitelist enumerates the only legitimate mentions:
+        the ``Plan/Phase/Epic taxonomy`` proper-noun reference to the
+        locked decision document. Any other occurrence is a rot bug per
+        the heuristic in ``decision_plan_phase_epic_taxonomy.md``."""
+        # Case-insensitive word-boundary match.
+        matches = list(re.finditer(r"\bepic\b", skill_text, re.IGNORECASE))
+        # Filter out whitelisted contexts by looking at a ~40-char window
+        # around each hit.
+        unqualified: list[str] = []
+        for m in matches:
+            lo = max(0, m.start() - 40)
+            hi = min(len(skill_text), m.end() + 40)
+            window = skill_text[lo:hi]
+            if "Plan/Phase/Epic taxonomy" in window:
+                continue
+            unqualified.append(window)
+        assert not unqualified, (
+            "Unqualified 'epic' references in pipeline contexts "
+            "(should be Plan or Phase):\n"
+            + "\n---\n".join(unqualified)
+        )
+
+
+class TestAC2_ExhaustiveLegalExits:
+    """R-17: the skill body contains a ``## Exhaustive Legal Exits``
+    section matching the §5.3.2 structural template — exact heading, with
+    ``### Mechanical exits`` (numbered), ``### Plan-reality drift exits``
+    (numbered), and ``### Explicit non-exits`` (bulleted) subsections."""
+
+    def test_section_heading_present(self, skill_text: str) -> None:
+        assert re.search(
+            r"^## Exhaustive Legal Exits\s*$",
+            skill_text,
+            re.MULTILINE,
+        ), "Must contain '## Exhaustive Legal Exits' heading (exact)"
+
+    def test_closed_list_framing_present(self, skill_text: str) -> None:
+        """The opening sentence must assert the closed-list contract."""
+        section = _section(skill_text, "Exhaustive Legal Exits")
+        assert section, "Exhaustive Legal Exits section not found"
+        assert re.search(
+            r"closed.*no other condition warrants stopping",
+            section,
+            re.IGNORECASE | re.DOTALL,
+        ), "Section must declare the closed-list contract"
+
+    def test_mechanical_exits_subsection(self, skill_text: str) -> None:
+        section = _section(skill_text, "Exhaustive Legal Exits")
+        # _section stops at the next ## or ### — so grab a wider window.
+        lines = skill_text.splitlines(keepends=True)
+        start = next(
+            i for i, l in enumerate(lines)
+            if l.startswith("## Exhaustive Legal Exits")
+        )
+        end = next(
+            (i for i in range(start + 1, len(lines))
+             if lines[i].startswith("## ")
+             and not lines[i].startswith("## Exhaustive Legal Exits")),
+            len(lines),
+        )
+        body = "".join(lines[start:end])
+        assert "### Mechanical exits" in body, (
+            "Must contain '### Mechanical exits' subsection"
+        )
+        # At least 4 numbered mechanical exits (matches §5.3.3 template).
+        mech_start = body.index("### Mechanical exits")
+        mech_body = body[mech_start:]
+        numbered = re.findall(r"^\d+\.\s+\*\*", mech_body, re.MULTILINE)
+        assert len(numbered) >= 4, (
+            f"Mechanical exits must enumerate at least 4 numbered items "
+            f"(found {len(numbered)})"
+        )
+
+    def test_plan_reality_drift_exits_subsection(
+        self, skill_text: str
+    ) -> None:
+        lines = skill_text.splitlines(keepends=True)
+        start = next(
+            i for i, l in enumerate(lines)
+            if l.startswith("## Exhaustive Legal Exits")
+        )
+        end = next(
+            (i for i in range(start + 1, len(lines))
+             if lines[i].startswith("## ")
+             and not lines[i].startswith("## Exhaustive Legal Exits")),
+            len(lines),
+        )
+        body = "".join(lines[start:end])
+        assert "### Plan-reality drift exits" in body, (
+            "Must contain '### Plan-reality drift exits' subsection"
+        )
+
+    def test_explicit_non_exits_subsection(self, skill_text: str) -> None:
+        lines = skill_text.splitlines(keepends=True)
+        start = next(
+            i for i, l in enumerate(lines)
+            if l.startswith("## Exhaustive Legal Exits")
+        )
+        end = next(
+            (i for i in range(start + 1, len(lines))
+             if lines[i].startswith("## ")
+             and not lines[i].startswith("## Exhaustive Legal Exits")),
+            len(lines),
+        )
+        body = "".join(lines[start:end])
+        assert "### Explicit non-exits" in body, (
+            "Must contain '### Explicit non-exits' subsection"
+        )
+        # Must have at least 5 bulleted non-exits.
+        nonexit_start = body.index("### Explicit non-exits")
+        nonexit_body = body[nonexit_start:]
+        bullets = re.findall(
+            r"^-\s+\*\*", nonexit_body, re.MULTILINE
+        )
+        assert len(bullets) >= 5, (
+            f"Explicit non-exits must enumerate at least 5 bulleted items "
+            f"(found {len(bullets)})"
+        )
+
+    def test_cross_reference_to_principle_memory_files(
+        self, skill_text: str
+    ) -> None:
+        """AC-3: the section must cross-reference both
+        ``principle_user_attention_is_the_cost.md`` and
+        ``principle_cost_asymmetry_continue_vs_exit.md``."""
+        lines = skill_text.splitlines(keepends=True)
+        start = next(
+            i for i, l in enumerate(lines)
+            if l.startswith("## Exhaustive Legal Exits")
+        )
+        end = next(
+            (i for i in range(start + 1, len(lines))
+             if lines[i].startswith("## ")
+             and not lines[i].startswith("## Exhaustive Legal Exits")),
+            len(lines),
+        )
+        body = "".join(lines[start:end])
+        assert "principle_user_attention_is_the_cost.md" in body, (
+            "Must cross-reference principle_user_attention_is_the_cost.md"
+        )
+        assert "principle_cost_asymmetry_continue_vs_exit.md" in body, (
+            "Must cross-reference principle_cost_asymmetry_continue_vs_exit.md"
+        )
