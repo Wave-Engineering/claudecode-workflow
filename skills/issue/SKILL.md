@@ -1,14 +1,16 @@
 ---
 name: issue
-description: Create structured issues (feature, story, bug, chore, docs, epic) with proper templates and labels. Supports both GitHub (gh) and GitLab (glab). Self-contained — does not depend on CLAUDE.md for templates. Sub-issue templates (feature, story, chore, docs, bug) emit the H2 sections that `/prepwaves` and `spec_validate_structure` require, so issues are wave-pattern-ready on first try.
+description: Create structured issues (plan, epic, feature, story, bug, chore, docs) with proper templates and labels. Supports both GitHub (gh) and GitLab (glab). Self-contained — does not depend on CLAUDE.md for templates. Sub-issue templates (feature, story, chore, docs, bug) emit the H2 sections that `/prepwaves` and `spec_validate_structure` require, so issues are wave-pattern-ready on first try. The `plan` type emits the canonical Plan tracking-issue body per Dev Spec `phase-epic-taxonomy-devspec.md` §5.1.2, and Story creation accepts an optional `--epic N` flag that attaches the `epic::N` PM-layer label.
 usage: |
-  /issue feature <prompt>  Create a feature issue (alias: story)
-  /issue story <prompt>    Create a story issue (alias: feature)
-  /issue bug <prompt>      Create a bug issue
-  /issue chore <prompt>    Create a chore issue
-  /issue docs <prompt>     Create a docs issue
-  /issue epic <prompt>     Create an epic issue
-  /issue <prompt>          Infer type from the prompt
+  /issue plan <prompt>     Create a Plan tracking issue (canonical §5.1.2 body)
+  /issue epic <prompt>     Create an Epic parent tracker (PM-layer)
+  /issue feature <prompt>  Create a feature Story (alias: story)
+  /issue story <prompt>    Create a story Story (alias: feature)
+  /issue bug <prompt>      Create a bug Story
+  /issue chore <prompt>    Create a chore Story
+  /issue docs <prompt>     Create a docs Story
+  /issue <type> <prompt> --epic N  Attach epic::N PM-layer label to the Story
+  /issue <prompt>          Infer type from the prompt (never infers "plan")
   /issue                   Infer from recent conversation context
 ---
 
@@ -25,15 +27,36 @@ Create properly templated and labeled issues from a natural language prompt.
 ## Usage
 
 ```
-/issue feature <prompt>       Create a feature issue (alias: story)
-/issue story <prompt>          Create a story issue (alias: feature)
-/issue bug <prompt>            Create a bug issue
-/issue chore <prompt>          Create a chore issue
-/issue docs <prompt>           Create a docs issue
-/issue epic <prompt>           Create an epic issue
-/issue <prompt>                Infer type from the prompt
-/issue                         Infer from recent conversation context
+/issue plan <prompt>              Create a Plan tracking issue (canonical §5.1.2 body)
+/issue epic <prompt>              Create an Epic parent tracker (PM-layer)
+/issue feature <prompt>           Create a feature Story (alias: story)
+/issue story <prompt>             Create a story Story (alias: feature)
+/issue bug <prompt>               Create a bug Story
+/issue chore <prompt>             Create a chore Story
+/issue docs <prompt>              Create a docs Story
+/issue <type> <prompt> --epic N   Attach epic::N PM-layer label to the Story
+/issue <prompt>                   Infer type from the prompt (never infers "plan")
+/issue                            Infer from recent conversation context
 ```
+
+## Taxonomy Overview
+
+The `/issue` skill creates three distinct layers of issue, each with its own
+template and label family (authoritative source: `docs/phase-epic-taxonomy-devspec.md`
+§5.5, cross-ref `docs/kahuna-devspec.md` Terminology section):
+
+| Layer | Type | Label | Role |
+|-------|------|-------|------|
+| **Plan** | `plan` | `type::plan` | Top-level wave-pipeline tracking issue. Has a canonical frozen body; runtime state lives in comments. One Plan per `/devspec` walk. |
+| **Epic** | `epic` | `type::epic` | **PM-layer concept only.** A parent thematic tracker for human project management. The pipeline ignores `type::epic` and `epic::N` labels entirely (per Dev Spec R-03). |
+| **Story** | `feature`, `story`, `bug`, `chore`, `docs` | `type::<sub>` | The unit of implementable work — one issue, one branch, one PR/MR, one Flight. Optionally carries an `epic::N` label applied via `--epic N` on creation. |
+
+**Load-bearing distinction:** a Plan is not an Epic. A Plan is a pipeline
+artifact the Orchestrator reads; an Epic is a PM-layer grouping the pipeline
+never reads. If you find pipeline code inspecting `type::epic` or `epic::N`,
+it's a taxonomy leak (Dev Spec R-19). The two types share label colour
+`#5319E7` because they sit in the same visual family on the project board,
+not because they share any pipeline semantics.
 
 ## Wave-Pattern-Ready Output Guarantee
 
@@ -54,35 +77,57 @@ picked up by `/prepwaves` without mid-flight body fixes. If a particular
 section does not apply to a given issue, emit the heading with a single-line
 rationale (e.g. `None` or `N/A — because ...`); never omit the heading.
 
-The `epic` template is intentionally different — epics are parent issues
-that decompose into sub-issues, so they are not validated against the
-sub-issue grammar.
+The `plan` and `epic` templates are intentionally different:
+
+- **Plan** uses the canonical frozen-body template from Dev Spec §5.1.2
+  (Goal / Scope / Plan-level DoD / Phases / References). It's not validated
+  against the sub-issue grammar; it's the Orchestrator's worldview.
+- **Epic** is a PM-layer parent tracker; its body carries Goal / Scope /
+  sub-issue checklist for human reference. The pipeline ignores epics.
 
 See `docs/issue-body-grammar.md` in `mcp-server-sdlc` for the authoritative
-parser specification.
+parser specification (sub-issue grammar), and `docs/plan-issue-template.md`
+in this repo for the operator reference on Plan issues.
 
 ## Tools Used
+
 - `mcp__sdlc-server__work_item` — create issues cross-platform (handles GitHub/GitLab detection internally)
+- `mcp__sdlc-server__label_create` — on-demand label creation for `type::plan` and `epic::N` when the target repo doesn't yet carry them (Dev Spec R-14)
+- `mcp__sdlc-server__label_list` — optional pre-check that a label exists before `work_item`; the recommended pattern is to call `label_create` unconditionally and rely on its idempotent behaviour, but `label_list` is available if you need to inspect
+- `mcp__sdlc-server__work_item` (read path) — pre-check that `--epic N` references an existing open issue with `type::epic` label before creating the Story (Dev Spec §5.5.4 step 1)
 
 ## Step 1: Parse Arguments
 
 {{#if args}}
 Parse: `{{args}}`
 {{else}}
-No arguments — infer the issue from the most recent topic of conversation. Determine the type and content from context and create directly. State your interpretation in the report so the user can edit if the inference was wrong.
+No arguments — infer the issue from the most recent topic of conversation. Determine the type and content from context and create directly. State your interpretation in the report so the user can edit if the inference was wrong. Never infer `plan` — Plan creation is always intentional; if the conversation implies a Plan, ask explicitly.
 {{/if}}
 
-Extract two things:
-1. **Type** — the first word if it matches: `feature`, `story`, `bug`, `chore`, `docs`, `epic`. `feature` and `story` are aliases and use the same template. If it doesn't match a type, treat the entire argument as the prompt and infer the type.
-2. **Prompt** — everything after the type (or the entire argument if no type prefix).
+Extract three things:
 
-**Type inference rules** (when no explicit type):
+1. **Type** — the first word if it matches one of:
+   `plan`, `epic`, `feature`, `story`, `bug`, `chore`, `docs`.
+   `feature` and `story` are aliases and use the same sub-issue template.
+   If it doesn't match a type, treat the entire argument (minus flags) as the
+   prompt and infer the type from keywords (see table below).
+2. **`--epic N` flag** — optional flag anywhere after the type. When present
+   on a Story-type invocation (`feature`/`story`/`bug`/`chore`/`docs`),
+   captures the integer `N`. Invalid on `plan` and `epic` invocations — if
+   `--epic` appears with type=`plan` or type=`epic`, fail with a clear error.
+3. **Prompt** — everything after the type (or the entire argument if no type
+   prefix), with the `--epic N` token removed if present.
+
+**Type inference rules** (when no explicit type — never infers `plan`):
+
 - Mentions broken, fails, crash, error, wrong → `bug`
 - Mentions add, create, build, implement, new → `feature`
 - Mentions story, user story, sub-issue under epic → `story`
 - Mentions update, fix, clean, refactor, rename, move, upgrade → `chore`
 - Mentions document, write docs, README, guide → `docs`
-- Mentions epic, phase, milestone, multi-part → `epic`
+- Mentions epic, phase, milestone, multi-part, thematic parent → `epic`
+- Mentions plan, dev spec, kahuna, wave pipeline → **ask explicitly**; do not
+  infer `plan`. Creating a Plan tracking issue is intentional (Dev Spec §5.5.6).
 - Ambiguous → ask the user
 
 ## Step 2: Draft the Issue
@@ -90,6 +135,73 @@ Extract two things:
 Use the prompt (or conversation context) to fill in the appropriate template below. The agent should flesh out the template sections intelligently — don't just echo the prompt back. Think about what a spec-driven implementing agent would need.
 
 **Quality standard:** Every issue should be detailed enough that a spec-driven agent can execute without making design decisions. Implementation steps should read like paint-by-numbers. Acceptance criteria should be evaluable before PR/MR merge.
+
+### Plan Template
+
+**Authoritative source:** Dev Spec §5.1.2 (`docs/phase-epic-taxonomy-devspec.md`).
+Operator reference: `docs/plan-issue-template.md`.
+
+When `/issue plan <prompt>` is invoked:
+
+1. **Parse the prompt** into Plan metadata. Extract (via the same LLM reasoning
+   used for type inference):
+   - A one-sentence Goal.
+   - A suggested slug (kebab-case) from the Goal — used as a reminder only;
+     the kahuna branch name is chosen later by `/devspec`.
+   - Initial In-scope / Out-of-scope bullets as placeholders the Pair fills
+     during `/devspec create`.
+2. **Render the canonical body** verbatim using the template below. Every
+   heading is frozen content per §5.1.6 mutation rule 1; the body is hand-
+   edited during `/devspec create` and frozen at `/devspec approve`.
+   Post-creation, runtime state flows through comments (never the body) —
+   see `docs/plan-issue-template.md` for the comment typed-prefix table.
+3. **Title** is `Plan: <short name derived from prompt>`, matching the body's
+   `# Plan: <Name>` heading. If the inferred name is wrong, the Pair edits
+   the issue directly — cheaper than a re-invocation.
+4. **Post NO comments at creation.** Empty comment log is the correct initial
+   state (Dev Spec §5.1.6 rule 1). The Decision Ledger starts empty; entries
+   append during `/devspec create` and runtime.
+
+```markdown
+# Plan: <Name>
+
+<!-- PLAN-ISSUE v1 — frozen content only. Runtime state lives in comments. -->
+
+## Goal
+<one sentence describing what this Plan delivers>
+
+## Scope
+### In scope
+- <bullet>
+### Out of scope
+- <bullet>
+
+## Plan-level Definition of Done
+- [ ] Phase 1 DoD satisfied
+- [ ] Phase 2 DoD satisfied
+- [ ] (... one line per Phase)
+- [ ] Kahuna→main MR merged clean
+- [ ] VRTM complete
+- [ ] (... cross-cutting conditions)
+
+## Phases
+
+### Phase 1 — <Phase Name>
+**DoD:**
+- [ ] <verifiable condition> [R-XX]
+- [ ] <verifiable condition>
+
+### Phase 2 — <Phase Name>
+**DoD:**
+- [ ] <verifiable condition>
+
+### (... one section per Phase)
+
+## References
+- Dev Spec: `docs/<slug>-devspec.md`
+- Memory files: `decision_<topic>.md`, `principle_<topic>.md`
+- Related Plans: #NNN (if any)
+```
 
 ### Wave-Pattern Sub-Issue Templates
 
@@ -105,7 +217,7 @@ when a section is `None` or `N/A` — the parser only sees H2s.
 ## Summary
 
 [1-2 sentences: what this feature delivers and why. Include Context — background,
-motivation, link to Epic or Dev Spec if applicable — as a short sub-paragraph
+motivation, link to Plan or Dev Spec if applicable — as a short sub-paragraph
 under the Summary heading rather than a separate H2, so the parser sees the
 canonical Summary section.]
 
@@ -144,7 +256,7 @@ canonical Summary section.]
 ## Metadata
 
 **Wave:** [N or N/A]
-**Parent Epic:** [#NNN or N/A]
+**Plan:** [#NNN or N/A]
 **Wave Master:** [#NNN or N/A]
 ```
 
@@ -249,7 +361,7 @@ environment, or `N/A`]
 ## Metadata
 
 **Wave:** [N or N/A]
-**Parent Epic:** [#NNN or N/A]
+**Plan:** [#NNN or N/A]
 ```
 
 ### Docs Template
@@ -293,15 +405,22 @@ environment, or `N/A`]
 ## Metadata
 
 **Wave:** [N or N/A]
-**Parent Epic:** [#NNN or N/A]
+**Plan:** [#NNN or N/A]
 ```
 
-### Epic Template
+### Epic Template (PM-layer only)
+
+The `epic` type creates a `type::epic` parent tracker for **project-management
+thematic grouping**. It is a PM-layer concept: the wave-pipeline (Orchestrator,
+`/wavemachine`, `/nextwave`, `/prepwaves`) reads neither `type::epic` issues
+nor `epic::N` labels (Dev Spec R-03, R-19). Use `epic` when a human PM wants
+to group Stories thematically across multiple Plans or across none at all.
+**Do not confuse with `plan`** — Plans are pipeline artifacts, Epics are not.
 
 ```markdown
 ## Goal
 
-[One sentence: what this epic proves or delivers]
+[One sentence: what this epic proves or delivers (PM-thematic, not pipeline)]
 
 ## Scope
 
@@ -324,17 +443,15 @@ environment, or `N/A`]
 | 1 | #NNN | [title] | None |
 | 2 | #NNN | [title] | #NNN |
 
-## Wave Map
-
-| Wave | Issues | Parallel? |
-|------|--------|-----------|
-| 1 | #NNN | Single |
-| 2 | #NNN, #NNN | Yes |
-
 ## Success Metrics
 
 [Quantitative or qualitative measures of success]
 ```
+
+Epic issues created by this skill do NOT receive a `Wave Map` section; wave
+planning belongs to the Plan's `/devspec` → `/prepwaves` pipeline, not to the
+PM-layer Epic. If human users want a thematic grouping with a wave map, they
+can add one by hand after creation.
 
 ## Step 3: Determine Labels
 
@@ -344,12 +461,65 @@ Labels use the `group::value` convention. Within each group, labels are mutually
 
 | Type | Label |
 |------|-------|
+| plan | `type::plan` |
+| epic | `type::epic` |
 | feature | `type::feature` |
 | story | `type::story` |
 | bug | `type::bug` |
 | chore | `type::chore` |
 | docs | `type::docs` |
-| epic | `type::epic` |
+
+### `--epic N` Flag — Optional PM-Layer Label (Dev Spec §5.5.4)
+
+When a Story-type invocation (`feature`, `story`, `bug`, `chore`, `docs`)
+includes `--epic N`:
+
+1. **Pre-check `N` exists and is an Epic.** Call `work_item` (read path) to
+   fetch issue `#N` on the target repo. Assert it is open and carries the
+   `type::epic` label. If the issue doesn't exist, is closed, or lacks
+   `type::epic`, fail with a clear error message directing the Pair to first
+   create the Epic via `/issue epic <prompt>`. Do not create the Story.
+2. **Attach both labels** to the Story being created: `type::<subtype>` AND
+   `epic::N`.
+3. **On-demand label creation** for the `epic::N` label family — see
+   "On-demand label creation" below.
+4. **No comment is posted on the Epic issue.** The parent-child relationship
+   is represented by the `epic::N` label alone (Dev Spec §5.5.4 step 4).
+   The wave pipeline ignores both `type::epic` and `epic::N`; PMs who care
+   can filter the Epic's project board by its label.
+
+**`--epic N` is invalid with type=`plan` or type=`epic`.** A Plan is not an
+Epic sub-issue; an Epic is not attached to another Epic. If `--epic` appears
+on either of those invocations, fail before any create calls.
+
+### On-demand Label Creation (Dev Spec R-14 / §5.5.3 step 2)
+
+Two label families are created on-demand when absent from the target repo:
+
+| Label | Colour | Description | Created by |
+|-------|--------|-------------|------------|
+| `type::plan` | `#5319E7` | `"Plan tracking issue — top-level pipeline container"` | `/issue plan` invocations |
+| `epic::<N>` | `#5319E7` | `"Story belongs to Epic #N (PM-layer thematic grouping)"` (substitute `<N>`) | `/issue <story> --epic N` invocations |
+
+Both share colour `#5319E7` with `type::epic` — they sit in the same visual
+family on the project board. This does NOT mean the pipeline treats them
+alike; the colour is cosmetic, the semantics are different.
+
+**Procedure (applied before `work_item` creates the issue):**
+
+1. Call `mcp__sdlc-server__label_create` for the required label with its
+   canonical colour and description. The tool is idempotent — creating an
+   already-existing label succeeds silently. There is no need to pre-check
+   via `label_list`; the recommended pattern is unconditional `label_create`.
+2. If `label_create` fails for any reason OTHER than "already exists"
+   (e.g. permissions, platform outage), surface the error to the Pair and
+   abort the issue creation. Do not proceed to `work_item`.
+3. Once the label exists, proceed to `work_item` with both the type label
+   and (if applicable) the `epic::N` label in the label list.
+
+**Rationale for unconditional `label_create`.** It's one call either way;
+the pre-check-then-create pattern is two calls and is no safer. The tool's
+idempotent contract lets us skip the branch.
 
 ### Inferred Labels
 
@@ -359,9 +529,13 @@ Assess and apply values for these groups using judgment. Do not pause to confirm
 |-------|--------|---------------|
 | **Priority** | `priority::critical`, `priority::high`, `priority::medium`, `priority::low` | All issues |
 | **Urgency** | `urgency::immediate`, `urgency::soon`, `urgency::normal`, `urgency::eventual` | All issues |
-| **Size** | `size::S`, `size::M`, `size::L`, `size::XL` | Features, chores, docs (optional on bugs, omit for epics) |
+| **Size** | `size::S`, `size::M`, `size::L`, `size::XL` | Features, chores, docs (optional on bugs, omit for plans and epics) |
 | **Severity** | `severity::critical`, `severity::major`, `severity::minor`, `severity::cosmetic` | Bugs only |
-| **Wave** | `wave::1`, `wave::2`, etc. | Wave-planned issues only — omit otherwise |
+| **Wave** | `wave::1`, `wave::2`, etc. | Wave-planned Stories only — omit otherwise. Never applied to plan or epic types. |
+
+**Plan defaults.** A Plan typically gets `priority::medium`, `urgency::normal`,
+and no `size::` label (Plans are not sized — they decompose into Phases which
+decompose into Stories). The Pair can override after creation.
 
 **Priority vs Urgency are orthogonal:**
 - **Priority** = business value importance. How much does this matter?
@@ -373,9 +547,21 @@ Assess labels based on the content — do not ask the user to confirm each one. 
 
 Create immediately — do not ask for approval. Issues are cheap to edit and close. The user gave intent when they invoked `/issue`; the real review happens in the project board where the editing tools are better.
 
-Call `work_item` with the drafted title, body, and labels. The tool handles platform detection and issue creation internally — no `gh` or `glab` CLI calls.
+**Order of operations (all invocations):**
 
-If a label doesn't exist on the repo, the tool or platform will report it. Offer to create missing labels via CLI as a one-time setup step (label CRUD MCP tool is planned but not yet available).
+1. If the invocation is `/issue plan ...`, call `label_create` for `type::plan`
+   (idempotent, see Step 3 "On-demand label creation").
+2. If the invocation carries `--epic N`:
+   a. Call `work_item` (read path) on `#N` and verify it exists, is open,
+      and carries `type::epic`. Abort on failure.
+   b. Call `label_create` for `epic::N` (idempotent).
+3. Call `mcp__sdlc-server__work_item` with the drafted title, body, and the
+   full label list (type label + `epic::N` if applicable + inferred labels).
+   The tool handles platform detection and issue creation internally — no
+   `gh` or `glab` CLI calls.
+
+If `work_item` reports a missing label at create-time (race or pre-existing
+`epic::X` for a different `X`), surface the error; do not silently retry.
 
 ## Step 5: Report
 
@@ -385,7 +571,25 @@ Confirm creation with the issue number, URL, and a nudge to review:
 > Labels: `type::feature`, `priority::medium`, `urgency::normal`, `size::M`
 > Review and edit: `<issue URL>`
 
-When creating multiple issues in a batch (e.g., epic decomposition), report all of them at the end in a table rather than one at a time:
+For a Plan invocation:
+
+> Created Plan **#NNN** — `Plan: <Name>`
+> Labels: `type::plan`, `priority::medium`, `urgency::normal`
+> Body: canonical §5.1.2 template (Goal / Scope / DoD / Phases / References)
+> Comments: none (correct initial state per Dev Spec §5.1.6 rule 1)
+> Next: run `/devspec create <N>` to begin the Dev Spec walk.
+> Review and edit: `<issue URL>`
+
+For a Story invocation with `--epic N`:
+
+> Created **#NNN** — `feat(scope): description`
+> Labels: `type::feature`, `epic::42`, `priority::medium`, `urgency::normal`, `size::M`
+> Epic: #42 (PM-layer thematic grouping; pipeline ignores)
+> Review and edit: `<issue URL>`
+
+When creating multiple issues in a batch (e.g., Plan decomposition from a
+devspec walk), report all of them at the end in a table rather than one at a
+time:
 
 > | # | Title | Labels |
 > |---|-------|--------|
@@ -394,15 +598,18 @@ When creating multiple issues in a batch (e.g., epic decomposition), report all 
 >
 > Review in your project board: `<project URL>`
 
-## Label Color Reference
+## Label Colour Reference
 
-When creating labels, use these colors for consistency. **Note:** `gh` expects hex without `#` prefix; `glab` expects it with `#`.
+When creating labels, use these colours for consistency. **Note:** `gh` expects hex without `#` prefix; `glab` expects it with `#`. The `mcp__sdlc-server__label_create` tool handles platform translation; pass the `#`-prefixed form.
 
-| Group | Color (glab) | Color (gh) |
-|-------|-------------|------------|
-| `type::` | `#0E8A16` | `0E8A16` |
+| Group | Colour (glab / label_create) | Colour (gh) |
+|-------|------------------------------|-------------|
+| `type::plan` | `#5319E7` | `5319E7` |
+| `type::epic` | `#5319E7` | `5319E7` |
+| `type::<story-subtype>` | `#0E8A16` | `0E8A16` |
 | `priority::` | `#D93F0B` | `D93F0B` |
 | `urgency::` | `#FBCA04` | `FBCA04` |
 | `size::` | `#1D76DB` | `1D76DB` |
 | `severity::` | `#B60205` | `B60205` |
 | `wave::` | `#5319E7` | `5319E7` |
+| `epic::<N>` | `#5319E7` | `5319E7` |
