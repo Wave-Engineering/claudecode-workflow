@@ -31,13 +31,30 @@ finalization_score: 7/7
 
 ---
 
+## Terminology
+
+This spec — and the wave-pattern pipeline it describes — distinguishes **six primitives**. Five are pipeline-native; the sixth (Epic) is a PM-layer concept the pipeline deliberately ignores. Every later section of this document uses these terms in exactly this sense. When an older reader encounters "epic" in pipeline-operational prose, that is a taxonomy leak (see `docs/phase-epic-taxonomy-devspec.md`); report it.
+
+| Primitive | What it is | Where it lives | Relation | Non-relation |
+|-----------|-----------|----------------|----------|--------------|
+| **Plan** | Top-level container for a multi-Phase delivery. One Plan → one kahuna branch → one kahuna→main MR. Synthetic pipeline primitive. | Platform issue with `type::plan` label; `plan_id` = issue number. Decision Ledger lives in its comments. | A Plan contains one or more Phases. A Plan maps 1:1 to a kahuna branch `kahuna/<plan_id>-<slug>`. | A Plan is **not** a GitHub/GitLab native Milestone, Projects V2 item, GitLab Epic, or Iteration — those are PM-layer primitives left alone. A Plan is **not** a `type::epic` issue. |
+| **Phase** | Sequential pipeline-internal ordering unit within a Plan. Phases run in order; waves within a Phase may run in parallel. | `phases-waves.json` (pipeline-only); checklist item in the Plan issue body. | A Phase belongs to exactly one Plan. A Phase contains one or more Waves. | A Phase is **not** a platform issue, label, milestone, or branch. It has no native representation; it exists only in pipeline state. |
+| **Wave** | A parallel-safe batch of Stories executed as a unit by Prime + Flight agents. All Stories in a Wave land on the kahuna branch before the next Wave begins. | `phases-waves.json` (pipeline-only); `wave_N` keys in wave state. | A Wave belongs to exactly one Phase. A Wave contains one or more Flights (one Flight per Story). | A Wave is **not** a platform primitive. It has no issue, no label, no branch. |
+| **Story** | The unit of implementable work — one issue, one branch, one MR, one Flight. Lands one coherent change on the kahuna branch. | Native platform issue with `type::feature`, `type::bug`, `type::chore`, or `type::docs`. | A Story belongs to exactly one Wave (implicitly, via `phases-waves.json`). A Story may optionally carry an `epic::N` PM-layer label. | A Story is **not** a Plan, even if single-Story Plans exist; the Plan issue is a distinct tracker. |
+| **Flight** | Ephemeral runtime agent + worktree + wavebus slot that implements exactly one Story. Returns `PASS`/`FAIL` on the canonical status line. | `/tmp/wavemachine/<slug>/wave-<N>/flight-<M>/` + a git worktree + a feature branch based on the active kahuna branch. | A Flight maps 1:1 to a Story. A Flight opens its MR with `base = <active-kahuna-branch>`. | A Flight is **not** persisted in platform state. Post-completion, only its MR and the wavebus artifact remain; the worktree and agent are torn down. |
+| **Epic** | **PM-layer concept only.** Either a `type::epic` parent tracker issue (used by humans for thematic grouping), or an `epic::N` label on Story issues. The pipeline reads neither, filters by neither, and never branches control flow on either. | Optional. Lives on the platform as a `type::epic` issue or as an `epic::N` label on Stories. | An Epic is a PM-facing grouping that **may** span Stories across multiple Plans or none at all. | An Epic is **not** a Plan, a Phase, a Wave, a Story, or a Flight. Any pipeline code that reads `epic::N` or routes on `type::epic` is a taxonomy leak (see `decision_plan_phase_epic_taxonomy.md`). The kahuna branch name uses `<plan_id>`, never an epic identifier. |
+
+**Historical note:** prior versions of this Dev Spec used "epic" in pipeline-operational contexts (e.g., "per-epic integration branch", `epic_id` handler parameters, `kahuna/<epic-id>-<slug>` branch naming). Those usages have been renamed to "Plan" throughout. See `docs/phase-epic-taxonomy-devspec.md` for the rationale and the one-time rename scope.
+
+---
+
 ## 1. Problem Domain
 
 ### 1.1 Background
 
-The Claude Code Workflow Kit ships a wave-pattern execution system — `/assesswaves`, `/prepwaves`, `/nextwave`, `/wavemachine`, `/dod` — that decomposes an epic into waves of parallel-safe "flights," each implementing one issue in its own worktree. Wavemachine v2 (shipped 2026-04-23, epic #384) restructured this around an Orchestrator / Prime / Flight model with a filesystem message bus at `/tmp/wavemachine/`, circuit-breakers via `wave_health_check`, and a canonical status-line protocol so Flights return `PASS`/`FAIL` to Primes to the Orchestrator without the Orchestrator needing to read each Flight's output.
+The Claude Code Workflow Kit ships a wave-pattern execution system — `/assesswaves`, `/prepwaves`, `/nextwave`, `/wavemachine`, `/dod` — that decomposes a Plan into waves of parallel-safe "flights," each implementing one Story in its own worktree. Wavemachine v2 (shipped 2026-04-23, Plan #384 — tracked historically under the `type::epic` label before the Plan/Phase/Epic taxonomy landed) restructured this around an Orchestrator / Prime / Flight model with a filesystem message bus at `/tmp/wavemachine/`, circuit-breakers via `wave_health_check`, and a canonical status-line protocol so Flights return `PASS`/`FAIL` to Primes to the Orchestrator without the Orchestrator needing to read each Flight's output.
 
-The system was conceptually designed for three progressively autonomous operating modes (Tier 1: agent executes, human merges; Tier 2: agent merges individual changes, human gates the epic; Tier 3: fully autonomous end-to-end with trust-score-based auto-merge at main). Today the kit operates at Tier 1 only. **Tier 3 is the destination for this epic.** Tier 2 is referenced in the Phased Implementation Plan (§8) as an intermediate checkpoint during development — it is not a shipping configuration. Once Tier 3 is built, it is the only mode the kit runs in.
+The system was conceptually designed for three progressively autonomous operating modes (Tier 1: agent executes, human merges; Tier 2: agent merges individual changes, human gates the Plan; Tier 3: fully autonomous end-to-end with trust-score-based auto-merge at main). Today the kit operates at Tier 1 only. **Tier 3 is the destination for this Plan.** Tier 2 is referenced in the Phased Implementation Plan (§8) as an intermediate checkpoint during development — it is not a shipping configuration. Once Tier 3 is built, it is the only mode the kit runs in.
 
 The sdlc-server has most of the trust-signal infrastructure required for Tier 3 (`commutativity_verify` returning STRONG/MEDIUM/WEAK/ORACLE_REQUIRED verdicts, `wave_ci_trust_level`, `skip_train` bypass flag on `pr_merge`), but no mechanism exists to route flights away from main or to act on the trust signals without human intervention.
 
@@ -55,25 +72,25 @@ Relaxing all three gates at the main-branch level is not acceptable. Main is the
 
 ### 1.3 Proposed Solution
 
-Introduce a per-epic **integration branch** called "Kahuna" that lives between individual Flight branches and main. For each epic processed by the wave-pattern pipeline:
+Introduce a per-Plan **integration branch** called "Kahuna" that lives between individual Flight branches and main. For each Plan processed by the wave-pattern pipeline:
 
-1. `wave_init` creates a `kahuna/<epic-id>-<slug>` branch off the current main head and records it in wave state.
-2. Per-flight sub-agents branch off kahuna, not main (`feature/<story-id>-<slug>` with `kahuna/<epic-id>-<slug>` as base ref).
+1. `wave_init` creates a `kahuna/<plan-id>-<slug>` branch off the current main head and records it in wave state.
+2. Per-flight sub-agents branch off kahuna, not main (`feature/<story-id>-<slug>` with `kahuna/<plan-id>-<slug>` as base ref).
 3. Flight MRs target kahuna as their integration branch. The platform is configured such that MRs **into** kahuna merge automatically on CI-green with zero human approval required — the "sandbox" property: kahuna is pre-main staging, not production-visible state.
-4. When all stories in the epic are merged to kahuna and Definition-of-Done checks pass, a new `wave_finalize` tool opens a kahuna→main MR with an auto-assembled body derived from wavebus artifacts (one bullet per flight, linking the original flight MRs).
+4. When all stories in the Plan are merged to kahuna and Definition-of-Done checks pass, a new `wave_finalize` tool opens a kahuna→main MR with an auto-assembled body derived from wavebus artifacts (one bullet per flight, linking the original flight MRs).
 5. The kahuna→main MR auto-merges when all trust signals are satisfied: `commutativity_verify` reports STRONG or MEDIUM on the composed diff (kahuna vs main), CI on kahuna is green, the `feature-dev:code-reviewer` agent reports no critical or important findings, and `trivy fs` reports zero HIGH/CRITICAL vulnerabilities. Any red signal pauses for human review. There is no per-repo "tier knob" — this is the only mode; degraded-signal fallback to human is automatic, not configured.
 
-What is missing on the sdlc-server side is narrower than it first appears. `pr_create` already accepts a custom `base` ref — flights can target `kahuna/*` today with no plumbing changes. `pr_merge` derives base from the PR itself (set at creation time) and needs no modifications. The actual gaps are: a new `wave_finalize` tool that assembles and opens the kahuna→main MR from wavebus artifacts; a wave-state schema addition for the `kahuna_branch` field; a schema relaxation on `commutativity_verify` so it can gate a single composed kahuna-vs-main diff (today it requires pairwise changesets, min 2 — the underlying `commutativity-probe` binary handles single-target analysis already, only the handler enforces pairwise); and kahuna branch lifecycle primitives (`wave_init` creating the branch, cleanup on epic close). Outside the sdlc-server surface: per-platform settings automation to establish sandbox properties on kahuna branches, and a `/precheck` adaptation that recognizes "Flight operating inside a Kahuna sandbox" and auto-approves its own `/scpmmr` within that context.
+What is missing on the sdlc-server side is narrower than it first appears. `pr_create` already accepts a custom `base` ref — flights can target `kahuna/*` today with no plumbing changes. `pr_merge` derives base from the PR itself (set at creation time) and needs no modifications. The actual gaps are: a new `wave_finalize` tool that assembles and opens the kahuna→main MR from wavebus artifacts; a wave-state schema addition for the `kahuna_branch` field; a schema relaxation on `commutativity_verify` so it can gate a single composed kahuna-vs-main diff (today it requires pairwise changesets, min 2 — the underlying `commutativity-probe` binary handles single-target analysis already, only the handler enforces pairwise); and kahuna branch lifecycle primitives (`wave_init` creating the branch, cleanup on Plan close). Outside the sdlc-server surface: per-platform settings automation to establish sandbox properties on kahuna branches, and a `/precheck` adaptation that recognizes "Flight operating inside a Kahuna sandbox" and auto-approves its own `/scpmmr` within that context.
 
-The critical invariant: **MRs into kahuna are relaxed; MRs from kahuna to main retain full rigor — just with a different gating source (trust signals rather than human per-MR).** Main's safety properties are unchanged. The gate moves from "per flight at main" to "one at epic-close, against the assembled whole, validated by composable signals."
+The critical invariant: **MRs into kahuna are relaxed; MRs from kahuna to main retain full rigor — just with a different gating source (trust signals rather than human per-MR).** Main's safety properties are unchanged. The gate moves from "per flight at main" to "one at Plan-close, against the assembled whole, validated by composable signals."
 
 ### 1.4 Target Users
 
 | Persona | Description | Primary Use Case |
 |---|---|---|
-| **BJ (wave-driver)** | Engineer running `/wavemachine` for overnight or long-running autonomous execution on multi-issue epics. Starts the wave, walks away, evaluates state on return. | Invoke `/wavemachine` on an approved epic; audit the already-merged-by-trust-score epic on return (or resume a paused wave when a trust signal went red). |
+| **BJ (wave-driver)** | Engineer running `/wavemachine` for overnight or long-running autonomous execution on multi-issue Plans. Starts the wave, walks away, evaluates state on return. | Invoke `/wavemachine` on an approved Plan; audit the already-merged-by-trust-score Plan on return (or resume a paused wave when a trust signal went red). |
 | **tachikoma (sdlc-server maintainer)** | Dev owning the mcp-server-sdlc tool surface. Implements `wave_finalize`, wave-state schema additions, `commutativity_verify` schema extension. | Consumes the Dev Spec Section 5 tool contracts, delivers against them in parallel with BJ's claudecode-workflow work. |
-| **Orchestrator Agent** | Main interactive agent (the top-level Claude Code session). Runs the `/wavemachine` loop. | Reads wave state, spawns Prime agents per wave, consumes canonical status returns, drives the epic from `wave_init` through `wave_finalize` and cleanup. |
+| **Orchestrator Agent** | Main interactive agent (the top-level Claude Code session). Runs the `/wavemachine` loop. | Reads wave state, spawns Prime agents per wave, consumes canonical status returns, drives the Plan from `wave_init` through `wave_finalize` and cleanup. |
 | **Prime Agent** | First agent created per wave. Manages flight planning, flight input/output, and post-wave reconciliation. | Pre-wave: partition stories into parallel-safe flights, generate flight prompts, kick off flights. Post-flight: reconcile results. Post-wave: prepare wavebus artifacts for the Orchestrator's next decision. |
 | **Flight Agent** | Sub-agent given a single, specific user story and tasked with implementing it. | Branches off kahuna, implements the story in a worktree, commits, pushes, opens an MR targeting kahuna, self-approves `/scpmmr` because it is operating inside a Kahuna sandbox. |
 | **Team members (non-wave contributors)** | Engineers working in the same repos via conventional `feature/...`, `fix/...` branches directly to main. | Continue working normally. Their MRs go to main, do not interact with kahuna branches, do not see kahuna in their daily flow unless they happen to look at `git branch -a`. |
@@ -83,7 +100,7 @@ The critical invariant: **MRs into kahuna are relaxed; MRs from kahuna to main r
 - **Not a main-branch safety relaxation.** Main's existing protection, review requirements, and merge rules are unchanged. Everything this spec introduces happens below main or at the single gate-point of kahuna→main.
 - **Not a replacement for `/precheck` discipline.** `/precheck` still runs inside Flight sub-agents. What changes is the *post-checklist* approval step — it auto-approves within a Kahuna sandbox instead of STOP-and-wait. The checklist itself, the code-reviewer agent, the trivy scan, the validation run — all still happen.
 - **Not a mechanism to merge code without CI.** Every Flight MR to kahuna is gated by CI passing. The kahuna→main MR is gated by CI on kahuna passing. There is no path that merges code without CI.
-- **Not a cross-epic trunk.** Kahuna is per-epic, created fresh from main at epic start, destroyed after epic close. It is not a long-lived integration branch like `develop`. No state persists from one epic to the next on kahuna.
+- **Not a cross-Plan trunk.** Kahuna is per-Plan, created fresh from main at Plan start, destroyed after Plan close. It is not a long-lived integration branch like `develop`. No state persists from one Plan to the next on kahuna.
 - **Not a substitute for code review of individual changes.** The `feature-dev:code-reviewer` sub-agent still runs on each Flight's changes inside `/precheck`. In Tier 3, the code-reviewer-agent-clean signal is a required input to the trust score for the kahuna→main auto-merge. Code review does not disappear — it moves from gating to signaling.
 - **Not a GitLab-only or GitHub-only pattern.** The design is platform-neutral. MVP proof is GitLab (the 29 projects already widened), but the sdlc-server tool surface must work equivalently on both. Platform-specific settings automation lives outside the core spec.
 
@@ -97,7 +114,7 @@ The critical invariant: **MRs into kahuna are relaxed; MRs from kahuna to main r
 |----|-----------|-----------|
 | **CT-01** | Main branch safety properties are inviolable. Existing branch protection, required-reviews rules, merge-queue configuration, and push restrictions on main must persist unchanged. KAHUNA may only relax rules on `kahuna/*` branches, never on main. | Main is the shipped, production-visible state. Teams outside the wave-pattern workflow depend on its current safety guarantees. The whole point of the integration-branch pattern is to move autonomy below main, not to weaken main itself. |
 | **CT-02** | Platform-neutral design. The sdlc-server tool surface (`wave_finalize`, modified `commutativity_verify`, existing `pr_create`/`pr_merge`) must work identically against GitHub and GitLab. Platform-specific differences live in settings automation, not in the core spec. | The wave-pattern kit is already dual-platform. Introducing tool-level platform drift would bifurcate the whole pipeline and destroy the "one spec, two ecosystems" property that makes it maintainable. |
-| **CT-03** | No regressions to Wavemachine v2 infrastructure. The filesystem bus (`/tmp/wavemachine/`), the Orchestrator/Prime/Flight protocol, the canonical `PASS`/`FAIL` status-line contract, and `wave_health_check` circuit-breakers must continue to function unchanged when KAHUNA is not in use, and must interoperate with KAHUNA cleanly when it is. | Wavemachine v2 (epic #384) shipped 2026-04-23 and is in use today. Regressing it to ship KAHUNA would leave the kit worse off on the way to a theoretically better end state. |
+| **CT-03** | No regressions to Wavemachine v2 infrastructure. The filesystem bus (`/tmp/wavemachine/`), the Orchestrator/Prime/Flight protocol, the canonical `PASS`/`FAIL` status-line contract, and `wave_health_check` circuit-breakers must continue to function unchanged when KAHUNA is not in use, and must interoperate with KAHUNA cleanly when it is. | Wavemachine v2 (Plan #384, tracked under the legacy `type::epic` label pre-taxonomy) shipped 2026-04-23 and is in use today. Regressing it to ship KAHUNA would leave the kit worse off on the way to a theoretically better end state. |
 | **CT-04** | Existing sdlc-server tool surface must be preserved where it already suffices. `pr_create` and `pr_merge` have the behavior KAHUNA needs — do not modify them. New capability goes in new tools (`wave_finalize`) or narrow schema extensions (`commutativity_verify` min-changeset relaxation). | Per tachikoma's §1 review: touching working tools introduces risk without benefit. The principle is additive, not transformative. Consumer skills that already call these tools in Tier-1 contexts must see no behavioral change. |
 | **CT-05** | Kahuna branch lifecycle must be fault-tolerant. A crash, network failure, or agent exit during wave execution must not leave the target project in a state that blocks the next wave run. Specifically: orphaned kahuna branches from a failed wave must be identifiable and cleanable without corrupting state. | BJ runs `/wavemachine` overnight. If a wave crashes at 3 AM and leaves `kahuna/42-foo` half-populated with no cleanup path, the next morning's work is blocked. The persist-on-abort decision (§1.5) makes this constraint concrete: "persist" is only safe if there's a defined way to resume or abandon. |
 | **CT-06** | Every Flight MR into kahuna must be gated by CI passing before auto-merge. The sandbox property does not mean "skip CI" — it means "don't require humans." | This is the guardrail that prevents the sandbox from becoming a dumping ground. CI is non-negotiable. Any path that merges to kahuna without CI is a bug. |
@@ -109,9 +126,9 @@ The critical invariant: **MRs into kahuna are relaxed; MRs from kahuna to main r
 |----|-----------|-----------|
 | **CP-01** | Invisible to non-wave contributors. Engineers using conventional `feature/`, `fix/`, `chore/`, `doc/` branches against main must see no change to their workflow. They should not need to understand kahuna to continue working normally. | The kit is used by humans and agents side-by-side. A pattern that forces every teammate to learn new rules just to keep pushing their regular code would be rejected on social grounds regardless of technical merit. |
 | **CP-02** | Per-project settings configuration required for KAHUNA to function must be deployable via `gl-settings` (GitLab) or equivalent automation. No manual per-repo configuration. | 29 GitLab projects today; target set grows as more teams adopt. Manual settings clicks across dozens of repos is how initiatives get abandoned. If it can't be automated, it can't ship at the scale needed. |
-| **CP-03** | Only one active `/wavemachine` run per epic at a time. A second run cannot start against the same epic while a prior run's kahuna branch is unresolved (not merged, not abandoned). | Two concurrent wavemachine runs racing on the same kahuna branch would produce corrupted state, lost commits, and untrackable merges. This is a "don't hold it wrong" constraint — the skill must detect and refuse the collision. |
+| **CP-03** | Only one active `/wavemachine` run per Plan at a time. A second run cannot start against the same Plan while a prior run's kahuna branch is unresolved (not merged, not abandoned). | Two concurrent wavemachine runs racing on the same kahuna branch would produce corrupted state, lost commits, and untrackable merges. This is a "don't hold it wrong" constraint — the skill must detect and refuse the collision. |
 | **CP-04** | The Kahuna sandbox property must be enforceable by the platform — not by convention. If a target platform cannot enforce "auto-merge MRs into `kahuna/*` without review," KAHUNA does not work on that platform. | The whole trust model depends on the platform-level guarantee that kahuna is sandboxed. If that's just "please don't review kahuna MRs too hard," someone will eventually review one and block it, and the autonomous wave run stalls indefinitely. Convention is not enforcement. |
-| **CP-05** | Kahuna branches are short-lived (hours to days, not weeks). Projects with long-running epics must break them into phased sub-epics rather than maintaining a kahuna branch for extended periods. | Long-lived integration branches accumulate merge conflicts against main, create stale-CI problems, and blur the "atomic epic delivery" property. Capping kahuna lifetime is a product-level forcing function to keep epics well-scoped. Enforced by convention + `wave_health_check` staleness warning, not hard-blocked. |
+| **CP-05** | Kahuna branches are short-lived (hours to days, not weeks). Projects with long-running Plans must break them into Phases (or split into successor Plans) rather than maintaining a kahuna branch for extended periods. | Long-lived integration branches accumulate merge conflicts against main, create stale-CI problems, and blur the "atomic Plan delivery" property. Capping kahuna lifetime is a product-level forcing function to keep Plans well-scoped. Enforced by convention + `wave_health_check` staleness warning, not hard-blocked. |
 
 ---
 
@@ -129,10 +146,10 @@ Requirements follow the **EARS** notation:
 
 | ID | Type | Requirement |
 |----|------|-------------|
-| **R-01** | Event-driven | When `/wavemachine` is invoked on an approved epic that has no existing active kahuna branch recorded in wave state, the system shall create a branch named `kahuna/<epic-id>-<slug>` off the current main head and record it in wave state. |
-| **R-02** | Event-driven | When `/wavemachine` is invoked on an approved epic that already has an active kahuna branch recorded in wave state, the system shall reuse the existing branch and resume wave execution against it. |
+| **R-01** | Event-driven | When `/wavemachine` is invoked on an approved Plan that has no existing active kahuna branch recorded in wave state, the system shall create a branch named `kahuna/<plan-id>-<slug>` off the current main head and record it in wave state. |
+| **R-02** | Event-driven | When `/wavemachine` is invoked on an approved Plan that already has an active kahuna branch recorded in wave state, the system shall reuse the existing branch and resume wave execution against it. |
 | **R-03** | Event-driven | When `wave_finalize` successfully auto-merges the kahuna→main MR, the system shall delete the kahuna branch from the target platform. |
-| **R-04** | Unwanted | If `/wavemachine` aborts mid-epic due to crash, interrupt, signal failure, or trust-signal rejection, then the system shall preserve the kahuna branch in its current state and transition the existing wave-state action label (used for stages like `planning`, `flight`) to reflect the abort. |
+| **R-04** | Unwanted | If `/wavemachine` aborts mid-Plan due to crash, interrupt, signal failure, or trust-signal rejection, then the system shall preserve the kahuna branch in its current state and transition the existing wave-state action label (used for stages like `planning`, `flight`) to reflect the abort. |
 
 ### 3.2 Flight Integration
 
@@ -148,13 +165,13 @@ Requirements follow the **EARS** notation:
 |----|------|-------------|
 | **R-08** | State-driven | While a `kahuna/*` branch exists on a project with KAHUNA configuration applied, the platform shall allow merge requests targeting that branch to auto-merge on CI-green with zero human approval required. |
 | **R-09** | Ubiquitous | Merge requests targeting main from a `kahuna/*` source branch shall be gated by the trust-score requirements defined in §3.4. |
-| **R-10** | Ubiquitous | The branch-naming rules on the target platform shall accept `kahuna/<epic-id>-<slug>` patterns alongside existing accepted prefixes. |
+| **R-10** | Ubiquitous | The branch-naming rules on the target platform shall accept `kahuna/<plan-id>-<slug>` patterns alongside existing accepted prefixes. |
 
 ### 3.4 Trust-Score Gate
 
 | ID | Type | Requirement |
 |----|------|-------------|
-| **R-11** | Event-driven | When the final flight of an epic successfully merges to kahuna and all Definition-of-Done checks defined in §7 pass, the system shall invoke `wave_finalize` to open a kahuna→main MR with an auto-assembled body summarizing all flights. |
+| **R-11** | Event-driven | When the final flight of a Plan successfully merges to kahuna and all Definition-of-Done checks defined in §7 pass, the system shall invoke `wave_finalize` to open a kahuna→main MR with an auto-assembled body summarizing all flights. |
 | **R-12** | Ubiquitous | Before the kahuna→main MR auto-merges, `commutativity_verify` shall report a verdict of STRONG or MEDIUM on the composed kahuna-vs-main diff. |
 | **R-13** | Ubiquitous | Before the kahuna→main MR auto-merges, CI on the tip of the kahuna branch shall report success. |
 | **R-14** | Ubiquitous | Before the kahuna→main MR auto-merges, the `feature-dev:code-reviewer` agent shall report zero critical or important findings on the composed diff. |
@@ -166,15 +183,15 @@ Requirements follow the **EARS** notation:
 
 | ID | Type | Requirement |
 |----|------|-------------|
-| **R-17** | Ubiquitous | Wave state (`.claude/status/state.json` in the target project) shall include a `kahuna_branch` field when an epic is executing under KAHUNA, and a `kahuna_branches` history recording all kahuna branches created for past epics with their disposition (merged, aborted, abandoned). |
+| **R-17** | Ubiquitous | Wave state (`.claude/status/state.json` in the target project) shall include a `kahuna_branch` field when a Plan is executing under KAHUNA, and a `kahuna_branches` history recording all kahuna branches created for past Plans with their disposition (merged, aborted, abandoned). |
 | **R-18** | State-driven | While a wave is executing under KAHUNA, `wave-status show` shall display the active kahuna branch name, count of merged flights, count of pending flights, and the current trust-signal summary for the eventual kahuna→main gate. |
-| **R-19** | Event-driven | When the kahuna→main merge auto-completes, the system shall emit a Discord notification to the `#wave-status` channel and a vox announcement summarizing the epic, merged flight count, and final merge commit SHA. |
+| **R-19** | Event-driven | When the kahuna→main merge auto-completes, the system shall emit a Discord notification to the `#wave-status` channel and a vox announcement summarizing the Plan, merged flight count, and final merge commit SHA. |
 
 ### 3.6 Safety and Concurrency
 
 | ID | Type | Requirement |
 |----|------|-------------|
-| **R-20** | Unwanted | If `/wavemachine` is invoked on an epic that already has an active unresolved kahuna branch, then the system shall refuse to start and report the prior run's state. |
+| **R-20** | Unwanted | If `/wavemachine` is invoked on a Plan that already has an active unresolved kahuna branch, then the system shall refuse to start and report the prior run's state. |
 | **R-21** | Event-driven | When a Flight Agent encounters a non-fast-forward situation while pushing its branch (kahuna advanced since flight creation), the system shall attempt `git pull --rebase origin <kahuna-branch>` automatically. On clean rebase, proceed. On rebase conflict, return `FAIL` to Prime with the conflict detail. |
 | **R-22** | State-driven | While a kahuna branch has been active longer than the configured TTL threshold (default: 48 hours), `wave_health_check` shall report a staleness warning in its output but shall NOT block further wave execution. |
 
@@ -187,7 +204,7 @@ Requirements follow the **EARS** notation:
 ```
                          ┌─────────────────────────────────────┐
                          │   BJ (wave-driver, human)           │
-                         │   invokes /wavemachine on epic #N   │
+                         │   invokes /wavemachine on Plan #N   │
                          └──────────────────┬──────────────────┘
                                             │
                                             ▼
@@ -207,18 +224,18 @@ Requirements follow the **EARS** notation:
                 ┌──────────────────────────┐  │
                 │ Flight Agent (per story) │──┘
                 │ feature/<N>-xyz branch   │
-                │ base = kahuna/<epic>-xyz │
+                │ base = kahuna/<plan>-xyz │
                 └──────────────────────────┘
                                │ opens MR → auto-merge
                                ▼
     ┌────────────────────────────────────────────────────────────┐
-    │   kahuna/<epic>-xyz integration branch                     │
-    │   — accumulates all flight commits for the epic            │
+    │   kahuna/<plan>-xyz integration branch                     │
+    │   — accumulates all flight commits for the Plan            │
     │   — MRs in: no review required, CI-gated                   │
     │   — MRs out: trust-score-gated (§3.4)                      │
     └──────────────────────┬─────────────────────────────────────┘
                            │ wave_finalize opens final MR
-                           │ when epic complete + DoD passes
+                           │ when Plan complete + DoD passes
                            ▼
     ┌────────────────────────────────────────────────────────────┐
     │   main (production-visible, normal protections)            │
@@ -239,19 +256,19 @@ Requirements follow the **EARS** notation:
       • wave-status CLI (state, dashboard)
 ```
 
-### 4.2 Happy-Path Flow: Overnight Autonomous Epic
+### 4.2 Happy-Path Flow: Overnight Autonomous Plan
 
-Narrative: BJ approves a Dev Spec, runs `/devspec upshift` to populate the backlog with an epic and its wave-pattern stories, invokes `/wavemachine` before bed, returns the next morning to find the epic merged.
+Narrative: BJ approves a Dev Spec, runs `/devspec upshift` to populate the backlog with a Plan and its wave-pattern Stories, invokes `/wavemachine` before bed, returns the next morning to find the Plan merged.
 
-1. **Epic start.** BJ runs `/wavemachine` naming an approved epic. The Orchestrator reads wave state, sees no existing `kahuna_branch` field, calls `wave_init` with the epic ID.
-2. **Kahuna created.** `wave_init` creates `kahuna/<epic-id>-<slug>` off the current main head, writes the branch name into `kahuna_branch` in wave state, and returns success. Wave state `action` = `planning`.
+1. **Plan start.** BJ runs `/wavemachine` naming an approved Plan. The Orchestrator reads wave state, sees no existing `kahuna_branch` field, calls `wave_init` with the Plan ID.
+2. **Kahuna created.** `wave_init` creates `kahuna/<plan-id>-<slug>` off the current main head, writes the branch name into `kahuna_branch` in wave state, and returns success. Wave state `action` = `planning`.
 3. **Wave 1 begins.** Orchestrator spawns Prime for Wave 1. Prime reads the wave's stories from `phases-waves.json`, partitions them into parallel-safe flights via `flight_partition`, writes `flights.json`, and spawns one Flight Agent per flight via the `Agent` tool.
 4. **Flight execution.** Each Flight Agent:
-   - Creates a worktree, branches off `kahuna/<epic-id>-<slug>` (per R-05)
+   - Creates a worktree, branches off `kahuna/<plan-id>-<slug>` (per R-05)
    - Implements the story
    - Runs `/precheck` — the checklist runs fully (validation, code-reviewer, trivy, notifications)
    - Because the base ref is `kahuna/*`, `/precheck` recognizes the sandbox context (per R-07) and auto-approves its own `/scpmmr` without STOP-and-wait
-   - `pr_create` opens an MR with `base = kahuna/<epic-id>-<slug>`
+   - `pr_create` opens an MR with `base = kahuna/<plan-id>-<slug>`
    - The platform auto-merges on CI-green (per R-08, enforced by KAHUNA settings applied via gl-settings)
    - Flight writes its `results.md` to the wavebus and returns `PASS` to Prime
 5. **Wave reconciliation.** Prime reads all flight results, confirms all `PASS`, reports to Orchestrator. If any `FAIL`, Orchestrator invokes the failure path (§4.4).
@@ -264,7 +281,7 @@ Narrative: BJ approves a Dev Spec, runs `/devspec upshift` to populate the backl
    - `trivy fs` on the kahuna branch → zero HIGH/CRITICAL expected
 9. **Auto-merge.** All four green → Orchestrator invokes `pr_merge(kahuna-main-mr-number)` with `skip_train=true` (trust-cleared, bypass merge queue). The merge lands on main as a single squash commit.
 10. **Cleanup.** `wave_finalize` deletes the kahuna branch (per R-03), updates wave state to record the disposition in `kahuna_branches` history, emits Discord notification to `#wave-status` + vox announcement (per R-19).
-11. **BJ wakes up.** Status panel shows epic complete, kahuna branch gone, main contains the new commit. The notification thread on Discord has the summary.
+11. **BJ wakes up.** Status panel shows Plan complete, kahuna branch gone, main contains the new commit. The notification thread on Discord has the summary.
 
 ### 4.3 Team-Member Coexistence
 
@@ -273,7 +290,7 @@ A non-wave contributor pushing to main while `/wavemachine` runs overnight is a 
 - The non-wave contributor's MR lands on main as usual — normal review, normal merge queue, normal protections. KAHUNA settings on `kahuna/*` branches do not affect the main-target workflow.
 - When the next Flight Agent creates its branch off the (now-stale) kahuna HEAD, the Flight's branch is automatically based on kahuna — not on main. The Flight's work is isolated from the main drift.
 - When the Flight's MR merges into kahuna and the next Prime starts the next wave, the new Flight branches off a kahuna that is *still stale relative to main* — this is fine, because the final kahuna→main gate will catch any conflicts at `commutativity_verify` (which computes the composed diff against current main HEAD, not a snapshot).
-- If main has drifted so far that commutativity returns WEAK/ORACLE_REQUIRED, the epic pauses at the gate (per R-16), and BJ handles the reconciliation — either merging main into kahuna and re-running the gate, or rejecting the drift.
+- If main has drifted so far that commutativity returns WEAK/ORACLE_REQUIRED, the Plan pauses at the gate (per R-16), and BJ handles the reconciliation — either merging main into kahuna and re-running the gate, or rejecting the drift.
 
 **Key property:** team members do not experience any workflow change. They don't see kahuna in their MR-create dropdowns (their UI defaults to main as base), they don't need to know KAHUNA exists, they don't need new permissions or configuration.
 
@@ -287,8 +304,8 @@ A non-wave contributor pushing to main while `/wavemachine` runs overnight is a 
 | Flight rebase conflict when kahuna advanced | **Procedure B** — rebase conflict | Resolve conflict manually, push, re-run wave |
 | Trust signal red at kahuna→main gate (any of: commutativity WEAK/ORACLE_REQUIRED, CI red, code-reviewer critical/important, trivy HIGH/CRITICAL) | **Procedure C** — gate signal failure | Fix underlying issue, re-gate (or merge manually after review) |
 | Team member's unrelated main merge breaks kahuna composition | Manifests as commutativity WEAK/ORACLE_REQUIRED → **Procedure C** | Merge main into kahuna + re-gate, or accept drift and proceed |
-| Orchestrator session crashes mid-epic | **Procedure D** — crash recovery | Run `/wavemachine` again; wave state + kahuna branch persist, R-02 reuse path picks up |
-| Epic fundamentally wrong, BJ wants to drop it | No automated support in MVP | `git push origin --delete kahuna/<epic>-<slug>`, clear `kahuna_branch` from wave state |
+| Orchestrator session crashes mid-Plan | **Procedure D** — crash recovery | Run `/wavemachine` again; wave state + kahuna branch persist, R-02 reuse path picks up |
+| Plan fundamentally wrong, BJ wants to drop it | No automated support in MVP | `git push origin --delete kahuna/<plan>-<slug>`, clear `kahuna_branch` from wave state |
 
 #### 4.4.2 Procedure A — Flight Validation Failure
 
@@ -330,19 +347,19 @@ A non-wave contributor pushing to main while `/wavemachine` runs overnight is a 
 1. Orchestrator collects all four signal results even if one fails early (do not short-circuit; capturing all four gives the operator complete status)
 2. Orchestrator transitions wave state `action` → `gate_blocked`, records which signals failed and their detail payloads
 3. Orchestrator emits `disc_send` to `#wave-status` with:
-   - Epic name
+   - Plan name
    - Each failing signal's name + short detail
    - Kahuna branch name
    - The existing open kahuna→main MR URL
-4. Orchestrator emits vox announcement: "Kahuna gate blocked for epic X. N signals red. Ready for your review."
+4. Orchestrator emits vox announcement: "Kahuna gate blocked for Plan X. N signals red. Ready for your review."
 5. Orchestrator exits wavemachine loop; kahuna branch preserved; the kahuna→main MR stays open (un-merged)
 
 **Human recovery:** BJ reviews the failing signals. Three paths:
-- Fix the underlying issue (update dep for trivy, fix code for reviewer findings, merge main into kahuna for commutativity drift) and re-run the gate by re-invoking `/wavemachine` at the epic level — R-02 reuse detects the unresolved state and resumes at the gate
+- Fix the underlying issue (update dep for trivy, fix code for reviewer findings, merge main into kahuna for commutativity drift) and re-run the gate by re-invoking `/wavemachine` at the Plan level — R-02 reuse detects the unresolved state and resumes at the gate
 - Accept the signal as a false positive / reviewed-and-overridden and merge the kahuna→main MR manually
-- Abandon the epic per the manual scenario
+- Abandon the Plan per the manual scenario
 
-#### 4.4.5 Procedure D — Orchestrator Crash Mid-Epic
+#### 4.4.5 Procedure D — Orchestrator Crash Mid-Plan
 
 **Detection:** Orchestrator process exits abnormally (crash, OOM, signal, user Ctrl-C). The sub-shell invoking `/wavemachine` terminates.
 
@@ -352,7 +369,7 @@ A non-wave contributor pushing to main while `/wavemachine` runs overnight is a 
 - Wavebus `/tmp/wavemachine/<slug>/` — all flight artifacts intact
 - Any in-flight MRs on kahuna — remain open (platform doesn't know about the crash)
 
-**Human recovery:** BJ runs `/wavemachine` on the same epic.
+**Human recovery:** BJ runs `/wavemachine` on the same Plan.
 - R-02 fires: existing `kahuna_branch` field in wave state is detected, existing branch is reused
 - Orchestrator inspects wave state's last recorded `action` label to determine resume point
 - If the last action was `planning`, Orchestrator restarts the current wave's Prime
@@ -360,7 +377,7 @@ A non-wave contributor pushing to main while `/wavemachine` runs overnight is a 
 - If the last action was `gate_evaluating`, Orchestrator re-runs the gate (Procedure C)
 - Any flight MRs that were left in an intermediate state (PR open but not merged because the Orchestrator died mid-merge) are re-attempted by querying `pr_status` and resuming `pr_merge` if still mergeable
 
-**Important:** The crash-recovery logic must be idempotent. Calling `pr_merge` on an already-merged PR is handled by the tool itself (returns success if already merged). Calling `wave_finalize` on an epic whose kahuna→main MR already exists is handled by detecting that MR in `pr_list` before creating a new one.
+**Important:** The crash-recovery logic must be idempotent. Calling `pr_merge` on an already-merged PR is handled by the tool itself (returns success if already merged). Calling `wave_finalize` on a Plan whose kahuna→main MR already exists is handled by detecting that MR in `pr_list` before creating a new one.
 
 ### 4.5 Integration with Existing Wave-Pattern Infrastructure
 
@@ -383,14 +400,14 @@ The sdlc-server changes are additive. Three new/modified tool surfaces plus one 
 
 #### 5.1.1 `wave_finalize` — new tool
 
-Opens the kahuna→main MR when an epic's final wave completes. Idempotent: if the MR already exists for the given epic, returns its details rather than creating a duplicate.
+Opens the kahuna→main MR when a Plan's final wave completes. Idempotent: if the MR already exists for the given Plan, returns its details rather than creating a duplicate.
 
 **Signature:**
 
 ```typescript
 wave_finalize({
   root?: string,            // project path; defaults to CLAUDE_PROJECT_DIR
-  epic_id: number,          // epic issue number
+  plan_id: number,          // Plan issue number (the `type::plan` tracking issue)
   kahuna_branch: string,    // e.g., "kahuna/42-wave-status-cli"
   target_branch?: string,   // defaults to "main"
   body_artifacts_dir?: string  // wavebus artifacts dir for body assembly;
@@ -410,7 +427,7 @@ wave_finalize({
 **Behavior:**
 1. Check `pr_list({head: kahuna_branch, base: target_branch})` for an existing open MR. If present, return its details with `created: false`.
 2. Assemble the MR body by walking `body_artifacts_dir` / `wave-*/flight-*/results.md` and extracting: flight ID, issue closed, brief summary, link to the flight's original kahuna-target MR.
-3. Call `pr_create({title: "epic(#<epic_id>): <slug> — kahuna to main", body: <assembled>, base: target_branch, head: kahuna_branch})`.
+3. Call `pr_create({title: "plan(#<plan_id>): <slug> — kahuna to main", body: <assembled>, base: target_branch, head: kahuna_branch})`.
 4. Return the created MR with `created: true`.
 
 **Error semantics:**
@@ -472,7 +489,7 @@ wave_init({
   plan: <existing plan JSON shape>,
   extend?: boolean,
   kahuna?: {                                  // NEW optional object
-    epic_id: number,
+    plan_id: number,                          // Plan issue number (type::plan tracker)
     slug: string                              // "42-wave-status-cli" style
   }
 }) → {
@@ -485,8 +502,8 @@ wave_init({
 **Behavior when `kahuna` is passed:**
 1. Resolve target platform via `detectPlatformForRef`
 2. Get current main head SHA via `gh/glab api`
-3. Create branch `kahuna/<epic_id>-<slug>` at that SHA via platform API
-4. Update wave state to include `kahuna_branch: "kahuna/<epic_id>-<slug>"`
+3. Create branch `kahuna/<plan_id>-<slug>` at that SHA via platform API
+4. Update wave state to include `kahuna_branch: "kahuna/<plan_id>-<slug>"`
 5. Return the branch name in the response
 
 **Idempotency:** if the branch already exists on the platform AND is already recorded in wave state, return success with the existing name. If it exists on the platform but not in state, refuse (possible orphan from a prior run — human triage).
@@ -500,16 +517,16 @@ Wave state (`.claude/status/state.json`) gains two top-level fields. Both are op
   "kahuna_branch": "kahuna/42-wave-status-cli",
   "kahuna_branches": [
     {
-      "branch": "kahuna/41-prior-epic",
-      "epic_id": 41,
+      "branch": "kahuna/41-prior-plan",
+      "plan_id": 41,
       "created_at": "2026-04-23T10:00:00Z",
       "resolved_at": "2026-04-24T02:15:00Z",
       "disposition": "merged",
       "main_merge_sha": "abc123..."
     },
     {
-      "branch": "kahuna/40-aborted-epic",
-      "epic_id": 40,
+      "branch": "kahuna/40-aborted-plan",
+      "plan_id": 40,
       "created_at": "2026-04-22T08:00:00Z",
       "resolved_at": "2026-04-22T09:30:00Z",
       "disposition": "aborted",
@@ -551,15 +568,15 @@ else:
 
 The top-level loop gains three new step groups.
 
-**New step group — pre-wave kahuna bootstrap (runs once per epic, on first invocation):**
+**New step group — pre-wave kahuna bootstrap (runs once per Plan, on first invocation):**
 1. Read wave state; if `kahuna_branch` is absent, proceed to creation. If present, skip (resume path).
-2. Invoke `wave_init` with the `kahuna: { epic_id, slug }` argument to create and record the branch.
-3. Emit `#wave-status` notification: epic started, kahuna branch created.
+2. Invoke `wave_init` with the `kahuna: { plan_id, slug }` argument to create and record the branch.
+3. Emit `#wave-status` notification: Plan started, kahuna branch created.
 
 **Existing step group — per-wave execution (unchanged behavior, new sandbox-aware Flights):**
 - Prime spawned; Flights branch off kahuna, not main. Prime coordinates via existing wavebus protocol.
 
-**New step group — trust-score gate and auto-merge (runs once at epic completion, after final wave):**
+**New step group — trust-score gate and auto-merge (runs once at Plan completion, after final wave):**
 1. DoD checks per §7.
 2. Invoke `wave_finalize` to open the kahuna→main MR.
 3. Transition wave state `action` → `gate_evaluating`.
@@ -634,7 +651,8 @@ Each project that opts into KAHUNA publishes a small configuration artifact, eit
 kahuna:
   enabled: true
   ttl_hours: 48           # overridable default from R-22
-  epic_label: "type::epic" # how epics are identified
+  plan_label: "type::plan" # how Plans are identified (new taxonomy; legacy `type::epic`
+                           # is ignored — PM-layer parent tracker, not pipeline-operational)
   wave_label: "type::chore" # how wave masters are identified (existing convention)
 ```
 
@@ -647,8 +665,8 @@ The Dev Spec is canonical in claudecode-workflow. Section 5's sdlc-server contra
 **Freeze discipline:** After approval, §5.1 (sdlc-server tool contracts) is locked. Any mid-flight change requires a spec amendment PR in claudecode-workflow and a corresponding update notice in the Big Kahuna thread. Neither side modifies their working assumption without both steps.
 
 **Parallel-execution plan:**
-- BJ drives claudecode-workflow work via `/wavemachine` on an epic filed in that repo's issue tracker
-- Tachikoma drives mcp-server-sdlc work on a parallel epic in that repo's tracker
+- BJ drives claudecode-workflow work via `/wavemachine` on a Plan filed in that repo's issue tracker
+- Tachikoma drives mcp-server-sdlc work on a parallel Plan in that repo's tracker
 - Integration tests live in claudecode-workflow, exercising the full chain against the proving-ground project
 
 ### 5.A Deliverables Manifest
@@ -713,8 +731,8 @@ TBD. Proving-ground repo selection deferred. Integration tests and manual verifi
 Testing operates at three levels:
 
 - **Unit tests** — cover tool implementations inside each MCP server (especially the sdlc-server changes: `wave_finalize`, `commutativity_verify` single-target mode, `wave_init` kahuna extension). Tests run via `bun test` in mcp-server-sdlc's standard CI.
-- **Integration tests** — exercise the full KAHUNA flow end-to-end against the proving-ground project. These live in claudecode-workflow, run manually (or via a scheduled CI job) because they require live GitLab API access and the proving-ground project's test epic.
-- **Manual verification procedures** — a checklist executed personally by BJ the first few times KAHUNA processes a real epic. Catches the things automated tests can't — like whether the notification lands in the right channel, whether the status panel renders the new fields, whether the overnight run actually completes autonomously.
+- **Integration tests** — exercise the full KAHUNA flow end-to-end against the proving-ground project. These live in claudecode-workflow, run manually (or via a scheduled CI job) because they require live GitLab API access and the proving-ground project's test Plan.
+- **Manual verification procedures** — a checklist executed personally by BJ the first few times KAHUNA processes a real Plan. Catches the things automated tests can't — like whether the notification lands in the right channel, whether the status panel renders the new fields, whether the overnight run actually completes autonomously.
 
 The split is deliberate: unit tests verify correctness, integration tests verify wiring, manual verification verifies *fitness for purpose*.
 
@@ -722,35 +740,35 @@ The split is deliberate: unit tests verify correctness, integration tests verify
 
 | ID | Scenario | Verifies | Pass Criteria |
 |----|----------|----------|---------------|
-| **IT-01** | Single-flight, single-wave epic processes autonomously | R-01, R-05, R-06, R-07, R-08, R-11, R-12, R-13, R-14, R-15, R-17, R-19, R-23 | `/wavemachine` on a 1-story epic produces: kahuna branch created, flight MR merged to kahuna via auto-merge, kahuna→main MR auto-merged when all four trust signals green, kahuna branch deleted, Discord+vox notifications fired. Whole run completes without human input. |
-| **IT-02** | Multi-flight, multi-wave epic with parallel flights | R-05, R-06, R-07, R-08, R-17 | `/wavemachine` on a 3-wave epic with 2-flight parallel wave produces expected merge sequence into kahuna; flights observably execute in parallel (timestamp delta < 5s between their MR creations). |
-| **IT-03** | Trust-signal failure — commutativity WEAK | R-12, R-16, R-23, R-04 | Setup via `wave-fixture-gen --scenario conflicting-functions`: epic where kahuna contains conflicting changesets. Expected: `commutativity_verify` returns WEAK, gate blocks, `#wave-status` notification lists failing signal, kahuna branch preserved, `action == gate_blocked`. |
-| **IT-04** | Trust-signal failure — trivy finding | R-15, R-16, R-23 | Setup via `wave-fixture-gen --scenario trivy-dep-vuln`: epic that introduces a vulnerable dep. Expected: trivy signal red, gate blocks, notification names the CVE. |
-| **IT-05** | Trust-signal failure — code-reviewer critical | R-14, R-16, R-23 | Setup via `wave-fixture-gen --scenario critical-code-smell`: epic that includes an obvious critical issue. Expected: code-reviewer flags it, gate blocks, finding in notification. |
-| **IT-06** | Team-member drift at gate | R-16, R-23 | Setup: start `/wavemachine` on an epic, then (during the run) push an unrelated MR to main that touches overlapping files. Expected: commutativity_verify returns WEAK at gate, pause for BJ. |
-| **IT-07** | Orchestrator crash recovery | R-02, Procedure D | Setup: start `/wavemachine`, kill the session mid-epic. Expected: re-running `/wavemachine` on the same epic resumes from wave state's last recorded action, reuses the existing kahuna branch, no duplicate MRs created. |
+| **IT-01** | Single-flight, single-wave Plan processes autonomously | R-01, R-05, R-06, R-07, R-08, R-11, R-12, R-13, R-14, R-15, R-17, R-19, R-23 | `/wavemachine` on a 1-Story Plan produces: kahuna branch created, flight MR merged to kahuna via auto-merge, kahuna→main MR auto-merged when all four trust signals green, kahuna branch deleted, Discord+vox notifications fired. Whole run completes without human input. |
+| **IT-02** | Multi-flight, multi-wave Plan with parallel flights | R-05, R-06, R-07, R-08, R-17 | `/wavemachine` on a 3-wave Plan with 2-flight parallel wave produces expected merge sequence into kahuna; flights observably execute in parallel (timestamp delta < 5s between their MR creations). |
+| **IT-03** | Trust-signal failure — commutativity WEAK | R-12, R-16, R-23, R-04 | Setup via `wave-fixture-gen --scenario conflicting-functions`: Plan where kahuna contains conflicting changesets. Expected: `commutativity_verify` returns WEAK, gate blocks, `#wave-status` notification lists failing signal, kahuna branch preserved, `action == gate_blocked`. |
+| **IT-04** | Trust-signal failure — trivy finding | R-15, R-16, R-23 | Setup via `wave-fixture-gen --scenario trivy-dep-vuln`: Plan that introduces a vulnerable dep. Expected: trivy signal red, gate blocks, notification names the CVE. |
+| **IT-05** | Trust-signal failure — code-reviewer critical | R-14, R-16, R-23 | Setup via `wave-fixture-gen --scenario critical-code-smell`: Plan that includes an obvious critical issue. Expected: code-reviewer flags it, gate blocks, finding in notification. |
+| **IT-06** | Team-member drift at gate | R-16, R-23 | Setup: start `/wavemachine` on a Plan, then (during the run) push an unrelated MR to main that touches overlapping files. Expected: commutativity_verify returns WEAK at gate, pause for BJ. |
+| **IT-07** | Orchestrator crash recovery | R-02, Procedure D | Setup: start `/wavemachine`, kill the session mid-Plan. Expected: re-running `/wavemachine` on the same Plan resumes from wave state's last recorded action, reuses the existing kahuna branch, no duplicate MRs created. |
 | **IT-08** | Flight rebase-conflict handling | R-21, Procedure B | Setup via `wave-fixture-gen --scenario rebase-conflict-setup`: flight branches where flight N+1 touches the same lines as flight N after flight N merges to kahuna. Expected: flight N+1 attempts rebase, detects conflict, returns FAIL, kahuna preserved. |
 | **IT-09** | `/precheck` sandbox detection | R-07 | Setup: Flight agent on a `kahuna/*`-based feature branch. Expected: `/precheck` runs full checklist, then auto-approves `/scpmmr` without STOP. Same flight on a `main`-based branch: STOP-and-wait behavior preserved. |
-| **IT-10** | Concurrent wavemachine invocation refused | R-20 | Setup: run `/wavemachine` on an epic, then (in a second session) try to run `/wavemachine` on the same epic while the first run is still in-flight. Expected: second invocation refused with message naming the prior run's state. |
+| **IT-10** | Concurrent wavemachine invocation refused | R-20 | Setup: run `/wavemachine` on a Plan, then (in a second session) try to run `/wavemachine` on the same Plan while the first run is still in-flight. Expected: second invocation refused with message naming the prior run's state. |
 | **IT-11** | Non-wave teammate workflow unchanged | CP-01 | Setup: during an active `/wavemachine` run, an unrelated `feature/` branch MR opened to main. Expected: that MR behaves identically to pre-KAHUNA — normal review, normal merge queue, normal protections. |
 | **IT-12** | Settings-automation drift detection | R-10, CP-02 | Setup: run `gl-settings kahuna-sandbox --check <project-url>` on a project where the KAHUNA settings have been partially removed. Expected: check mode reports the specific drift items. |
-| **IT-13** | Vox announcement invoked correctly at epic completion | R-19 | During IT-01, the Orchestrator invokes `vox` as a subprocess exactly once. Verifiable via subprocess capture wrapper: expected message substring ("merged into main"), subprocess returns exit code 0, epic ID and merge SHA present in the message string. Does not assert audible playback. |
+| **IT-13** | Vox announcement invoked correctly at Plan completion | R-19 | During IT-01, the Orchestrator invokes `vox` as a subprocess exactly once. Verifiable via subprocess capture wrapper: expected message substring ("merged into main"), subprocess returns exit code 0, Plan ID and merge SHA present in the message string. Does not assert audible playback. |
 
 ### 6.3 End-to-End Tests
 
 | ID | Scenario | Fidelity |
 |----|----------|----------|
-| **E2E-01** | Full overnight run — realistic 5-story, 3-wave epic, zero human input between `/wavemachine` invocation and morning status check | No mocks, live GitLab API, real trust-signal evaluation including live `commutativity-probe` subprocess, real CI pipeline runs, real disc-server notifications, real vox announcement |
+| **E2E-01** | Full overnight run — realistic 5-Story, 3-wave Plan, zero human input between `/wavemachine` invocation and morning status check | No mocks, live GitLab API, real trust-signal evaluation including live `commutativity-probe` subprocess, real CI pipeline runs, real disc-server notifications, real vox announcement |
 | **E2E-02** | Multiple concurrent epics on two separate proving-ground projects | **POST-MVP** — deferred until a second proving-ground project is available. Not in scope for v1 delivery. |
 
 ### 6.4 Manual Verification Procedures
 
 | ID | Procedure | Expected Observation |
 |----|-----------|---------------------|
-| **MV-01** | Watch `#wave-status` channel during an IT-01 run | Notifications arrive in order: epic-started, (per flight) flight-merged-to-kahuna, gate-evaluating, epic-merged-to-main. No notifications to `#general` or project-default channel. |
+| **MV-01** | Watch `#wave-status` channel during an IT-01 run | Notifications arrive in order: plan-started, (per flight) flight-merged-to-kahuna, gate-evaluating, plan-merged-to-main. No notifications to `#general` or project-default channel. |
 | **MV-02** | Open the wave-status dashboard HTML during an IT-01 run (before gate) | Dashboard shows active `kahuna_branch`, accurate merged-flight count, accurate pending-flight count, action label transitions visible as waves progress |
 | **MV-03** | Observe `action` label transitions on status panel during IT-03 (gate failure) | Panel shows `gate_evaluating` → `gate_blocked` with failure reason field populated and rendering correctly |
-| **MV-05** | Verify kahuna branch cleanup via `git branch -a --remotes` on the proving-ground project after IT-01 completion | `kahuna/<epic-id>-*` branch no longer present on remote |
+| **MV-05** | Verify kahuna branch cleanup via `git branch -a --remotes` on the proving-ground project after IT-01 completion | `kahuna/<plan-id>-*` branch no longer present on remote |
 | **MV-06** | Verify non-wave workflow during IT-11 | While `/wavemachine` runs, a separate terminal opens a feature/fix MR to main following normal workflow — confirms the normal flow is unblocked and unchanged |
 | **MV-07** | Verify 48-hour staleness warning | With wave state's `kahuna_branch` created > 48 hours ago, run `wave_health_check`. Expected: warning printed, does not block further execution. |
 
@@ -786,7 +804,7 @@ All 22 requirements have at least one verification item.
 
 - Proving-ground GitLab project with KAHUNA settings applied (via `gl-settings kahuna-sandbox`)
 - Bot identity with write access + committer email matching `commit_committer_check` (if enabled)
-- Test epic pre-populated with sub-issues decomposed into waves
+- Test Plan pre-populated with Story issues decomposed into waves
 - Live `commutativity-probe` binary installed locally
 - Discord bot with write access to `#wave-status`
 - `trivy` installed locally
@@ -800,14 +818,14 @@ Test reset between runs: delete any lingering `kahuna/*` branches, reset wave st
 
 ### 7.1 Global DoD Checklist
 
-For the KAHUNA epic overall. All deliverables in the Deliverables Manifest (Section 5.A) must be produced or explicitly marked N/A; every Tier 1 row with a file path and every Tier 2 row triggered must ship.
+For the KAHUNA Plan overall. All deliverables in the Deliverables Manifest (Section 5.A) must be produced or explicitly marked N/A; every Tier 1 row with a file path and every Tier 2 row triggered must ship.
 
 - [ ] All requirements R-01 through R-23 have at least one passing verification item (test or AC). VRTM in §9 shows full trace.
 - [ ] All Deliverables Manifest (Section 5.A) rows delivered or marked N/A with rationale. Tier 1 rows (DM-01 through DM-09) opt-out-with-rationale honored. Tier 2 rows (DM-10 through DM-12) delivered since their triggers fired. Every row's "Produced In" wave assignment honored.
 - [ ] `mcp-server-sdlc` release published with the new `wave_finalize` tool, `commutativity_verify` schema extension, `wave_init` kahuna extension. Release binary available via standard install channel.
 - [ ] `claudecode-workflow` release with `/precheck` sandbox detection, `/wavemachine` gate evaluation, `/nextwave` kahuna base-ref plumbing, wave-status CLI updates. Deployed via `./install` with smart-merge intact.
 - [ ] `gl-settings` release with new `push-rule` operation and `kahuna-sandbox` composite operation.
-- [ ] Proving-ground project selected, KAHUNA settings applied, test epic pre-populated.
+- [ ] Proving-ground project selected, KAHUNA settings applied, test Plan pre-populated.
 - [ ] Synthetic wave-fixture generator (DM-10) functional for the four MVP scenarios.
 - [ ] Integration tests IT-01 through IT-13 all pass against the proving-ground. E2E-01 executes cleanly (E2E-02 deferred).
 - [ ] Manual verifications MV-01, MV-02, MV-03, MV-05, MV-06, MV-07 personally verified by BJ on at least one real overnight run.
@@ -873,7 +891,7 @@ Three phases, each containing 1–2 waves. Cross-repo: stories tagged with scope
 - **Story 3.3:** `/wavemachine` gate-evaluation step group. Parallel trust-signal invocation per R-23. Auto-merge via `pr_merge(skip_train=true)`. Notification via `#wave-status`. Test via IT-01.
 - **Story 3.4:** CLAUDE.md update — sandbox-exception note on mandatory rule. Update `/precheck`, `/scp*` skill prose.
 
-**AC for Wave 3:** IT-01 passes end-to-end on proving-ground. `/wavemachine` on a 1-story epic completes autonomously.
+**AC for Wave 3:** IT-01 passes end-to-end on proving-ground. `/wavemachine` on a 1-Story Plan completes autonomously.
 
 ### Phase 3: Verification + Documentation
 
@@ -964,8 +982,8 @@ Backward trace is derived by inverting §6.5 Requirement-to-Test Traceability. W
 
 ### Appendix D: Glossary
 
-- **KAHUNA** — the integration-branch pattern defined by this spec. Also: "Big Kahuna" — the single merge per epic onto main.
-- **kahuna branch** — `kahuna/<epic-id>-<slug>`, per-epic ephemeral integration branch.
+- **KAHUNA** — the integration-branch pattern defined by this spec. Also: "Big Kahuna" — the single merge per Plan onto main.
+- **kahuna branch** — `kahuna/<plan-id>-<slug>`, per-Plan ephemeral integration branch.
 - **Sandbox** — the relaxed-settings property of a kahuna branch (auto-merge on CI-green, no approvals required).
 - **Trust score** — the composite of four signals evaluated in parallel before kahuna→main auto-merge (R-12..R-15 + R-23).
 - **Orchestrator / Prime / Flight** — the three Wavemachine v2 agent roles per §1.4.
@@ -973,7 +991,7 @@ Backward trace is derived by inverting §6.5 Requirement-to-Test Traceability. W
 
 ### Appendix R: References
 
-- Wavemachine v2 Dev Spec / epic #384 (claudecode-workflow)
+- Wavemachine v2 Dev Spec / Plan #384 (claudecode-workflow) — historically filed as `type::epic` pre-taxonomy; the taxonomy rework (Plan `docs/phase-epic-taxonomy-devspec.md`) renames in-flight references to Plan.
 - commutativity_verify prior art: existing pairwise implementation in `mcp-server-sdlc/handlers/commutativity_verify.ts`
 - gl-settings operations module pattern: `gitlab-settings-automation/gl_settings/operations/__init__.py`
 - Discord-watcher filter convention: `docs/discord-watcher.md`
