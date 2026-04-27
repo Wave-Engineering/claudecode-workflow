@@ -7,7 +7,7 @@ description: Autopilot for wave-pattern execution. Runs a top-level loop that ca
 
 `/wavemachine` is the **Orchestrator-level autopilot** for a multi-wave plan. It runs in the top-level session (where `Agent` lives) as a simple loop: check health, pick the next pending wave, delegate that single wave to `/nextwave auto`, parse the result, repeat. The sophistication lives in the primitives — `/nextwave` does the real per-wave work, `wave_health_check()` decides whether to continue, the user controls when to interrupt.
 
-**Mental model (compiling natural language):** issue specs are source; planning/execution sub-agents are the compiler; MCP tools are the runtime; **wavemachine is `make all` for the wave-pattern compiler.** It exists so the human can hand off a vetted multi-wave plan and get back a merged epic — or a single clean blocker report when something breaks.
+**Mental model (compiling natural language):** issue specs are source; planning/execution sub-agents are the compiler; MCP tools are the runtime; **wavemachine is `make all` for the wave-pattern compiler.** It exists so the human can hand off a vetted multi-wave Plan and get back a merged Plan (kahuna→main) — or a single clean blocker report when something breaks.
 
 **Why the loop runs in the top-level session (v2 shape):** CC sub-agents do NOT have the `Agent` tool. v1 spawned the wave loop in a background Agent sub-agent, so every `/nextwave` call inside it collapsed to serial execution — the parallel Flight spawn that makes a wave fast was silently lost. v2 keeps the loop *here*, at the top level, where Agent lives and `/nextwave auto` can spawn its parallel Flights properly. There is no background worker. See `decision_wavemachine_v2.md` and `lesson_cc_subagent_tools.md`.
 
@@ -16,8 +16,8 @@ description: Autopilot for wave-pattern execution. Runs a top-level loop that ca
 - `mcp__sdlc-server__wave_health_check` — circuit breaker; called before every iteration
 - `mcp__sdlc-server__wave_next_pending` — identifies the next pending wave; loop exits when this returns null
 - `mcp__sdlc-server__wave_show` — pre-flight state inspection; also reads `kahuna_branch` for bootstrap and gate
-- `mcp__sdlc-server__wave_init` — pre-wave kahuna bootstrap (creates `kahuna/<epic_id>-<slug>` once per epic)
-- `mcp__sdlc-server__wave_finalize` — opens kahuna→main MR at epic completion
+- `mcp__sdlc-server__wave_init` — pre-wave kahuna bootstrap (creates `kahuna/<plan_id>-<slug>` once per Plan)
+- `mcp__sdlc-server__wave_finalize` — opens kahuna→main MR at Plan completion
 - `mcp__sdlc-server__commutativity_verify` — trust-score signal; runs concurrently with the other three (R-23)
 - `mcp__sdlc-server__ci_wait_run` — trust-score signal; waits for CI on the kahuna branch
 - `mcp__sdlc-server__pr_merge` — auto-merge kahuna→main on all-green gate, with `skip_train: true` (semantics differ by platform — see "Platform note: `skip_train` semantics" below)
@@ -30,13 +30,13 @@ description: Autopilot for wave-pattern execution. Runs a top-level loop that ca
 - The Skill tool — invokes `/nextwave auto` per iteration (the one place wave work is delegated)
 - `ScheduleWakeup` — OPTIONAL, fallback-only, used when a merge-queue idle is detected (not the primary execution model)
 
-**Not used in the loop body:** wave-internal `Agent` spawning is owned by `/nextwave` — the loop body itself never spawns sub-agents per iteration. The single exception is the gate's `feature-dev:code-reviewer` Agent at epic completion (one of four concurrent trust signals — see "Trust-Score Gate and Auto-Merge"). Background Agent invocation is NEVER used anywhere in this skill; the loop and the gate both run synchronously in the top-level session.
+**Not used in the loop body:** wave-internal `Agent` spawning is owned by `/nextwave` — the loop body itself never spawns sub-agents per iteration. The single exception is the gate's `feature-dev:code-reviewer` Agent at Plan completion (one of four concurrent trust signals — see "Trust-Score Gate and Auto-Merge"). Background Agent invocation is NEVER used anywhere in this skill; the loop and the gate both run synchronously in the top-level session.
 
 ## Pre-Flight Checks (refuse to start on failure)
 
 Before entering the loop:
 
-1. **Plan exists.** Call `wave_show()`. If it returns no state / empty state, refuse: "No wave plan exists. Run `/prepwaves <epic>` first."
+1. **Plan exists.** Call `wave_show()`. If it returns no state / empty state, refuse: "No wave plan exists. Run `/prepwaves <plan>` first."
 2. **No other wave active.** Inspect `wave_show()`'s output — if `action` is `in-flight`, `planning`, or any active state, refuse: "Wave <id> is already active (action: <X>). Let it finish or clear state before starting wavemachine."
 3. **Base branch clean.** `git status --porcelain` returns nothing on the configured base branch. Any untracked/modified files → refuse and list them.
 4. **Previous wave merged.** Call `wave_previous_merged()`. If the prior wave's work is not on main, refuse.
@@ -79,9 +79,9 @@ Once pre-flight passes:
 
    The first command writes a self-contained HTML snapshot of current wave state to `.status-panel.html` at the repo root. The second command opens it in the operator's default browser. Do not skip either half — the panel is the visual contract this skill maintains with the human, and a /wavemachine launch without an open panel is malformed. (See "Status Panel Lifecycle" below for what the panel does and does NOT do after launch.)
 3. **Detect CI trust** by calling `wave_ci_trust_level()` once. (The value is also cached by each `/nextwave auto` iteration; calling it here is informational — it shapes the start announcement.)
-4. **Pre-wave kahuna bootstrap** (see "Pre-Wave Kahuna Bootstrap" below). Runs exactly once per epic on first `/wavemachine` invocation. On resume invocations the wave state already carries `kahuna_branch` and this step is a no-op.
+4. **Pre-wave kahuna bootstrap** (see "Pre-Wave Kahuna Bootstrap" below). Runs exactly once per Plan on first `/wavemachine` invocation. On resume invocations the wave state already carries `kahuna_branch` and this step is a no-op.
 5. **Post to Discord.** `disc_send` to `#wave-status` (`1487386934094462986`): `"🌊 **Wavemachine started** — <project>, <N> waves pending. Agent: **<dev-name>** <dev-avatar>"`. Resolve identity from `/tmp/claude-agent-<md5>.json`. If `disc_send` fails, log and continue — Discord is informational, not a gate.
-6. **Emit observability event.** `scripts/mcp-log wavemachine_start epic=<epic_id> waves=<N> kahuna=<kahuna_branch>` — timestamps autopilot start in the fleet logfile so post-mortem can correlate with sdlc-server tool_call events.
+6. **Emit observability event.** `scripts/mcp-log wavemachine_start plan=<plan_id> waves=<N> kahuna=<kahuna_branch>` — timestamps autopilot start in the fleet logfile so post-mortem can correlate with sdlc-server tool_call events.
 
 ## Status Panel Lifecycle
 
@@ -100,20 +100,20 @@ In both cases the regeneration is **fire-and-forget** — we do NOT block the lo
 
 ## Pre-Wave Kahuna Bootstrap
 
-**When this runs:** once per epic, during the launch sequence (step 4 above), BEFORE the loop's first iteration. This is the kahuna sandbox setup step group from Dev Spec §5.2.2 ("New step group — pre-wave kahuna bootstrap").
+**When this runs:** once per Plan, during the launch sequence (step 4 above), BEFORE the loop's first iteration. This is the kahuna sandbox setup step group from Dev Spec §5.2.2 ("New step group — pre-wave kahuna bootstrap").
 
 **Procedure:**
 
 1. Read wave state via `wave_show()`. Inspect the `kahuna_branch` field.
 2. **If `kahuna_branch` is present and non-empty:** SKIP — this is the resume path (Procedure D, §4.4.5). The kahuna branch already exists on the platform and in wave state; do nothing and continue to step 5 of the launch sequence.
-3. **If `kahuna_branch` is absent or empty:** invoke `wave_init` with the `kahuna: { epic_id, slug }` argument, where:
-   - `epic_id` is the master/epic issue number for the current plan (read from wave state's plan metadata).
-   - `slug` is a human-readable kebab-case slug derived from the epic title (the same slug computation `wave_init` already documents).
-   `wave_init` creates `kahuna/<epic_id>-<slug>` off the current main head, writes the branch name into wave state's `kahuna_branch` field, and returns success. (See Dev Spec §5.1.3 for the tool contract.)
+3. **If `kahuna_branch` is absent or empty:** invoke `wave_init` with the `kahuna: { plan_id, slug }` argument, where:
+   - `plan_id` is the Plan tracking-issue number for the current plan (read from wave state's plan metadata — the `type::plan` issue, per the Plan/Phase/Epic taxonomy locked 2026-04-26).
+   - `slug` is a human-readable kebab-case slug derived from the Plan title (the same slug computation `wave_init` already documents).
+   `wave_init` creates `kahuna/<plan_id>-<slug>` off the current main head, writes the branch name into wave state's `kahuna_branch` field, and returns success. (See Dev Spec §5.1.3 for the tool contract.)
 4. **Emit the bootstrap notification.** `disc_send` to `#wave-status` (`1487386934094462986`):
-   `"🏝 **Kahuna sandbox created** — <project>, epic #<epic_id>, branch `<kahuna_branch>`. Agent: **<dev-name>** <dev-avatar>"`. If `disc_send` fails, log and continue — Discord is informational.
+   `"🏝 **Kahuna sandbox created** — <project>, Plan #<plan_id>, branch `<kahuna_branch>`. Agent: **<dev-name>** <dev-avatar>"`. If `disc_send` fails, log and continue — Discord is informational.
 
-**Idempotency.** This step is idempotent by design: the `kahuna_branch` field is the marker. A second `/wavemachine` invocation on the same epic will see the field populated in step 1 and skip creation. This is the foundation for Procedure D crash-recovery.
+**Idempotency.** This step is idempotent by design: the `kahuna_branch` field is the marker. A second `/wavemachine` invocation on the same Plan will see the field populated in step 1 and skip creation. This is the foundation for Procedure D crash-recovery.
 
 **Cross-reference.** Dev Spec §5.2.2 (gate behavior) and §5.1.3 (`wave_init` kahuna extension).
 
@@ -171,7 +171,7 @@ The loop exits cleanly when any of the following happens:
 
 ## Trust-Score Gate and Auto-Merge
 
-**When this runs:** exactly once per epic, at the loop's clean-completion path — after `wave_next_pending()` returns null and §7 Definition-of-Done checks pass. This replaces the v1 "On clean completion" simple announcement with the autonomous gate evaluation specified in Dev Spec §5.2.2 ("New step group — trust-score gate and auto-merge").
+**When this runs:** exactly once per Plan, at the loop's clean-completion path — after `wave_next_pending()` returns null (all waves across all Phases are merged) and §7 Definition-of-Done checks pass. This replaces the v1 "On clean completion" simple announcement with the autonomous gate evaluation specified in Dev Spec §5.2.2 ("New step group — trust-score gate and auto-merge").
 
 **Legacy short-circuit.** If wave state has no `kahuna_branch` (legacy non-KAHUNA execution), skip this entire step group and fall through to the "On Clean Completion" announcement below — there is no kahuna→main MR to gate. This preserves backward compatibility with non-KAHUNA plans.
 
@@ -198,17 +198,17 @@ The loop exits cleanly when any of the following happens:
 6. **All-green path** (every signal passes):
    - **Detect platform** before the merge call. Read `.claude-project.md`'s `Platform.Host` field (cached by `/ccfold`). On GitLab, additionally emit a one-line warning to `#wave-status` *before* invoking `pr_merge`: `"⚠️ **GitLab merge train detected** — <project>: \`skip_train: true\` is a no-op against GitLab merge trains; the kahuna→main MR will wait in the train regardless. Agent: **<dev-name>** <dev-avatar>"`. This sets operator expectations so "why is this taking so long?" doesn't surface as a surprise during the train wait. (See "Platform note: `skip_train` semantics" below for the full rationale.)
    - Invoke `pr_merge({number: <kahuna_mr_number>, skip_train: true, squash_message: <assembled body from step 2>})`. `skip_train: true` is passed unconditionally — its platform-specific interpretation is the adapter's responsibility (`mcp-server-sdlc`'s `pr_merge`), not this skill's. On GitHub the flag bypasses the merge queue (the kahuna MR has already been gated by the four signals, so bypassing the queue is the whole point of the autonomous gate). On GitLab the flag is silently dropped by the platform — the merge train is enforced as a project-level merge method and there is no client-side bypass; the four-signal gate still ran, but the train wait still applies.
-   - **Record disposition** in wave state's `kahuna_branches` history array: append `{branch: <kahuna_branch>, epic_id: <epic_id>, disposition: "merged", merged_at: <iso8601>, mr_number: <kahuna_mr_number>}`. (Schema per §5.1.)
+   - **Record disposition** in wave state's `kahuna_branches` history array: append `{branch: <kahuna_branch>, plan_id: <plan_id>, disposition: "merged", merged_at: <iso8601>, mr_number: <kahuna_mr_number>}`. (Schema per §5.1.)
    - **Delete the kahuna branch** from the platform (per R-03). On GitHub: `gh api -X DELETE repos/<owner>/<repo>/git/refs/heads/<kahuna_branch>` (or equivalent). On GitLab: `glab api -X DELETE projects/:id/repository/branches/<kahuna_branch_url_encoded>`.
-   - **Emit `#wave-status` notification** (R-19): `"✅ **Kahuna gate passed** — <project>, epic #<epic_id> auto-merged to main. <N> flights, <M> commits. Agent: **<dev-name>** <dev-avatar>"`.
-   - **Vox announcement** (conversational, brief): name, team, project, "kahuna gate passed, epic merged to main".
+   - **Emit `#wave-status` notification** (R-19): `"✅ **Kahuna gate passed** — <project>, Plan #<plan_id> auto-merged to main. <N> flights, <M> commits. Agent: **<dev-name>** <dev-avatar>"`.
+   - **Vox announcement** (conversational, brief): name, team, project, "kahuna gate passed, Plan merged to main".
    - Then fall through to the standard "On Clean Completion" announcement and `wave_status wavemachine-stop`.
 
 7. **Any-red path** (one or more signals fail):
    - Transition wave state `action` → `gate_blocked`, recording each failing signal's name + detail payload (so the dashboard's signal-failure detail block can render — §5.2.5).
    - **Preserve the kahuna branch** (per Procedure C). Do NOT delete it. Do NOT merge the kahuna→main MR. The MR stays open for human review.
-   - **Emit `#wave-status` notification** per Procedure C, §4.4.4: epic name, each failing signal's name + short detail, kahuna branch name, the open kahuna→main MR URL.
-   - **Vox announcement**: "Kahuna gate blocked for epic <epic_id>. <N> signals red. Ready for your review."
+   - **Emit `#wave-status` notification** per Procedure C, §4.4.4: Plan name, each failing signal's name + short detail, kahuna branch name, the open kahuna→main MR URL.
+   - **Vox announcement**: "Kahuna gate blocked for Plan <plan_id>. <N> signals red. Ready for your review."
    - Call `wave_waiting("kahuna gate blocked: <one-line summary>")` so the plan is explicitly marked paused.
    - `wave_status wavemachine-stop` and exit the loop.
 
@@ -234,7 +234,7 @@ The crash-recovery contract (per Dev Spec §4.4.5):
 
 The re-entry path is therefore: detect `gate_evaluating`, jump to step 4, run the gate to completion. Document this so the loop driver knows the gate is safe to retry.
 
-**Cross-reference.** Dev Spec §5.2.2 (gate behavior), §4.4.4 (Procedure C — gate signal failure), §4.4.5 (Procedure D — orchestrator crash mid-epic), §7 (Definition of Done), R-23 (concurrency requirement), R-19 (notification requirement), R-03 (kahuna branch deletion on success).
+**Cross-reference.** Dev Spec §5.2.2 (gate behavior), §4.4.4 (Procedure C — gate signal failure), §4.4.5 (Procedure D — orchestrator crash mid-Plan), §7 (Definition of Done), R-23 (concurrency requirement), R-19 (notification requirement), R-03 (kahuna branch deletion on success).
 
 ## Platform note: `skip_train` semantics
 
@@ -303,29 +303,29 @@ Before each terminal-event `disc_send` that includes `attach_path`, make sure th
 - In legacy non-KAHUNA mode (no `kahuna_branch` in wave state), the gate is skipped and this announcement runs directly when `wave_next_pending()` returns null.
 - Regenerate `.status-panel.html` synchronously before posting so the attachment is current: `./scripts/generate-status-panel`.
 - Discord `#wave-status`: `disc_send(channel_id="1487386934094462986", message="✅ **Wavemachine complete** — <project>, all <N> waves merged. Run /dod to verify. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
-- `scripts/mcp-log wavemachine_complete epic=<epic_id> status=OK waves_merged=<N>`
+- `scripts/mcp-log wavemachine_complete plan=<plan_id> status=OK waves_merged=<N>`
 - Vox (conversational, brief): name, team, project, "wavemachine complete, all waves merged".
 
 **On gate-blocked completion** (KAHUNA mode, one or more trust signals failed):
 
 - Regenerate `.status-panel.html` synchronously before posting so the attachment captures the gate-blocked state: `./scripts/generate-status-panel`.
-- Per Procedure C / "Trust-Score Gate and Auto-Merge" any-red path: `disc_send(channel_id="1487386934094462986", message="🛑 **Kahuna gate blocked** — <project>, epic #<epic_id>: <failing-signals summary>. MR <url> open for review. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
-- Vox alert: "Kahuna gate blocked for epic <epic_id>. <N> signals red. Ready for your review."
-- `scripts/mcp-log --level warn wavemachine_complete epic=<epic_id> status=BLOCKED reason="kahuna gate blocked: <signals>"`
+- Per Procedure C / "Trust-Score Gate and Auto-Merge" any-red path: `disc_send(channel_id="1487386934094462986", message="🛑 **Kahuna gate blocked** — <project>, Plan #<plan_id>: <failing-signals summary>. MR <url> open for review. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
+- Vox alert: "Kahuna gate blocked for Plan <plan_id>. <N> signals red. Ready for your review."
+- `scripts/mcp-log --level warn wavemachine_complete plan=<plan_id> status=BLOCKED reason="kahuna gate blocked: <signals>"`
 - `wave_waiting("kahuna gate blocked: <one-line summary>")` so the plan is explicitly marked paused.
 
 **On circuit-breaker trip** (`wave_health_check` non-HEALTHY):
 
 - Regenerate `.status-panel.html` synchronously before posting: `./scripts/generate-status-panel`.
 - Discord `#wave-status`: `disc_send(channel_id="1487386934094462986", message="🛑 **Wavemachine aborted (circuit breaker)** — <project>: <one-line health summary>. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
-- `scripts/mcp-log --level error wavemachine_complete epic=<epic_id> status=ABORTED reason="circuit breaker: <summary>"`
+- `scripts/mcp-log --level error wavemachine_complete plan=<plan_id> status=ABORTED reason="circuit breaker: <summary>"`
 - Call `wave_waiting("wavemachine aborted (circuit breaker): <one-line summary>")` so the plan is explicitly marked paused.
 
 **On per-wave BLOCKED or FAIL** (from `/nextwave auto` return):
 
 - Regenerate `.status-panel.html` synchronously before posting: `./scripts/generate-status-panel`.
 - Discord `#wave-status`: `disc_send(channel_id="1487386934094462986", message="🛑 **Wavemachine aborted** — <project>, wave <id>: <one-line failure summary>. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
-- `scripts/mcp-log --level error wavemachine_complete epic=<epic_id> status=ABORTED wave=<id> reason="<summary>"`
+- `scripts/mcp-log --level error wavemachine_complete plan=<plan_id> status=ABORTED wave=<id> reason="<summary>"`
 - Call `wave_waiting("wavemachine aborted: <one-line summary>")`.
 
 **On user interrupt** (see "Interrupt Handling" above).
@@ -340,6 +340,58 @@ When a merge-queue-idle scenario is detected (a wave merged but the queue is chu
 - The wait is long enough (several minutes) that holding the session occupied is wasteful.
 
 When waking up, re-enter the loop at step 1 (re-run `wave_health_check` from scratch).
+
+## Exhaustive Legal Exits
+
+This loop halts if — and ONLY if — one of the following occurs. This list is closed: no other condition warrants stopping.
+
+### Mechanical exits (tool returns)
+
+1. **wave_health_check returns non-HEALTHY.** The circuit breaker tripped.
+   Detected by: `wave_health_check()` result ≠ "HEALTHY".
+   Action: announce abort to `#wave-status`, call `wavemachine-stop`, exit loop.
+
+2. **wave_next_pending returns null.** No more pending waves; all phases complete.
+   Detected by: `wave_next_pending()` returns null.
+   Action: run §7 DoD checks → trust-score gate → merge kahuna→main on all-green; exit loop.
+
+3. **/nextwave auto returns BLOCKED.** A wave cannot be planned (spec unbuildable, dependency violation).
+   Detected by: skill invocation result `{"status": "BLOCKED", ...}`.
+   Action: surface blocker reason to `#wave-status`, call `wave_waiting(<reason>)`, exit loop.
+
+4. **/nextwave auto returns FAIL.** A wave attempted execution and a Flight returned FAIL that wasn't recovered.
+   Detected by: skill invocation result `{"status": "FAIL", ...}`.
+   Action: surface failure reason to `#wave-status`, call `wave_waiting(<reason>)`, exit loop.
+
+### Plan-reality drift exits
+
+5. **Scope divergence.** A Flight committed files outside the declared scope of the Story it was implementing.
+   Detected by: `drift_files_changed(story_id)` returns files not in the Story's declared-scope manifest.
+   Action: post `[drift-halt]` comment to Plan issue citing the divergent files, halt loop, await Pair triage.
+
+6. **Story count or dependency violation.** The number of stories completed ≠ the number planned for the current wave, or a Story whose dependencies are unmet landed anyway.
+   Detected by: post-wave reconciliation against `phases-waves.json`.
+   Action: post `[drift-halt]` comment citing the mismatch, halt loop, await Pair triage.
+
+7. **AC materially unmet by committed code.** A Story's acceptance criteria include testable conditions that the committed code fails (e.g. a required file doesn't exist, a required function isn't exported).
+   Detected by: `dod_verify_deliverable(story_id)` returns failures.
+   Action: post `[drift-halt]` comment citing the failing AC, halt loop, await Pair triage.
+
+### Explicit non-exits (DO NOT halt for these)
+
+The following conditions look like checkpoints but are NOT exits. The loop continues past each:
+
+- **Phase transitions.** Wave-N of Phase 1 → wave-1 of Phase 2 is a routine lifecycle event, not a checkpoint. Phase DoDs are validated at phase-complete time via `[phase-complete ...]` comment; the loop does not pause for human review of the transition.
+- **First multi-issue wave.** The first wave with >1 story is not categorically different from the fifth. Multi-issue parallelism is the normal case, validated by flight_partition at Prime(pre-wave) time.
+- **Session elapsed time.** How long the loop has been running is not evidence of anything. Short runs can have drift; long runs can be clean.
+- **First-time execution of a known pattern.** If the skill body describes the event (phase transition, kahuna bootstrap, gate evaluation, PATH-inheritance drift), it is precedented. "I've never actually done this before" is not a new category.
+- **Recent successes increasing anxiety.** Each merged wave makes the Orchestrator more confident *in the harness*, not less confident *in the next wave*. Loss-aversion dressed as caution is the specific failure mode this section exists to prevent.
+- **General caution / "what if something goes wrong?"** This framing invents a new checkpoint category. If something does go wrong, it shows up as mechanical exit #1-4 or drift exit #5-7. Absence of those is presumption of healthy operation.
+- **"Something feels off and I was about to halt."** If the observation doesn't match any numbered exit above, it is NOT an exit. Use the Concerns Channel (§5.3.7) — post a `[concern]` comment + Discord ping, continue the loop. Commits can be rolled back; wall-clock time cannot. See `principle_cost_asymmetry_continue_vs_exit.md`.
+
+### Cross-reference
+
+See memory files `principle_user_attention_is_the_cost.md` and `principle_cost_asymmetry_continue_vs_exit.md` for the reasoning that motivates this closed-list discipline. Stopping is a cost paid by the Pair's attention AND by unrecoverable wall-clock time; the list above enumerates the only costs worth paying.
 
 ## Non-Negotiables
 
@@ -372,7 +424,7 @@ This idempotent re-entry is what makes the gate crash-safe.
 
 ## Pair
 
-- `/prepwaves` — plans the waves (authors the wave plan from a master epic).
+- `/prepwaves` — plans the waves (authors the wave plan from a Plan tracking issue).
 - `/nextwave` — executes one wave end-to-end (Orchestrator/Prime/Flight on the filesystem bus). Interactive by default; `/nextwave auto` is the no-gate variant.
 - **`/wavemachine` — loops over `/nextwave auto` with a health circuit breaker. This skill.**
 - `/dod` — verifies the project at the end against the Deliverables Manifest.
