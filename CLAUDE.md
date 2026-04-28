@@ -37,6 +37,8 @@ gh project item-add <project-number> --owner <owner> --url <issue-url>
 
 When work is done, run `/precheck` immediately — don't ask permission, just run it. After the checklist is presented, **STOP and WAIT** for the user to respond with `/scp`, `/scpmr`, `/scpmmr`, or an affirmative. No autonomous commits. No diff presentation. If in doubt, ask.
 
+**Never write phrases like "shall I run /precheck?", "ready for precheck?", "let me know when to run /precheck." Asking is itself a violation of this rule. The checklist that `/precheck` presents is the approval gate; the *start* of `/precheck` is unilateral. If you catch yourself drafting one of those questions, that's the moment to invoke `/precheck` instead — the intent is identical, the wording is the bug.**
+
 The full procedure lives in `/precheck` (`skills/precheck/SKILL.md`).
 
 ### Exception: Kahuna Sandbox Auto-Approval
