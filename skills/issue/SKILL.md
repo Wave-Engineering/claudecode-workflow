@@ -1,6 +1,6 @@
 ---
 name: issue
-description: Create structured issues (plan, epic, feature, story, bug, chore, docs) with proper templates and labels. Supports both GitHub (gh) and GitLab (glab). Self-contained — does not depend on CLAUDE.md for templates. Sub-issue templates (feature, story, chore, docs, bug) emit the H2 sections that `/prepwaves` and `spec_validate_structure` require, so issues are wave-pattern-ready on first try. The `plan` type emits the canonical Plan tracking-issue body per Dev Spec `phase-epic-taxonomy-devspec.md` §5.1.2, and Story creation accepts an optional `--epic N` flag that attaches the `epic::N` PM-layer label.
+description: Create structured issues (plan, epic, feature, story, bug, chore, doc) with proper templates and labels. Supports both GitHub (gh) and GitLab (glab). Self-contained — does not depend on CLAUDE.md for templates. Sub-issue templates (feature, story, chore, doc, bug) emit the H2 sections that `/prepwaves` and `spec_validate_structure` require, so issues are wave-pattern-ready on first try. The `plan` type emits the canonical Plan tracking-issue body per Dev Spec `phase-epic-taxonomy-devspec.md` §5.1.2, and Story creation accepts an optional `--epic N` flag that attaches the `epic::N` PM-layer label.
 usage: |
   /issue plan <prompt>     Create a Plan tracking issue (canonical §5.1.2 body)
   /issue epic <prompt>     Create an Epic parent tracker (PM-layer)
@@ -8,7 +8,7 @@ usage: |
   /issue story <prompt>    Create a story Story (alias: feature)
   /issue bug <prompt>      Create a bug Story
   /issue chore <prompt>    Create a chore Story
-  /issue docs <prompt>     Create a docs Story
+  /issue doc <prompt>     Create a doc Story
   /issue <type> <prompt> --epic N  Attach epic::N PM-layer label to the Story
   /issue <prompt>          Infer type from the prompt (never infers "plan")
   /issue                   Infer from recent conversation context
@@ -33,7 +33,7 @@ Create properly templated and labeled issues from a natural language prompt.
 /issue story <prompt>             Create a story Story (alias: feature)
 /issue bug <prompt>               Create a bug Story
 /issue chore <prompt>             Create a chore Story
-/issue docs <prompt>              Create a docs Story
+/issue doc <prompt>               Create a doc Story
 /issue <type> <prompt> --epic N   Attach epic::N PM-layer label to the Story
 /issue <prompt>                   Infer type from the prompt (never infers "plan")
 /issue                            Infer from recent conversation context
@@ -49,7 +49,7 @@ template and label family (authoritative source: `docs/phase-epic-taxonomy-devsp
 |-------|------|-------|------|
 | **Plan** | `plan` | `type::plan` | Top-level wave-pipeline tracking issue. Has a canonical frozen body; runtime state lives in comments. One Plan per `/devspec` walk. |
 | **Epic** | `epic` | `type::epic` | **PM-layer concept only.** A parent thematic tracker for human project management. The pipeline ignores `type::epic` and `epic::N` labels entirely (per Dev Spec R-03). |
-| **Story** | `feature`, `story`, `bug`, `chore`, `docs` | `type::<sub>` | The unit of implementable work — one issue, one branch, one PR/MR, one Flight. Optionally carries an `epic::N` label applied via `--epic N` on creation. |
+| **Story** | `feature`, `story`, `bug`, `chore`, `doc` | `type::<sub>` | The unit of implementable work — one issue, one branch, one PR/MR, one Flight. Optionally carries an `epic::N` label applied via `--epic N` on creation. |
 
 **Load-bearing distinction:** a Plan is not an Epic. A Plan is a pipeline
 artifact the Orchestrator reads; an Epic is a PM-layer grouping the pipeline
@@ -61,7 +61,7 @@ not because they share any pipeline semantics.
 ## Wave-Pattern-Ready Output Guarantee
 
 The sub-issue templates emitted by this skill (`feature`, `story`, `chore`,
-`docs`, `bug`) include the six H2 sections required for downstream wave
+`doc`, `bug`) include the six H2 sections required for downstream wave
 execution:
 
 - `## Summary`
@@ -107,12 +107,12 @@ No arguments — infer the issue from the most recent topic of conversation. Det
 Extract three things:
 
 1. **Type** — the first word if it matches one of:
-   `plan`, `epic`, `feature`, `story`, `bug`, `chore`, `docs`.
+   `plan`, `epic`, `feature`, `story`, `bug`, `chore`, `doc`.
    `feature` and `story` are aliases and use the same sub-issue template.
    If it doesn't match a type, treat the entire argument (minus flags) as the
    prompt and infer the type from keywords (see table below).
 2. **`--epic N` flag** — optional flag anywhere after the type. When present
-   on a Story-type invocation (`feature`/`story`/`bug`/`chore`/`docs`),
+   on a Story-type invocation (`feature`/`story`/`bug`/`chore`/`doc`),
    captures the integer `N`. Invalid on `plan` and `epic` invocations — if
    `--epic` appears with type=`plan` or type=`epic`, fail with a clear error.
 3. **Prompt** — everything after the type (or the entire argument if no type
@@ -124,7 +124,7 @@ Extract three things:
 - Mentions add, create, build, implement, new → `feature`
 - Mentions story, user story, sub-issue under epic → `story`
 - Mentions update, fix, clean, refactor, rename, move, upgrade → `chore`
-- Mentions document, write docs, README, guide → `docs`
+- Mentions document, write doc, README, guide → `doc`
 - Mentions epic, phase, milestone, multi-part, thematic parent → `epic`
 - Mentions plan, dev spec, kahuna, wave pipeline → **ask explicitly**; do not
   infer `plan`. Creating a Plan tracking issue is intentional (Dev Spec §5.5.6).
@@ -205,7 +205,7 @@ When `/issue plan <prompt>` is invoked:
 
 ### Wave-Pattern Sub-Issue Templates
 
-The five templates below (`feature`, `story`, `chore`, `docs`, `bug`) all
+The five templates below (`feature`, `story`, `chore`, `doc`, `bug`) all
 emit the same six required H2 sections so they are recognized by
 `spec_validate_structure` and ready for `/prepwaves`. The body inside each
 section is tailored to the issue type. **Always emit all six headings**, even
@@ -467,11 +467,11 @@ Labels use the `group::value` convention. Within each group, labels are mutually
 | story | `type::story` |
 | bug | `type::bug` |
 | chore | `type::chore` |
-| docs | `type::docs` |
+| doc | `type::docs` (the canonical GitHub label is plural; the `/issue` user-facing alias `doc` is singular per CLAUDE.md branch-prefix convention) |
 
 ### `--epic N` Flag — Optional PM-Layer Label (Dev Spec §5.5.4)
 
-When a Story-type invocation (`feature`, `story`, `bug`, `chore`, `docs`)
+When a Story-type invocation (`feature`, `story`, `bug`, `chore`, `doc`)
 includes `--epic N`:
 
 1. **Pre-check `N` exists and is an Epic.** Call `work_item` (read path) to
@@ -529,7 +529,7 @@ Assess and apply values for these groups using judgment. Do not pause to confirm
 |-------|--------|---------------|
 | **Priority** | `priority::critical`, `priority::high`, `priority::medium`, `priority::low` | All issues |
 | **Urgency** | `urgency::immediate`, `urgency::soon`, `urgency::normal`, `urgency::eventual` | All issues |
-| **Size** | `size::S`, `size::M`, `size::L`, `size::XL` | Features, chores, docs (optional on bugs, omit for plans and epics) |
+| **Size** | `size::S`, `size::M`, `size::L`, `size::XL` | Features, chores, doc (optional on bugs, omit for plans and epics) |
 | **Severity** | `severity::critical`, `severity::major`, `severity::minor`, `severity::cosmetic` | Bugs only |
 | **Wave** | `wave::1`, `wave::2`, etc. | Wave-planned Stories only — omit otherwise. Never applied to plan or epic types. |
 
@@ -558,7 +558,11 @@ Create immediately — do not ask for approval. Issues are cheap to edit and clo
 3. Call `mcp__sdlc-server__work_item` with the drafted title, body, and the
    full label list (type label + `epic::N` if applicable + inferred labels).
    The tool handles platform detection and issue creation internally — no
-   `gh` or `glab` CLI calls.
+   `gh` or `glab` CLI calls. **Type alias mapping:** when the user-facing
+   invocation is `doc`, pass `docs` to `work_item` (the tool's `type` enum
+   uses `docs` plural to match the canonical `type::docs` label; the `/issue`
+   skill exposes singular `doc` to align with the singular branch prefix per
+   CLAUDE.md). Same pattern as `story` ↔ `feature`.
 
 If `work_item` reports a missing label at create-time (race or pre-existing
 `epic::X` for a different `X`), surface the error; do not silently retry.
