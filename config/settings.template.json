@@ -68,6 +68,17 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.local/bin/precheck-asking-detector.sh"
+          }
+        ]
+      }
     ]
   },
   "statusLine": {
