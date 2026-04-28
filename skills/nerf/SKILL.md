@@ -27,15 +27,17 @@ deterministic MCP tool calls — do NOT implement any logic in this skill file.
 
 Parse the user's input and call the corresponding MCP tool:
 
+**Every routing entry MUST pass `session_id`.** See "Session ID" below.
+
 | User Input | MCP Tool | Arguments |
 |------------|----------|-----------|
-| `/nerf` | `nerf_status` | *(none)* |
-| `/nerf status` | `nerf_status` | *(none)* |
-| `/nerf mode` | `nerf_mode` | *(none — returns current)* |
-| `/nerf mode <mode>` | `nerf_mode` | `{ "mode": "<mode>" }` |
-| `/nerf darts` | `nerf_darts` | *(none — returns current)* |
-| `/nerf darts <s> <h> <o>` | `nerf_darts` | `{ "soft": <s>, "hard": <h>, "ouch": <o> }` |
-| `/nerf <limit>` | `nerf_budget` | `{ "ouch": <limit> }` |
+| `/nerf` | `nerf_status` | `{ "session_id": "<current session ID>" }` |
+| `/nerf status` | `nerf_status` | `{ "session_id": "<current session ID>" }` |
+| `/nerf mode` | `nerf_mode` | `{ "session_id": "<current session ID>" }` |
+| `/nerf mode <mode>` | `nerf_mode` | `{ "mode": "<mode>", "session_id": "<current session ID>" }` |
+| `/nerf darts` | `nerf_darts` | `{ "session_id": "<current session ID>" }` |
+| `/nerf darts <s> <h> <o>` | `nerf_darts` | `{ "soft": <s>, "hard": <h>, "ouch": <o>, "session_id": "<current session ID>" }` |
+| `/nerf <limit>` | `nerf_budget` | `{ "ouch": <limit>, "session_id": "<current session ID>" }` |
 | `/nerf scope` | `nerf_scope` | `{ "session_id": "<current session ID>" }` |
 
 ## Parsing Rules
@@ -44,13 +46,22 @@ Parse the user's input and call the corresponding MCP tool:
 - A bare number (e.g., `/nerf 200k`) routes to `nerf_budget`, not `nerf_darts`
 - Mode names are exact: `not-too-rough`, `hurt-me-plenty`, `ultraviolence`
 
-## Session ID for Scope
+## Session ID (required for all calls)
 
-When calling `nerf_scope`, you MUST pass the real Claude Code session ID.
-The MCP server cannot discover it automatically in multi-session environments.
+You MUST pass the real Claude Code session ID on every `nerf_*` call. The MCP
+server has a multi-strategy resolver (env var → per-project transcript scan →
+md5 fallback), but the explicit override is the only path that's free of
+filesystem-state assumptions. Passing `session_id` keeps the skill working
+even if the server's heuristic resolver regresses or runs in an environment
+where transcript paths differ.
 
-Find it from: the transcript path in conversation context, the crystallizer
-state, or `tail -1 ~/.claude/history.jsonl | jq -r '.sessionId'` as a last resort.
+Find the session ID from, in order of preference: the transcript path in
+conversation context, or the crystallizer state. If neither is available,
+omit `session_id` entirely — do NOT attempt to derive it from shell commands
+or filesystem reads (`history.jsonl` and similar files are racy across
+concurrent CC sessions and would silently feed the wrong UUID). Falling
+through to the server's resolver chain is safe; injecting a wrong value
+is not.
 
 ## Important
 
