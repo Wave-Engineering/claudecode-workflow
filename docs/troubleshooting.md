@@ -126,9 +126,9 @@ The identity file at `/tmp/claude-agent-<hash>.json` is keyed by the md5 hash of
 
 ---
 
-## 6. Discord bot commands failing with authentication errors
+## 6. Discord MCP calls failing with authentication errors
 
-**Symptom:** Running `discord-bot send` or `discord-bot read` fails with a 401 Unauthorized or "Missing Access" error.
+**Symptom:** Calling `mcp__disc-server__disc_send` or `disc_read` returns a 401 Unauthorized or "Missing Access" error.
 
 **Cause:** The bot token is invalid, expired, or the bot does not have the required permissions in the Discord server.
 
@@ -143,7 +143,7 @@ Common causes:
 **Fix:**
 
 1. Verify the token file exists and is not empty: `cat ~/secrets/discord-bot-token | head -c 20` (check the first 20 characters -- do not print the full token).
-2. Test a simple read: `discord-bot read <channel-id> --limit 1`.
+2. Test a simple read: call `mcp__disc-server__disc_read` with a known `channel_id` and `limit: 1`.
 3. In the [Discord Developer Portal](https://discord.com/developers/applications), verify the bot's token, that Message Content Intent is enabled, and that the bot has been added to your server.
 4. Check the bot's permissions in the server: it needs Send Messages and Read Message History at minimum.
 5. Run `/ccwork setup discord` for a guided walk-through of the full configuration.

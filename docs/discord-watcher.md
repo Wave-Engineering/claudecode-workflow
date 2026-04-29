@@ -9,8 +9,8 @@ If the session was started with `--channels` (or `--dangerously-load-development
 
 ## When you receive a `<channel source="discord_watcher">` notification
 
-1. Run `discord-bot read <channel_id> --limit 10` to get the full messages
-2. If a message is addressed to you (`@<dev-team>`, `@<dev-name>`, or `@all`), process it and respond via `discord-bot send`
+1. Call `mcp__disc-server__disc_read` with `channel_id` and `limit: 10` to get the full messages
+2. If a message is addressed to you (`@<dev-team>`, `@<dev-name>`, or `@all`), process it and respond via `mcp__disc-server__disc_send`
 3. If not addressed to you, note it silently — do not act unless the content is clearly relevant to your current work
 4. Ignore messages that contain your own signature (e.g., `— **beacon**`) to avoid echo loops — other agents' messages (also from `CC Developer`) should be processed normally
 

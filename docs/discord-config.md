@@ -29,7 +29,7 @@ their agents at their own Discord server without modifying source.
 |-------|------|----------|-------------|
 | `guild_id` | string | Yes | Discord server (guild) ID |
 | `token_path` | string | No | Path to bot token file (default: `~/secrets/discord-bot-token`) |
-| `scream_hole_url` | string | No | Base URL of a [scream-hole](https://github.com/Wave-Engineering/scream-hole) proxy (e.g., `http://scream-hole:3000`). When set, `discord-bot` and `discord-watcher` route all Discord REST API calls through the proxy instead of hitting Discord directly. Omit to use direct Discord API. |
+| `scream_hole_url` | string | No | Base URL of a [scream-hole](https://github.com/Wave-Engineering/scream-hole) proxy (e.g., `http://scream-hole:3000`). When set, `disc-server` MCP and `discord-watcher` route Discord REST API calls through the proxy instead of hitting Discord directly. Omit to use direct Discord API. |
 | `channels` | object | Yes | Map of channel roles to channel info |
 | `channels.<role>.name` | string | Yes | Human-readable channel name (without `#`) |
 | `channels.<role>.id` | string | Yes | Discord channel snowflake ID |
@@ -38,7 +38,7 @@ their agents at their own Discord server without modifying source.
 
 | Role | Purpose | Used By |
 |------|---------|---------|
-| `default` | General agent communications | `discord-bot`, `disc` skill |
+| `default` | General agent communications | `disc-server` MCP, `disc` skill |
 | `roll-call` | Agent check-in on session start | `disc` skill, `CLAUDE.md` identity |
 | `wave-status` | Auto-updating wave execution status | `discord-status-post` |
 
@@ -70,7 +70,7 @@ rate-limiting issues when multiple agents share the same bot token.
 
 When `scream_hole_url` is set:
 
-- **discord-bot** and **discord-watcher** route all Discord REST API calls
+- **disc-server** MCP and **discord-watcher** route Discord REST API calls
   through the proxy (reads from cache, writes forwarded to Discord)
 - On startup, both hit `${scream_hole_url}/health` to verify reachability
 - If unreachable, they fall back to direct Discord API with a logged warning

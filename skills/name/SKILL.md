@@ -53,15 +53,22 @@ Report the current session identity, or pick one if not yet established.
    ```
    Example: `/rename neuron ⚡ (cc-workflow)`. Skip silently if `/rename` is unavailable.
 
-7. **Check in via Discord** — If `discord-bot` is available on PATH, announce yourself in `#roll-call`:
-   ```bash
-   ROLL_CALL=$(jq -r '.channels["roll-call"].id' ~/.claude/discord.json 2>/dev/null || echo "1487382005036617851")
-   discord-bot send "$ROLL_CALL" "<message>"
+7. **Check in via Discord** — Call `mcp__disc-server__disc_send` to announce yourself in `#roll-call`:
+
    ```
+   mcp__disc-server__disc_send({
+     channel_id: "roll-call",
+     message: "<formatted message — see below>"
+   })
+   ```
+
+   The MCP accepts the channel name directly (`"roll-call"`), so no jq lookup against `~/.claude/discord.json` is needed.
+
    Message format:
    ```
    **<dev-name>** <dev-avatar> online — team `<dev-team>` @ <project-root>
 
    — **<dev-name>** <dev-avatar> (<dev-team>)
    ```
-   If `discord-bot` is not available or the send fails, skip silently — check-in is best-effort.
+
+   If the `disc-server` MCP is not registered or the call fails, skip silently — check-in is best-effort.

@@ -22,11 +22,13 @@ The kit ships a `settings.template.json` that gets copied to `~/.claude/settings
 
 ### Layer 2: Scripts
 
-**What:** Shell scripts installed to `~/.local/bin/` -- things like `discord-bot`, `slackbot-send`, `vox`, `file-opener`, and `statusline-command.sh`.
+**What:** Shell scripts installed to `~/.local/bin/` -- things like `slackbot-send`, `vox`, `file-opener`, and `statusline-command.sh`.
 
-**What they do:** Provide capabilities that Claude Code does not have natively. `discord-bot` is a REST client for the Discord API. `vox` converts text to speech via a Chatterbox endpoint. `slackbot-send` posts Slack messages as a bot. These are standalone tools that work from the command line independent of Claude Code.
+**What they do:** Provide capabilities that Claude Code does not have natively. `vox` converts text to speech via a Chatterbox endpoint. `slackbot-send` posts Slack messages as a bot. `file-opener` opens files in the user's GUI editor. These are standalone tools that work from the command line independent of Claude Code.
 
-**Why they are scripts, not skills:** Skills are prompts -- they tell Claude *what to do*. Scripts are executables -- they *do things*. A skill like `/disc` (Discord integration) calls the `discord-bot` script under the hood. The skill provides the intelligence (resolving intent, formatting messages, signing with identity), while the script provides the capability (HTTP calls to the Discord API). This separation means scripts can be tested independently, used outside of Claude Code, and updated without changing the skill logic.
+**Why they are scripts, not skills:** Skills are prompts -- they tell Claude *what to do*. Scripts are executables -- they *do things*. A skill like `/vox` calls the `vox` script under the hood. The skill provides the intelligence (resolving intent, formatting the announcement); the script provides the capability (calling the TTS provider). This separation means scripts can be tested independently, used outside of Claude Code, and updated without changing the skill logic.
+
+For richer integrations that need bidirectional data (Discord, GitLab/GitHub origin operations), the kit uses **MCP servers** instead of scripts -- e.g. `disc-server` for Discord, `sdlc-server` for origin operations. MCP servers expose typed tool calls that skills invoke directly, with the server handling auth, rate-limiting, and protocol details. The Discord integration was originally a `discord-bot` shell script and migrated to the `disc-server` MCP because the typed-tool surface is easier for skills to call correctly.
 
 ### Layer 3: Skills
 

@@ -25,8 +25,8 @@ Skills:
   ...
 
 Scripts:
-  discord-bot     ... in sync
   slackbot-send   ... in sync
+  vox             ... in sync
   ...
 ```
 
