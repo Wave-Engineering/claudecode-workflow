@@ -56,6 +56,26 @@
             "command": "~/.claude/context-crystallizer/hooks/session-start.sh"
           }
         ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.local/bin/hooks/nerf/session-start-compact.sh"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.local/bin/hooks/nerf/pre-compact.sh"
+          }
+        ]
       }
     ],
     "SubagentStop": [
