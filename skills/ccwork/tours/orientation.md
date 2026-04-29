@@ -25,10 +25,10 @@ Narration: "These are your skills — slash commands you can use in any Claude C
 ### Check installed scripts
 
 ```bash
-ls ~/.local/bin/discord-bot ~/.local/bin/slackbot-send ~/.local/bin/vox ~/.local/bin/file-opener ~/.local/bin/statusline-command.sh 2>/dev/null || echo "(some scripts not installed)"
+ls ~/.local/bin/slackbot-send ~/.local/bin/vox ~/.local/bin/file-opener ~/.local/bin/statusline-command.sh 2>/dev/null || echo "(some scripts not installed)"
 ```
 
-Narration: "These are your scripts — standalone tools that skills call under the hood. `discord-bot` talks to Discord, `vox` does text-to-speech, `file-opener` opens files in your GUI apps. Skills provide the intelligence; scripts provide the capabilities."
+Narration: "These are your scripts — standalone tools that skills call under the hood. `vox` does text-to-speech, `file-opener` opens files in your GUI apps, `slackbot-send` talks to Slack. Discord lives in an MCP server (`disc-server`) rather than a script. Skills provide the intelligence; scripts and MCP tools provide the capabilities."
 
 ### Check settings
 

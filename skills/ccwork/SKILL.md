@@ -439,11 +439,11 @@ Ask: *"What's your Discord server (guild) ID? You can find it by right-clicking 
 
 After receiving the guild ID, verify bot access AND auto-discover channels in one step:
 
-```bash
-discord-bot list-channels <guild_id> --type text
+```
+mcp__disc-server__disc_list({ guild_id: "<guild_id>", type: "text" })
 ```
 
-- **If the command succeeds:** The bot has access. Display the discovered text channels as a numbered list for the user:
+- **If the call succeeds:** The bot has access. Display the discovered text channels as a numbered list for the user:
 
   ```
   Found N text channels in your server:
@@ -456,15 +456,15 @@ discord-bot list-channels <guild_id> --type text
 
   Proceed to Step 4.
 
-- **If the command fails:** The bot token is invalid or the bot hasn't been invited to this server. Help troubleshoot:
+- **If the call fails:** The bot token is invalid or the bot hasn't been invited to this server. Help troubleshoot:
   - "Make sure the bot has been invited to your server with the correct permissions."
   - "Verify the guild ID is correct."
   - "Check that your token file contains a valid bot token."
-  - Do NOT proceed until `list-channels` succeeds.
+  - Do NOT proceed until `disc_list` succeeds.
 
 ### Step 4: Assign Channel Roles
 
-Using the discovered channel list from Step 3, ask the user to assign each role. Present all four roles, one at a time, with the channel list visible:
+Using the discovered channel list from Step 3, ask the user to assign each role. Present all three roles, one at a time, with the channel list visible:
 
 1. **default** — "Which channel should be the **default** for agent messages? (e.g., `#agent-ops`). Enter the number from the list above, or a channel name."
 2. **roll-call** — "Which channel for **roll-call** check-ins? Enter a number or name."
@@ -478,15 +478,7 @@ For each assignment, resolve the user's input (number or name) to the channel's 
 
 If any required role (`default`, `roll-call`) could not be filled from existing channels, or the user wants channels that don't exist yet, offer to create them.
 
-**First, create an "Agent Comms" category** to group agent channels visually:
-
-```bash
-discord-bot create-channel <guild_id> "Agent Comms" --type category
-```
-
-Capture the category ID from the output.
-
-Then for each missing channel, ask:
+For each missing channel, ask:
 
 *"Your server doesn't have a channel for **<role>**. I can create one for you. Want me to create `#<suggested-name>`?"*
 
@@ -497,11 +489,15 @@ Suggested default names per role:
 
 For each channel the user approves:
 
-```bash
-discord-bot create-channel <guild_id> <name> --category <category_id>
+```
+mcp__disc-server__disc_create_channel({
+  guild_id: "<guild_id>",
+  name: "<name>",
+  type: "text"
+})
 ```
 
-Capture the channel ID from the command output and use it in the config. If the user declines creation for a required role, ask them to provide an existing channel instead — `default` and `roll-call` are mandatory.
+Capture the channel ID from the response and use it in the config. The new channel is created at the top level of the server — the user can drag it into a category in Discord's UI for visual grouping if they want. If the user declines creation for a required role, ask them to provide an existing channel instead — `default` and `roll-call` are mandatory.
 
 ### Step 6: Write Config
 
@@ -526,16 +522,20 @@ Only include `wave-status` if the user assigned it. The config must match the sc
 
 ### Step 7: Verify
 
-Send a test message to the default channel to confirm the full pipeline works:
+Send a test message to the default channel to confirm the full pipeline works. Resolve the channel ID and name from the just-written config (the `default` key in `channels` is a *role*, not a channel name — the actual Discord channel name and ID live under `.channels.default.id` / `.channels.default.name`):
 
 ```bash
-discord-bot send $(jq -r '.channels.default.id' ~/.claude/discord.json) "Discord integration configured successfully. This is a test message from /ccwork setup discord."
+CHANNEL_ID=$(jq -r '.channels.default.id' ~/.claude/discord.json)
+CHANNEL_NAME=$(jq -r '.channels.default.name' ~/.claude/discord.json)
 ```
 
-Resolve the channel name for the confirmation:
+Then call:
 
-```bash
-CHANNEL_NAME=$(jq -r '.channels.default.name' ~/.claude/discord.json)
+```
+mcp__disc-server__disc_send({
+  channel_id: "<CHANNEL_ID>",
+  message: "Discord integration configured successfully. This is a test message from /ccwork setup discord."
+})
 ```
 
 ### Step 8: Verify Discord Watcher
