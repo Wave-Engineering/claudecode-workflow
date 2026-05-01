@@ -154,13 +154,55 @@ EOF
     exit 0
 fi
 
+# ---------------------------------------------------------------------------
+# Per-session cooldown: prevent calling crystallizer.sh on every tool use
+# once the threshold is crossed. The warning still fires every call; only
+# the expensive crystallizer.sh subprocess is rate-limited.
+#
+# Cooldown is keyed by session ID so concurrent sessions don't interfere.
+# Tunable via CRYSTALLIZER_COOLDOWN_MINUTES (default: 10).
+# ---------------------------------------------------------------------------
+CRYSTALLIZER_COOLDOWN_MINUTES="${CRYSTALLIZER_COOLDOWN_MINUTES:-10}"
+# Key by session_id; fall back to a hash of the transcript path so concurrent
+# sessions without a session_id don't share one cooldown file.
+_COOLDOWN_KEY="${SESSION_ID:-$(echo "$TRANSCRIPT_PATH" | md5sum | cut -c1-8)}"
+COOLDOWN_FILE="/tmp/crystallizer-cooldown-${_COOLDOWN_KEY}"
+
+_is_cooling_down() {
+    if [[ -f "$COOLDOWN_FILE" ]]; then
+        local last_run now elapsed
+        last_run=$(cat "$COOLDOWN_FILE" 2>/dev/null || echo 0)
+        now=$(date +%s)
+        elapsed=$(( now - last_run ))
+        if [[ $elapsed -lt $(( CRYSTALLIZER_COOLDOWN_MINUTES * 60 )) ]]; then
+            return 0  # still cooling down
+        fi
+    fi
+    return 1  # cooldown expired or no stamp
+}
+
+_stamp_cooldown() {
+    date +%s > "$COOLDOWN_FILE" 2>/dev/null || true
+}
+
+# Run crystallizer.sh, maintain latest symlink, stamp cooldown.
+# Sets CRYSTAL_FILE in caller scope.
+_run_crystallizer() {
+    local state_subdir="${STATE_DIR}/context-states"
+    CRYSTAL_FILE=$("${LIB_DIR}/crystallizer.sh" "$TRANSCRIPT_PATH" "$state_subdir" "${CLAUDE_PROJECT_DIR:-.}" "$SESSION_ID" 2>/dev/null || echo "")
+    if [[ -n "$CRYSTAL_FILE" && -f "$CRYSTAL_FILE" ]]; then
+        ln -sf "$CRYSTAL_FILE" "${STATE_DIR}/context-state.md" 2>/dev/null || true
+        _stamp_cooldown
+    fi
+}
+
 # Determine response based on action
 case "$ACTION" in
     "none")
         # All good, exit silently
         exit 0
         ;;
-    
+
     "warn")
         # Return a warning via additionalContext (message field doesn't work per CC bug)
         cat << EOF
@@ -170,20 +212,22 @@ case "$ACTION" in
 EOF
         exit 0
         ;;
-    
+
     "crystallize")
-        # Auto-crystallize and respond based on mode
-        STATE_SUBDIR="${STATE_DIR}/context-states"
-        CRYSTAL_FILE=$("${LIB_DIR}/crystallizer.sh" "$TRANSCRIPT_PATH" "$STATE_SUBDIR" "${CLAUDE_PROJECT_DIR:-.}" "$SESSION_ID" 2>/dev/null || echo "")
-        
-        # Maintain a "latest" symlink for easy access
-        if [[ -n "$CRYSTAL_FILE" && -f "$CRYSTAL_FILE" ]]; then
-            ln -sf "$CRYSTAL_FILE" "${STATE_DIR}/context-state.md" 2>/dev/null || true
+        if _is_cooling_down; then
+            cat << EOF
+{
+    "additionalContext": "🔶 CONTEXT DANGER: ${PERCENT}% used. (State already crystallized this cycle — next crystallization in ${CRYSTALLIZER_COOLDOWN_MINUTES}m.)"
+}
+EOF
+            exit 0
         fi
-        
+
+        CRYSTAL_FILE=""
+        _run_crystallizer
+
         case "$CRYSTALLIZE_MODE" in
             "yolo")
-                # YOLO mode: Instruct Claude to clear automatically
                 cat << EOF
 {
     "additionalContext": "🔶 CONTEXT DANGER: ${PERCENT}% used.\n\n**State crystallized to:** ${CRYSTAL_FILE}\n\n🤖 **AUTO-CLEAR ENGAGED (YOLO MODE)**\n\nI have saved the conversation state. Now executing automatic context clear to avoid lossy auto-compact.\n\n**IMPORTANT: Run /clear now, then read ${CRYSTAL_FILE} to restore context and continue.**"
@@ -191,7 +235,6 @@ EOF
 EOF
                 ;;
             "prompt")
-                # Prompt mode: Ask Claude to present state and get user confirmation
                 cat << EOF
 {
     "additionalContext": "🔶 CONTEXT DANGER: ${PERCENT}% used.\n\n**State automatically crystallized to:** ${CRYSTAL_FILE}\n\n📋 **PLEASE REVIEW CRYSTALLIZED STATE:**\n\nRead and summarize the contents of \`${CRYSTAL_FILE}\` for the user, then ask:\n\n\"I've saved our conversation state to avoid losing context. Would you like me to run /clear now and resume from the saved state? (yes/no)\"\n\nIf user confirms, run /clear and then read the state file to continue."
@@ -199,7 +242,6 @@ EOF
 EOF
                 ;;
             *)
-                # Manual mode (default): Just warn
                 cat << EOF
 {
     "additionalContext": "🔶 CONTEXT DANGER: Usage at ${PERCENT}% (${TOTAL}/${CONTEXT_LIMIT} tokens).\n\n**State automatically crystallized to:** ${CRYSTAL_FILE}\n\nRecommended actions:\n1. Complete your current atomic task\n2. Review the crystallized state file\n3. Run /clear to reset context\n4. Resume with fresh context (state file will be loaded)"
@@ -209,20 +251,22 @@ EOF
         esac
         exit 0
         ;;
-    
+
     "critical")
-        # Critical - crystallize and respond based on mode
-        STATE_SUBDIR="${STATE_DIR}/context-states"
-        CRYSTAL_FILE=$("${LIB_DIR}/crystallizer.sh" "$TRANSCRIPT_PATH" "$STATE_SUBDIR" "${CLAUDE_PROJECT_DIR:-.}" "$SESSION_ID" 2>/dev/null || echo "")
-        
-        # Maintain latest symlink
-        if [[ -n "$CRYSTAL_FILE" && -f "$CRYSTAL_FILE" ]]; then
-            ln -sf "$CRYSTAL_FILE" "${STATE_DIR}/context-state.md" 2>/dev/null || true
+        if _is_cooling_down; then
+            cat << EOF
+{
+    "additionalContext": "🚨 CRITICAL: ${PERCENT}% - AUTO-COMPACT IMMINENT! State already crystallized this cycle. Run /clear NOW and resume from ${STATE_DIR}/context-state.md — no re-crystallization needed."
+}
+EOF
+            exit 0
         fi
-        
+
+        CRYSTAL_FILE=""
+        _run_crystallizer
+
         case "$CRYSTALLIZE_MODE" in
             "yolo")
-                # YOLO mode: Instruct Claude to clear immediately
                 cat << EOF
 {
     "additionalContext": "🚨 CRITICAL: ${PERCENT}% - AUTO-COMPACT IMMINENT!\n\n**State crystallized to:** ${CRYSTAL_FILE:-FAILED}\n\n🤖 **EMERGENCY AUTO-CLEAR (YOLO MODE)**\n\n**STOP EVERYTHING. Run /clear RIGHT NOW.**\n\nAfter clear, immediately read ${CRYSTAL_FILE} to restore context and continue where we left off."
@@ -230,7 +274,6 @@ EOF
 EOF
                 ;;
             "prompt")
-                # Prompt mode: Urgent request for user confirmation
                 cat << EOF
 {
     "additionalContext": "🚨 CRITICAL: ${PERCENT}% - AUTO-COMPACT IMMINENT!\n\n**State crystallized to:** ${CRYSTAL_FILE:-FAILED}\n\n⚡ **URGENT: We need to /clear NOW to avoid lossy auto-compact!**\n\nQuickly confirm: Should I run /clear and resume from the saved state? We have seconds, not minutes.\n\n(Responding 'yes' or just pressing enter will proceed with /clear)"
@@ -238,7 +281,6 @@ EOF
 EOF
                 ;;
             *)
-                # Manual mode: Strong warning
                 cat << EOF
 {
     "additionalContext": "🚨 CRITICAL CONTEXT ALERT: Usage at ${PERCENT}% - AUTO-COMPACT IMMINENT!\n\n**State crystallized to:** ${CRYSTAL_FILE:-FAILED}\n\n⚡ STOP CURRENT WORK and run /clear NOW to avoid lossy auto-compact!\n\nThe crystallized state file contains your conversation context. After /clear, read that file to resume."
