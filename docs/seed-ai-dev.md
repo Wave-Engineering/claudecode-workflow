@@ -229,7 +229,7 @@ When you resume a session after compaction or you are a fresh agent brought in t
 2. **Read `memory/project_upcoming_work.md`** — what's in-flight.
 3. **`git log --oneline -10` + `git branch -a | head -20`** — verify memory against the codebase.
 4. **Check `.claude/status/`** for any active wave plan (`phases-waves.json`, `state.json`).
-5. **Look at `.claude/plans/session-state.md`** if you were cryo'd — that's the hand-off doc from the prior session.
+5. **Look at `.claude/context-state.md`** — a symlink to the latest auto-crystallized snapshot, if one exists. That's the most recent working-state hand-off.
 
 Memory ages fast. If a memory file names a specific function, PR, or flag: verify it still exists before recommending it. See the "Before recommending from memory" section of the auto-memory system instructions in your system prompt.
 

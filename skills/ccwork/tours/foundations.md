@@ -8,14 +8,14 @@ A guided walkthrough of the foundational skills — the ones that manage session
 
 ---
 
-## Section 1: `/engage` — The Thaw Cycle
+## Section 1: `/engage` — The Resume Cycle
 
 Narration: "The most important foundation skill. `/engage` loads your rules, restores context, and confirms ready state. You run it at session start and after every context compaction."
 
 ### What it does
 
 1. **Reads CLAUDE.md** and confirms the mandatory rules are loaded
-2. **Loads the current plan** if one exists (from a prior `/cryo` or plan mode)
+2. **Loads the current plan** if one exists (from plan mode or auto-crystallized state)
 3. **Reports ready state** — current branch, pending work, asks what's next
 
 ### When to use it
@@ -34,38 +34,32 @@ Narration: "If there's no `CLAUDE.md` in your project, `/engage` still works —
 
 ---
 
-## Section 2: `/cryo` — The Freeze Cycle
+## Section 2: State Preservation — How It Actually Works
 
-Narration: "`/cryo` is the complement to `/engage`. It freezes session state before context compaction hits. Think of it as saving your game."
+Narration: "There's no explicit 'freeze' skill you run before compaction. State preservation happens automatically through two mechanisms that you should understand."
 
-### What it does
+### Mechanism 1: Memory files (durable facts)
 
-1. **Audits current state** — branch, recent commits, uncommitted work
-2. **Curates the plan file** — rewrites it as a snapshot of where things stand RIGHT NOW
-3. **Prunes the task list** — deletes completed and stale tasks, keeps pending ones
-4. **Confirms** — tells you what was preserved
+When you learn something worth keeping across sessions — a design decision, a lesson, a project fact — you write a memory file. These live in a project-scoped memory directory and are loaded automatically into every future session's system prompt. No skill needed; memory writes are plain file writes the agent performs when the moment is right.
 
-### When to use it
-
-- **When context is getting full** — you'll notice responses getting shorter or less detailed
-- **Before a long break** — if you're stepping away and want to resume later
-- **Before any operation that might trigger compaction** — large file reads, long conversations
-
-### The cryo-engage cycle
-
-```
-Session start → /engage (thaw)
-     ↓
-  [work]
-     ↓
-Context filling up → /cryo (freeze)
-     ↓
-  [compaction happens]
-     ↓
-/engage (thaw) → resume work
+```bash
+# Peek at the current project's memory index (if it exists)
+MEMORY_DIR="$HOME/.claude/projects/$(pwd | sed 's|/|-|g')/memory"
+ls "$MEMORY_DIR"/MEMORY.md 2>/dev/null && echo "  → project has memories" || echo "  → no memories yet for this project"
 ```
 
-Narration: "`/cryo` writes to the plan file, `/engage` reads from it. They're a matched pair. The plan file is the only thing that survives compaction intact — everything else becomes a lossy summary."
+### Mechanism 2: Auto-crystallization (working state)
+
+The context-crystallizer hook runs automatically after every tool call. When context crosses a threshold, it writes a snapshot of the session state to `.claude/context-states/`. A `context-state.md` symlink always points at the latest snapshot. After compaction, a `SessionStart:compact` hook injects the snapshot into the new session — so `/engage` has something to thaw from.
+
+The hook is rate-limited (at most once per 10 minutes per session) so heavy tool use doesn't loop-crystallize.
+
+```bash
+# Peek at the latest crystallized state (if any)
+readlink .claude/context-state.md 2>/dev/null || echo "  → no crystallized state yet in this project"
+```
+
+Narration: "Between these two mechanisms, you don't need to do anything manual before a compaction. Memory files survive because they're on disk; crystallized state survives because the SessionStart hook re-injects it. `/engage` is the thaw."
 
 ---
 
@@ -168,12 +162,13 @@ Here is the full foundation skill set at a glance:
 | Skill | When | What |
 |-------|------|------|
 | `/engage` | Session start, after compaction | Load rules, restore context |
-| `/cryo` | Before compaction, before breaks | Freeze state to plan file |
 | `/ccfold` | After kit updates | Merge upstream CLAUDE.md changes |
 | `/edit` | When you need to modify a file in GUI | Open in editor |
 | `/view` | When you need to view a file in GUI | Open in viewer |
 | `/name` | Check or pick identity | Show/set Dev-Name, Dev-Avatar |
 | `/ibm` | Workflow check | Quick-reference for the dev loop |
+
+State preservation is automatic — memory files persist durable facts, and the auto-crystallizer hook snapshots working state on threshold. No manual "freeze" step.
 
 ---
 

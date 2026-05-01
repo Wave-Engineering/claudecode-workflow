@@ -59,7 +59,7 @@ full skill file when no `usage` frontmatter exists.
    ────────────────────────────────────────
    assesswaves   Quick assessment of wave-pattern suitability
    ccfold        Merge upstream CLAUDE.md template changes
-   cryo          Cryogenically preserve session state
+   ccwork        Onboarding hub — tour the kit, run labs
    ...
    ```
 

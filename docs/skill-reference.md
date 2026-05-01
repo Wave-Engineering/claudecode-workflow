@@ -14,7 +14,7 @@ These manage the agent's own state and context. Use them at session boundaries a
 
 ### `/engage` -- Load Rules and Restore Context
 
-Reads CLAUDE.md, confirms the mandatory development rules are loaded, restores any active plan from a prior session, and reports the agent's ready state. This is the "thaw" operation that pairs with `/cryo`.
+Reads CLAUDE.md, confirms the mandatory development rules are loaded, restores any active plan, and reports the agent's ready state. This is the single entry point for resuming work.
 
 **When to use it:**
 - At the start of every new session
@@ -27,28 +27,9 @@ Reads CLAUDE.md, confirms the mandatory development rules are loaded, restores a
 /engage
 ```
 
-No arguments -- it reads the environment and reports what it finds. If CLAUDE.md exists, it summarizes the mandatory rules. If a plan file exists, it summarizes pending work. It always ends with the current git branch and a prompt for direction.
+No arguments -- it reads the environment and reports what it finds. Memory files and crystallized state are loaded automatically by the harness; `/engage` reads CLAUDE.md, summarizes the mandatory rules, surfaces any pending work, and ends with the current git branch and a prompt for direction.
 
----
-
-### `/cryo` -- Freeze Session State
-
-Cryogenically preserves session state into durable storage before context compaction hits. Rewrites the plan file as a factual snapshot of current state and prunes the task list to only what matters.
-
-**When to use it:**
-- When the context window is getting full and compaction is imminent
-- Before ending a long session where you want to pick up exactly where you left off
-- Any time you want to checkpoint your progress
-
-**Examples:**
-
-```
-/cryo
-```
-
-No arguments. It audits the current git state, rewrites the plan file with commits, branches, decisions, and pending work, then prunes completed tasks from the task list. The audience is a future version of the agent with zero context.
-
-**Key detail:** `/cryo` freezes, `/engage` thaws. Always run `/cryo` before compaction and `/engage` after.
+**State preservation:** There is no explicit "freeze before compact" step. Durable facts are captured in memory files (plain file writes to the project's memory directory); working state is captured by the auto-crystallizer hook after every tool call when context crosses the threshold (rate-limited per session). The `SessionStart:compact` hook re-injects the crystallized snapshot after compaction.
 
 ---
 
@@ -718,7 +699,7 @@ No arguments. It identifies the next pending wave from the task list and auto-de
 
 **Flow (serial):** Pre-Flight Checks -> Flight 1 (execute + merge) -> Flight 2 (execute + merge) -> ... -> Drift Check -> Wave Complete.
 
-**Key detail:** One wave per invocation. The user controls the pace. Run `/cryo` between waves if compaction is imminent.
+**Key detail:** One wave per invocation. The user controls the pace. Compaction between waves is handled automatically by the auto-crystallizer hook.
 
 ---
 

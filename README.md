@@ -61,7 +61,6 @@ Key features:
 | assesswaves | `/assesswaves` | Quick assessment of wave-pattern suitability |
 | ccfold | `/ccfold` | Merge upstream CLAUDE.md template updates into local project |
 | ccwork | `/ccwork` | Onboarding hub — tour the kit, run labs, configure integrations |
-| cryo | `/cryo` | Preserve session state before context compaction |
 | ddd | `/ddd` | Domain-Driven Design facilitation — event storming, domain modeling, concept handoff |
 | disc | `/disc` | Discord integration — check-in, send, read, list, resolve channels |
 | dod | `/dod` | Project Definition of Done verification against the Deliverables Manifest |
