@@ -87,7 +87,7 @@ Once you are in a session, run:
 This is the "rules of engagement" skill. It does three things:
 
 1. **Reads CLAUDE.md** and confirms the mandatory rules are loaded -- things like "never commit without `/precheck`", "always have an issue before starting work", and "test before push".
-2. **Loads the current plan** if one exists (from a prior `/cryo` freeze or plan mode). If no plan exists, it says so.
+2. **Loads the current plan** if one exists (from plan mode or auto-crystallized state). If no plan exists, it says so.
 3. **Reports ready state** -- your current git branch, any pending work, and asks what you would like to work on.
 
 You should run `/engage` at the start of every session, and especially after context compaction (when Claude's context window fills up and gets summarized). `/engage` is the thaw cycle that restores context after compaction.
@@ -196,7 +196,6 @@ The full skill reference is in [Skill Reference](skill-reference.md) with detail
 
 | Skill | When to use it |
 |-------|---------------|
-| `/cryo` | Before context compaction -- freezes session state so `/engage` can restore it |
 | `/review` | Run a standalone code review on staged changes, a branch diff, or a specific file |
 | `/issue` | Create structured issues with proper templates and labels from natural language |
 | `/nerf` | Context budget management -- check usage, adjust limits, launch scope monitor |
@@ -248,7 +247,6 @@ This merges new sections and updates while preserving your project-specific cont
 | Pre-commit gate | `/precheck` |
 | Ship code | `/scp`, `/scpmr`, or `/scpmmr` |
 | Context budget | `/nerf` |
-| Freeze state | `/cryo` |
 | Restore state | `/engage` |
 | Update kit | `git pull && ./install.sh` |
 | Sync CLAUDE.md | `/ccfold` |

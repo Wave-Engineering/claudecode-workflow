@@ -56,7 +56,6 @@ graph TB
     engage([/engage])
     name([/name])
     ccfold([/ccfold])
-    cryo([/cryo])
     man([/man])
     vox([/vox])
     view([/view])
@@ -122,7 +121,7 @@ What each skill calls under the hood.
 
 ### No MCP tools (pure orchestration / UI)
 
-`/ccfold`, `/cryo`, `/edit`, `/engage`, `/man`, `/name`, `/ping`, `/pong`, `/view`, `/vox`
+`/ccfold`, `/edit`, `/engage`, `/man`, `/name`, `/ping`, `/pong`, `/view`, `/vox`
 
 ---
 
