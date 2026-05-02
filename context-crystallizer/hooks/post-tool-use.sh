@@ -95,7 +95,10 @@ if [[ -n "$SESSION_ID" ]]; then
             "not-too-rough") CRYSTALLIZE_MODE="manual" ;;
             "hurt-me-plenty") CRYSTALLIZE_MODE="prompt" ;;
             "ultraviolence")  CRYSTALLIZE_MODE="yolo" ;;
-            *)                CRYSTALLIZE_MODE="prompt" ;;
+            *)
+                echo "[$(date -Iseconds)] [crystallizer-hook] WARN: unrecognized nerf mode '$_NERF_MODE' — defaulting to hurt-me-plenty behavior" >&2
+                CRYSTALLIZE_MODE="prompt"
+                ;;
         esac
 
         # Convert absolute darts to percentage thresholds of the real window
@@ -155,6 +158,51 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
+# Zone classification + per-crossing debounce
+# ---------------------------------------------------------------------------
+# Map ACTION to a dart zone. The in-chat message fires only on zone transitions,
+# so the agent sees one message per crossing rather than one per tool call.
+# Downward crossings (after /compact) update the tracked zone so a subsequent
+# climb re-announces.
+#
+# ultraviolence wants re-fires on every crossing; that's achieved naturally —
+# a /compact drops the zone back to "none", then climbing re-triggers the
+# transition detection.
+# ---------------------------------------------------------------------------
+case "$ACTION" in
+    "warn")        CURRENT_ZONE="soft" ;;
+    "crystallize") CURRENT_ZONE="hard" ;;
+    "critical")    CURRENT_ZONE="critical" ;;
+    *)             CURRENT_ZONE="none" ;;
+esac
+
+# Key by session_id; fall back to a hash of the transcript path so concurrent
+# sessions without a session_id don't share state.
+_CROSSING_KEY="${SESSION_ID:-$(echo "$TRANSCRIPT_PATH" | md5sum | cut -c1-8)}"
+CROSSING_FILE="/tmp/nerf-crossing-${_CROSSING_KEY}.json"
+
+LAST_ZONE="none"
+if [[ -f "$CROSSING_FILE" ]]; then
+    LAST_ZONE=$(jq -r '.last_zone // "none"' "$CROSSING_FILE" 2>/dev/null || echo "none")
+fi
+
+SHOULD_ANNOUNCE=false
+if [[ "$CURRENT_ZONE" != "$LAST_ZONE" ]]; then
+    SHOULD_ANNOUNCE=true
+    # Update the crossing-state file atomically (temp file + rename) so
+    # concurrent hook invocations don't tear each other's writes.
+    _CROSSING_TMP="${CROSSING_FILE}.tmp.$$"
+    if echo "{\"last_zone\":\"${CURRENT_ZONE}\"}" > "$_CROSSING_TMP" 2>/dev/null; then
+        mv -f "$_CROSSING_TMP" "$CROSSING_FILE" 2>/dev/null || rm -f "$_CROSSING_TMP" 2>/dev/null
+    fi
+fi
+
+# not-too-rough mode silences all in-chat messages; crystallization still runs.
+if [[ "$_NERF_MODE" == "not-too-rough" ]]; then
+    SHOULD_ANNOUNCE=false
+fi
+
+# ---------------------------------------------------------------------------
 # Per-session cooldown: prevent calling crystallizer.sh on every tool use
 # once the threshold is crossed. The warning still fires every call; only
 # the expensive crystallizer.sh subprocess is rate-limited.
@@ -204,90 +252,85 @@ case "$ACTION" in
         ;;
 
     "warn")
-        # Return a warning via additionalContext (message field doesn't work per CC bug)
-        cat << EOF
+        # Soft dart crossed. Message only on transition; silent in not-too-rough.
+        if [[ "$SHOULD_ANNOUNCE" == "true" ]]; then
+            case "$_NERF_MODE" in
+                "ultraviolence")
+                    cat << EOF
 {
-    "additionalContext": "⚠️ CONTEXT WARNING: Usage at ${PERCENT}% (${TOTAL}/${CONTEXT_LIMIT} tokens). Consider wrapping up current task and crystallizing state soon."
+    "additionalContext": "⚠ ${PERCENT}% (${TOTAL}/${CONTEXT_LIMIT}). Rip and tear — but also /compact. Do it at your next tool break."
 }
 EOF
+                    ;;
+                *)  # hurt-me-plenty (default)
+                    cat << EOF
+{
+    "additionalContext": "⚠ Context at ${PERCENT}% (${TOTAL}/${CONTEXT_LIMIT}). The Imps are stirring. Consider /compact at your next natural break."
+}
+EOF
+                    ;;
+            esac
+        fi
         exit 0
         ;;
 
     "crystallize")
-        if _is_cooling_down; then
-            cat << EOF
-{
-    "additionalContext": "🔶 CONTEXT DANGER: ${PERCENT}% used. (State already crystallized this cycle — next crystallization in ${CRYSTALLIZER_COOLDOWN_MINUTES}m.)"
-}
-EOF
-            exit 0
+        # Hard dart crossed. Run crystallization if cooldown allows (independent
+        # of mode — even not-too-rough gets automatic crystallization). Emit an
+        # in-chat message only on zone transition and only if mode warrants it.
+        if ! _is_cooling_down; then
+            CRYSTAL_FILE=""
+            _run_crystallizer
         fi
 
-        CRYSTAL_FILE=""
-        _run_crystallizer
-
-        case "$CRYSTALLIZE_MODE" in
-            "yolo")
-                cat << EOF
+        if [[ "$SHOULD_ANNOUNCE" == "true" ]]; then
+            case "$_NERF_MODE" in
+                "ultraviolence")
+                    cat << EOF
 {
-    "additionalContext": "🔶 CONTEXT DANGER: ${PERCENT}% used.\n\n**State crystallized to:** ${CRYSTAL_FILE}\n\n🤖 **AUTO-CLEAR ENGAGED (YOLO MODE)**\n\nI have saved the conversation state. Now executing automatic context clear to avoid lossy auto-compact.\n\n**IMPORTANT: Run /clear now, then read ${CRYSTAL_FILE} to restore context and continue.**"
+    "additionalContext": "⚠⚠ ${PERCENT}% (${TOTAL}/${CONTEXT_LIMIT}). /compact NOW. Hold the line no longer."
 }
 EOF
-                ;;
-            "prompt")
-                cat << EOF
+                    ;;
+                *)  # hurt-me-plenty (default)
+                    cat << EOF
 {
-    "additionalContext": "🔶 CONTEXT DANGER: ${PERCENT}% used.\n\n**State automatically crystallized to:** ${CRYSTAL_FILE}\n\n📋 **PLEASE REVIEW CRYSTALLIZED STATE:**\n\nRead and summarize the contents of \`${CRYSTAL_FILE}\` for the user, then ask:\n\n\"I've saved our conversation state to avoid losing context. Would you like me to run /clear now and resume from the saved state? (yes/no)\"\n\nIf user confirms, run /clear and then read the state file to continue."
+    "additionalContext": "⚠⚠ Context at ${PERCENT}% (${TOTAL}/${CONTEXT_LIMIT}). Cacodemon sighted. Strongly recommend /compact — don't let the session rot."
 }
 EOF
-                ;;
-            *)
-                cat << EOF
-{
-    "additionalContext": "🔶 CONTEXT DANGER: Usage at ${PERCENT}% (${TOTAL}/${CONTEXT_LIMIT} tokens).\n\n**State automatically crystallized to:** ${CRYSTAL_FILE}\n\nRecommended actions:\n1. Complete your current atomic task\n2. Review the crystallized state file\n3. Run /clear to reset context\n4. Resume with fresh context (state file will be loaded)"
-}
-EOF
-                ;;
-        esac
+                    ;;
+            esac
+        fi
         exit 0
         ;;
 
     "critical")
-        if _is_cooling_down; then
-            cat << EOF
-{
-    "additionalContext": "🚨 CRITICAL: ${PERCENT}% - AUTO-COMPACT IMMINENT! State already crystallized this cycle. Run /clear NOW and resume from ${STATE_DIR}/context-state.md — no re-crystallization needed."
-}
-EOF
-            exit 0
+        # Ouch dart crossed — auto-compact imminent. Run crystallization
+        # regardless of mode (safety net); in-chat message only on transition
+        # and only if mode warrants it.
+        if ! _is_cooling_down; then
+            CRYSTAL_FILE=""
+            _run_crystallizer
         fi
 
-        CRYSTAL_FILE=""
-        _run_crystallizer
-
-        case "$CRYSTALLIZE_MODE" in
-            "yolo")
-                cat << EOF
+        if [[ "$SHOULD_ANNOUNCE" == "true" ]]; then
+            case "$_NERF_MODE" in
+                "ultraviolence")
+                    cat << EOF
 {
-    "additionalContext": "🚨 CRITICAL: ${PERCENT}% - AUTO-COMPACT IMMINENT!\n\n**State crystallized to:** ${CRYSTAL_FILE:-FAILED}\n\n🤖 **EMERGENCY AUTO-CLEAR (YOLO MODE)**\n\n**STOP EVERYTHING. Run /clear RIGHT NOW.**\n\nAfter clear, immediately read ${CRYSTAL_FILE} to restore context and continue where we left off."
+    "additionalContext": "⚠⚠⚠ ${PERCENT}% (${TOTAL}/${CONTEXT_LIMIT}). /compact THIS TURN. No excuses, no deferrals, no \"just one more thing.\" The session ends now or it ends worse later."
 }
 EOF
-                ;;
-            "prompt")
-                cat << EOF
+                    ;;
+                *)  # hurt-me-plenty (default)
+                    cat << EOF
 {
-    "additionalContext": "🚨 CRITICAL: ${PERCENT}% - AUTO-COMPACT IMMINENT!\n\n**State crystallized to:** ${CRYSTAL_FILE:-FAILED}\n\n⚡ **URGENT: We need to /clear NOW to avoid lossy auto-compact!**\n\nQuickly confirm: Should I run /clear and resume from the saved state? We have seconds, not minutes.\n\n(Responding 'yes' or just pressing enter will proceed with /clear)"
+    "additionalContext": "⚠⚠⚠ Context at ${PERCENT}% (${TOTAL}/${CONTEXT_LIMIT}). Cyberdemon in the corridor. /compact immediately. The auto-compact is merciless."
 }
 EOF
-                ;;
-            *)
-                cat << EOF
-{
-    "additionalContext": "🚨 CRITICAL CONTEXT ALERT: Usage at ${PERCENT}% - AUTO-COMPACT IMMINENT!\n\n**State crystallized to:** ${CRYSTAL_FILE:-FAILED}\n\n⚡ STOP CURRENT WORK and run /clear NOW to avoid lossy auto-compact!\n\nThe crystallized state file contains your conversation context. After /clear, read that file to resume."
-}
-EOF
-                ;;
-        esac
+                    ;;
+            esac
+        fi
         exit 0
         ;;
 esac

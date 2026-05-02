@@ -9,6 +9,11 @@ input=$(cat)
 cwd=$(echo "$input" | jq -r '.cwd // .workspace.current_dir // ""')
 model=$(echo "$input" | jq -r '.model.display_name // ""')
 remaining_pct=$(echo "$input" | jq -r '.context_window.remaining_percentage // empty')
+session_id=$(echo "$input" | jq -r '.session_id // empty')
+ctx_used_tokens=$(echo "$input" | jq -r '
+    (.context_window.total_input_tokens // 0)
+    + (.context_window.total_output_tokens // 0)
+' 2>/dev/null)
 
 # ANSI colors
 c_purple='\033[38;5;97m'
@@ -18,6 +23,7 @@ c_blue='\033[01;34m'
 c_cyan='\033[36m'
 c_red='\033[31m'
 c_yellow='\033[33m'
+c_orange='\033[38;5;208m'
 c_reset='\033[00m'
 
 # Shorten path: replace $HOME with ~
@@ -173,16 +179,51 @@ if [ -n "$cwd" ] && git_output=$(GIT_OPTIONAL_LOCKS=0 git -C "$cwd" status --por
 fi
 
 # --- Context remaining indicator ---
+# Colors key off nerf dart zones when a nerf config exists for this session;
+# otherwise fall back to the legacy 13%/25% thresholds against the full window.
 ctx_str=""
 if [ -n "$remaining_pct" ]; then
 	remaining_int=${remaining_pct%.*}
-	if ((remaining_int <= 13)); then
-		ctx_color="$c_red"
-	elif ((remaining_int <= 25)); then
-		ctx_color="$c_yellow"
-	else
-		ctx_color="$c_green"
+	ctx_color=""
+
+	nerf_config=""
+	if [ -n "$session_id" ]; then
+		candidate="/tmp/nerf-${session_id}.json"
+		[ -f "$candidate" ] && nerf_config="$candidate"
 	fi
+
+	if [ -n "$nerf_config" ] && [ -n "$ctx_used_tokens" ] && [ "$ctx_used_tokens" -gt 0 ] 2>/dev/null; then
+		nerf_soft=$(jq -r '.darts.soft // empty' "$nerf_config" 2>/dev/null)
+		nerf_hard=$(jq -r '.darts.hard // empty' "$nerf_config" 2>/dev/null)
+		nerf_ouch=$(jq -r '.darts.ouch // empty' "$nerf_config" 2>/dev/null)
+
+		if [ -n "$nerf_soft" ] && [ -n "$nerf_hard" ] && [ -n "$nerf_ouch" ]; then
+			if ((ctx_used_tokens >= nerf_ouch)); then
+				ctx_color="$c_red"
+			elif ((ctx_used_tokens >= nerf_hard)); then
+				ctx_color="$c_orange"
+			elif ((ctx_used_tokens >= nerf_soft)); then
+				ctx_color="$c_yellow"
+			else
+				ctx_color="$c_green"
+			fi
+		else
+			# Malformed nerf config — fall back to legacy thresholds
+			nerf_config=""
+			ctx_color=""
+		fi
+	fi
+
+	if [ -z "$ctx_color" ]; then
+		if ((remaining_int <= 13)); then
+			ctx_color="$c_red"
+		elif ((remaining_int <= 25)); then
+			ctx_color="$c_yellow"
+		else
+			ctx_color="$c_green"
+		fi
+	fi
+
 	ctx_str="  $(printf '%b' "${ctx_color}")ctx remaining: ${remaining_int}%$(printf '%b' "${c_reset}")"
 fi
 
