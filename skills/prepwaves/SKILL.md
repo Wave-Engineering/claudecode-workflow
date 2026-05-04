@@ -19,7 +19,19 @@ Analyze one or more Plan tracking issues, validate their sub-issue specs, comput
 ## Procedure
 
 1. **Inputs.** Plan tracking-issue numbers passed by the user (`/prepwaves #2` or `/prepwaves #2 #3 ...`). Each Plan becomes one Phase in `phases-waves.json`.
-2. **Pre-flight readiness table.** For each Plan: call `epic_sub_issues(N)` (tool name is a historical identifier — the call enumerates the Plan's sub-issues); for each child call `spec_validate_structure(N)`. Present a table (Issue | Title | Deps | Changes | Tests | AC | Ready?). If any sub-issue is not ready, stop and ask the user how to proceed.
+2. **Pre-flight readiness table.** For each Plan:
+   a. Call `epic_sub_issues(N)` inline to get the list of sub-issue numbers (must complete before spawning validators — you need the list first).
+   b. Launch **one Haiku sub-agent per sub-issue in a single message** (parallel). Each sub-agent runs `spec_validate_structure` for its issue and returns a one-line result: `#N | <title> | <deps> | Changes:✓/✗ | Tests:✓/✗ | AC:✓/✗ | <Ready/NOT READY>`. Sub-agents have no data dependencies on each other — all can run concurrently.
+
+   Sub-agent template (one per sub-issue, all launched in a single message):
+   ```
+   subagent_type: general-purpose
+   model: haiku
+   prompt: "Call mcp__sdlc-server__spec_validate_structure for issue #<N> in repo <owner/repo>.
+            Return a single line: #<N> | <title> | deps:<dep_list or none> | Changes:<✓ or ✗> | Tests:<✓ or ✗> | AC:<✓ or ✗> | <Ready or NOT READY: list missing sections>"
+   ```
+
+   Assemble the returned lines into the readiness table. If any sub-issue is NOT READY, stop and ask the user how to proceed.
 3. **Compute waves.** Call `wave_compute(epic_ref)` (param name is historical — pass the Plan's issue ref) to get the topologically-sorted wave plan, then `wave_topology(...)` to classify. Present the wave plan (waves, issues, dependency chain, branch naming `feature/<N>-<desc>`).
 4. **Cross-repo detection.** For each Phase about to be persisted, walk every sub-issue's ref. Resolve each ref's `owner/repo` (per-issue `repo` field, else plan-level `repo`, else the orchestrator's current project repo). Collect distinct repo slugs that differ from the orchestrator's project repo. If the set is non-empty, set `cross_repo: true` and `target_repos: [<slug>, ...]` on that Phase in the plan JSON. Single-repo Phases leave both fields unset. Cheap — no extra LLM calls; pure walk over refs already in `wave_compute`'s output.
 5. **Approval gate.** Wait for explicit user approval. Iterate on the plan here — not during `/nextwave`.
