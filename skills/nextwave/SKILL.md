@@ -172,7 +172,14 @@ Run this after `wave_complete()` lands and the bus has been cleaned (Step 5).
    This handles the multi-session case: `/prepwaves` may have run in a different session and its scrollback is gone. The recipe content lives in one place — both skills `cat` from the same file. Single-repo waves skip this step entirely.
 2. Resolve **target repo slug** for the bus path. Same-repo waves: use the current repo's slug. Cross-repo waves (wave plan lives in this repo, stories live elsewhere): use the target repo's slug per `lesson_cross_repo_wave_orchestration.md`.
 3. **Emit observability anchor.** Run `mcp-log wave_start wave=<N> target=<repo-slug> issues=<COMPACT JSON array, no spaces, e.g. [418,419,420]>` so this anchor *precedes* every per-issue `spec_validate_structure`, `wave_show`, and `wave_previous_merged` call below — that ordering is what makes post-mortem temporal correlation work. The `kahuna` field is added later (Step 1.5) once `wave_show` has been called; it is fine for the initial `wave_start` to omit it.
-4. Verify main is clean in the target repo; `wave_previous_merged()` confirms prior wave landed; `spec_validate_structure(issue)` for each issue in the wave.
+4. Verify main is clean in the target repo; `wave_previous_merged()` confirms prior wave landed. Then validate all issues in parallel — launch **one Haiku sub-agent per issue in a single message**:
+   ```
+   subagent_type: general-purpose
+   model: haiku
+   prompt: "Call mcp__sdlc-server__spec_validate_structure for issue #<X> in repo <owner/repo>.
+            Return a single line: #<X> | <VALID or INVALID: list missing sections>"
+   ```
+   Collect results. Any INVALID → stop, report which issue(s) failed validation, exit.
 5. Call `scripts/wavebus/wave-init <repo-slug> <N> 1`. Flight count is `1` initially — Prime may re-invoke it with the real count (script is idempotent). Capture the printed wave root.
 6. **Read `kahuna_branch` from wave state** via `wave_show()` (or by reading `.claude/status/state.json` in the target repo). If the field is present and non-empty, the wave is executing under KAHUNA — capture the value (e.g. `kahuna/<plan-id>-<slug>`) and pass it into the Prime(pre-wave) prompt as the `kahuna_branch` input. If absent or empty, the wave is a legacy non-KAHUNA execution — flights base off `main` as before. Pre-created worktree branches (Step 7, cross-repo path) and `pr_create` `base` (Step 3e) honor this same value. See Dev Spec §5.2.3 for the authoritative contract.
 7. Pre-create worktrees per issue. Same-repo: `Agent` calls in Step 3 can use `isolation: "worktree"`. Cross-repo: create them now via `git -C <target-repo> worktree add /tmp/wt-<slug>-<issue> -b feature/<issue>-<desc> origin/<base-ref>` (one per issue), where `<base-ref>` is `kahuna_branch` if set, else `main`.
@@ -237,7 +244,7 @@ Each Flight's last message is exactly one line matching `^(/tmp/wavemachine/[^\s
 
 Code-reviewer findings must be in hand at gate time so the human sees them in the batched checklist. Flights cannot dispatch the reviewer themselves (sub-agents lack the `Agent`/`Task` tool — see `lesson_cc_subagent_tools.md`). The Orchestrator does have `Agent`, so it dispatches the reviewer pass here, BEFORE the consolidated approval gate.
 
-In a SINGLE tool-use block, issue one `Agent` call per issue X in this flight, `subagent_type: feature-dev:code-reviewer`. Each call's prompt: `"Review the diff for issue #<X> against the SPEC EXECUTOR rubric. Worktree: <worktree-path>. Diff: run git -C <worktree-path> diff origin/<base-ref>...HEAD. Report any high-confidence findings (correctness bugs, security issues, AC mismatches)."`
+In a SINGLE tool-use block, issue one `Agent` call per issue X in this flight, `subagent_type: feature-dev:code-reviewer`, `model: opus`. Each call's prompt: `"Review the diff for issue #<X> against the SPEC EXECUTOR rubric. Worktree: <worktree-path>. Diff: run git -C <worktree-path> diff origin/<base-ref>...HEAD. Report any high-confidence findings (correctness bugs, security issues, AC mismatches)."`
 
 Collect the reviewer outputs and stash them keyed by issue — they feed directly into the per-issue rows of the gate's batch checklist (Step 3d) and into the Prime(post-flight) prompt (Step 3e). If ANY issue surfaces a high-confidence finding, the gate at 3d still fires (so the human sees the finding in context), but the orchestrator must surface the finding prominently and recommend rejection.
 
