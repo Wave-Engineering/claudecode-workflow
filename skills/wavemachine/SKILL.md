@@ -36,12 +36,13 @@ description: Autopilot for wave-pattern execution. Runs a top-level loop that ca
 
 Before entering the loop:
 
-1. **Plan exists.** Call `wave_show()`. If it returns no state / empty state, refuse: "No wave plan exists. Run `/prepwaves <plan>` first."
-2. **No other wave active.** Inspect `wave_show()`'s output — if `action` is `in-flight`, `planning`, or any active state, refuse: "Wave <id> is already active (action: <X>). Let it finish or clear state before starting wavemachine."
-3. **Base branch clean.** `git status --porcelain` returns nothing on the configured base branch. Any untracked/modified files → refuse and list them.
-4. **Previous wave merged.** Call `wave_previous_merged()`. If the prior wave's work is not on main, refuse.
-5. **At least one pending wave remains.** Call `wave_next_pending()`. If null, refuse: "No pending waves. Plan is complete — run `/dod` to verify."
-6. **No concurrent wavemachine.** Read `.claude/status/state.json` — if `wavemachine_active` is already `true`, refuse: "Wavemachine is already running in this project. Wait for it to complete or abort first."
+1. **Supporting CLIs on PATH.** **Run this check FIRST, before any MCP calls — if it fails, stop immediately and do not proceed to items #2–7.** Run `command -v wave-status generate-status-panel mcp-log` and verify all three resolve. If any is missing, refuse with a message that names every missing CLI individually: `"/wavemachine requires <name> on PATH. Re-run claudecode-workflow's ./install to deploy supporting tooling."` Do NOT fall back to relative paths or Python-module invocation forms — they are not portable across projects, and silent fallback hides installer regressions (this check exists because of issue #569).
+2. **Plan exists.** Call `wave_show()`. If it returns no state / empty state, refuse: "No wave plan exists. Run `/prepwaves <plan>` first."
+3. **No other wave active.** Inspect `wave_show()`'s output — if `action` is `in-flight`, `planning`, or any active state, refuse: "Wave <id> is already active (action: <X>). Let it finish or clear state before starting wavemachine."
+4. **Base branch clean.** `git status --porcelain` returns nothing on the configured base branch. Any untracked/modified files → refuse and list them.
+5. **Previous wave merged.** Call `wave_previous_merged()`. If the prior wave's work is not on main, refuse.
+6. **At least one pending wave remains.** Call `wave_next_pending()`. If null, refuse: "No pending waves. Plan is complete — run `/dod` to verify."
+7. **No concurrent wavemachine.** Read `.claude/status/state.json` — if `wavemachine_active` is already `true`, refuse: "Wavemachine is already running in this project. Wait for it to complete or abort first."
 
 On any refusal: explain the failure, suggest the remediation, **do not enter the loop**.
 
@@ -52,7 +53,7 @@ The `wavemachine_active` flag in `.claude/status/state.json` is the signal the s
 **On entry (after pre-flight passes, before the first iteration):**
 
 ```
-python3 -m wave_status wavemachine-start --launcher main
+wave-status wavemachine-start --launcher main
 ```
 
 Writes `wavemachine_active: true`, `wavemachine_started_at`, and `wavemachine_launcher=main` into `state.json`. The CLI guarantees atomic writes via `save_json`. Do **not** `Edit` `state.json` directly — always go through this CLI.
@@ -60,7 +61,7 @@ Writes `wavemachine_active: true`, `wavemachine_started_at`, and `wavemachine_la
 **On EVERY exit path (happy completion, circuit breaker trip, per-wave BLOCKED/FAIL, user interrupt, tool denial, unexpected error):**
 
 ```
-python3 -m wave_status wavemachine-stop
+wave-status wavemachine-stop
 ```
 
 Clears `wavemachine_active` and the related metadata. Idempotent — safe to call even if already cleared. Treat this as a `finally` clause around the whole loop: no codepath out of `/wavemachine` may skip it.
@@ -73,7 +74,7 @@ Once pre-flight passes:
 2. **Regenerate and open the status panel — REQUIRED.** This step is **not optional** — the panel is the operator's primary visibility surface and MUST be open before the loop starts. Run the exact invocation:
 
    ```bash
-   ./scripts/generate-status-panel
+   generate-status-panel
    xdg-open .status-panel.html   # Linux; substitute `open` on macOS
    ```
 
@@ -81,15 +82,15 @@ Once pre-flight passes:
 3. **Detect CI trust** by calling `wave_ci_trust_level()` once. (The value is also cached by each `/nextwave auto` iteration; calling it here is informational — it shapes the start announcement.)
 4. **Pre-wave kahuna bootstrap** (see "Pre-Wave Kahuna Bootstrap" below). Runs exactly once per Plan on first `/wavemachine` invocation. On resume invocations the wave state already carries `kahuna_branch` and this step is a no-op.
 5. **Post to Discord.** `disc_send` to `#wave-status` (`1487386934094462986`): `"🌊 **Wavemachine started** — <project>, <N> waves pending. Agent: **<dev-name>** <dev-avatar>"`. Resolve identity from `/tmp/claude-agent-<md5>.json`. If `disc_send` fails, log and continue — Discord is informational, not a gate.
-6. **Emit observability event.** `scripts/mcp-log wavemachine_start plan=<plan_id> waves=<N> kahuna=<kahuna_branch>` — timestamps autopilot start in the fleet logfile so post-mortem can correlate with sdlc-server tool_call events.
+6. **Emit observability event.** `mcp-log wavemachine_start plan=<plan_id> waves=<N> kahuna=<kahuna_branch>` — timestamps autopilot start in the fleet logfile so post-mortem can correlate with sdlc-server tool_call events.
 
 ## Status Panel Lifecycle
 
-`.status-panel.html` is a **point-in-time snapshot** of wave state, not a live dashboard. The generator (`scripts/generate-status-panel`) reads `.claude/status/{phases-waves,state,flights}.json`, renders a self-contained HTML file (inline CSS/JS, no external deps), and exits. There is **no** JavaScript polling, **no** WebSocket, **no** background refresher — the open browser tab will keep displaying the snapshot from whenever the file was last written until the operator hits Cmd-R / F5 (or the file is regenerated and the operator refreshes).
+`.status-panel.html` is a **point-in-time snapshot** of wave state, not a live dashboard. The generator (`generate-status-panel`) reads `.claude/status/{phases-waves,state,flights}.json`, renders a self-contained HTML file (inline CSS/JS, no external deps), and exits. There is **no** JavaScript polling, **no** WebSocket, **no** background refresher — the open browser tab will keep displaying the snapshot from whenever the file was last written until the operator hits Cmd-R / F5 (or the file is regenerated and the operator refreshes).
 
 This is a deliberate design choice: a static file has zero runtime cost, no auth surface, and can be opened from anywhere — including after the wavemachine session has exited. The cost is that the panel is only as fresh as the last `generate-status-panel` invocation.
 
-**Auto-regeneration policy.** To keep the panel close to live without introducing a polling loop, `/wavemachine` re-invokes `./scripts/generate-status-panel` at the two lifecycle events that change wave state most visibly:
+**Auto-regeneration policy.** To keep the panel close to live without introducing a polling loop, `/wavemachine` re-invokes `generate-status-panel` at the two lifecycle events that change wave state most visibly:
 
 1. **After every `wave_complete` event** — i.e. immediately after `/nextwave auto` returns OK and before the loop iterates. The wave's `done` action and any merged-MR metadata are now in `state.json`; regeneration reflects them.
 2. **After every `wave_flight_done` event** — i.e. as flights complete within an in-flight wave. This is owned by `/nextwave auto`'s flight-completion handler (the loop body here does not see individual flight completions), so the regeneration call lives there. `/wavemachine` is responsible only for the post-`wave_complete` regeneration in its own loop body; the flight-grain regeneration is `/nextwave`'s contract.
@@ -126,7 +127,7 @@ loop:
   1. health = wave_health_check()
      if health.status != "HEALTHY":
          announce abort (see "On Circuit-Breaker Trip")
-         python3 -m wave_status wavemachine-stop
+         wave-status wavemachine-stop
          exit loop
 
   2. next = wave_next_pending()
@@ -149,7 +150,7 @@ loop:
      status JSON:
          {"status": "OK" | "BLOCKED" | "FAIL", "wave_id": "<id>", ...}
 
-     - "OK"      → run `./scripts/generate-status-panel` (fire-and-forget;
+     - "OK"      → run `generate-status-panel` (fire-and-forget;
                     auto-regen on wave_complete per "Status Panel Lifecycle"),
                     then loop back to step 1
      - "BLOCKED" → stop; announce abort with the blocker detail
@@ -202,7 +203,7 @@ The loop exits cleanly when any of the following happens:
    - **Delete the kahuna branch** from the platform (per R-03). On GitHub: `gh api -X DELETE repos/<owner>/<repo>/git/refs/heads/<kahuna_branch>` (or equivalent). On GitLab: `glab api -X DELETE projects/:id/repository/branches/<kahuna_branch_url_encoded>`.
    - **Emit `#wave-status` notification** (R-19): `"✅ **Kahuna gate passed** — <project>, Plan #<plan_id> auto-merged to main. <N> flights, <M> commits. Agent: **<dev-name>** <dev-avatar>"`.
    - **Vox announcement** (conversational, brief): name, team, project, "kahuna gate passed, Plan merged to main".
-   - Then fall through to the standard "On Clean Completion" announcement and `wave_status wavemachine-stop`.
+   - Then fall through to the standard "On Clean Completion" announcement and `wave-status wavemachine-stop`.
 
 7. **Any-red path** (one or more signals fail):
    - Transition wave state `action` → `gate_blocked`, recording each failing signal's name + detail payload (so the dashboard's signal-failure detail block can render — §5.2.5).
@@ -210,7 +211,7 @@ The loop exits cleanly when any of the following happens:
    - **Emit `#wave-status` notification** per Procedure C, §4.4.4: Plan name, each failing signal's name + short detail, kahuna branch name, the open kahuna→main MR URL.
    - **Vox announcement**: "Kahuna gate blocked for Plan <plan_id>. <N> signals red. Ready for your review."
    - Call `wave_waiting("kahuna gate blocked: <one-line summary>")` so the plan is explicitly marked paused.
-   - `wave_status wavemachine-stop` and exit the loop.
+   - `wave-status wavemachine-stop` and exit the loop.
 
 ### PROBE_UNAVAILABLE handling
 
@@ -271,9 +272,9 @@ Users can stop `/wavemachine` three ways:
 
 In every interrupt case:
 
-- Run `python3 -m wave_status wavemachine-stop` immediately to clear the flag (the statusline must match reality).
+- Run `wave-status wavemachine-stop` immediately to clear the flag (the statusline must match reality).
 - **Leave the in-flight wave's bus tree in place** (`/tmp/wavemachine/<repo-slug>/wave-<N>/`). Do NOT call `wave-cleanup` on an interrupted wave — the partial state is forensic evidence for the human.
-- Regenerate `.status-panel.html` synchronously before announcing so the attachment captures the interrupted state: `./scripts/generate-status-panel`.
+- Regenerate `.status-panel.html` synchronously before announcing so the attachment captures the interrupted state: `generate-status-panel`.
 - Announce the interrupt to `#wave-status` (`1487386934094462986`) with the panel attached: `disc_send(channel_id="1487386934094462986", message="⏸ **Wavemachine interrupted** — <project>, wave <id> mid-flight, bus preserved at <path>. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`.
 - Report to the user: which wave was interrupted, the bus root path, what was merged successfully before the interrupt, how to resume (re-run `/wavemachine` after reviewing the bus).
 
@@ -291,7 +292,7 @@ Preserve the v1 announcement surface — one Discord post per lifecycle event, o
 
 The non-terminal events (`wavemachine-started`, intermediate `wave_complete` text posts) do NOT attach the HTML — they fire too frequently and the panel is more useful as the closing-frame snapshot. If `disc_send` fails to upload the attachment (network, permissions, Discord transient), the text portion still posts and the failure is logged — Discord is informational, never a gate.
 
-Before each terminal-event `disc_send` that includes `attach_path`, make sure the file is fresh: re-invoke `./scripts/generate-status-panel` synchronously so the attachment captures the actual moment of completion/abort, not a stale snapshot from before the terminal transition.
+Before each terminal-event `disc_send` that includes `attach_path`, make sure the file is fresh: re-invoke `generate-status-panel` synchronously so the attachment captures the actual moment of completion/abort, not a stale snapshot from before the terminal transition.
 
 **On loop start** (see "Launch Sequence" above):
 
@@ -301,31 +302,31 @@ Before each terminal-event `disc_send` that includes `attach_path`, make sure th
 
 - This announcement runs AFTER the trust-score gate's all-green path (see "Trust-Score Gate and Auto-Merge"). In KAHUNA mode, the gate has already auto-merged kahuna→main and posted its own `✅ **Kahuna gate passed**` notification — this announcement closes out the wavemachine session.
 - In legacy non-KAHUNA mode (no `kahuna_branch` in wave state), the gate is skipped and this announcement runs directly when `wave_next_pending()` returns null.
-- Regenerate `.status-panel.html` synchronously before posting so the attachment is current: `./scripts/generate-status-panel`.
+- Regenerate `.status-panel.html` synchronously before posting so the attachment is current: `generate-status-panel`.
 - Discord `#wave-status`: `disc_send(channel_id="1487386934094462986", message="✅ **Wavemachine complete** — <project>, all <N> waves merged. Run /dod to verify. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
-- `scripts/mcp-log wavemachine_complete plan=<plan_id> status=OK waves_merged=<N>`
+- `mcp-log wavemachine_complete plan=<plan_id> status=OK waves_merged=<N>`
 - Vox (conversational, brief): name, team, project, "wavemachine complete, all waves merged".
 
 **On gate-blocked completion** (KAHUNA mode, one or more trust signals failed):
 
-- Regenerate `.status-panel.html` synchronously before posting so the attachment captures the gate-blocked state: `./scripts/generate-status-panel`.
+- Regenerate `.status-panel.html` synchronously before posting so the attachment captures the gate-blocked state: `generate-status-panel`.
 - Per Procedure C / "Trust-Score Gate and Auto-Merge" any-red path: `disc_send(channel_id="1487386934094462986", message="🛑 **Kahuna gate blocked** — <project>, Plan #<plan_id>: <failing-signals summary>. MR <url> open for review. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
 - Vox alert: "Kahuna gate blocked for Plan <plan_id>. <N> signals red. Ready for your review."
-- `scripts/mcp-log --level warn wavemachine_complete plan=<plan_id> status=BLOCKED reason="kahuna gate blocked: <signals>"`
+- `mcp-log --level warn wavemachine_complete plan=<plan_id> status=BLOCKED reason="kahuna gate blocked: <signals>"`
 - `wave_waiting("kahuna gate blocked: <one-line summary>")` so the plan is explicitly marked paused.
 
 **On circuit-breaker trip** (`wave_health_check` non-HEALTHY):
 
-- Regenerate `.status-panel.html` synchronously before posting: `./scripts/generate-status-panel`.
+- Regenerate `.status-panel.html` synchronously before posting: `generate-status-panel`.
 - Discord `#wave-status`: `disc_send(channel_id="1487386934094462986", message="🛑 **Wavemachine aborted (circuit breaker)** — <project>: <one-line health summary>. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
-- `scripts/mcp-log --level error wavemachine_complete plan=<plan_id> status=ABORTED reason="circuit breaker: <summary>"`
+- `mcp-log --level error wavemachine_complete plan=<plan_id> status=ABORTED reason="circuit breaker: <summary>"`
 - Call `wave_waiting("wavemachine aborted (circuit breaker): <one-line summary>")` so the plan is explicitly marked paused.
 
 **On per-wave BLOCKED or FAIL** (from `/nextwave auto` return):
 
-- Regenerate `.status-panel.html` synchronously before posting: `./scripts/generate-status-panel`.
+- Regenerate `.status-panel.html` synchronously before posting: `generate-status-panel`.
 - Discord `#wave-status`: `disc_send(channel_id="1487386934094462986", message="🛑 **Wavemachine aborted** — <project>, wave <id>: <one-line failure summary>. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
-- `scripts/mcp-log --level error wavemachine_complete plan=<plan_id> status=ABORTED wave=<id> reason="<summary>"`
+- `mcp-log --level error wavemachine_complete plan=<plan_id> status=ABORTED wave=<id> reason="<summary>"`
 - Call `wave_waiting("wavemachine aborted: <one-line summary>")`.
 
 **On user interrupt** (see "Interrupt Handling" above).
@@ -396,7 +397,7 @@ See memory files `principle_user_attention_is_the_cost.md` and `principle_cost_a
 ## Non-Negotiables
 
 - **One plan at a time.** Pre-flight refuses to start if another wavemachine is active or another wave is in-flight.
-- **`wavemachine_active` flag must always reflect reality.** Set on entry via `wave_status wavemachine-start`; unset on EVERY exit path via `wave_status wavemachine-stop`. No `Edit` to `state.json`. The statusline 🌊 indicator is not allowed to lie.
+- **`wavemachine_active` flag must always reflect reality.** Set on entry via `wave-status wavemachine-start`; unset on EVERY exit path via `wave-status wavemachine-stop`. No `Edit` to `state.json`. The statusline 🌊 indicator is not allowed to lie.
 - **NEVER run the loop in a background sub-agent.** No background Agent invocation, ever — not with the `run_in_background` parameter, not shelled out, not via any other escape hatch. The loop is top-level, period. (The gate's `feature-dev:code-reviewer` Agent runs *synchronously* at the top level — not in the background.)
 - **NEVER spawn Flights or Prime directly.** `/nextwave auto` owns the Orchestrator/Prime/Flight protocol for each wave — `/wavemachine` only delegates wave work to it.
 - **Circuit breaker before every iteration.** `wave_health_check` is called at the TOP of each loop iteration, not just the first.
