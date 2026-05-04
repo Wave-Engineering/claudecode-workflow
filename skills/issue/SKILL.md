@@ -567,6 +567,54 @@ Create immediately — do not ask for approval. Issues are cheap to edit and clo
 If `work_item` reports a missing label at create-time (race or pre-existing
 `epic::X` for a different `X`), surface the error; do not silently retry.
 
+## Batch Creation (N > 1 issues in one pass)
+
+When a calling agent (e.g. `/devspec`, `/prepwaves`) needs to create multiple
+issues in a single pass, spawn them as **parallel sub-agents** rather than
+looping serially. This keeps the issue-drafting work out of the main context
+window and collapses wall-clock time to the slowest single issue.
+
+**When to use:** any time the caller has ≥ 2 issues to create in the same
+invocation and the issues have no creation-time dependencies on each other
+(i.e. no issue needs the number of another issue before it can be created).
+
+**When NOT to use:** if issue B needs the number of issue A to embed in its
+body (e.g. a Plan issue that references sub-issues by number). Create A first,
+then batch the rest.
+
+**Sub-agent template** (one per issue, all launched in a single message):
+
+```
+subagent_type: general-purpose
+model: sonnet
+prompt: "Create a <type> issue in repo <owner/repo> using the /issue skill.
+
+Type: <feature|bug|chore|doc|story|plan|epic>
+Repo: <owner/repo>
+Epic flag: <--epic N, or omit>
+
+Intent:
+<Full description of what this issue should cover. Be specific enough that
+the sub-agent can fill out all six required H2 sections (Summary, Implementation
+Steps, Test Procedures, Acceptance Criteria, Dependencies, Metadata) without
+making design decisions. This is the same quality bar as a human /issue prompt.>
+
+Label hints (override sub-agent judgment if supplied):
+- priority: <critical|high|medium|low, or omit to let sub-agent infer>
+- urgency: <immediate|soon|normal|eventual, or omit>
+- size: <S|M|L|XL, or omit>
+- wave: <N, or omit>
+
+Return: issue number and URL only. No other output."
+```
+
+**Model:** `sonnet` — issue body quality is load-bearing (Flight Agents execute
+directly from it). Do not downgrade to Haiku.
+
+**Collecting results:** each sub-agent returns `{number, url}`. Assemble these
+into the batch report table in Step 5. If any sub-agent fails, report the
+failure inline in the table row rather than aborting the whole batch.
+
 ## Step 5: Report
 
 Confirm creation with the issue number, URL, and a nudge to review:
