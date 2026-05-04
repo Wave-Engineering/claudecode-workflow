@@ -443,18 +443,47 @@ Ask the user (or read from conversation context if previously established) for t
 
 Call `devspec_parse_section_8(path)` — returns `{ ok, phases: [{ name, dod, waves: [{ name, stories: [{ id, title, summary, implementation_steps, test_procedures, acceptance_criteria, wave, depends_on }] }] }] }`. Each Story carries an `id` (stable identifier from §8, e.g. `3.4`), a `wave` label (e.g. `P3W2`), and a `depends_on` array of Story IDs (may be empty `[]`).
 
-### Step 4: Create Story Issues (one per Story)
+### Step 4: Create Story Issues (parallel batch)
 
-For each Story in §8, call `work_item(type: <subtype>, title: story.title, body, labels: [<subtype label>])`. The subtype is the Story's declared kind: `type::feature` / `type::bug` / `type::chore` / `type::docs` (default `type::feature` if not declared).
+Launch all Stories as **parallel Sonnet sub-agents in a single message** — they have no creation-time dependencies on each other. Do NOT loop serially.
 
-The Story issue body includes:
-- `## Summary` (from `story.summary`)
-- `## Implementation Steps` (from `story.implementation_steps`)
-- `## Test Procedures` (from `story.test_procedures`)
-- `## Acceptance Criteria` (as checkboxes from `story.acceptance_criteria`)
-- `## Metadata` block with **Plan:** #<plan_id>, **Phase:** <phase-name>, **Wave:** <wave-name>, **Depends on:** <story IDs or "none">
+Sub-agent template (one per Story, all launched in a single message):
+```
+subagent_type: general-purpose
+model: sonnet
+prompt: "Create a <subtype> issue in repo <owner/repo> using mcp__sdlc-server__work_item.
 
-Record each returned issue number (keyed by Story ID).
+Type: <feature|bug|chore|docs>  (default: feature if not declared)
+Title: <story.title>
+Labels: [<type::<subtype>>]
+
+Body (use exactly these H2 sections):
+
+## Summary
+<story.summary>
+
+## Implementation Steps
+<story.implementation_steps>
+
+## Test Procedures
+<story.test_procedures>
+
+## Acceptance Criteria
+<story.acceptance_criteria as checkboxes>
+
+## Dependencies
+<depends_on story IDs, or 'None'>
+
+## Metadata
+**Plan:** #<plan_id>
+**Phase:** <phase-name>
+**Wave:** <wave-name>
+**Depends on:** <story IDs or 'none'>
+
+Return: the issue number and URL only. No other output."
+```
+
+Wait for all sub-agents to return. Record each issue number keyed by Story ID (e.g. `{ "1.1": 501, "1.2": 502, ... }`). If any sub-agent fails, report the failure but continue collecting the rest — do not abort the batch. Failed Stories get a `FAILED` marker in the summary; the Pair resolves them manually.
 
 ### Step 5 (Optional): Create a PM-Layer Epic Parent Tracker
 
