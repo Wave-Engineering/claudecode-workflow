@@ -28,7 +28,7 @@ CC sub-agents do not have the `Agent`/`Task` tool. Only the top-level session ca
 - CI trust (auto mode): `wave_ci_trust_level`
 - Bus primitives (bash): `scripts/wavebus/wave-init`, `scripts/wavebus/flight-finalize`, `scripts/wavebus/wave-cleanup`
 - Notifications: `mcp__disc-server__disc_send` — post wave status to `#wave-status` (`1487386934094462986`)
-- Observability: `scripts/mcp-log` — emit lifecycle events to `~/.claude/logs/mcp.jsonl` for temporal correlation against sdlc-server `tool_call` events. See `docs/mcp-logging-standard.md`.
+- Observability: `mcp-log` — emit lifecycle events to `~/.claude/logs/mcp.jsonl` for temporal correlation against sdlc-server `tool_call` events. See `docs/mcp-logging-standard.md`.
 
 ## Concepts
 
@@ -171,7 +171,7 @@ Run this after `wave_complete()` lands and the bus has been cleaned (Step 5).
 
    This handles the multi-session case: `/prepwaves` may have run in a different session and its scrollback is gone. The recipe content lives in one place — both skills `cat` from the same file. Single-repo waves skip this step entirely.
 2. Resolve **target repo slug** for the bus path. Same-repo waves: use the current repo's slug. Cross-repo waves (wave plan lives in this repo, stories live elsewhere): use the target repo's slug per `lesson_cross_repo_wave_orchestration.md`.
-3. **Emit observability anchor.** Run `scripts/mcp-log wave_start wave=<N> target=<repo-slug> issues=<COMPACT JSON array, no spaces, e.g. [418,419,420]>` so this anchor *precedes* every per-issue `spec_validate_structure`, `wave_show`, and `wave_previous_merged` call below — that ordering is what makes post-mortem temporal correlation work. The `kahuna` field is added later (Step 1.5) once `wave_show` has been called; it is fine for the initial `wave_start` to omit it.
+3. **Emit observability anchor.** Run `mcp-log wave_start wave=<N> target=<repo-slug> issues=<COMPACT JSON array, no spaces, e.g. [418,419,420]>` so this anchor *precedes* every per-issue `spec_validate_structure`, `wave_show`, and `wave_previous_merged` call below — that ordering is what makes post-mortem temporal correlation work. The `kahuna` field is added later (Step 1.5) once `wave_show` has been called; it is fine for the initial `wave_start` to omit it.
 4. Verify main is clean in the target repo; `wave_previous_merged()` confirms prior wave landed; `spec_validate_structure(issue)` for each issue in the wave.
 5. Call `scripts/wavebus/wave-init <repo-slug> <N> 1`. Flight count is `1` initially — Prime may re-invoke it with the real count (script is idempotent). Capture the printed wave root.
 6. **Read `kahuna_branch` from wave state** via `wave_show()` (or by reading `.claude/status/state.json` in the target repo). If the field is present and non-empty, the wave is executing under KAHUNA — capture the value (e.g. `kahuna/<plan-id>-<slug>`) and pass it into the Prime(pre-wave) prompt as the `kahuna_branch` input. If absent or empty, the wave is a legacy non-KAHUNA execution — flights base off `main` as before. Pre-created worktree branches (Step 7, cross-repo path) and `pr_create` `base` (Step 3e) honor this same value. See Dev Spec §5.2.3 for the authoritative contract.
@@ -211,7 +211,7 @@ Prompt template (fill in `<repo-slug>`, `<N>`, `<wave-root>`, the issue list, an
 
 Orchestrator parses that JSON. If `status=BLOCKED`, print the blocker from `plan.md`, post a BLOCKED notice to `#wave-status`, exit (leave bus in place for forensics). In **auto mode**, emit the canonical status line (see "Step 6 — Final status emission") before returning control. Else continue.
 
-If `status=READY`, for each flight in the parsed `flights` array emit `scripts/mcp-log flight_plan wave=<N> flight=<M> issues=<COMPACT JSON array, no spaces, e.g. [418,419,420]>` so the planned partition is recorded in the fleet logfile. This is the temporal anchor for correlating sdlc-server tool_call events to a specific flight in post-mortem. **Important:** the array must be compact (no inner spaces) — pretty-printed arrays will be word-split by the shell into broken tokens.
+If `status=READY`, for each flight in the parsed `flights` array emit `mcp-log flight_plan wave=<N> flight=<M> issues=<COMPACT JSON array, no spaces, e.g. [418,419,420]>` so the planned partition is recorded in the fleet logfile. This is the temporal anchor for correlating sdlc-server tool_call events to a specific flight in post-mortem. **Important:** the array must be compact (no inner spaces) — pretty-printed arrays will be word-split by the shell into broken tokens.
 
 ## Step 3 — Per-flight execution loop
 
@@ -363,7 +363,7 @@ After every flight has merged:
    > ```
 
 2. Orchestrator reads the report, surfaces a human-readable summary, and — in interactive mode — prompts: "Wave N complete. Run `/nextwave` for Wave N+1, or pause here."
-3. Emit `scripts/mcp-log wave_complete wave=<N> status=<PASS|FAIL|BLOCKED> merged=<count> deferred=<count>` so the wave terminal state is timestamped in the fleet logfile.
+3. Emit `mcp-log wave_complete wave=<N> status=<PASS|FAIL|BLOCKED> merged=<count> deferred=<count>` so the wave terminal state is timestamped in the fleet logfile.
 4. Post to `#wave-status` (`1487386934094462986`): `"✅ **Wave <N> complete** — <project>, <merged> merged, <deferred> deferred. Agent: **<dev-name>** <dev-avatar>"`, then vox announcement (conversational: name, team, project, wave, counts).
 5. In **auto mode**, emit the canonical status line (see "Step 6 — Final status emission") as the final assistant message. If Prime(post-wave) returned FAIL/BLOCKED, emit that status; otherwise emit OK.
 
