@@ -15,13 +15,68 @@ Mandatory verification before any commit. Checks compliance, runs code review, p
 - `mcp__disc-server__disc_send` — post approval request to `#precheck` (channel `1491195025198157834`)
 
 ## Procedure
-`ibm()` (stop on fail) → `spec_validate_structure(N)` → run repo validation (`validate.sh`/`make test`/`pytest`/`npm test`); fix failures first → **dependency vulnerability scan** (see below) → launch `feature-dev:code-reviewer` via Agent over all changed files, WAIT, fix high+ findings → present the checklist → **notify BJ** (see "The Notification" below): `disc_send` to `#precheck`, **then `vox`** — **ALWAYS do both** → **sandbox-context detection** (see "Sandbox Auto-Approval" below): if the current branch's base ref matches `^kahuna/[0-9]+-`, emit the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invoke `/scpmmr` immediately with no wait; otherwise **STOP.** Wait for `/scp`/`/scpmr`/`/scpmmr`/affirmative. Negative/rework → return to work. If `disc_send` fails (MCP unavailable, network), still do `vox` — still apply the sandbox-vs-stop logic above. Never bypass the STOP on notification failure in non-sandbox contexts.
+
+### Step 1 — IBM gate (serial, hard stop)
+Call `mcp__sdlc-server__ibm` directly (no sub-agent — it's one MCP call). If it fails, stop immediately and do not proceed.
+
+### Step 2 — Parallel verification batch
+After `ibm()` passes, launch all four jobs **in a single message** as parallel Agent calls. Do NOT wait for one before starting the next — they have no data dependencies on each other.
+
+**Job A — Spec validation** `model: haiku`
+```
+subagent_type: general-purpose
+model: haiku
+prompt: "Run mcp__sdlc-server__spec_validate_structure for issue #<N> in repo <repo>.
+         Return: PASS or FAIL, and if FAIL, list exactly which required H2 sections are missing."
+```
+
+**Job B — Repo validation** `model: haiku`
+```
+subagent_type: general-purpose
+model: haiku
+prompt: "Run the project's validation and test tooling in <repo_root>.
+         First: read .claude-project.md if it exists — use whatever toolchain commands it declares.
+         If absent, probe in order: ./scripts/ci/validate.sh, ./scripts/ci/test.sh,
+         make test, python3 -m pytest tests/, npm test.
+         Run whatever exists. Return: PASS or FAIL, and any error output verbatim (truncated to 50 lines max)."
+```
+
+**Job C — Dependency vulnerability scan** `model: haiku`
+```
+subagent_type: general-purpose
+model: haiku
+prompt: "Run: trivy fs --scanners vuln --severity HIGH,CRITICAL --format json --quiet <repo_root>
+         Parse the JSON. Return one of:
+           PASS — zero findings
+           SKIP — trivy not installed
+           FINDINGS — list each as: package | CVE | severity | fixed_version (or 'no fix available')
+         Do not auto-upgrade anything. Just report."
+```
+
+**Job D — Code review** `model: opus`
+```
+subagent_type: feature-dev:code-reviewer
+model: opus
+prompt: "Review all files changed on the current branch vs main in <repo_root>.
+         Use confidence-based filtering — report only issues you are genuinely confident matter.
+         Categorize findings as: critical / important / minor.
+         Return a structured list; if none, say 'No findings'."
+```
+
+### Step 3 — Fix high+ findings (serial)
+Wait for all four jobs to return. If Job D (code-reviewer) returned critical or important findings, fix them now before proceeding. Re-run Job D if the fixes were non-trivial. Haiku job failures (B or C) block the checklist item but do not block the gate unless validation itself fails.
+
+### Step 4 — Assemble checklist and notify
+Collect results from all four jobs, assemble the checklist (see below), then **notify BJ**: `disc_send` to `#precheck`, **then `vox`** — **ALWAYS do both**. If `disc_send` fails (MCP unavailable, network), still do `vox`.
+
+### Step 5 — Sandbox detection + gate
+Run **sandbox-context detection** (see "Sandbox Auto-Approval" below): if the current branch's base ref matches `^kahuna/[0-9]+-`, emit the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invoke `/scpmmr` immediately with no wait; otherwise **STOP.** Wait for `/scp`/`/scpmr`/`/scpmmr`/affirmative. Negative/rework → return to work. Never bypass the STOP on notification failure in non-sandbox contexts.
 
 ## Dependency Vulnerability Scan
-Run `trivy fs --scanners vuln --severity HIGH,CRITICAL --format json --quiet .` on the project root. Parse the JSON output (each finding has a `FixedVersion` field — empty string means no fix available).
-- **Zero findings** → checklist item passes, move on.
-- **Findings exist** → report each finding (package, CVE, severity, fixed version if any) as a deferred checklist item. Do NOT auto-upgrade dependencies — the user approves the codebase state at the gate. Do NOT block the gate on vulnerabilities with no available fix.
-- **`trivy` not installed** → skip with a warning on the checklist: `[SKIPPED — trivy not installed]`. Do not fail the gate.
+Delegated to Job C (Haiku sub-agent) in the parallel batch. Interpret the result as:
+- **PASS** → checklist item passes.
+- **SKIP** → emit `[SKIPPED — trivy not installed]` on the checklist. Do not fail the gate.
+- **FINDINGS** → report each finding (package, CVE, severity, fixed version if any) as a deferred checklist item. Do NOT auto-upgrade dependencies — the user approves the codebase state at the gate. Do NOT block the gate on vulnerabilities with no available fix.
 
 ## The Checklist (full every time; a checkmark means VERIFIED by reading the codebase)
 **Context:** Project | Issue #N — title | Branch `feature/N-...` → `main`
