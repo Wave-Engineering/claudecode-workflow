@@ -1,0 +1,27 @@
+# /etc/logrotate.d/cc-mcp-logs — MCP fleet structured-log rotation policy
+#
+# Rotates the unified Claude Code MCP log aggregator at
+# ~/.claude/logs/mcp.jsonl when it reaches 100 MB OR daily, whichever
+# comes first. Keeps 14 rotations, gzip-compressed except for the most
+# recent (delaycompress) so a live grep/tail of the previous rotation
+# stays human-readable for debugging.
+#
+# Templated: the {{HOME}} marker is replaced with the installing user's
+# home directory at install time by `install --with-logrotate`.
+#
+# copytruncate is load-bearing — MCP servers do not handle SIGHUP, so a
+# rename-and-reopen rotation would orphan the original file descriptor
+# and silently drop subsequent log writes. With copytruncate, the log
+# file's inode is preserved; a small write window during the copy may
+# duplicate or interleave but cannot lose entries.
+
+{{HOME}}/.claude/logs/mcp.jsonl {
+    size 100M
+    daily
+    rotate 14
+    compress
+    delaycompress
+    copytruncate
+    missingok
+    notifempty
+}
