@@ -233,7 +233,12 @@ merge_settings() {
 	# Deep merge: template into local, preserving user customizations
 	# Rules:
 	#   1. Top-level keys (scalars AND objects like statusLine): added only if ABSENT locally
-	#   2. hooks: add missing event keys from template; leave existing alone
+	#   2. hooks:
+	#      - Event keys missing locally: added from template
+	#      - Event keys present in both: matcher arrays unioned by .matcher value
+	#        (template matcher entries whose .matcher is not in the local array
+	#        are appended; existing local entries are left untouched, preserving
+	#        user customizations to the per-matcher hooks list)
 	#   3. permissions.allow: union of both arrays (deduplicated)
 	#   4. enabledPlugins: add missing keys from template; leave existing alone
 	#   5. _comment keys: stripped from result (template-only documentation)
@@ -250,12 +255,26 @@ merge_settings() {
 		# Capture local keys before entering reduce
 		(.[1] | keys) as $local_keys |
 
-		# Merge hooks: add missing event keys
+		# Merge hooks: add missing event keys AND union matcher arrays for shared keys
 		((.[0].hooks // {}) | to_entries | map(
 			select(.key != "_comment")
 		)) as $tpl_hooks |
+		((.[1].hooks // {}) | to_entries | map(
+			select(.key != "_comment")
+		)) as $local_hooks |
 		((.[1].hooks // {}) | keys) as $local_hook_keys |
+		# New event keys (template only) — add wholesale
 		($tpl_hooks | map(select(.key | IN($local_hook_keys[]) | not))) as $new_hooks |
+		# Shared event keys — union their matcher arrays by .matcher value
+		($tpl_hooks | map(select(.key | IN($local_hook_keys[]))) | map({
+			key: .key,
+			value: (
+				(.value // []) as $tpl_arr |
+				(($local_hooks | from_entries)[.key] // []) as $local_arr |
+				($local_arr | map(.matcher)) as $local_matchers |
+				$local_arr + ($tpl_arr | map(select(.matcher as $m | $local_matchers | index($m) | not)))
+			)
+		}) | from_entries) as $merged_shared_hooks |
 
 		# Merge permissions.allow: union
 		((.[0].permissions.allow // []) + (.[1].permissions.allow // []) | unique) as $merged_perms |
@@ -268,7 +287,7 @@ merge_settings() {
 		# Build result: start with local, add missing pieces
 		.[1]
 		| .permissions.allow = $merged_perms
-		| .hooks = ((.hooks // {}) + ($new_hooks | from_entries))
+		| .hooks = ((.hooks // {}) + ($new_hooks | from_entries) + $merged_shared_hooks)
 		| .enabledPlugins = ((.enabledPlugins // {}) + ($new_plugins | from_entries))
 		| reduce ($tpl_defaults[] | select(.key | IN($local_keys[]) | not)) as $s (.; .[$s.key] = $s.value)
 		| del(._comment)
@@ -279,10 +298,24 @@ merge_settings() {
 
 	# Report what changed
 
-	# Report new hooks
+	# Report new hooks (and new matchers within shared event keys)
 	for hook_event in $(jq -r '.hooks // {} | keys[] | select(. != "_comment")' "$template"); do
 		if jq -e ".hooks.\"${hook_event}\"" "${target}.bak" &>/dev/null; then
-			skip "hooks.$hook_event — already present (skipped)"
+			# Event already exists locally — diff matcher arrays and report any
+			# template matchers that were appended by the union-merge.
+			local added_matchers
+			added_matchers=$(jq -r --arg ev "$hook_event" --slurpfile bak "${target}.bak" '
+				(($bak[0].hooks[$ev] // []) | map(.matcher)) as $local_ms |
+				(.hooks[$ev] // []) | map(.matcher) | map(select(. as $m | $local_ms | index($m) | not)) | .[]
+			' "$target")
+			if [[ -z "$added_matchers" ]]; then
+				skip "hooks.$hook_event — already present (skipped)"
+			else
+				while IFS= read -r m; do
+					[[ -z "$m" ]] && continue
+					info "hooks.$hook_event — matcher \"$m\" added"
+				done <<<"$added_matchers"
+			fi
 		else
 			info "hooks.$hook_event — added"
 		fi
@@ -446,14 +479,30 @@ if [[ "$CHECK_MODE" == true ]]; then
 		echo ""
 		echo "Settings"
 		echo "──────────────────────────────────────────"
-		# Check for missing hooks
+		# Check for missing hooks AND missing matchers within existing event arrays
 		for hook_event in $(jq -r '.hooks // {} | keys[] | select(. != "_comment")' "$REPO_DIR/config/settings.template.json"); do
 			total=$((total + 1))
 			if ! jq -e ".hooks.\"${hook_event}\"" "$CLAUDE_DIR/settings.json" &>/dev/null; then
 				drift "settings.json — missing hook: $hook_event"
 				drifted=$((drifted + 1))
 			else
-				info "settings.json hook $hook_event (present)"
+				# Event present — but does the local array cover every
+				# template matcher? Report any missing matchers as drift.
+				missing_matchers=$(jq -r \
+					--arg ev "$hook_event" \
+					--slurpfile localf "$CLAUDE_DIR/settings.json" '
+					(($localf[0].hooks[$ev] // []) | map(.matcher)) as $local_ms |
+					(.hooks[$ev] // []) | map(.matcher) | map(select(. as $m | $local_ms | index($m) | not)) | .[]
+				' "$REPO_DIR/config/settings.template.json")
+				if [[ -n "$missing_matchers" ]]; then
+					while IFS= read -r m; do
+						[[ -z "$m" ]] && continue
+						drift "settings.json — missing matcher \"$m\" in event $hook_event"
+					done <<<"$missing_matchers"
+					drifted=$((drifted + 1))
+				else
+					info "settings.json hook $hook_event (present)"
+				fi
 			fi
 		done
 		# Check for missing plugins
