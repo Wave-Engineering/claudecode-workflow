@@ -326,7 +326,12 @@ One `Agent` call, `subagent_type: general-purpose`. Pass the wave's `kahuna_bran
 >    - `STRONG` / `MEDIUM` → `pr_merge(skip_train=true)` for all.
 >    - `WEAK` / `ORACLE_REQUIRED` → sequential merge via the merge queue (no skip).
 >    Single-issue flights skip commutativity entirely.
-> 5. Merge all flight PRs via `pr_merge`. On merge, call `wave_close_issue(X)` and `wave_record_mr(issue_number=X, mr_ref=<url>)` per issue. Call `wave_flight_done(M)` after all merges land. Then fire-and-forget the auto-updating Discord embed: `./scripts/discord-status-post --channel-id 1487386934094462986 --state-dir .claude/status` (background, non-blocking; failures logged and ignored — Discord is informational, never a gate).
+> 5. Merge all flight PRs via `pr_merge`. On merge, per issue X:
+>    a. `wave_close_issue(X)`
+>    b. `wave_record_mr(issue_number=X, mr_ref=<url>)`
+>    c. Read `**Plan:** #M` from the story issue's `## Metadata` section (via `spec_get(issue_ref=X)`). If `M` is present and not `N/A`, call `plan_mark_story_done({plan_ref: M, story_id: X})`. The handler is `warn_only: true` — a failure is logged to the merge report but does NOT abort the merge sequence. (The handler ships in `mcp-server-sdlc`; until it lands, the call surfaces as a warn-only logged failure per the same contract.)
+>
+>    Call `wave_flight_done(M)` after all merges land. Then fire-and-forget the auto-updating Discord embed: `./scripts/discord-status-post --channel-id 1487386934094462986 --state-dir .claude/status` (background, non-blocking; failures logged and ignored — Discord is informational, never a gate).
 > 6. `git checkout main && git pull` in the target repo.
 > 7. Write `<wave-root>/flight-<M>/merge-report.md` (per-issue PR URL, CI status, merge strategy, reviewer-pass summary per issue from the Step 3c.5 dispatch, anomalies).
 >
