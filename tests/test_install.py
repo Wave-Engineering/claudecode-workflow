@@ -511,30 +511,56 @@ class TestInstallSyntheticTree:
             f"stdout: {result.stdout}\nstderr: {result.stderr}"
         )
 
+        # Cellar + symlink-farm contract (#560, recommendation B):
+        # - Cellar at ~/.claude/scripts/ holds the full recursive tree
+        #   (top-level + nested), preserving exec bits and structure.
+        # - ~/.local/bin/ holds symlinks ONLY for top-level Cellar entries.
+        cellar = home / ".claude" / "scripts"
         bin_dir = home / ".local" / "bin"
-        # Flat + nested + doubly-nested all landed.
-        assert (bin_dir / "foo").exists(), "flat top-level script missing"
-        assert (bin_dir / "sub" / "bar").exists(), "single-nested script missing"
-        assert (bin_dir / "sub" / "baz" / "qux").exists(), (
-            "double-nested script missing"
+
+        # Cellar mirrors the source tree end-to-end (top-level + nested).
+        assert (cellar / "foo").exists(), "flat top-level script missing in Cellar"
+        assert (cellar / "sub" / "bar").exists(), (
+            "single-nested script missing in Cellar"
         )
-        # Executable bits preserved.
-        assert os.access(str(bin_dir / "foo"), os.X_OK)
-        assert os.access(str(bin_dir / "sub" / "bar"), os.X_OK)
-        assert os.access(str(bin_dir / "sub" / "baz" / "qux"), os.X_OK)
-        # Non-executable doc copied, NOT marked executable.
-        readme = bin_dir / "sub" / "README.md"
-        assert readme.exists(), "non-executable doc not copied"
+        assert (cellar / "sub" / "baz" / "qux").exists(), (
+            "double-nested script missing in Cellar"
+        )
+        # Executable bits preserved end-to-end in the Cellar.
+        assert os.access(str(cellar / "foo"), os.X_OK)
+        assert os.access(str(cellar / "sub" / "bar"), os.X_OK)
+        assert os.access(str(cellar / "sub" / "baz" / "qux"), os.X_OK)
+        # Non-executable doc copied to Cellar, NOT marked executable.
+        readme = cellar / "sub" / "README.md"
+        assert readme.exists(), "non-executable doc not copied to Cellar"
         assert not os.access(str(readme), os.X_OK), (
-            "non-executable doc was incorrectly chmod'd +x"
+            "non-executable doc was incorrectly chmod'd +x in Cellar"
         )
-        # Excluded subtree not copied.
-        assert not (bin_dir / "excluded" / "__pycache__" / "y").exists(), (
+        # Excluded subtree not copied to Cellar either.
+        assert not (cellar / "excluded" / "__pycache__" / "y").exists(), (
             "excluded __pycache__ subtree was copied"
         )
 
+        # Symlink farm: only top-level entries are symlinked into ~/.local/bin/.
+        # Nested entries (sub/, sub/baz/, etc.) stay Cellar-only per
+        # recommendation B from #560.
+        assert (bin_dir / "foo").is_symlink(), (
+            "top-level script should be a symlink in the farm"
+        )
+        assert not (bin_dir / "sub").exists(), (
+            "subtree directories should NOT be mirrored into ~/.local/bin/ "
+            "(granularity B per #560)"
+        )
+
     def test_prune_removes_orphan(self, tmp_path: Path) -> None:
-        """--prune removes installed files whose source no longer exists."""
+        """--prune (legacy, manifest-based) removes ~/.local/bin/<rel> files
+        whose source under scripts/<rel> no longer exists.
+
+        Note: under #560's Cellar layout, structural orphan rot is killed
+        by the cellar-wipe at install time, so --prune is effectively a
+        backwards-compat code path. We exercise it with a synthetic
+        manifest entry to confirm it still functions.
+        """
         repo = self._build_synthetic_repo(tmp_path)
         home = tmp_path / "home"
         (home / ".local" / "bin").mkdir(parents=True)
@@ -553,7 +579,9 @@ class TestInstallSyntheticTree:
         ).returncode
         assert rc == 0, "first install failed"
 
-        # Plant an orphan (the manifest will pick it up since we'll add it).
+        # Plant an orphan (manifest-tracked plain file under ~/.local/bin/).
+        # The legacy --prune walks the manifest and removes plain files
+        # whose source under scripts/ no longer exists.
         bin_dir = home / ".local" / "bin"
         orphan = bin_dir / "ghost"
         orphan.write_text("#!/bin/bash\necho gone\n")
@@ -576,14 +604,24 @@ class TestInstallSyntheticTree:
         assert not orphan.exists(), "orphan was not pruned"
         # Backup retained.
         assert (bin_dir / "ghost.bak").exists(), "orphan backup missing"
-        # Real files still present.
-        assert (bin_dir / "foo").exists(), "prune removed live top-level script"
-        assert (bin_dir / "sub" / "bar").exists(), (
-            "prune removed live nested script"
+        # Cellar live files still present (top-level + nested).
+        cellar = home / ".claude" / "scripts"
+        assert (cellar / "foo").exists(), "prune removed live top-level Cellar entry"
+        assert (cellar / "sub" / "bar").exists(), (
+            "prune removed live nested Cellar entry"
+        )
+        # Symlink farm top-level still present.
+        assert (bin_dir / "foo").is_symlink(), (
+            "prune removed live top-level symlink-farm entry"
         )
 
     def test_check_reports_nested_drift(self, tmp_path: Path) -> None:
-        """--check reports drift for missing nested files (not just top-level)."""
+        """--check reports drift for missing nested files in the Cellar.
+
+        Under #560 the Cellar (~/.claude/scripts/) holds the full recursive
+        tree (top-level + nested). Deleting a nested Cellar entry should
+        surface as drift — the tree no longer matches the source.
+        """
         repo = self._build_synthetic_repo(tmp_path)
         home = tmp_path / "home"
         (home / ".local" / "bin").mkdir(parents=True)
@@ -601,8 +639,8 @@ class TestInstallSyntheticTree:
         ).returncode
         assert rc == 0, "install failed"
 
-        # Delete a nested file; --check should flag the drift.
-        target = home / ".local" / "bin" / "sub" / "bar"
+        # Delete a nested Cellar file; --check should flag the drift.
+        target = home / ".claude" / "scripts" / "sub" / "bar"
         assert target.exists()
         target.unlink()
 
@@ -615,7 +653,7 @@ class TestInstallSyntheticTree:
         )
         assert result.returncode == 0, "check exited non-zero"
         assert "sub/bar" in result.stdout, (
-            f"--check did not report missing nested file:\n{result.stdout}"
+            f"--check did not report missing nested Cellar file:\n{result.stdout}"
         )
         assert "out of sync" in result.stdout.lower(), (
             f"--check did not flag drift:\n{result.stdout}"
