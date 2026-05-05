@@ -182,6 +182,8 @@ On session start, run `/engage` to detect platform, resolve identity, load conte
 
 If the session was started with `--channels`, a Discord watcher will push notifications. See `docs/discord-watcher.md` for the addressing convention, signature format, and echo-filter rules.
 
+The MCP fleet writes a unified structured-event log to `~/.claude/logs/mcp.jsonl`. Rotation policy and operational commands: `docs/operations/log-rotation.md`.
+
 ---
 
 ## MANDATORY: Post-Compaction Rules Confirmation

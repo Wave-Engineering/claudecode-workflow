@@ -5,17 +5,20 @@
 # into the correct locations on the local machine.
 #
 # Usage:
-#   ./install                 Install everything
-#   ./install --dry-run       Show what would be done without doing it
-#   ./install --check         Show drift between repo and installed versions
-#   ./install --skills        Install skills only
-#   ./install --scripts       Install scripts only (also builds packages from src/)
-#   ./install --config        Install config files only (smart-merges settings.json)
-#   ./install --mcps          Install MCP servers only (via mcps.json manifest)
-#   ./install --crystallizer  Install context-crystallizer only
-#   ./install --no-mcps       Install everything except MCP servers
-#   ./install --prune         Remove installed files whose source no longer exists
-#   ./install --yes           Non-interactive (assume yes for --prune confirmations)
+#   ./install                    Install everything
+#   ./install --dry-run          Show what would be done without doing it
+#   ./install --check            Show drift between repo and installed versions
+#   ./install --skills           Install skills only
+#   ./install --scripts          Install scripts only (also builds packages from src/)
+#   ./install --config           Install config files only (smart-merges settings.json)
+#   ./install --mcps             Install MCP servers only (via mcps.json manifest)
+#   ./install --crystallizer     Install context-crystallizer only
+#   ./install --no-mcps          Install everything except MCP servers
+#   ./install --with-logrotate   Install logrotate policy for ~/.claude/logs/mcp.jsonl
+#                                  (Linux only; no-op elsewhere). Implies non-interactive.
+#   ./install --without-logrotate Skip logrotate install (suppresses the prompt).
+#   ./install --prune            Remove installed files whose source no longer exists
+#   ./install --yes              Non-interactive (assume yes for --prune confirmations)
 #
 # Recursion: scripts/ is walked recursively. Files at scripts/<sub>/path are
 # mirrored to ~/.local/bin/<sub>/path with executable bit preserved. Excluded
@@ -48,6 +51,8 @@ INSTALL_SCRIPTS=true
 INSTALL_CONFIG=true
 INSTALL_MCPS=true
 INSTALL_CRYSTALLIZER=true
+# Logrotate is a tri-state: "prompt" by default, forced on/off by flag.
+LOGROTATE_MODE=prompt
 
 # Subtree names excluded from the recursive scripts/ walk.
 SCRIPTS_EXCLUDE_NAMES=(tests fixtures __pycache__ .pytest_cache)
@@ -100,6 +105,14 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--no-mcps)
 		INSTALL_MCPS=false
+		shift
+		;;
+	--with-logrotate)
+		LOGROTATE_MODE=on
+		shift
+		;;
+	--without-logrotate)
+		LOGROTATE_MODE=off
 		shift
 		;;
 	--prune)
@@ -342,6 +355,103 @@ merge_settings() {
 	fi
 }
 
+# --- Logrotate helpers --------------------------------------------------------
+# Constants for the logrotate policy. Source template lives under
+# assets/logrotate/cc-mcp-logs and contains a {{HOME}} marker that must be
+# rendered to the installing user's home before dropping into /etc.
+LOGROTATE_SRC="$REPO_DIR/assets/logrotate/cc-mcp-logs"
+LOGROTATE_DEST="/etc/logrotate.d/cc-mcp-logs"
+LOGROTATE_LOGS_DIR="$HOME/.claude/logs"
+
+# True iff this host has a logrotate(8) we can drive. Linux + logrotate on PATH.
+logrotate_supported() {
+	[[ "$(uname -s)" == "Linux" ]] && command -v logrotate &>/dev/null
+}
+
+# Render the templated config to stdout: substitute {{HOME}} with $HOME.
+render_logrotate_template() {
+	# Use a literal sed delimiter that cannot appear in a Linux home path.
+	# Any character is fine; we use '|' since absolute paths contain '/'.
+	sed "s|{{HOME}}|$HOME|g" "$LOGROTATE_SRC"
+}
+
+# Install the rendered config to /etc/logrotate.d/cc-mcp-logs and run a
+# dry-run validation. Returns non-zero on failure.
+install_logrotate_config() {
+	local tmp
+	tmp="$(mktemp)"
+	render_logrotate_template >"$tmp"
+
+	if [[ "$DRY_RUN" == true ]]; then
+		info "(dry-run) Would install logrotate config to $LOGROTATE_DEST"
+		info "(dry-run) Would run: sudo logrotate -d $LOGROTATE_DEST"
+		rm -f "$tmp"
+		return 0
+	fi
+
+	if sudo install -m 0644 "$tmp" "$LOGROTATE_DEST"; then
+		info "Installed $LOGROTATE_DEST"
+	else
+		warn "Failed to install $LOGROTATE_DEST (sudo install)"
+		rm -f "$tmp"
+		return 1
+	fi
+	rm -f "$tmp"
+
+	# Dry-run validation: logrotate -d prints what it would do without rotating.
+	if sudo logrotate -d "$LOGROTATE_DEST" >/dev/null 2>&1; then
+		ok "logrotate -d validation passed"
+	else
+		warn "logrotate -d reported errors — re-run manually to diagnose:"
+		warn "  sudo logrotate -d $LOGROTATE_DEST"
+		return 1
+	fi
+}
+
+# Report logrotate status for --check mode.
+# Returns 0 if all-in-sync, 1 if any drift.
+check_logrotate_status() {
+	if ! logrotate_supported; then
+		info "logrotate (skipped — non-Linux or logrotate not installed)"
+		return 0
+	fi
+	local d=0
+	if [[ ! -f "$LOGROTATE_DEST" ]]; then
+		drift "logrotate config $LOGROTATE_DEST — NOT INSTALLED"
+		return 1
+	fi
+	# Compare installed vs rendered template; report drift if differs.
+	local rendered
+	rendered="$(mktemp)"
+	render_logrotate_template >"$rendered"
+	if ! sudo diff -q "$rendered" "$LOGROTATE_DEST" &>/dev/null; then
+		drift "logrotate config $LOGROTATE_DEST — DIFFERS from repo template"
+		d=1
+	else
+		info "logrotate config $LOGROTATE_DEST (in sync)"
+	fi
+	rm -f "$rendered"
+	# Last-rotation mtime: any mcp.jsonl.1 / mcp.jsonl.1.gz / mcp.jsonl.N[.gz]
+	# under the logs dir indicates the rotation has fired at least once.
+	if [[ -d "$LOGROTATE_LOGS_DIR" ]]; then
+		local newest
+		newest=$(find "$LOGROTATE_LOGS_DIR" -maxdepth 1 \
+			\( -name 'mcp.jsonl.[0-9]*' -o -name 'mcp.jsonl.[0-9]*.gz' \) \
+			-type f -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1)
+		if [[ -n "$newest" ]]; then
+			local newest_path newest_mtime
+			newest_path="${newest#* }"
+			newest_mtime=$(stat -c '%y' "$newest_path" 2>/dev/null || echo 'unknown')
+			info "last rotation: $newest_path ($newest_mtime)"
+		else
+			info "no rotated files yet under $LOGROTATE_LOGS_DIR — rotation has not fired"
+		fi
+	else
+		info "$LOGROTATE_LOGS_DIR does not exist yet — no rotation history"
+	fi
+	return $d
+}
+
 # --- Prune mode ---------------------------------------------------------------
 # Walk previously-installed files (manifest + current source set), remove the
 # ones whose source under scripts/ no longer exists. Backed-up to <file>.bak
@@ -569,6 +679,15 @@ if [[ "$CHECK_MODE" == true ]]; then
 		fi
 	fi
 
+	# Logrotate
+	echo ""
+	echo "Logrotate"
+	echo "──────────────────────────────────────────"
+	total=$((total + 1))
+	if ! check_logrotate_status; then
+		drifted=$((drifted + 1))
+	fi
+
 	# External dependencies
 	# shellcheck source=scripts/ci/check-deps.sh
 	source "$REPO_DIR/scripts/ci/check-deps.sh"
@@ -781,6 +900,52 @@ if [[ "$INSTALL_MCPS" == true && -f "$REPO_DIR/mcps.json" ]]; then
 				echo ""
 			fi
 		done
+	fi
+fi
+
+# --- Install logrotate policy -------------------------------------------------
+# Only fires on Linux with logrotate(8) on PATH. macOS and other platforms
+# print a single notice and skip — no error, no prompt. The mode is set by
+# --with-logrotate / --without-logrotate; absent either flag the user is
+# prompted (unless --yes was passed, which is taken as consent).
+if [[ "$INSTALL_CONFIG" == true || "$LOGROTATE_MODE" != "prompt" ]]; then
+	echo ""
+	echo "Logrotate (~/.claude/logs/mcp.jsonl)"
+	echo "──────────────────────────────────────────"
+	if ! logrotate_supported; then
+		skip "Skipping — logrotate(8) is Linux-only and not present here ($(uname -s))."
+		skip "macOS users: see docs/operations/log-rotation.md for newsyslog guidance."
+	else
+		do_logrotate=false
+		case "$LOGROTATE_MODE" in
+		on)
+			do_logrotate=true
+			;;
+		off)
+			skip "Skipping — --without-logrotate."
+			;;
+		prompt)
+			if [[ "$ASSUME_YES" == true ]]; then
+				do_logrotate=true
+				info "--yes given — installing logrotate policy."
+			elif [[ "$DRY_RUN" == true ]]; then
+				info "(dry-run) Would prompt to install logrotate policy."
+			elif [[ -t 0 ]]; then
+				read -r -p "Install logrotate policy for ~/.claude/logs/mcp.jsonl? [Y/n] " reply || reply=""
+				case "$reply" in
+				n | N | no | NO) skip "Skipped by user." ;;
+				*) do_logrotate=true ;;
+				esac
+			else
+				# Non-interactive (no tty) and no flag — default to skip with a notice.
+				skip "Non-interactive shell and no --with-logrotate / --without-logrotate flag — skipping."
+				info "Re-run with ./install --with-logrotate to enable rotation."
+			fi
+			;;
+		esac
+		if [[ "$do_logrotate" == true ]]; then
+			install_logrotate_config || warn "logrotate install reported issues — see above."
+		fi
 	fi
 fi
 
