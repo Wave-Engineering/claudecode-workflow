@@ -53,14 +53,23 @@ if [[ -z "$LAST_ASSISTANT_TEXT" || "$LAST_ASSISTANT_TEXT" == "null" ]]; then
 	exit 0
 fi
 
-# Two alternations:
+# Three alternations:
 #   1. Interrogative — trigger word (shall/should/can/may/do you want me to/
 #      ready for|to) within ~40 chars of "precheck", ending with "?" within
 #      ~80 chars. Catches direct asking like "Shall I run /precheck?".
 #   2. Deferral — "let me know" idiom near "precheck", no "?" required.
 #      Catches "Let me know when I should run precheck." which is asking by
 #      deferral.
-# Both case-insensitive. Negative cases the regex must NOT match: past-tense
+#   3. Inverted — "precheck" appears BEFORE the trigger word (broadened
+#      trigger set: should/shall/need/ready/appropriate), within the same
+#      sentence (no sentence-terminating punctuation between), ending with
+#      "?". Catches "Is /precheck something I should run?", "Would /precheck
+#      be appropriate here?", "Precheck — should I do that now?". The
+#      sentence-boundary character class ([^.?!\n]) is the false-positive
+#      guard for cases like "/precheck completed. Should I commit now?" —
+#      the period severs precheck from the trigger word so the inverted
+#      pattern declines to fire. Issue cc-workflow#545.
+# All case-insensitive. Negative cases the regex must NOT match: past-tense
 # precheck mentions, different-command questions ("Shall I run /scp?"),
 # distant trigger-and-precheck pairs, and ordinary checklist text.
 #
@@ -69,9 +78,11 @@ fi
 # kill-switch exists for those cases.
 PATTERN_INTERROGATIVE='(?i)\b(shall|should|can|may|do you want me to|ready (for|to))\b.{0,40}/?precheck.{0,80}\?'
 PATTERN_DEFERRAL='(?i)\blet me know\b.{0,40}/?precheck'
+PATTERN_INVERTED='(?i)/?precheck[^.?!\n]{0,40}\b(should|shall|need|ready|appropriate)\b[^.?!\n]{0,40}\?'
 
 if printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_INTERROGATIVE" 2>/dev/null ||
-	printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_DEFERRAL" 2>/dev/null; then
+	printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_DEFERRAL" 2>/dev/null ||
+	printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_INVERTED" 2>/dev/null; then
 	cat <<'JSON'
 {"decision":"block","reason":"Per CLAUDE.md MANDATORY Pre-Commit Gate: don't ask whether to run /precheck — run it. The checklist that /precheck presents is the approval gate; the start of /precheck is unilateral. Continue this turn by invoking /precheck now."}
 JSON
