@@ -83,6 +83,25 @@ Every issue MUST be wave-pattern quality: detailed enough that a spec-driven age
 
 ---
 
+## MANDATORY: WAVE_AXIOMS — Load-Bearing Rules for Wave-Pattern Work
+
+**READ `WAVE_AXIOMS.md` FIRST when invoking `/wavemachine`, `/nextwave`, `/assesswaves`, or `/prepwaves`.** That file is the canonical, load-mandatory constitutional layer for wave-pattern execution. Each axiom binds to a specific observed-and-forbidden agent behavior; violation is a bug, not a judgment call.
+
+The eight axioms (full text in `WAVE_AXIOMS.md` at the cc-workflow root):
+
+1. **Serial is a valid wave topology.** Wave campaigns are justified by autonomous batched execution, not parallelism.
+2. **The campaign is autonomous from invocation to terminal state.** No mid-campaign questions. No "shall I continue?"
+3. **The Legal Exits list is closed.** Plan-reality drift, hard fault, explicit user halt. No others.
+4. **When unsettled, use the Concerns Channel. Do not stop.** Post `[concern]`, ping if urgent, continue.
+5. **Continuing is cheaper than stopping. Default forward.** Continuation costs revertible commits; stops cost unrecoverable wall-clock.
+6. **Approval frequency is set by the invoked command.** `/nextwave` = per-wave; `/wavemachine` = at terminal state. The agent never adds gates.
+7. **`/assesswaves` measures justification, not topology suitability.** YES whenever count ≥ 4 or per-issue wall-clock is non-trivial.
+8. **These axioms supersede agent judgment in their domain.** Disagreement is a reason to PR `WAVE_AXIOMS.md`, never to override in the moment.
+
+Disagreement with an axiom is a reason to update `WAVE_AXIOMS.md` via PR — never to override it in the moment.
+
+---
+
 ## Branching Strategy
 
 Trunk-based flow. Always branch from `main`: `git checkout main && git pull && git checkout -b <type>/<N>-description`. Types: `feature`, `fix`, `chore`, `doc`. PR/MRs target `main`.
