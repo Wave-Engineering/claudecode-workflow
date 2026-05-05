@@ -230,14 +230,16 @@ For each flight M in the plan, in order:
 
 The Orchestrator issues one `Agent` tool-use block containing N `Agent` calls — one per issue in flight M — **in the same assistant message**. This is the only place in the skill where parallelism actually happens. Do NOT issue the calls in separate messages; do NOT use `run_in_background`; do NOT shell out.
 
+**Non-negotiable — `run_in_background` is forbidden here.** The Orchestrator MUST omit the parameter entirely (the default routes synchronously). Passing `run_in_background: true` is a contract break, not a tuning knob. The collection step (3c) below assumes every same-block Agent call returns synchronously with its canonical PASS/FAIL line; an async/background return for any one of the N calls would split the batch and break deterministic collection. This is a **harness contract**: same-block Agent calls without the explicit `run_in_background: true` flag MUST all route synchronously, with no internal heuristic backgrounding any subset. If a harness ever returns an "Async agent launched" surface for a call the Orchestrator did not flag as background, that is a harness bug — file it; do NOT add a polling fallback here. (The explicit case — when a caller intentionally passes `run_in_background: true` — still routes async; the contract targets the implicit case only. See cc-workflow#490 for the source incident.)
+
 Each Agent call: `subagent_type: general-purpose`, prompt = the Flight stub below (filled in), and for same-repo waves `isolation: "worktree"` (for cross-repo, omit — worktrees were pre-created in Step 1.5 and are referenced by path in the prompt).
 
 ### 3c. Collect returns.
 
-Each Flight's last message is exactly one line matching `^(/tmp/wavemachine/[^\s]+/results\.md) (PASS|FAIL)$`. Orchestrator:
+Each Flight's last message is exactly one line matching `^(/tmp/wavemachine/[^\s]+/results\.md) (PASS|FAIL)$`. Per the Step 3b harness contract, all N returns are synchronous and arrive together in the same tool-result block — no polling, no waiting on bus DONE sentinels for collection, no fallback path for "one of N came back async." Orchestrator:
 
 - Parses each line. Malformed → record as FAIL, note "malformed return".
-- Verifies the `DONE` sentinel (`/tmp/wavemachine/.../issue-<X>/DONE`) exists and contains `PASS` or `FAIL` matching the returned line. Mismatch → FAIL.
+- Verifies the `DONE` sentinel (`/tmp/wavemachine/.../issue-<X>/DONE`) exists and contains `PASS` or `FAIL` matching the returned line. Mismatch → FAIL. (The DONE sentinel is a cross-check on the Flight's self-report, not a collection mechanism.)
 - Reads each `results.md` into context (small, summary + checklist).
 
 ### 3c.5. Reviewer pass (Orchestrator dispatches — runs before the gate).
