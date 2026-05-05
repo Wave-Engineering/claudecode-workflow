@@ -248,10 +248,27 @@ def _plan_default_repo(plan_data: dict) -> str | None:
 
 
 def _issue_repo(plan_data: dict, issue: dict) -> str | None:
-    """Resolve the effective repo for *issue* — per-issue overrides plan-level."""
+    """Resolve the effective repo for *issue*.
+
+    Resolution order:
+
+    1. Per-issue ``repo`` override — wins.
+    2. Per-issue qualified ``ref`` field (e.g. ``owner/name#N``) — when no
+       per-issue ``repo`` is set, parse the repo prefix off the ref so a
+       cross-repo plan written from a different orchestrator repo doesn't
+       silently substitute the orchestrator slug into ``state.json`` keys
+       (issue #521).
+    3. Plan-level default ``repo``.
+    4. ``None``.
+    """
     per_issue = issue.get("repo")
     if isinstance(per_issue, str) and per_issue:
         return per_issue
+    ref = issue.get("ref")
+    if isinstance(ref, str) and "#" in ref:
+        repo_part, _, _ = ref.rpartition("#")
+        if repo_part:
+            return repo_part
     return _plan_default_repo(plan_data)
 
 
@@ -297,7 +314,20 @@ def _all_issue_refs(plan_data: dict, default_repo: str | None = None) -> set[str
     for phase in plan_data.get("phases", []):
         for wave in phase.get("waves", []):
             for issue in wave.get("issues", []):
-                repo = issue.get("repo") if isinstance(issue.get("repo"), str) and issue.get("repo") else plan_default
+                # Per-issue repo wins; then a qualified ``ref`` field; then
+                # the plan-level default.  Mirrors ``_issue_repo()`` so
+                # collision detection sees the same key shape ``init`` and
+                # ``extend_init`` actually write.
+                per_issue_repo = issue.get("repo")
+                if isinstance(per_issue_repo, str) and per_issue_repo:
+                    repo = per_issue_repo
+                else:
+                    ref = issue.get("ref")
+                    if isinstance(ref, str) and "#" in ref:
+                        repo_part, _, _ = ref.rpartition("#")
+                        repo = repo_part or plan_default
+                    else:
+                        repo = plan_default
                 refs.add(_compose_issue_key(issue["number"], repo))
     return refs
 
