@@ -18,6 +18,9 @@ Thumbs.db
 # Generated files
 .status-panel.html
 
+# Transient validate.sh output dump
+validate_output.txt
+
 # Python bytecode
 __pycache__/
 *.pyc
