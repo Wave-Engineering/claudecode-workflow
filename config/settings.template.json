@@ -62,7 +62,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.local/bin/hooks/nerf/session-start-compact.sh"
+            "command": "~/.claude/scripts/hooks/nerf/session-start-compact.sh"
           }
         ]
       }
@@ -73,7 +73,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.local/bin/hooks/nerf/pre-compact.sh"
+            "command": "~/.claude/scripts/hooks/nerf/pre-compact.sh"
           }
         ]
       }

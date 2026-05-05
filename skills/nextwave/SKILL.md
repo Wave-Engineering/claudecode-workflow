@@ -26,7 +26,7 @@ CC sub-agents do not have the `Agent`/`Task` tool. Only the top-level session ca
 - Spec: `spec_validate_structure`, `spec_get`, `spec_acceptance_criteria`
 - Commutativity + merge (used by Prime post-flight): `commutativity_verify`, `pr_create`, `pr_wait_ci`, `pr_merge`
 - CI trust (auto mode): `wave_ci_trust_level`
-- Bus primitives (bash): `scripts/wavebus/wave-init`, `scripts/wavebus/flight-finalize`, `scripts/wavebus/wave-cleanup`
+- Bus primitives (bash): `scripts/wavebus/wave-init`, `scripts/wavebus/flight-finalize`, `scripts/wavebus/wave-cleanup`, `scripts/wavebus/changelog-aggregate`
 - Notifications: `mcp__disc-server__disc_send` — post wave status to `#wave-status` (`1487386934094462986`)
 - Observability: `mcp-log` — emit lifecycle events to `~/.claude/logs/mcp.jsonl` for temporal correlation against sdlc-server `tool_call` events. See `docs/mcp-logging-standard.md`.
 
@@ -230,14 +230,16 @@ For each flight M in the plan, in order:
 
 The Orchestrator issues one `Agent` tool-use block containing N `Agent` calls — one per issue in flight M — **in the same assistant message**. This is the only place in the skill where parallelism actually happens. Do NOT issue the calls in separate messages; do NOT use `run_in_background`; do NOT shell out.
 
+**Non-negotiable — `run_in_background` is forbidden here.** The Orchestrator MUST omit the parameter entirely (the default routes synchronously). Passing `run_in_background: true` is a contract break, not a tuning knob. The collection step (3c) below assumes every same-block Agent call returns synchronously with its canonical PASS/FAIL line; an async/background return for any one of the N calls would split the batch and break deterministic collection. This is a **harness contract**: same-block Agent calls without the explicit `run_in_background: true` flag MUST all route synchronously, with no internal heuristic backgrounding any subset. If a harness ever returns an "Async agent launched" surface for a call the Orchestrator did not flag as background, that is a harness bug — file it; do NOT add a polling fallback here. (The explicit case — when a caller intentionally passes `run_in_background: true` — still routes async; the contract targets the implicit case only. See cc-workflow#490 for the source incident.)
+
 Each Agent call: `subagent_type: general-purpose`, prompt = the Flight stub below (filled in), and for same-repo waves `isolation: "worktree"` (for cross-repo, omit — worktrees were pre-created in Step 1.5 and are referenced by path in the prompt).
 
 ### 3c. Collect returns.
 
-Each Flight's last message is exactly one line matching `^(/tmp/wavemachine/[^\s]+/results\.md) (PASS|FAIL)$`. Orchestrator:
+Each Flight's last message is exactly one line matching `^(/tmp/wavemachine/[^\s]+/results\.md) (PASS|FAIL)$`. Per the Step 3b harness contract, all N returns are synchronous and arrive together in the same tool-result block — no polling, no waiting on bus DONE sentinels for collection, no fallback path for "one of N came back async." Orchestrator:
 
 - Parses each line. Malformed → record as FAIL, note "malformed return".
-- Verifies the `DONE` sentinel (`/tmp/wavemachine/.../issue-<X>/DONE`) exists and contains `PASS` or `FAIL` matching the returned line. Mismatch → FAIL.
+- Verifies the `DONE` sentinel (`/tmp/wavemachine/.../issue-<X>/DONE`) exists and contains `PASS` or `FAIL` matching the returned line. Mismatch → FAIL. (The DONE sentinel is a cross-check on the Flight's self-report, not a collection mechanism.)
 - Reads each `results.md` into context (small, summary + checklist).
 
 ### 3c.5. Reviewer pass (Orchestrator dispatches — runs before the gate).
@@ -324,7 +326,12 @@ One `Agent` call, `subagent_type: general-purpose`. Pass the wave's `kahuna_bran
 >    - `STRONG` / `MEDIUM` → `pr_merge(skip_train=true)` for all.
 >    - `WEAK` / `ORACLE_REQUIRED` → sequential merge via the merge queue (no skip).
 >    Single-issue flights skip commutativity entirely.
-> 5. Merge all flight PRs via `pr_merge`. On merge, call `wave_close_issue(X)` and `wave_record_mr(issue_number=X, mr_ref=<url>)` per issue. Call `wave_flight_done(M)` after all merges land.
+> 5. Merge all flight PRs via `pr_merge`. On merge, per issue X:
+>    a. `wave_close_issue(X)`
+>    b. `wave_record_mr(issue_number=X, mr_ref=<url>)`
+>    c. Read `**Plan:** #M` from the story issue's `## Metadata` section (via `spec_get(issue_ref=X)`). If `M` is present and not `N/A`, call `plan_mark_story_done({plan_ref: M, story_id: X})`. The handler is `warn_only: true` — a failure is logged to the merge report but does NOT abort the merge sequence. (The handler ships in `mcp-server-sdlc`; until it lands, the call surfaces as a warn-only logged failure per the same contract.)
+>
+>    Call `wave_flight_done(M)` after all merges land. Then fire-and-forget the auto-updating Discord embed: `./scripts/discord-status-post --channel-id 1487386934094462986 --state-dir .claude/status` (background, non-blocking; failures logged and ignored — Discord is informational, never a gate).
 > 6. `git checkout main && git pull` in the target repo.
 > 7. Write `<wave-root>/flight-<M>/merge-report.md` (per-issue PR URL, CI status, merge strategy, reviewer-pass summary per issue from the Step 3c.5 dispatch, anomalies).
 >
@@ -360,8 +367,9 @@ After every flight has merged:
    >    - `SPEC CURRENT` → note in report; move on.
    >    - `SPEC STALE` → mechanical fix: update the issue with corrected paths/names; list changes in the report.
    >    - `SPEC BROKEN` → leave the issue alone; flag for user attention in the report.
-   > 4. `wave_complete()` (marks the current wave complete — takes no args; the server uses the active wave from state).
-   > 5. Write `<wave-root>/merge-report.md` (issues closed, PR URLs, flight breakdown, drift findings, deferred items, next-wave preview).
+   > 4. **CHANGELOG aggregation (mechanical — no gate).** Run `scripts/wavebus/changelog-aggregate <wave-root> <target-repo-path> wave-<N>` to merge per-issue `CHANGELOG.fragment.md` files into the target repo's `CHANGELOG.md` under `## Unreleased`. If the aggregator wrote to `CHANGELOG.md`, commit on a fresh `chore/wave-<N>-changelog` branch in the target repo, push, open a PR (`pr_create`) targeting `<kahuna_branch>` if set else `main`, wait for CI (`pr_wait_ci`), then `pr_merge`. No human gate — content was already approved at each flight's Step 3d gate; this step is purely mechanical aggregation. If the aggregator reports `no fragments found`, skip the commit/PR step entirely (no-op).
+   > 5. `wave_complete()` (marks the current wave complete — takes no args; the server uses the active wave from state).
+   > 6. Write `<wave-root>/merge-report.md` (issues closed, PR URLs, flight breakdown, drift findings, CHANGELOG aggregation result + PR URL if applicable, deferred items, next-wave preview).
    >
    > Final message — exactly one line:
    >
@@ -376,7 +384,7 @@ After every flight has merged:
 
 ## Step 5 — Cleanup
 
-- **Success path** (Prime(post-wave) returned `PASS`): call `scripts/wavebus/wave-cleanup <wave-root>`. Report "bus cleaned" in the final summary. Then remove any worktrees the wave created — both same-repo (CC `isolation: "worktree"`) and cross-repo (orchestrator-created).
+- **Success path** (Prime(post-wave) returned `PASS`): call `scripts/wavebus/wave-cleanup <wave-root>`. This rm -rf's the wave subtree, including every per-issue `CHANGELOG.fragment.md` written by the flights — Prime(post-wave) Step 4 already merged their content into the target repo's `CHANGELOG.md` under `## Unreleased` and opened the chore PR, so the fragments are intentionally ephemeral and disappear with the bus. Report "bus cleaned" in the final summary. Then remove any worktrees the wave created — both same-repo (CC `isolation: "worktree"`) and cross-repo (orchestrator-created).
 
   **Worktree-removal contract.** CC's worktree-isolation mechanism (and Flight sub-agents in general) leaves a git lock file on each Flight's worktree (`lock reason: "claude agent <id> (pid ...)"`). A single `git worktree remove --force` is NOT enough — git refuses to remove a locked working tree. The cleanup MUST unlock first (no-op if unlocked) and then force-remove:
 
@@ -431,6 +439,8 @@ This prompt is what each Flight sub-agent receives. Preserve the SPEC EXECUTOR b
 > - CI/CD: no more than 5 lines in any `run:`/`script:` block — extract shell scripts to `scripts/ci/`. No hardcoded secrets.
 > - Tests exercise REAL code paths. Mocks only for true external boundaries (network/fs/APIs). Every new function needs coverage. Assert meaningful outcomes. >2 mocks in one test = wrong approach.
 > - Report: what was implemented, files, test results, review findings, AC status, concerns. Do NOT report success on failing tests or unmet AC.
+>
+> **CHANGELOG fragment rule.** Do NOT edit `CHANGELOG.md` directly. If the issue introduces a user-visible change worth a changelog entry, write `CHANGELOG.fragment.md` in your issue dir at `<wave-root>/flight-<M>/issue-<X>/CHANGELOG.fragment.md`. The fragment is a markdown document with H3 category headings (`### Breaking`, `### Features`, `### Fixes`, `### Docs`, `### Chore`) followed by bullet lines. Prime(post-wave) aggregates every fragment in the wave into the target repo's `CHANGELOG.md` under `## Unreleased` (deterministic order: numeric flight, then numeric issue; identical bullets deduplicated). This unblocks `flight_partition` parallelism for waves whose stories all touch `CHANGELOG.md` — see `pattern_changelog_fragment_aggregation.md`.
 >
 > **After implementation, run the mechanical half of `/precheck` in the worktree:**
 >

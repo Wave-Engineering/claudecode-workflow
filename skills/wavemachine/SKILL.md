@@ -81,7 +81,7 @@ Once pre-flight passes:
    The first command writes a self-contained HTML snapshot of current wave state to `.status-panel.html` at the repo root. The second command opens it in the operator's default browser. Do not skip either half — the panel is the visual contract this skill maintains with the human, and a /wavemachine launch without an open panel is malformed. (See "Status Panel Lifecycle" below for what the panel does and does NOT do after launch.)
 3. **Detect CI trust** by calling `wave_ci_trust_level()` once. (The value is also cached by each `/nextwave auto` iteration; calling it here is informational — it shapes the start announcement.)
 4. **Pre-wave kahuna bootstrap** (see "Pre-Wave Kahuna Bootstrap" below). Runs exactly once per Plan on first `/wavemachine` invocation. On resume invocations the wave state already carries `kahuna_branch` and this step is a no-op.
-5. **Post to Discord.** `disc_send` to `#wave-status` (`1487386934094462986`): `"🌊 **Wavemachine started** — <project>, <N> waves pending. Agent: **<dev-name>** <dev-avatar>"`. Resolve identity from `/tmp/claude-agent-<md5>.json`. If `disc_send` fails, log and continue — Discord is informational, not a gate.
+5. **Post to Discord.** `disc_send` to `#wave-status` (`1487386934094462986`): `"🌊 **Wavemachine started** — <project>, <N> waves pending. Agent: **<dev-name>** <dev-avatar>"`. Resolve identity from `/tmp/claude-agent-<md5>.json`. If `disc_send` fails, log and continue — Discord is informational, not a gate. Then fire-and-forget the auto-updating embed card: `./scripts/discord-status-post --channel-id 1487386934094462986 --state-dir .claude/status` (background, non-blocking; failures logged and ignored).
 6. **Emit observability event.** `mcp-log wavemachine_start plan=<plan_id> waves=<N> kahuna=<kahuna_branch>` — timestamps autopilot start in the fleet logfile so post-mortem can correlate with sdlc-server tool_call events.
 
 ## Status Panel Lifecycle
@@ -97,7 +97,7 @@ This is a deliberate design choice: a static file has zero runtime cost, no auth
 
 In both cases the regeneration is **fire-and-forget** — we do NOT block the loop on it, we do NOT open a new browser tab (the operator's tab from launch is still pointed at the file), and a regeneration failure is logged but does not abort the loop. The operator refreshes when they want fresh data; the file is current within ~1 second of each lifecycle event.
 
-**What this is NOT.** This is not a live dashboard. If you want live-updating telemetry, look at `scripts/discord-status-post` (the embed it posts to `#wave-status` is PATCHed in place on every call) or the Discord notifications in the "Announcements" section below. The HTML panel is for at-a-glance overview; Discord is for the live timeline.
+**What this is NOT.** This is not a live dashboard. For live-updating telemetry, `/wavemachine` invokes `scripts/discord-status-post` as a fire-and-forget call at every state-change point (launch, post-`wave_complete`, post-`wave_flight_done`, and all five terminal exits) — the embed it posts to `#wave-status` is PATCHed in place on every call, so subscribers get a single auto-updating card rather than a stream of plain-text posts. The HTML panel is for at-a-glance overview; the Discord embed is for the live timeline.
 
 ## Pre-Wave Kahuna Bootstrap
 
@@ -152,6 +152,9 @@ loop:
 
      - "OK"      → run `generate-status-panel` (fire-and-forget;
                     auto-regen on wave_complete per "Status Panel Lifecycle"),
+                    then fire-and-forget
+                    `./scripts/discord-status-post --channel-id 1487386934094462986 --state-dir .claude/status`
+                    (PATCH the embed in place; failures logged and ignored),
                     then loop back to step 1
      - "BLOCKED" → stop; announce abort with the blocker detail
      - "FAIL"    → stop; announce abort with the failure detail
@@ -275,6 +278,7 @@ In every interrupt case:
 - Run `wave-status wavemachine-stop` immediately to clear the flag (the statusline must match reality).
 - **Leave the in-flight wave's bus tree in place** (`/tmp/wavemachine/<repo-slug>/wave-<N>/`). Do NOT call `wave-cleanup` on an interrupted wave — the partial state is forensic evidence for the human.
 - Regenerate `.status-panel.html` synchronously before announcing so the attachment captures the interrupted state: `generate-status-panel`.
+- Fire-and-forget the embed update: `./scripts/discord-status-post --channel-id 1487386934094462986 --state-dir .claude/status` (background, non-blocking; failures logged and ignored).
 - Announce the interrupt to `#wave-status` (`1487386934094462986`) with the panel attached: `disc_send(channel_id="1487386934094462986", message="⏸ **Wavemachine interrupted** — <project>, wave <id> mid-flight, bus preserved at <path>. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`.
 - Report to the user: which wave was interrupted, the bus root path, what was merged successfully before the interrupt, how to resume (re-run `/wavemachine` after reviewing the bus).
 
@@ -303,6 +307,7 @@ Before each terminal-event `disc_send` that includes `attach_path`, make sure th
 - This announcement runs AFTER the trust-score gate's all-green path (see "Trust-Score Gate and Auto-Merge"). In KAHUNA mode, the gate has already auto-merged kahuna→main and posted its own `✅ **Kahuna gate passed**` notification — this announcement closes out the wavemachine session.
 - In legacy non-KAHUNA mode (no `kahuna_branch` in wave state), the gate is skipped and this announcement runs directly when `wave_next_pending()` returns null.
 - Regenerate `.status-panel.html` synchronously before posting so the attachment is current: `generate-status-panel`.
+- Fire-and-forget the embed update: `./scripts/discord-status-post --channel-id 1487386934094462986 --state-dir .claude/status` (background, non-blocking; failures logged and ignored).
 - Discord `#wave-status`: `disc_send(channel_id="1487386934094462986", message="✅ **Wavemachine complete** — <project>, all <N> waves merged. Run /dod to verify. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
 - `mcp-log wavemachine_complete plan=<plan_id> status=OK waves_merged=<N>`
 - Vox (conversational, brief): name, team, project, "wavemachine complete, all waves merged".
@@ -310,6 +315,7 @@ Before each terminal-event `disc_send` that includes `attach_path`, make sure th
 **On gate-blocked completion** (KAHUNA mode, one or more trust signals failed):
 
 - Regenerate `.status-panel.html` synchronously before posting so the attachment captures the gate-blocked state: `generate-status-panel`.
+- Fire-and-forget the embed update: `./scripts/discord-status-post --channel-id 1487386934094462986 --state-dir .claude/status` (background, non-blocking; failures logged and ignored).
 - Per Procedure C / "Trust-Score Gate and Auto-Merge" any-red path: `disc_send(channel_id="1487386934094462986", message="🛑 **Kahuna gate blocked** — <project>, Plan #<plan_id>: <failing-signals summary>. MR <url> open for review. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
 - Vox alert: "Kahuna gate blocked for Plan <plan_id>. <N> signals red. Ready for your review."
 - `mcp-log --level warn wavemachine_complete plan=<plan_id> status=BLOCKED reason="kahuna gate blocked: <signals>"`
@@ -318,6 +324,7 @@ Before each terminal-event `disc_send` that includes `attach_path`, make sure th
 **On circuit-breaker trip** (`wave_health_check` non-HEALTHY):
 
 - Regenerate `.status-panel.html` synchronously before posting: `generate-status-panel`.
+- Fire-and-forget the embed update: `./scripts/discord-status-post --channel-id 1487386934094462986 --state-dir .claude/status` (background, non-blocking; failures logged and ignored).
 - Discord `#wave-status`: `disc_send(channel_id="1487386934094462986", message="🛑 **Wavemachine aborted (circuit breaker)** — <project>: <one-line health summary>. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
 - `mcp-log --level error wavemachine_complete plan=<plan_id> status=ABORTED reason="circuit breaker: <summary>"`
 - Call `wave_waiting("wavemachine aborted (circuit breaker): <one-line summary>")` so the plan is explicitly marked paused.
@@ -325,6 +332,7 @@ Before each terminal-event `disc_send` that includes `attach_path`, make sure th
 **On per-wave BLOCKED or FAIL** (from `/nextwave auto` return):
 
 - Regenerate `.status-panel.html` synchronously before posting: `generate-status-panel`.
+- Fire-and-forget the embed update: `./scripts/discord-status-post --channel-id 1487386934094462986 --state-dir .claude/status` (background, non-blocking; failures logged and ignored).
 - Discord `#wave-status`: `disc_send(channel_id="1487386934094462986", message="🛑 **Wavemachine aborted** — <project>, wave <id>: <one-line failure summary>. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
 - `mcp-log --level error wavemachine_complete plan=<plan_id> status=ABORTED wave=<id> reason="<summary>"`
 - Call `wave_waiting("wavemachine aborted: <one-line summary>")`.

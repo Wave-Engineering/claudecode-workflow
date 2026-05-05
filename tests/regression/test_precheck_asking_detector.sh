@@ -87,6 +87,12 @@ assert_blocks "let_me_know_when" "Let me know when I should run precheck."
 assert_blocks "do_you_want" "Do you want me to run /precheck?"
 assert_blocks "may_i_run" "May I run /precheck?"
 
+# Inverted phrasings — issue #545. Trigger word follows "precheck" instead
+# of preceding it. Caught by PATTERN_INVERTED.
+assert_blocks "inverted_is_precheck" "Is /precheck something I should run?"
+assert_blocks "inverted_appropriate" "Would /precheck be appropriate here?"
+assert_blocks "inverted_precheck_first" "Precheck — should I do that now?"
+
 # ---------------------------------------------------------------------------
 # Negative cases — hook MUST NOT block
 # ---------------------------------------------------------------------------
@@ -113,6 +119,13 @@ assert_passes "checklist_text" "Validation green, trivy 0, reviewer clean. Ready
 # Distance test: trigger word and "precheck" >40 chars apart.
 assert_passes "distant_words" \
 	"Should we, given everything that has happened in this very long sentence with lots of detail, also do a precheck?"
+
+# Issue #545 false-positive guard: a past-tense precheck mention followed by
+# a separate question about the *next* step must not block. The
+# sentence-terminating period severs precheck from "should" so PATTERN_INVERTED
+# declines to fire. CRITICAL — narrow PATTERN_INVERTED if this regresses.
+assert_passes "negative_past_tense_with_question" \
+	"/precheck completed. Should I commit now?"
 
 # ---------------------------------------------------------------------------
 # Disable env var
