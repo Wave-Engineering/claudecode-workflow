@@ -86,6 +86,37 @@ def _regenerate_dashboard(root: Path) -> None:
         pass  # discord-status-post not installed or timed out — skip silently
 
 
+def _safe_regenerate_dashboard(root: Path) -> None:
+    """Run ``_regenerate_dashboard`` but never raise to the caller [#495].
+
+    The state mutation has already persisted by the time this is called.
+    Dashboard regeneration is a derived-view refresh — if it crashes (bad
+    legacy state.json, missing field, library bug, etc.), we still want
+    the JSON success envelope to print so MCP wrappers and downstream
+    sub-agents see ``{ok: true}`` instead of a non-zero exit.
+
+    The exception detail is written to stderr so a human running the CLI
+    interactively can still see what failed.
+    """
+    try:
+        _regenerate_dashboard(root)
+    except Exception as exc:  # noqa: BLE001 — best-effort; envelope must print
+        print(
+            f"warning: dashboard regeneration failed: {exc}",
+            file=sys.stderr,
+        )
+
+
+def _print_envelope(state: dict) -> None:
+    """Print the canonical ``{ok, state}`` JSON envelope to stdout [#495].
+
+    Used by the mutation subcommands so callers (sdlc-server MCP wrappers,
+    Prime sub-agents) get a parseable success payload rather than the empty
+    stdout that pre-#495 mutation handlers produced.
+    """
+    print(json.dumps({"ok": True, "state": state}))
+
+
 # ---------------------------------------------------------------------------
 # Subcommand handlers
 # ---------------------------------------------------------------------------
@@ -141,15 +172,17 @@ def _cmd_planning(args: argparse.Namespace) -> None:
 def _cmd_flight(args: argparse.Namespace) -> None:
     """Handle ``flight <N>``."""
     root = get_project_root()
-    flight(args.n, root)
-    _regenerate_dashboard(root)
+    result = flight(args.n, root)
+    _safe_regenerate_dashboard(root)
+    _print_envelope(result)
 
 
 def _cmd_flight_done(args: argparse.Namespace) -> None:
     """Handle ``flight-done <N>``."""
     root = get_project_root()
-    flight_done(args.n, root)
-    _regenerate_dashboard(root)
+    result = flight_done(args.n, root)
+    _safe_regenerate_dashboard(root)
+    _print_envelope(result)
 
 
 def _cmd_review(args: argparse.Namespace) -> None:
@@ -170,8 +203,9 @@ def _cmd_waiting(args: argparse.Namespace) -> None:
     """Handle ``waiting [msg]``."""
     root = get_project_root()
     msg = args.msg if args.msg else ""
-    waiting(root, msg=msg)
-    _regenerate_dashboard(root)
+    result = waiting(root, msg=msg)
+    _safe_regenerate_dashboard(root)
+    _print_envelope(result)
 
 
 def _cmd_waiting_ci(args: argparse.Namespace) -> None:
@@ -185,15 +219,17 @@ def _cmd_waiting_ci(args: argparse.Namespace) -> None:
 def _cmd_close_issue(args: argparse.Namespace) -> None:
     """Handle ``close-issue <N>``."""
     root = get_project_root()
-    close_issue(args.n, root)
-    _regenerate_dashboard(root)
+    result = close_issue(args.n, root)
+    _safe_regenerate_dashboard(root)
+    _print_envelope(result)
 
 
 def _cmd_record_mr(args: argparse.Namespace) -> None:
     """Handle ``record-mr <issue> <mr>``."""
     root = get_project_root()
-    record_mr(args.issue, args.mr, root)
-    _regenerate_dashboard(root)
+    result = record_mr(args.issue, args.mr, root)
+    _safe_regenerate_dashboard(root)
+    _print_envelope(result)
 
 
 def _cmd_defer(args: argparse.Namespace) -> None:
@@ -243,8 +279,9 @@ def _cmd_wavemachine_start(args: argparse.Namespace) -> None:
 def _cmd_wavemachine_stop(args: argparse.Namespace) -> None:
     """Handle ``wavemachine-stop``."""
     root = get_project_root()
-    wavemachine_stop(root)
-    _regenerate_dashboard(root)
+    result = wavemachine_stop(root)
+    _safe_regenerate_dashboard(root)
+    _print_envelope(result)
 
 
 def _cmd_show(args: argparse.Namespace) -> None:
