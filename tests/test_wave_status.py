@@ -1022,6 +1022,81 @@ class TestCrossRepoPlanRoundTrip:
             "Wave-Engineering/mcp-server-sdlc",
         ]
 
+    def test_init_preserves_cross_repo_refs(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """Issue #521 regression: ``state.json`` ``issues`` dict keys must
+        match the qualified ``ref`` from phases-waves.json verbatim — even
+        when the orchestrator git repo (current working directory) is a
+        DIFFERENT repo from the issues' target repos.
+
+        Before #521: an issue with ``ref="Wave-Engineering/mcp-server-sdlc#362"``
+        but no per-issue ``repo`` override would resolve through the plan-level
+        default (or — worst case — the orchestrator slug), and the state.json
+        key got built as ``Wave-Engineering/<orchestrator>#362``.
+
+        After #521: the qualified ``ref`` field, when present, is the source
+        of truth for the repo prefix and state.json keys round-trip the
+        original ``ref`` exactly.
+        """
+        repo = temp_git_repo
+        cross_repo_plan: dict = {
+            "project": "test-cross-repo-refs",
+            "base_branch": "main",
+            "master_issue": 499,
+            # Plan-level repo simulates the ORCHESTRATOR repo (cc-workflow),
+            # NOT the target repo of the issues.  Without the #521 fix this
+            # is what state.json keys would silently get prefixed with.
+            "repo": "Wave-Engineering/claudecode-workflow",
+            "phases": [
+                {
+                    "name": "Cross-Repo Phase",
+                    "cross_repo": True,
+                    "target_repos": ["Wave-Engineering/mcp-server-sdlc"],
+                    "waves": [
+                        {
+                            "id": "wave-1",
+                            "name": "Wave 1",
+                            "issues": [
+                                {
+                                    "number": 362,
+                                    "ref": "Wave-Engineering/mcp-server-sdlc#362",
+                                    "title": "Cross-repo issue 362",
+                                    "deps": [],
+                                },
+                                {
+                                    "number": 367,
+                                    "ref": "Wave-Engineering/mcp-server-sdlc#367",
+                                    "title": "Cross-repo issue 367",
+                                    "deps": [],
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        }
+        _write_plan(repo, cross_repo_plan)
+
+        rc, _, err = run_cli(["init", "--force", "plan.json"], repo)
+        assert rc == 0, f"init failed: {err}"
+
+        state_path = repo / ".claude" / "status" / "state.json"
+        state_data = json.loads(state_path.read_text(encoding="utf-8"))
+        issue_keys = set(state_data["issues"].keys())
+
+        # Keys must match the original ref values verbatim.
+        assert issue_keys == {
+            "Wave-Engineering/mcp-server-sdlc#362",
+            "Wave-Engineering/mcp-server-sdlc#367",
+        }, f"unexpected issue keys: {issue_keys}"
+
+        # And specifically: NO key may carry the orchestrator slug.
+        for key in issue_keys:
+            assert "claudecode-workflow" not in key, (
+                f"orchestrator slug leaked into state.json key: {key}"
+            )
+
 
 # ---------------------------------------------------------------------------
 # No external dependencies test [CT-01]
