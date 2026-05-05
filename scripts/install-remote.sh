@@ -14,6 +14,8 @@ set -euo pipefail
 #   curl ... | bash -s -- --check
 #   curl ... | bash -s -- --version v1.0.0
 #   curl ... | bash -s -- --no-mcps
+#   curl ... | bash -s -- --with-logrotate
+#   curl ... | bash -s -- --without-logrotate
 
 OWNER="Wave-Engineering"
 REPO="claudecode-workflow"
@@ -22,9 +24,18 @@ BASE_URL="https://github.com/${OWNER}/${REPO}/releases"
 SKILLS_DIR="$HOME/.claude/skills"
 SCRIPTS_DIR="$HOME/.local/bin"
 CLAUDE_DIR="$HOME/.claude"
+# Cellar: kit-owned scripts directory (Homebrew/Nix pattern). Wiped and
+# recreated on every install — eliminates orphan rot. SCRIPTS_DIR becomes a
+# symlink farm pointing into here for entries that need PATH. Ported from
+# install per cc-workflow#560.
+CELLAR_DIR="$HOME/.claude/scripts"
 
 VERSION=""
 NO_MCPS=false
+DRY_RUN=false
+# Logrotate is a tri-state: "prompt" by default, forced on/off by flag.
+# Ported from install per cc-workflow#540.
+LOGROTATE_MODE=prompt
 TMPDIR_CLEANUP=""
 
 # ---------------------------------------------------------------------------
@@ -36,6 +47,7 @@ ok() { printf '  \033[1;32m[+]\033[0m %s\n' "$*"; }
 warn() { printf '  \033[1;33m[!]\033[0m %s\n' "$*"; }
 fail() { printf '  \033[1;31m[!]\033[0m %s\n' "$*"; }
 skip() { printf '  \033[0;37m[-]\033[0m %s\n' "$*"; }
+drift() { printf '  \033[0;33m[~]\033[0m %s\n' "$*"; }
 die() {
 	fail "$*"
 	exit 1
@@ -97,7 +109,163 @@ resolve_url() {
 }
 
 # ---------------------------------------------------------------------------
-# Settings smart-merge (ported from install.sh)
+# Cellar + symlink-farm helpers (ported from install — see #560)
+# ---------------------------------------------------------------------------
+# Cellar = $CELLAR_DIR (kit-owned). Wiped and recreated each install.
+# Symlink farm = $SCRIPTS_DIR — only top-level Cellar entries; subtrees like
+# hooks/, vox-providers/ stay Cellar-only and are invoked by absolute path.
+
+# Resolve a symlink's target to a normalized absolute path. Portable across
+# GNU and BSD readlink (no -f).
+resolve_symlink_target() {
+	local link="$1" target
+	target=$(readlink "$link" 2>/dev/null || true)
+	[[ -z "$target" ]] && return 0
+	if [[ "$target" != /* ]]; then
+		target="$(cd "$(dirname "$link")" 2>/dev/null && pwd)/$target"
+	fi
+	target="${target/#\~/$HOME}"
+	echo "$target"
+}
+
+# Enumerate the basenames that should appear in $SCRIPTS_DIR as symlinks
+# pointing into $CELLAR_DIR. Top-level scripts/ entries only. Uses
+# `find ... | sed` rather than GNU's `-printf '%f\n'` because BSD/macOS
+# find lacks -printf and silently emits nothing — same fix-pattern as
+# install. CRITICAL for macOS portability.
+enumerate_farm_targets() {
+	local src="$1"
+	(cd "$src" && find . -maxdepth 1 -type f | sed 's|^\./||' | sort)
+}
+
+# Wipe and recreate the Cellar from the release tarball's scripts/ tree.
+# Preserves directory structure and executable bits. Honors $DRY_RUN.
+cellar_deploy() {
+	local src_scripts="$1"
+	if [[ "$DRY_RUN" == true ]]; then
+		info "(dry-run) Would wipe and redeploy $CELLAR_DIR from tarball scripts/"
+		return 0
+	fi
+	# Wipe — structural orphan-killer. Anything from a prior install that is
+	# no longer in the release tarball dies here.
+	rm -rf "$CELLAR_DIR"
+	mkdir -p "$CELLAR_DIR"
+	# BSD/macOS-portable: find + sed instead of -printf '%P\n'.
+	while IFS= read -r rel; do
+		[[ -z "$rel" ]] && continue
+		[[ "$rel" == ci/* ]] && continue
+		[[ "$rel" == */tests/* ]] && continue
+		[[ "$rel" == */fixtures/* ]] && continue
+		[[ "$rel" == */__pycache__/* ]] && continue
+		[[ "$rel" == */.pytest_cache/* ]] && continue
+		local s="$src_scripts/$rel"
+		local d="$CELLAR_DIR/$rel"
+		mkdir -p "$(dirname "$d")"
+		cp "$s" "$d"
+		# Preserve exec bit (top-level scripts always +x for backwards compat).
+		if [[ "$rel" != */* ]]; then
+			chmod +x "$d"
+		elif [[ -x "$s" ]]; then
+			chmod +x "$d"
+		fi
+	done < <(cd "$src_scripts" && find . -type f | sed 's|^\./||' | sort)
+	info "Cellar redeployed: $CELLAR_DIR ($(find "$CELLAR_DIR" -type f | wc -l) files)"
+}
+
+# Drop a skill helper into a per-skill Cellar subdir at
+# $CELLAR_DIR/skills/<skill_name>/<helper_name>. Preserves +x. Distinct
+# from a flat Cellar drop so two skills shipping same-named helpers cannot
+# silently overwrite each other.
+cellar_install_skill_helper() {
+	local src="$1" skill_name="$2" helper_name="$3"
+	local dest="$CELLAR_DIR/skills/$skill_name/$helper_name"
+	if [[ "$DRY_RUN" == true ]]; then
+		info "(dry-run) $src → $dest (Cellar/skills)"
+		return 0
+	fi
+	mkdir -p "$(dirname "$dest")"
+	cp "$src" "$dest"
+	chmod +x "$dest"
+}
+
+# If $SCRIPTS_DIR/<name> exists as a plain file (not a symlink), back it up
+# before replacing with a symlink. Pre-Cellar layouts have plain files here.
+safeguard_user_file() {
+	local name="$1"
+	local path="$SCRIPTS_DIR/$name"
+	[[ -L "$path" ]] && return 0
+	[[ -e "$path" ]] || return 0
+	if [[ "$DRY_RUN" == true ]]; then
+		info "(dry-run) Would back up plain file $path → ${path}.bak"
+		return 0
+	fi
+	cp "$path" "${path}.bak"
+	rm -f "$path"
+	warn "Backed up user-customized $path → ${path}.bak"
+}
+
+# Create or refresh a symlink at $SCRIPTS_DIR/<name> pointing into the
+# Cellar at $CELLAR_DIR/<name>. Caller must safeguard plain-file occupants
+# first.
+farm_symlink() {
+	local name="$1"
+	local target="$CELLAR_DIR/$name"
+	local link="$SCRIPTS_DIR/$name"
+	if [[ "$DRY_RUN" == true ]]; then
+		info "(dry-run) symlink $link → $target"
+		return 0
+	fi
+	mkdir -p "$(dirname "$link")"
+	ln -sf "$target" "$link"
+}
+
+# Create or refresh a symlink at $SCRIPTS_DIR/<helper_name> pointing into
+# the per-skill Cellar subdir. Warn loudly on cross-skill name collision.
+farm_symlink_skill_helper() {
+	local skill_name="$1" helper_name="$2"
+	local target="$CELLAR_DIR/skills/$skill_name/$helper_name"
+	local link="$SCRIPTS_DIR/$helper_name"
+	if [[ "$DRY_RUN" == true ]]; then
+		info "(dry-run) symlink $link → $target"
+		return 0
+	fi
+	if [[ -L "$link" ]]; then
+		local existing
+		existing=$(resolve_symlink_target "$link")
+		if [[ "$existing" == "$CELLAR_DIR/skills/"* && "$existing" != "$target" ]]; then
+			warn "Helper name collision for '$helper_name': $existing already farmed; overwriting with $target"
+		fi
+	fi
+	mkdir -p "$(dirname "$link")"
+	ln -sf "$target" "$link"
+}
+
+# Walk $SCRIPTS_DIR and remove symlinks pointing into the Cellar whose
+# target no longer exists. Foreign symlinks are NEVER touched.
+reap_stale_cellar_symlinks() {
+	[[ -d "$SCRIPTS_DIR" ]] || return 0
+	local removed=0
+	while IFS= read -r link; do
+		[[ -L "$link" ]] || continue
+		local target
+		target=$(resolve_symlink_target "$link")
+		[[ "$target" == "$CELLAR_DIR"/* || "$target" == "$CELLAR_DIR" ]] || continue
+		[[ -e "$target" ]] && continue
+		if [[ "$DRY_RUN" == true ]]; then
+			info "(dry-run) Would remove stale symlink: $link → $target"
+		else
+			rm -f "$link"
+			info "Reaped stale symlink: $link → $target"
+		fi
+		removed=$((removed + 1))
+	done < <(find "$SCRIPTS_DIR" -maxdepth 1 -type l 2>/dev/null)
+	if [[ $removed -eq 0 ]]; then
+		skip "No stale symlinks under $SCRIPTS_DIR (Cellar reaper)"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# Settings smart-merge (ported from install — see #556 for hook union-merge)
 # ---------------------------------------------------------------------------
 
 merge_settings() {
@@ -108,7 +276,11 @@ merge_settings() {
 	# Deep merge: template into local, preserving user customizations
 	# Rules:
 	#   1. Top-level keys (scalars AND objects): added only if ABSENT locally
-	#   2. hooks: add missing event keys from template; leave existing alone
+	#   2. hooks:
+	#      - Event keys missing locally: added from template
+	#      - Event keys present in both: matcher arrays unioned by .matcher
+	#        value (template matcher entries whose .matcher is not in the
+	#        local array are appended; existing local entries left untouched)
 	#   3. permissions.allow: union of both arrays (deduplicated)
 	#   4. enabledPlugins: add missing keys from template; leave existing alone
 	#   5. _comment keys: stripped from result (template-only documentation)
@@ -125,12 +297,26 @@ merge_settings() {
 		# Capture local keys before entering reduce
 		(.[1] | keys) as $local_keys |
 
-		# Merge hooks: add missing event keys
+		# Merge hooks: add missing event keys AND union matcher arrays for shared keys
 		((.[0].hooks // {}) | to_entries | map(
 			select(.key != "_comment")
 		)) as $tpl_hooks |
+		((.[1].hooks // {}) | to_entries | map(
+			select(.key != "_comment")
+		)) as $local_hooks |
 		((.[1].hooks // {}) | keys) as $local_hook_keys |
+		# New event keys (template only) — add wholesale
 		($tpl_hooks | map(select(.key | IN($local_hook_keys[]) | not))) as $new_hooks |
+		# Shared event keys — union their matcher arrays by .matcher value
+		($tpl_hooks | map(select(.key | IN($local_hook_keys[]))) | map({
+			key: .key,
+			value: (
+				(.value // []) as $tpl_arr |
+				(($local_hooks | from_entries)[.key] // []) as $local_arr |
+				($local_arr | map(.matcher)) as $local_matchers |
+				$local_arr + ($tpl_arr | map(select(.matcher as $m | $local_matchers | index($m) | not)))
+			)
+		}) | from_entries) as $merged_shared_hooks |
 
 		# Merge permissions.allow: union
 		((.[0].permissions.allow // []) + (.[1].permissions.allow // []) | unique) as $merged_perms |
@@ -143,7 +329,7 @@ merge_settings() {
 		# Build result: start with local, add missing pieces
 		.[1]
 		| .permissions.allow = $merged_perms
-		| .hooks = ((.hooks // {}) + ($new_hooks | from_entries))
+		| .hooks = ((.hooks // {}) + ($new_hooks | from_entries) + $merged_shared_hooks)
 		| .enabledPlugins = ((.enabledPlugins // {}) + ($new_plugins | from_entries))
 		| reduce ($tpl_defaults[] | select(.key | IN($local_keys[]) | not)) as $s (.; .[$s.key] = $s.value)
 		| del(._comment)
@@ -153,9 +339,25 @@ merge_settings() {
 	echo "$merged" >"$target"
 
 	# Report what changed
+
+	# Report new hooks (and new matchers within shared event keys)
 	for hook_event in $(jq -r '.hooks // {} | keys[] | select(. != "_comment")' "$template"); do
 		if jq -e ".hooks.\"${hook_event}\"" "${target}.bak" &>/dev/null; then
-			skip "hooks.$hook_event -- already present (skipped)"
+			# Event already exists locally — diff matcher arrays and report
+			# any template matchers appended by the union-merge.
+			local added_matchers
+			added_matchers=$(jq -r --arg ev "$hook_event" --slurpfile bak "${target}.bak" '
+				(($bak[0].hooks[$ev] // []) | map(.matcher)) as $local_ms |
+				(.hooks[$ev] // []) | map(.matcher) | map(select(. as $m | $local_ms | index($m) | not)) | .[]
+			' "$target")
+			if [[ -z "$added_matchers" ]]; then
+				skip "hooks.$hook_event -- already present (skipped)"
+			else
+				while IFS= read -r m; do
+					[[ -z "$m" ]] && continue
+					info "hooks.$hook_event -- matcher \"$m\" added"
+				done <<<"$added_matchers"
+			fi
 		else
 			info "hooks.$hook_event -- added"
 		fi
@@ -178,6 +380,142 @@ merge_settings() {
 	else
 		skip "permissions -- no new entries"
 	fi
+}
+
+# ---------------------------------------------------------------------------
+# Logrotate helpers (ported from install — see #540)
+# ---------------------------------------------------------------------------
+# The release tarball ships assets/logrotate/cc-mcp-logs containing a
+# {{HOME}} marker which is rendered to the installing user's home before
+# dropping into /etc/logrotate.d. Linux-only; macOS no-ops politely.
+
+LOGROTATE_DEST="/etc/logrotate.d/cc-mcp-logs"
+LOGROTATE_LOGS_DIR="$HOME/.claude/logs"
+# LOGROTATE_SRC is set per-invocation from the release_dir.
+
+# True iff this host has a logrotate(8) we can drive. Linux + logrotate on PATH.
+logrotate_supported() {
+	[[ "$(uname -s)" == "Linux" ]] && command -v logrotate &>/dev/null
+}
+
+# Render the templated config to stdout: substitute {{HOME}} with $HOME.
+render_logrotate_template() {
+	local src="$1"
+	sed "s|{{HOME}}|$HOME|g" "$src"
+}
+
+# Install the rendered config to /etc/logrotate.d/cc-mcp-logs and run a
+# dry-run validation. Returns non-zero on failure.
+install_logrotate_config() {
+	local src="$1"
+	local tmp
+	tmp="$(mktemp)"
+	render_logrotate_template "$src" >"$tmp"
+
+	if [[ "$DRY_RUN" == true ]]; then
+		info "(dry-run) Would install logrotate config to $LOGROTATE_DEST"
+		info "(dry-run) Would run: sudo logrotate -d $LOGROTATE_DEST"
+		rm -f "$tmp"
+		return 0
+	fi
+
+	if sudo install -m 0644 "$tmp" "$LOGROTATE_DEST"; then
+		info "Installed $LOGROTATE_DEST"
+	else
+		warn "Failed to install $LOGROTATE_DEST (sudo install)"
+		rm -f "$tmp"
+		return 1
+	fi
+	rm -f "$tmp"
+
+	if sudo logrotate -d "$LOGROTATE_DEST" >/dev/null 2>&1; then
+		ok "logrotate -d validation passed"
+	else
+		warn "logrotate -d reported errors -- re-run manually to diagnose:"
+		warn "  sudo logrotate -d $LOGROTATE_DEST"
+		return 1
+	fi
+}
+
+# Remove the installed logrotate config (used by --uninstall).
+uninstall_logrotate_config() {
+	if ! logrotate_supported; then
+		skip "logrotate (skipped -- non-Linux or logrotate not installed)"
+		return 0
+	fi
+	if [[ ! -f "$LOGROTATE_DEST" ]]; then
+		skip "$LOGROTATE_DEST not installed"
+		return 0
+	fi
+	if [[ "$DRY_RUN" == true ]]; then
+		info "(dry-run) Would remove $LOGROTATE_DEST"
+		return 0
+	fi
+	if sudo rm -f "$LOGROTATE_DEST"; then
+		ok "Removed $LOGROTATE_DEST"
+	else
+		warn "Failed to remove $LOGROTATE_DEST"
+		return 1
+	fi
+}
+
+# Report logrotate status for --check mode. Returns 0 if all-in-sync,
+# 1 if any drift. Takes the rendered-source path as $1 (or empty string if
+# the source isn't available — e.g. if the tarball didn't ship it).
+check_logrotate_status() {
+	local src="$1"
+	if ! logrotate_supported; then
+		info "logrotate (skipped -- non-Linux or logrotate not installed)"
+		return 0
+	fi
+	if [[ -z "$src" || ! -f "$src" ]]; then
+		# No source to compare against — best-effort: report install status.
+		if [[ -f "$LOGROTATE_DEST" ]]; then
+			info "logrotate config $LOGROTATE_DEST installed (no source available for drift check)"
+		else
+			drift "logrotate config $LOGROTATE_DEST -- NOT INSTALLED"
+			return 1
+		fi
+		return 0
+	fi
+	local d=0
+	if [[ ! -f "$LOGROTATE_DEST" ]]; then
+		drift "logrotate config $LOGROTATE_DEST -- NOT INSTALLED"
+		return 1
+	fi
+	local rendered
+	rendered="$(mktemp)"
+	render_logrotate_template "$src" >"$rendered"
+	if ! sudo diff -q "$rendered" "$LOGROTATE_DEST" &>/dev/null; then
+		drift "logrotate config $LOGROTATE_DEST -- DIFFERS from release template"
+		d=1
+	else
+		info "logrotate config $LOGROTATE_DEST (in sync)"
+	fi
+	rm -f "$rendered"
+	# Last-rotation mtime: any rotated mcp.jsonl.* indicates the rotation has
+	# fired at least once. Use find + stat (no -printf — BSD portability).
+	if [[ -d "$LOGROTATE_LOGS_DIR" ]]; then
+		local newest=""
+		while IFS= read -r f; do
+			[[ -z "$f" ]] && continue
+			if [[ -z "$newest" || "$f" -nt "$newest" ]]; then
+				newest="$f"
+			fi
+		done < <(find "$LOGROTATE_LOGS_DIR" -maxdepth 1 \
+			\( -name 'mcp.jsonl.[0-9]*' -o -name 'mcp.jsonl.[0-9]*.gz' \) \
+			-type f 2>/dev/null)
+		if [[ -n "$newest" ]]; then
+			local newest_mtime
+			newest_mtime=$(stat -c '%y' "$newest" 2>/dev/null || stat -f '%Sm' "$newest" 2>/dev/null || echo 'unknown')
+			info "last rotation: $newest ($newest_mtime)"
+		else
+			info "no rotated files yet under $LOGROTATE_LOGS_DIR -- rotation has not fired"
+		fi
+	else
+		info "$LOGROTATE_LOGS_DIR does not exist yet -- no rotation history"
+	fi
+	return $d
 }
 
 # ---------------------------------------------------------------------------
@@ -209,9 +547,33 @@ do_install() {
 
 	local release_dir="$tmpdir"
 
+	# --- Install scripts (Cellar + symlink-farm, ported from install — #560) ---
+	# Order matters: cellar_deploy wipes $CELLAR_DIR before deploying, so
+	# skill helpers (which live under $CELLAR_DIR/skills/) would be obliterated
+	# if skills ran first. Scripts go FIRST, then skills layer on top.
+	if [[ -d "$release_dir/scripts" ]]; then
+		echo "Scripts -> $CELLAR_DIR (Cellar) + $SCRIPTS_DIR (symlinks)"
+		echo "--------------------------------------------"
+		mkdir -p "$SCRIPTS_DIR"
+		# 1. Cellar: wipe + redeploy from tarball scripts/.
+		cellar_deploy "$release_dir/scripts"
+		# 2. Reap stale symlinks pointing into the Cellar with missing targets.
+		reap_stale_cellar_symlinks
+		# 3. Symlink farm: top-level Cellar entries only.
+		while IFS= read -r name; do
+			[[ -z "$name" ]] && continue
+			safeguard_user_file "$name"
+			farm_symlink "$name"
+			ok "$name (symlink -> Cellar)"
+		done < <(enumerate_farm_targets "$release_dir/scripts")
+		echo ""
+	fi
+
 	# --- Install skills ---
-	echo "Skills -> $SKILLS_DIR"
+	echo "Skills -> $SKILLS_DIR (helpers go to $CELLAR_DIR/skills/<name>/ + symlink farm)"
 	echo "--------------------------------------------"
+	# Ensure Cellar exists (cellar_deploy may not have run if no scripts/).
+	mkdir -p "$CELLAR_DIR"
 	for skill_dir in "$release_dir"/skills/*/; do
 		[[ -d "$skill_dir" ]] || continue
 		local skill_name
@@ -223,7 +585,9 @@ do_install() {
 			cp "$skill_dir/SKILL.md" "$SKILLS_DIR/$skill_name/SKILL.md"
 		fi
 
-		# Install other files in the skill dir
+		# Install other files in the skill dir: .md files in the skill dir;
+		# everything else into Cellar at $CELLAR_DIR/skills/<skill>/<helper>
+		# with a top-level symlink for PATH discoverability (#560).
 		for helper in "$skill_dir"/*; do
 			[[ -f "$helper" ]] || continue
 			local helper_name
@@ -233,9 +597,9 @@ do_install() {
 				mkdir -p "$SKILLS_DIR/$skill_name"
 				cp "$helper" "$SKILLS_DIR/$skill_name/$helper_name"
 			else
-				mkdir -p "$SCRIPTS_DIR"
-				cp "$helper" "$SCRIPTS_DIR/$helper_name"
-				chmod +x "$SCRIPTS_DIR/$helper_name"
+				cellar_install_skill_helper "$helper" "$skill_name" "$helper_name"
+				safeguard_user_file "$helper_name"
+				farm_symlink_skill_helper "$skill_name" "$helper_name"
 			fi
 		done
 
@@ -257,48 +621,47 @@ do_install() {
 	done
 	echo ""
 
-	# --- Install scripts ---
-	echo "Scripts -> $SCRIPTS_DIR"
-	echo "--------------------------------------------"
-	mkdir -p "$SCRIPTS_DIR"
-	# Recursive walk: scripts/<rel> -> $SCRIPTS_DIR/<rel>, preserving nested
-	# subdirs like vox-providers/. ci/ and well-known noise subtrees are
-	# excluded.
-	while IFS= read -r rel; do
-		[[ "$rel" == ci/* ]] && continue
-		local src_path="$release_dir/scripts/$rel"
-		local dest_path="$SCRIPTS_DIR/$rel"
-		mkdir -p "$(dirname "$dest_path")"
-		cp "$src_path" "$dest_path"
-		# Preserve executable bit: top-level scripts always +x (legacy);
-		# nested files only +x if the source had it.
-		if [[ "$rel" != */* ]] || [[ -x "$src_path" ]]; then
-			chmod +x "$dest_path"
-		fi
-		ok "$rel"
-	done < <(
-		cd "$release_dir" && find scripts -type f \
-			-not -path '*/tests/*' \
-			-not -path '*/fixtures/*' \
-			-not -path '*/__pycache__/*' \
-			-not -path '*/.pytest_cache/*' \
-			-printf '%P\n' | sort
-	)
-	echo ""
-
 	# --- Install pre-built packages ---
 	if [[ -d "$release_dir/dist" ]]; then
-		echo "Packages -> $SCRIPTS_DIR"
+		echo "Packages -> $CELLAR_DIR (Cellar) + $SCRIPTS_DIR (symlinks)"
 		echo "--------------------------------------------"
 		for pkg in "$release_dir"/dist/*; do
 			[[ -f "$pkg" ]] || continue
 			local pkg_name
 			pkg_name="$(basename "$pkg")"
-			cp "$pkg" "$SCRIPTS_DIR/$pkg_name"
-			chmod +x "$SCRIPTS_DIR/$pkg_name"
+			# Cellar drop, then symlink farm entry (matches install — #560).
+			if [[ "$DRY_RUN" != true ]]; then
+				mkdir -p "$CELLAR_DIR"
+				cp "$pkg" "$CELLAR_DIR/$pkg_name"
+				chmod +x "$CELLAR_DIR/$pkg_name"
+			fi
+			safeguard_user_file "$pkg_name"
+			farm_symlink "$pkg_name"
 			ok "$pkg_name"
 		done
 		echo ""
+	fi
+
+	# --- Sanity check: prebuilt binaries present in symlink farm ---
+	# If the release tarball ever ships without a dist/ tree (release-pipeline
+	# regression), prebuilt binaries silently won't appear on PATH. Reuse the
+	# expected_scripts list from do_check() so the two stay in lockstep.
+	# Skipped on --dry-run (would always fail — nothing was actually farmed).
+	if [[ "$DRY_RUN" != true ]]; then
+		local expected_prebuilt=(discord-status-post slackbot-send job-fetch file-opener vox)
+		local missing_prebuilt=()
+		for prebuilt in "${expected_prebuilt[@]}"; do
+			if [[ ! -L "$SCRIPTS_DIR/$prebuilt" && ! -x "$SCRIPTS_DIR/$prebuilt" ]]; then
+				missing_prebuilt+=("$prebuilt")
+			fi
+		done
+		if [[ ${#missing_prebuilt[@]} -gt 0 ]]; then
+			warn "Expected prebuilt binaries missing from $SCRIPTS_DIR:"
+			for p in "${missing_prebuilt[@]}"; do
+				warn "  - $p"
+			done
+			warn "The release tarball may be missing its dist/ tree -- file an issue."
+		fi
 	fi
 
 	# --- Install config ---
@@ -359,6 +722,49 @@ do_install() {
 		echo ""
 	fi
 
+	# --- Install logrotate policy (ported from install — #540) ---
+	# Linux-only; macOS no-ops politely. Tri-state: --with-logrotate forces on,
+	# --without-logrotate forces off, default prompts (or skips if no tty).
+	echo "Logrotate (~/.claude/logs/mcp.jsonl)"
+	echo "--------------------------------------------"
+	local logrotate_src="$release_dir/assets/logrotate/cc-mcp-logs"
+	if ! logrotate_supported; then
+		skip "Skipping -- logrotate(8) is Linux-only and not present here ($(uname -s))."
+		skip "macOS users: see docs/operations/log-rotation.md for newsyslog guidance."
+	elif [[ ! -f "$logrotate_src" ]]; then
+		skip "Skipping -- assets/logrotate/cc-mcp-logs not found in release tarball."
+	else
+		local do_logrotate=false
+		case "$LOGROTATE_MODE" in
+		on)
+			do_logrotate=true
+			;;
+		off)
+			skip "Skipping -- --without-logrotate."
+			;;
+		prompt)
+			if [[ "$DRY_RUN" == true ]]; then
+				info "(dry-run) Would prompt to install logrotate policy."
+			elif [[ -t 0 ]]; then
+				read -r -p "Install logrotate policy for ~/.claude/logs/mcp.jsonl? [Y/n] " reply || reply=""
+				case "$reply" in
+				n | N | no | NO) skip "Skipped by user." ;;
+				*) do_logrotate=true ;;
+				esac
+			else
+				# Non-interactive (no tty, e.g. curl | bash) and no flag —
+				# default to skip with a notice.
+				skip "Non-interactive shell and no --with-logrotate / --without-logrotate flag -- skipping."
+				info "Re-run with --with-logrotate to enable rotation."
+			fi
+			;;
+		esac
+		if [[ "$do_logrotate" == true ]]; then
+			install_logrotate_config "$logrotate_src" || warn "logrotate install reported issues -- see above."
+		fi
+	fi
+	echo ""
+
 	# Verify install dir is on PATH
 	if ! echo "$PATH" | tr ':' '\n' | grep -qx "$SCRIPTS_DIR"; then
 		warn "${SCRIPTS_DIR} is not on your PATH"
@@ -404,7 +810,6 @@ do_check() {
 	# Skills
 	echo "Skills"
 	echo "--------------------------------------------"
-	# We check what's installed without downloading
 	local skill_count=0
 	if [[ -d "$SKILLS_DIR" ]]; then
 		for skill_dir in "$SKILLS_DIR"/*/; do
@@ -424,13 +829,38 @@ do_check() {
 	fi
 	echo ""
 
-	# Scripts
-	echo "Scripts"
+	# Scripts (Cellar + symlink farm, ported from install — #560)
+	echo "Scripts (Cellar: $CELLAR_DIR)"
+	echo "--------------------------------------------"
+	if [[ ! -d "$CELLAR_DIR" ]]; then
+		drift "Cellar -- NOT INSTALLED at $CELLAR_DIR"
+		issues=$((issues + 1))
+	else
+		local cellar_count
+		cellar_count=$(find "$CELLAR_DIR" -type f 2>/dev/null | wc -l)
+		info "$cellar_count file(s) in Cellar"
+	fi
+	echo ""
+
+	echo "Symlink farm ($SCRIPTS_DIR -> Cellar)"
 	echo "--------------------------------------------"
 	local expected_scripts=(discord-status-post slackbot-send job-fetch file-opener vox)
 	for script_name in "${expected_scripts[@]}"; do
-		if [[ -x "$SCRIPTS_DIR/$script_name" ]]; then
-			ok "$script_name"
+		local link="$SCRIPTS_DIR/$script_name"
+		if [[ -L "$link" ]]; then
+			local tgt
+			tgt=$(resolve_symlink_target "$link")
+			if [[ "$tgt" == "$CELLAR_DIR/$script_name" && -e "$tgt" ]]; then
+				ok "$script_name (symlink -> Cellar)"
+			elif [[ ! -e "$tgt" ]]; then
+				drift "$script_name -- DANGLING SYMLINK ($link -> $tgt)"
+				issues=$((issues + 1))
+			else
+				drift "$script_name -- symlink points outside Cellar ($tgt)"
+				issues=$((issues + 1))
+			fi
+		elif [[ -x "$link" ]]; then
+			drift "$script_name -- plain file (will be backed up to .bak on next install)"
 		else
 			fail "$script_name not found"
 			issues=$((issues + 1))
@@ -452,6 +882,19 @@ do_check() {
 		ok "settings.json"
 	else
 		fail "settings.json not found"
+		issues=$((issues + 1))
+	fi
+
+	# Settings drift detection requires the template; run from a checkout
+	# (./install --check) for full settings diff.
+	echo ""
+
+	# Logrotate (ported from install — #540)
+	echo "Logrotate"
+	echo "--------------------------------------------"
+	# In --check we don't have the rendered template handy (no tarball
+	# extraction). Pass empty src; check_logrotate_status reports install-only.
+	if ! check_logrotate_status ""; then
 		issues=$((issues + 1))
 	fi
 	echo ""
@@ -514,9 +957,28 @@ do_uninstall() {
 	fi
 	echo ""
 
-	# Remove scripts (known script names from skills)
-	echo "Scripts"
+	# Remove Cellar (Cellar + symlink farm — #560)
+	echo "Scripts (Cellar)"
 	echo "--------------------------------------------"
+	if [[ -d "$CELLAR_DIR" ]]; then
+		rm -rf "$CELLAR_DIR"
+		ok "Removed $CELLAR_DIR"
+	else
+		skip "No Cellar directory found"
+	fi
+	# Remove symlinks from $SCRIPTS_DIR pointing into the (now-gone) Cellar.
+	if [[ -d "$SCRIPTS_DIR" ]]; then
+		while IFS= read -r link; do
+			[[ -L "$link" ]] || continue
+			local tgt
+			tgt=$(resolve_symlink_target "$link")
+			if [[ "$tgt" == "$CELLAR_DIR"/* || "$tgt" == "$CELLAR_DIR" ]]; then
+				rm -f "$link"
+				ok "Removed symlink $(basename "$link")"
+			fi
+		done < <(find "$SCRIPTS_DIR" -maxdepth 1 -type l 2>/dev/null)
+	fi
+	# Legacy plain-file uninstall: known script names from pre-Cellar layouts.
 	local known_scripts=(
 		discord-status-post slackbot-send job-fetch
 		file-opener vox worktree-manager cc-inspector discord-lock
@@ -525,7 +987,7 @@ do_uninstall() {
 	for script_name in "${known_scripts[@]}"; do
 		if [[ -f "$SCRIPTS_DIR/$script_name" ]]; then
 			rm -f "$SCRIPTS_DIR/$script_name"
-			ok "Removed $script_name"
+			ok "Removed legacy plain file $script_name"
 		fi
 	done
 	echo ""
@@ -540,6 +1002,12 @@ do_uninstall() {
 		skip "statusline-command.sh not found"
 	fi
 	info "settings.json preserved (not removed)"
+	echo ""
+
+	# Remove logrotate config (#540)
+	echo "Logrotate"
+	echo "--------------------------------------------"
+	uninstall_logrotate_config
 	echo ""
 
 	# Uninstall MCPs
@@ -603,8 +1071,20 @@ while [[ $# -gt 0 ]]; do
 		NO_MCPS=true
 		shift
 		;;
+	--with-logrotate)
+		LOGROTATE_MODE=on
+		shift
+		;;
+	--without-logrotate)
+		LOGROTATE_MODE=off
+		shift
+		;;
+	--dry-run)
+		DRY_RUN=true
+		shift
+		;;
 	*)
-		die "Unknown flag: $1 (use --uninstall, --check, --version <tag>, or --no-mcps)"
+		die "Unknown flag: $1 (use --uninstall, --check, --version <tag>, --no-mcps, --with-logrotate, --without-logrotate, --dry-run)"
 		;;
 	esac
 done
