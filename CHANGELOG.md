@@ -3,6 +3,7 @@
 ## Unreleased
 
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 ### Fixes
 
 - `wave_finalize`: durable-state fallback when wavebus has been cleaned up by `wave_complete`. Re-derives the MR body from `<project>/.claude/status/{phases-waves.json,state.json}` (issue #s + recorded `mr_urls`) so the kahuna→target finalize step succeeds at the end of the last wave instead of returning `no_artifacts`. Bus artifacts still take precedence when present. (#415, Plan #581 incident)
@@ -17,6 +18,15 @@
 
 - `/prepwaves` now refuses to run on a dirty working tree or a non-base branch, listing every offending path so the operator can choose between commit, stash, or discard. A `--force-dirty` override exists for legitimate edge cases and emits a noisy banner before proceeding. Rationale: Plan #581 sandbox cross-talk incident (#603).
 - `/devspec approve` now self-commits the Dev Spec (and any auxiliary finalization-track writes) on the active branch with a `docs(devspec): finalize Dev Spec for Plan #N — <slug>` message instead of leaving the changes uncommitted. Refuses to commit on the project's protected base branch. Push remains the operator's affirmative act. (#604)
+>>>>>>> Stashed changes
+=======
+### Features
+
+- /wavemachine: long-session drift mitigation — at every wave-to-wave handoff the loop body emits per-wave drift-signal events (`wave_message_length_main`, `wave_stop_hook_blocks`, `wave_concerns_posts`) via `scripts/wavemachine/drift-instrumentation.sh emit-wave-drift` and injects a system-reminder re-grounding payload citing `WAVE_AXIOMS.md` (with explicit Axiom 9 reference). The lightweight payload is unconditional at every wave boundary; mandatory `/engage` and `/compact`-on-N-waves are documented as rejected alternatives held in reserve for empirical escalation. (cc-workflow#601, "Bug C" from Plan #581 campaign A debrief.)
+
+### Chore
+
+- WAVE_AXIOMS.md restructured: each axiom now has a stable rule/why/how subsection layout, and a new Axiom 9 ("User attention is the cost. Autonomy is the protection.") binds the autonomy clauses in `/wavemachine`-class skills to the user-attention-protection rationale. The four wave-pattern skill bodies (`/wavemachine`, `/nextwave`, `/prepwaves`, `/assesswaves`) now begin with a `## Axioms` cross-reference block citing the binding axioms by number, and inline justification prose that duplicated the axiom corpus has been replaced with cross-references — single source of truth, no more skill-body drift. (#605)
 >>>>>>> Stashed changes
 
 All notable changes to this project will be documented in this file.
