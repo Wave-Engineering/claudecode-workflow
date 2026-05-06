@@ -68,6 +68,33 @@ Analyze one or more Plan tracking issues, validate their sub-issue specs, comput
 
    Single-repo runs skip this step entirely — no context bloat. The recipe's content lives in one place; both `/prepwaves` (here) and `/nextwave` (preflight) `cat` from the same file.
 9. **Confirm.** Report wave count, issue count, readiness summary, cross-repo status (if any), and "Run `/nextwave` to begin execution."
+10. **Emit seed prompt + `/clear` recommendation (final block).** After persistence and confirmation, end `/prepwaves` output with a paste-ready seed for a fresh `/wavemachine` session. The block lives at the very end of the success path so the operator's eye lands on it last and the slash command is one paste away.
+
+    Default wording (strong nudge — use when the current session has accumulated significant `/prepwaves` planning context):
+
+    ```
+    Wave plan persisted for Plan #N.
+
+    Recommended next step: `/clear` then in a fresh session paste:
+
+        /wavemachine
+
+    This reduces context drift before the campaign begins.
+    ```
+
+    **Conditional downgrade.** If `mcp__nerf-server__nerf_status` reports the current session is using less than 30% of its soft dart, the recommendation may be downgraded to a hint — same seed, softer language:
+
+    ```
+    Wave plan persisted for Plan #N.
+
+    Optional: `/clear` and start a fresh session before `/wavemachine` if you want a clean context. This session has plenty of headroom, so it's not required:
+
+        /wavemachine
+    ```
+
+    Either variant: the line containing `/wavemachine` MUST be on its own line, indented as a code block (4-space indent or fenced) so the operator can paste it cleanly without surrounding markdown. No trailing punctuation, no decoration on the slash-command line itself.
+
+    **Rationale (load-bearing — do not delete).** This recommendation exists because of context-rot observed during Plan #581 debrief: `/prepwaves` accumulates a lot of one-shot planning context (sub-issue bodies, dependency analysis, readiness validation, cross-repo recipe injection) that adds noise to the subsequent `/wavemachine` execution session. Carrying that context into the campaign measurably degrades flight-agent prompts down-stream (the noise propagates via the orchestrator's session). A fresh session before `/wavemachine` is the cheapest mitigation — costs one `/clear`, removes a known drift source. The seed-prompt block makes the cheap path the obvious path; do not remove it in a future skill rewrite without an equivalent mitigation.
 
 ## Reasoning Rules (Preserve)
 
