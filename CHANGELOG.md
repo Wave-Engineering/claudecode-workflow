@@ -4,6 +4,7 @@
 
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 ### Fixes
 
 - `wave_finalize`: durable-state fallback when wavebus has been cleaned up by `wave_complete`. Re-derives the MR body from `<project>/.claude/status/{phases-waves.json,state.json}` (issue #s + recorded `mr_urls`) so the kahuna→target finalize step succeeds at the end of the last wave instead of returning `no_artifacts`. Bus artifacts still take precedence when present. (#415, Plan #581 incident)
@@ -27,6 +28,22 @@
 ### Chore
 
 - WAVE_AXIOMS.md restructured: each axiom now has a stable rule/why/how subsection layout, and a new Axiom 9 ("User attention is the cost. Autonomy is the protection.") binds the autonomy clauses in `/wavemachine`-class skills to the user-attention-protection rationale. The four wave-pattern skill bodies (`/wavemachine`, `/nextwave`, `/prepwaves`, `/assesswaves`) now begin with a `## Axioms` cross-reference block citing the binding axioms by number, and inline justification prose that duplicated the axiom corpus has been replaced with cross-references — single source of truth, no more skill-body drift. (#605)
+>>>>>>> Stashed changes
+=======
+### Features
+
+- `wave_wait_for_signal` MCP tool — sanctioned idle-wait for wave-pattern Orchestrators (and Primes) blocking on filesystem-bus completion artifacts. Polls every 5s with configurable timeout (default 1800s) and minimum match count (default 1); accepts literal paths or Bun.Glob patterns. Returns matched paths on success or `timed_out: true` + `partial_matches` on timeout. Replaces ad-hoc `Bash(sleep)` loops and the anxiety-driven premature-exit failure mode (#414).
+- **wave-watcher daemon (#578).** New standalone Bun daemon at
+- `/wave` skill: thin routing skill wrapping `mcp__sdlc-server__wave_show` so wave-pattern status (Project / Phase / Wave / Flight / Action / Progress / Deferrals) can be checked from any conversation without remembering the MCP tool name. Pure pass-through — no interpretation. Future routes (`/wave health`, `/wave topology`, `/wave next`) documented but reserved for follow-up issues. (#579)
+
+### Fixes
+
+- `pr_wait_ci` no longer hangs the full timeout window when a PR/MR has no required status checks. The handler now probes once at t=0; on empty rollup it returns `{ status: "no_checks_required", elapsed_sec, mergeable, blocker? }` instead of polling. Polling-loop behavior for non-empty rollups is unchanged. (#416)
+
+### Docs
+
+- Added `docs/tools.md` (per-tool reference, seeded with `wave_wait_for_signal`).
+- Added `docs/wave-pattern-orchestration.md` with the canonical Orchestrator-wait-on-Flights example.
 >>>>>>> Stashed changes
 
 All notable changes to this project will be documented in this file.
