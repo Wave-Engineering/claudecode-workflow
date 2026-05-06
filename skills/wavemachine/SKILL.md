@@ -150,12 +150,15 @@ loop:
      status JSON:
          {"status": "OK" | "BLOCKED" | "FAIL", "wave_id": "<id>", ...}
 
-     - "OK"      → run `generate-status-panel` (fire-and-forget;
-                    auto-regen on wave_complete per "Status Panel Lifecycle"),
-                    then fire-and-forget
-                    `./scripts/discord-status-post --channel-id 1487386934094462986 --state-dir .claude/status`
-                    (PATCH the embed in place; failures logged and ignored),
-                    then loop back to step 1
+     - "OK"      → wave-to-wave handoff. See "Wave-to-Wave Handoff" below —
+                    this transition MUST be a single tool-use boundary with
+                    NO narrative text between the OK return and the next
+                    iteration's `wave_health_check` call. Treat the post-OK
+                    side effects (status-panel regen, discord-status-post)
+                    and `wave_health_check` as ONE tool-use block; the
+                    immediately following assistant message MUST be that
+                    tool-use block — not prose, not "wave N complete,
+                    starting wave N+1", not anything narrative.
      - "BLOCKED" → stop; announce abort with the blocker detail
      - "FAIL"    → stop; announce abort with the failure detail
      - malformed / missing → treat as FAIL ("malformed /nextwave return"); stop
@@ -172,6 +175,22 @@ The loop exits cleanly when any of the following happens:
 - `wave_health_check()` returns a non-HEALTHY status (circuit breaker trips)
 - `/nextwave auto` returns BLOCKED or FAIL (per-wave abort)
 - The user interrupts (Ctrl+C or tool-denial mid-wave — see "Interrupt Handling")
+
+## Wave-to-Wave Handoff (no narrator gap)
+
+This section binds the OK-path of step 4 to a structural rule: **the wave-to-wave handoff MUST be a single tool-use boundary.** It exists because of the observed "Bug B" stall (cc-workflow#600 / Plan #581 campaign A debrief): after `wave_complete` fires for wave N inside `/nextwave auto`, the outer-loop assistant message would sometimes emit non-canonical narrative text ("Wave N complete, proceeding to wave N+1", "All issues for wave N merged successfully", etc.) instead of immediately invoking the next iteration's `wave_health_check` tool call. Each such narration is dead wall-clock — the loop is supposed to be tight and synchronous.
+
+**The contract — what the assistant message immediately after `/nextwave auto` returns OK must look like:**
+
+- It MUST be a tool-use block. The first (and ideally only) substantive content is tool calls.
+- The tool calls in that block are: (a) `generate-status-panel` (fire-and-forget Bash), (b) `discord-status-post` (fire-and-forget Bash), (c) `wave_health_check()` for the *next* iteration. Issuing all three in the same tool-use block is the canonical shape — it is one assistant message, three concurrent tool calls, no prose.
+- It MUST NOT contain narrative text such as "wave N complete", "starting wave N+1", "all flights merged", "loop iteration K finished", or any other status narration. Narration is what the Discord embed and status panel are for; the assistant turn is for tool calls.
+
+**If `wave_health_check` returns HEALTHY in the same tool-use block, the next assistant message proceeds to the loop's `wave_next_pending` step — also as a tool call, not prose.** Likewise, the message that calls `wave_next_pending` MUST also call `/nextwave auto` (via the Skill tool) when the result is non-null, in the same or the immediately following tool-use block. The whole iteration body is one chain of tool-use boundaries; narration belongs at terminal exits only (clean completion, abort, gate-blocked).
+
+**Why this is structural, not advisory.** The Stop hook with `decision:block` (config/settings.template.json, see "Pre-Flight Checks" cross-ref to `lesson_stop_hook_with_block.md`) prevents the agent from *ending the turn* while `wavemachine_active=true`, but the inter-wave stall manifests as an in-turn prose emission — the agent does not end the turn, it just emits a narrator paragraph that costs wall-clock. The Stop hook is the safety net for premature termination; this section is the contract that prevents the in-turn narration the Stop hook cannot catch.
+
+**Regression check.** `tests/regression/test_wavemachine_handoff_no_narrator.sh` is a doc-shape test asserting (a) this section exists and uses "single tool-use boundary" wording, (b) the loop body's OK-path defers to this section rather than enumerating side effects in narration-friendly prose, (c) Non-Negotiables forbid inter-wave narration. If a future edit silently weakens any of these, the test fails before merge.
 
 ## Trust-Score Gate and Auto-Merge
 
@@ -409,6 +428,7 @@ See memory files `principle_user_attention_is_the_cost.md` and `principle_cost_a
 - **NEVER run the loop in a background sub-agent.** No background Agent invocation, ever — not with the `run_in_background` parameter, not shelled out, not via any other escape hatch. The loop is top-level, period. (The gate's `feature-dev:code-reviewer` Agent runs *synchronously* at the top level — not in the background.)
 - **NEVER spawn Flights or Prime directly.** `/nextwave auto` owns the Orchestrator/Prime/Flight protocol for each wave — `/wavemachine` only delegates wave work to it.
 - **Circuit breaker before every iteration.** `wave_health_check` is called at the TOP of each loop iteration, not just the first.
+- **Wave-to-wave handoff is a single tool-use boundary — no narrator gap.** When `/nextwave auto` returns OK, the immediately following assistant message MUST be a tool-use block (status-panel regen + discord-status-post + next iteration's `wave_health_check`), NOT narrative text. Prose like "Wave N complete, starting wave N+1" between waves is forbidden — it costs wall-clock and is the specific failure mode this rule (cc-workflow#600 / Plan #581 campaign A "Bug B") exists to prevent. See "Wave-to-Wave Handoff" above. Stop hook with `decision:block` (config/settings.template.json) is the structural safety net for *premature termination*; this rule is the contract preventing the *in-turn narration* the Stop hook cannot catch.
 - **Leave the bus alone on abort.** On any non-happy exit, the in-flight wave's bus tree stays on disk for forensics. `wave-cleanup` runs only on PASS, inside `/nextwave auto`.
 - **Block on green CI.** `/nextwave auto` handles the per-wave CI gate; `/wavemachine` does not merge wave PRs directly and does not fast-path around it. The kahuna→main MR is the *only* PR `/wavemachine` merges, and only after the four-signal gate passes all-green.
 - **`skip_train` is platform-asymmetric.** On GitHub it bypasses the merge queue (the gate has earned that bypass). On GitLab it is a no-op — the merge train is a project-level merge method with no per-MR client bypass. The flag is passed unconditionally; the adapter handles the platform difference; the all-green path emits a warning notification on GitLab so operators know the kahuna→main MR is correctly waiting on the train rather than stuck. See "Platform note: `skip_train` semantics".
