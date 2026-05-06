@@ -2,11 +2,22 @@
 
 ## Unreleased
 
+<<<<<<< Updated upstream
 ### Fixes
 
 - `wave_finalize`: durable-state fallback when wavebus has been cleaned up by `wave_complete`. Re-derives the MR body from `<project>/.claude/status/{phases-waves.json,state.json}` (issue #s + recorded `mr_urls`) so the kahuna→target finalize step succeeds at the end of the last wave instead of returning `no_artifacts`. Bus artifacts still take precedence when present. (#415, Plan #581 incident)
 - `/wavemachine`: Wave-to-wave handoff is now a single tool-use boundary — skill body forbids narrative text between waves, and a new doc-shape regression test (`tests/regression/test_wavemachine_handoff_no_narrator.sh`) guards the contract. Closes "Bug B" from Plan #581 campaign A debrief (#600).
 - `/nextwave`: Prime(post-flight) prompt now declares the canonical-line contract verbatim with concrete PASS/FAIL/BLOCKED examples, a forbidden-phrases list (including the exact `"Sleep is still running. Let me wait for the notification."` narration that broke Plan #581 wave-2), and an `Exit shape` section as the LAST section of the prompt so it is the most recent context when the agent emits its final message. Closes #606.
+=======
+### Features
+
+- `/prepwaves` now ends with a `/clear` recommendation and a paste-ready `/wavemachine` seed prompt. The recommendation downgrades to a hint when `nerf_status` reports <30% of soft dart used. Reduces context drift between planning and execution sessions (Plan #581 debrief). Closes #602.
+
+### Chore
+
+- `/prepwaves` now refuses to run on a dirty working tree or a non-base branch, listing every offending path so the operator can choose between commit, stash, or discard. A `--force-dirty` override exists for legitimate edge cases and emits a noisy banner before proceeding. Rationale: Plan #581 sandbox cross-talk incident (#603).
+- `/devspec approve` now self-commits the Dev Spec (and any auxiliary finalization-track writes) on the active branch with a `docs(devspec): finalize Dev Spec for Plan #N — <slug>` message instead of leaving the changes uncommitted. Refuses to commit on the project's protected base branch. Push remains the operator's affirmative act. (#604)
+>>>>>>> Stashed changes
 
 All notable changes to this project will be documented in this file.
 
