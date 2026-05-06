@@ -32,6 +32,7 @@ This skill is bound by WAVE_AXIOMS 2, 3, 4, 5, 6, 8, 9 — see `WAVE_AXIOMS.md` 
 - The `Agent` tool — invoked AT THE GATE only, for the `feature-dev:code-reviewer` trust signal (one of four concurrent signals). The loop body itself never spawns Agents — `/nextwave auto` owns wave-internal Agent spawning.
 - The `Bash` tool — invoked AT THE GATE for the `trivy fs` dependency scan trust signal.
 - The Skill tool — invokes `/nextwave auto` per iteration (the one place wave work is delegated)
+- `scripts/wavemachine/drift-instrumentation.sh` — emits the three per-wave drift-signal events (`wave_message_length_main`, `wave_stop_hook_blocks`, `wave_concerns_posts`) to the fleet logfile so post-campaign analysis can detect monotonic drift trends. See "Periodic Re-Grounding (drift mitigation)" below for the wiring.
 - `ScheduleWakeup` — OPTIONAL, fallback-only, used when a merge-queue idle is detected (not the primary execution model)
 
 **Not used in the loop body:** wave-internal `Agent` spawning is owned by `/nextwave` — the loop body itself never spawns sub-agents per iteration. The single exception is the gate's `feature-dev:code-reviewer` Agent at Plan completion (one of four concurrent trust signals — see "Trust-Score Gate and Auto-Merge"). Background Agent invocation is NEVER used anywhere in this skill; the loop and the gate both run synchronously in the top-level session.
@@ -158,8 +159,10 @@ loop:
                     this transition MUST be a single tool-use boundary with
                     NO narrative text between the OK return and the next
                     iteration's `wave_health_check` call. Treat the post-OK
-                    side effects (status-panel regen, discord-status-post)
-                    and `wave_health_check` as ONE tool-use block; the
+                    side effects (status-panel regen, discord-status-post,
+                    drift-instrumentation emit, system-reminder re-grounding
+                    — see "Periodic Re-Grounding (drift mitigation)") and
+                    `wave_health_check` as ONE tool-use block; the
                     immediately following assistant message MUST be that
                     tool-use block — not prose, not "wave N complete,
                     starting wave N+1", not anything narrative.
@@ -187,7 +190,7 @@ This section binds the OK-path of step 4 to a structural rule: **the wave-to-wav
 **The contract — what the assistant message immediately after `/nextwave auto` returns OK must look like:**
 
 - It MUST be a tool-use block. The first (and ideally only) substantive content is tool calls.
-- The tool calls in that block are: (a) `generate-status-panel` (fire-and-forget Bash), (b) `discord-status-post` (fire-and-forget Bash), (c) `wave_health_check()` for the *next* iteration. Issuing all three in the same tool-use block is the canonical shape — it is one assistant message, three concurrent tool calls, no prose.
+- The tool calls in that block are: (a) `generate-status-panel` (fire-and-forget Bash), (b) `discord-status-post` (fire-and-forget Bash), (c) `scripts/wavemachine/drift-instrumentation.sh emit-wave-drift ...` (fire-and-forget Bash; see "Periodic Re-Grounding (drift mitigation)" below for the flag set), (d) `wave_health_check()` for the *next* iteration. Issuing all in the same tool-use block is the canonical shape — one assistant message, concurrent tool calls, no prose. The system-reminder re-grounding payload (also documented in "Periodic Re-Grounding") is appended in the same boundary as out-of-band content, NOT as in-turn narrative.
 - It MUST NOT contain narrative text such as "wave N complete", "starting wave N+1", "all flights merged", "loop iteration K finished", or any other status narration. Narration is what the Discord embed and status panel are for; the assistant turn is for tool calls.
 
 **If `wave_health_check` returns HEALTHY in the same tool-use block, the next assistant message proceeds to the loop's `wave_next_pending` step — also as a tool call, not prose.** Likewise, the message that calls `wave_next_pending` MUST also call `/nextwave auto` (via the Skill tool) when the result is non-null, in the same or the immediately following tool-use block. The whole iteration body is one chain of tool-use boundaries; narration belongs at terminal exits only (clean completion, abort, gate-blocked).
@@ -195,6 +198,90 @@ This section binds the OK-path of step 4 to a structural rule: **the wave-to-wav
 **Why this is structural, not advisory.** The Stop hook with `decision:block` (config/settings.template.json, see "Pre-Flight Checks" cross-ref to `lesson_stop_hook_with_block.md`) prevents the agent from *ending the turn* while `wavemachine_active=true`, but the inter-wave stall manifests as an in-turn prose emission — the agent does not end the turn, it just emits a narrator paragraph that costs wall-clock. The Stop hook is the safety net for premature termination; this section is the contract that prevents the in-turn narration the Stop hook cannot catch.
 
 **Regression check.** `tests/regression/test_wavemachine_handoff_no_narrator.sh` is a doc-shape test asserting (a) this section exists and uses "single tool-use boundary" wording, (b) the loop body's OK-path defers to this section rather than enumerating side effects in narration-friendly prose, (c) Non-Negotiables forbid inter-wave narration. If a future edit silently weakens any of these, the test fails before merge.
+
+## Periodic Re-Grounding (drift mitigation)
+
+Long /wavemachine campaigns (5+ waves, multi-hour wall-clock) drift in agent behavior: late-campaign waves get sloppier checklist treatment, more cross-talk with the user, more "is this still right?" pauses. The longer the session runs, the further the Orchestrator has drifted from its constitutional rules — `CLAUDE.md`, `WAVE_AXIOMS.md`, and the skill body it started with. This is "Bug C" from the Plan #581 campaign A debrief, and `cc-workflow#601` is the rework.
+
+Re-grounding is the structural counter-pressure. At each `wave_complete` boundary, the loop emits a system-reminder payload that re-loads the constitutional layer into the Orchestrator's working context, alongside two pieces of drift telemetry. The mechanism is the lightest of the three options the issue evaluated (per-wave system-reminder injection vs mandatory `/engage` between waves vs compact-on-N-waves heuristic). The two heavyweight options are documented as rejected alternatives below — they remain available if instrumentation shows the lightweight option is insufficient.
+
+### Mechanism — per-wave system-reminder injection
+
+At each `wave_complete` boundary inside the Wave-to-Wave Handoff block (i.e. in the same single tool-use boundary that fires status-panel regen + discord-status-post + the next iteration's `wave_health_check`), append a system-reminder payload with the following content:
+
+```
+[wavemachine re-grounding — wave <N> of <total>]
+
+Constitutional layer (single source of truth):
+  WAVE_AXIOMS.md — 9 axioms binding wave-pattern execution.
+  Axiom 9 in particular: "User attention is the cost. Autonomy is the
+  protection." The autonomy contract on this loop exists to protect the
+  user's wall-clock; every "shall I continue?" the agent invents costs
+  the human a context-switch they did not ask to pay. The decisions are
+  already made — the approved Plan, the approved Dev Spec, the approved
+  phases-waves.json. Re-asking re-litigates settled questions.
+
+  Axiom 3: closed-list legal exits — plan-reality drift, hard fault,
+  explicit user halt. No others. Unease that doesn't match an exit goes
+  through the Concerns Channel (Axiom 4), not through a stop.
+
+Loop contract (this skill body):
+  Wave-to-Wave Handoff is a single tool-use boundary — no narrator gap,
+  no prose between waves. The next assistant message is a tool-use
+  block, not status narration.
+
+Plan summary at this boundary:
+  Plan #<plan_id>, kahuna branch <kahuna_branch>.
+  Waves remaining: <count of pending waves>.
+  Next wave: <id> — <one-line summary from phases-waves.json>.
+```
+
+The `<total>`, `<plan_id>`, `<kahuna_branch>`, and pending-wave summary are filled from `wave_show()` output; the WAVE_AXIOMS reference is fixed text (the file is the canonical source — restating axiom prose here would re-introduce the cross-skill-rot pattern Axiom 8 + cc-workflow#605 corrected). This re-loads the constitutional layer into context exactly when drift accumulation is observable but before the next wave's first sub-agent dispatch.
+
+The re-grounding payload is a system-reminder (not narrative prose), which means it does NOT violate the Wave-to-Wave Handoff "no narrator gap" contract — system-reminders are out-of-band, not in-turn assistant text.
+
+### Instrumentation — drift signals per wave
+
+`scripts/wavemachine/drift-instrumentation.sh emit-wave-drift` emits three events to the fleet logfile (`~/.claude/logs/mcp.jsonl`) at each `wave_complete` boundary:
+
+- **`wave_message_length_main`** — the cumulative character count of Orchestrator (top-level session) assistant messages over the wave just completed. Drift signal: monotonically increasing per-wave totals indicate the Orchestrator emitting more narrative prose / cross-talk per wave as the campaign progresses.
+- **`wave_stop_hook_blocks`** — the number of Stop-hook `decision: block` events fired during the wave. Drift signal: late-wave increases indicate the agent is more frequently trying to end its turn while `wavemachine_active=true`, which the Stop hook catches but the count of which is the leading indicator.
+- **`wave_concerns_posts`** — the number of `[concern]` comments posted via the Concerns Channel (Axiom 4) during the wave. Drift signal: increases are NOT necessarily bad — the Concerns Channel exists precisely so unease has a legitimate outlet — but a sudden spike late in the campaign is evidence the agent is hitting more "this feels wrong" moments without a Legal Exit firing, which is itself drift.
+
+The helper accepts the three counts as flags so the loop body's measurement step (count assistant messages, count Stop-hook events from the session log, count `[concern]` comments via `gh issue view`) is decoupled from the emit step. See the script's `--help` for the exact invocation; the `report` subcommand aggregates a fleet logfile into a per-wave trend table for post-campaign analysis.
+
+`scripts/wavemachine/drift-instrumentation.sh self-test` emits one synthetic event per signal to stdout in compact JSON form, for verifying the instrumentation surface end-to-end without polluting the real fleet logfile. This is the test path used by `tests/test_drift_instrumentation_skill.py` to validate the script ships and its output shape matches the schema.
+
+### Wiring — where the calls fire in the loop body
+
+At the OK-path of step 4 in the loop (the Wave-to-Wave Handoff block), the single tool-use boundary that fires `generate-status-panel` + `discord-status-post` + the next iteration's `wave_health_check` ALSO fires:
+
+- `scripts/wavemachine/drift-instrumentation.sh emit-wave-drift --plan <plan_id> --wave <N> --message-length-main <chars> --stop-hook-blocks <count> --concerns-posts <count>` (Bash, fire-and-forget; failure logged, not gating)
+- The system-reminder injection described above
+
+Both are added to the same tool-use block as the existing handoff calls — they do NOT add a narrator gap because they are tool calls, not assistant prose. Per Axiom 6 ("approval frequency is set by the invoked command — the agent does not add gates"), the re-grounding mechanism is mechanical and unconditional; it does not gate on user approval, and it fires at every `wave_complete` boundary regardless of campaign length. Late-wave drift is the primary target, but the cost of re-grounding at wave 1 is negligible.
+
+### Rejected alternatives
+
+- **Mandatory `/engage` between waves.** Reloads CLAUDE.md and the project rules from scratch. Maximally re-grounding, but heavyweight: each `/engage` is a context-eating sub-skill invocation that re-reads memory files, MEMORY.md indexes, and identity caches. Net cost is several thousand tokens per wave. Not justified by current evidence — the system-reminder option lands the load-bearing constitutional content (WAVE_AXIOMS.md reference + the loop contract) at a fraction of the cost. If instrumentation shows drift signals are still trending up after the lightweight option is wired, this becomes the next escalation rung.
+- **Compact-on-N-waves heuristic.** Invoke `/compact` at wave N (e.g. N=3 or N=5) to clear conversation rot, then resume. Drastic — `/compact` rewrites the entire conversation history into a summary, which carries the risk of dropping load-bearing details (per-issue commit SHAs, partial decisions, Concerns Channel posts). Also fights against the Stop hook's `decision:block` contract, since `/compact` ends the agent's turn explicitly. Last-resort option; not the default mechanism.
+
+The lightweight option's main risk is that the system-reminder is not strong enough — drift signals continue trending up despite the per-wave re-grounding. If that turns up in practice (instrumentation will surface it), the escalation path is well-defined: tighten the payload first, then escalate to mandatory `/engage` if necessary, then to compaction as last resort.
+
+### Empirical baseline
+
+A fully empirical comparison ("run the same 6-wave plan with and without mitigation, observe drift signals flatten") cannot be performed inside a single Flight context — Flights cannot run live `/wavemachine` campaigns. The Flight ships:
+
+1. The instrumentation surface (`drift-instrumentation.sh`, the three named events, the report subcommand).
+2. The mitigation mechanism documented and wired into this skill body.
+3. The script's `self-test` invocation as a synthetic harness, executable end-to-end inside CI.
+4. A test (`tests/test_drift_instrumentation_skill.py`) asserting the wiring is in place — script exists, executable, self-test exits clean, the SKILL.md reference is present.
+
+The full A/B empirical comparison is tracked as a follow-up empirical-comparison issue (filed at the same level as the original cc-workflow#601). The first natural campaign of ≥5 waves run after this lands provides the post-mitigation data; the pre-mitigation baseline is the existing campaign A trace (Plan #581) referenced in the issue body.
+
+### Cross-reference
+
+WAVE_AXIOMS Axiom 9 (user attention as cost), Axiom 5 (cost-asymmetry), Axiom 4 (Concerns Channel), Axiom 6 (gate-frequency contract). cc-workflow#601 (this issue), cc-workflow#600 (Bug B — narrator gap), `decision_skills_ownership.md`, `feedback_user_attention_is_the_cost.md`.
 
 ## Trust-Score Gate and Auto-Merge
 
@@ -432,7 +519,8 @@ The closed-list discipline above is the operational binding of WAVE_AXIOMS Axiom
 - **NEVER run the loop in a background sub-agent.** No background Agent invocation, ever — not with the `run_in_background` parameter, not shelled out, not via any other escape hatch. The loop is top-level, period. (The gate's `feature-dev:code-reviewer` Agent runs *synchronously* at the top level — not in the background.)
 - **NEVER spawn Flights or Prime directly.** `/nextwave auto` owns the Orchestrator/Prime/Flight protocol for each wave — `/wavemachine` only delegates wave work to it.
 - **Circuit breaker before every iteration.** `wave_health_check` is called at the TOP of each loop iteration, not just the first.
-- **Wave-to-wave handoff is a single tool-use boundary — no narrator gap.** When `/nextwave auto` returns OK, the immediately following assistant message MUST be a tool-use block (status-panel regen + discord-status-post + next iteration's `wave_health_check`), NOT narrative text. Prose like "Wave N complete, starting wave N+1" between waves is forbidden — it costs wall-clock and is the specific failure mode this rule (cc-workflow#600 / Plan #581 campaign A "Bug B") exists to prevent. See "Wave-to-Wave Handoff" above. Stop hook with `decision:block` (config/settings.template.json) is the structural safety net for *premature termination*; this rule is the contract preventing the *in-turn narration* the Stop hook cannot catch.
+- **Wave-to-wave handoff is a single tool-use boundary — no narrator gap.** When `/nextwave auto` returns OK, the immediately following assistant message MUST be a tool-use block (status-panel regen + discord-status-post + drift-instrumentation emit + next iteration's `wave_health_check`), NOT narrative text. Prose like "Wave N complete, starting wave N+1" between waves is forbidden — it costs wall-clock and is the specific failure mode this rule (cc-workflow#600 / Plan #581 campaign A "Bug B") exists to prevent. See "Wave-to-Wave Handoff" above. Stop hook with `decision:block` (config/settings.template.json) is the structural safety net for *premature termination*; this rule is the contract preventing the *in-turn narration* the Stop hook cannot catch.
+- **Re-grounding fires every wave-to-wave handoff.** The drift-instrumentation emit AND the system-reminder re-grounding payload (referencing `WAVE_AXIOMS.md`, with explicit citation of Axiom 9 — user attention as cost) are unconditional at every `wave_complete` boundary. They are not gated on user approval, campaign length, or drift-signal threshold. Per Axiom 6, the agent does not add gates the user did not invoke; per Axiom 9, the cost of re-grounding at wave 1 is dominated by the cost of NOT re-grounding at wave 6. This is the cc-workflow#601 contract; weakening it requires a tracked rework. See "Periodic Re-Grounding (drift mitigation)".
 - **Leave the bus alone on abort.** On any non-happy exit, the in-flight wave's bus tree stays on disk for forensics. `wave-cleanup` runs only on PASS, inside `/nextwave auto`.
 - **Block on green CI.** `/nextwave auto` handles the per-wave CI gate; `/wavemachine` does not merge wave PRs directly and does not fast-path around it. The kahuna→main MR is the *only* PR `/wavemachine` merges, and only after the four-signal gate passes all-green.
 - **`skip_train` is platform-asymmetric.** On GitHub it bypasses the merge queue (the gate has earned that bypass). On GitLab it is a no-op — the merge train is a project-level merge method with no per-MR client bypass. The flag is passed unconditionally; the adapter handles the platform difference; the all-green path emits a warning notification on GitLab so operators know the kahuna→main MR is correctly waiting on the train rather than stuck. See "Platform note: `skip_train` semantics".
