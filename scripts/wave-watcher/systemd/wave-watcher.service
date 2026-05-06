@@ -1,0 +1,17 @@
+[Unit]
+Description=wave-watcher: aggregate wave-pattern state across local projects
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/wave-watcher run
+Restart=on-failure
+RestartSec=2
+# We bind to 127.0.0.1 only — no need for capabilities. Keep stdout+stderr
+# on the journal; do not redirect to a file. The daemon writes its own pid
+# (pidfile is informational; systemd manages lifecycle).
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

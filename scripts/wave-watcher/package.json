@@ -1,0 +1,19 @@
+{
+  "name": "wave-watcher",
+  "version": "0.1.0",
+  "description": "Standalone daemon aggregating active wave-pattern state from local projects",
+  "type": "module",
+  "scripts": {
+    "start": "bun launcher.ts run",
+    "dev": "bun --watch launcher.ts run",
+    "lint": "bunx tsc --noEmit",
+    "test": "bun test",
+    "build": "./build.sh"
+  },
+  "license": "MIT",
+  "author": "Wave Engineering",
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.7.0"
+  }
+}
