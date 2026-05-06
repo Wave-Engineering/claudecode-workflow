@@ -87,7 +87,7 @@ Every issue MUST be wave-pattern quality: detailed enough that a spec-driven age
 
 **READ `WAVE_AXIOMS.md` FIRST when invoking `/wavemachine`, `/nextwave`, `/assesswaves`, or `/prepwaves`.** That file is the canonical, load-mandatory constitutional layer for wave-pattern execution. Each axiom binds to a specific observed-and-forbidden agent behavior; violation is a bug, not a judgment call.
 
-The eight axioms (full text in `WAVE_AXIOMS.md` at the cc-workflow root):
+The nine axioms (full text in `WAVE_AXIOMS.md` at the cc-workflow root):
 
 1. **Serial is a valid wave topology.** Wave campaigns are justified by autonomous batched execution, not parallelism.
 2. **The campaign is autonomous from invocation to terminal state.** No mid-campaign questions. No "shall I continue?"
@@ -97,6 +97,7 @@ The eight axioms (full text in `WAVE_AXIOMS.md` at the cc-workflow root):
 6. **Approval frequency is set by the invoked command.** `/nextwave` = per-wave; `/wavemachine` = at terminal state. The agent never adds gates.
 7. **`/assesswaves` measures justification, not topology suitability.** YES whenever count ≥ 4 or per-issue wall-clock is non-trivial.
 8. **These axioms supersede agent judgment in their domain.** Disagreement is a reason to PR `WAVE_AXIOMS.md`, never to override in the moment.
+9. **User attention is the cost. Autonomy is the protection.** Autonomy clauses in `/wavemachine`-class skills protect the user's attention; the legal-exits list is exhaustive (Axiom 3); plan-reality drift is the only legitimate stop beyond hard faults and explicit halts.
 
 Disagreement with an axiom is a reason to update `WAVE_AXIOMS.md` via PR — never to override it in the moment.
 

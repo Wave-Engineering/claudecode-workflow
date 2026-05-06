@@ -5,6 +5,10 @@ description: Analyze a master issue, validate sub-issue specs, compute dependenc
 
 # PrepWaves — Plan Wave Execution
 
+## Axioms
+
+This skill is bound by WAVE_AXIOMS 1, 6, 7, 8 — see `WAVE_AXIOMS.md` at the repo root. The "serial is a valid wave topology" rule (Axiom 1), the assessment-skill binding (Axiom 7 — measure justification not parallelism), the approval-frequency rule (Axiom 6 — `/prepwaves` has its own approval gate at step 6, distinct from `/nextwave`'s execution gate), and the axioms-supersede-judgment principle (Axiom 8) live in that file. The mechanical detail below (sandbox-clean pre-flight, readiness table, wave computation, persistence) is the operational binding for those axioms — when justification prose seems missing, it is in `WAVE_AXIOMS.md` by design.
+
 Analyze one or more Plan tracking issues, validate their sub-issue specs, compute dependency-ordered waves, and persist the plan so `/nextwave` can execute it. Supports parallel, serial, and mixed topologies.
 
 ## Tools Used
@@ -100,7 +104,7 @@ Analyze one or more Plan tracking issues, validate their sub-issue specs, comput
 
 - This is a PLANNING skill — no implementation code runs here.
 - Push back hard on vague sub-issues. Vague issue → guessing agent; precise issue → executing agent.
-- **Serial is a valid wave topology.** Don't reject a linear dependency chain — classify it and let `/nextwave` use its streamlined single-issue path.
+- **Serial is a valid wave topology** — per WAVE_AXIOMS Axiom 1. Don't reject a linear dependency chain; classify it and let `/nextwave` use its streamlined single-issue path.
 - Do NOT create branches at prep time — `/nextwave` creates them from current main at execution time.
 - File-level conflict detection is `/nextwave`'s job (flight partitioning). Here you only care about dependency-level ordering.
 - Pair: `/prepwaves` plans, `/nextwave` executes one wave at a time.

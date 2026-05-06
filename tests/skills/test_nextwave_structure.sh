@@ -2,12 +2,16 @@
 # test_nextwave_structure.sh — structural regression tests for
 # skills/nextwave/SKILL.md per Dev Spec §5.3 and phase-epic-taxonomy §8 Story 3.2.
 #
-# Covers two unit tests called out in the issue body:
+# Covers:
 #   - test_nextwave_no_unqualified_epic: `\bepic\b` (case-insensitive) in the
 #     pipeline-operational contexts of the skill body returns zero. [R-10]
 #   - test_nextwave_exhaustive_legal_exits: the `## Exhaustive Legal Exits`
-#     section is present and contains the required sub-sections + the memory-
-#     file cross-references. [R-17]
+#     section is present and contains the required sub-sections.
+#   - test_nextwave_axiom_crossref: the WAVE_AXIOMS.md cross-reference is
+#     present in the body, AND a top-of-file `## Axioms` block exists per
+#     the post-#605 structural rework. The previous incarnation of this
+#     test asserted direct refs to two memory files; #605 routed those
+#     through the axiom corpus, so the predicate is now the axiom file.
 #
 # Scope: asserts structural presence, not content. Content is human-reviewed.
 # This mirrors Dev Spec §5.3.5's verification rubric.
@@ -92,16 +96,29 @@ else
 fi
 
 # 5. Required memory-file cross-references (AC-3).
-if ! grep -q 'principle_user_attention_is_the_cost\.md' "$SKILL"; then
-	fail "cross-reference to principle_user_attention_is_the_cost.md missing"
+# Required cross-reference to the canonical axioms file (AC-3, post-#605
+# structural rework). The previous incarnation of this test required direct
+# cross-references to principle_user_attention_is_the_cost.md and
+# principle_cost_asymmetry_continue_vs_exit.md. cc-workflow#605 restructured
+# the wave-pattern skill bodies so they cite WAVE_AXIOMS.md as the single
+# source of truth; the two memory files are reflected in Axiom 9 and the
+# file's cross-reference table. This test now asserts the axiom-file
+# cross-reference is present, which transitively covers both memory files
+# via the axiom corpus.
+if ! grep -q 'WAVE_AXIOMS\.md' "$SKILL"; then
+	fail "cross-reference to WAVE_AXIOMS.md missing"
 else
-	pass "cross-reference to principle_user_attention_is_the_cost.md"
+	pass "cross-reference to WAVE_AXIOMS.md"
 fi
 
-if ! grep -q 'principle_cost_asymmetry_continue_vs_exit\.md' "$SKILL"; then
-	fail "cross-reference to principle_cost_asymmetry_continue_vs_exit.md missing"
+# Top-of-file Axioms cross-reference block (per #605 structural rework).
+# Every wave-pattern skill body must begin with a `## Axioms` H2 that names
+# the axioms binding the skill and points at WAVE_AXIOMS.md. This is the
+# contract that prevents drift between the skill body and the axiom corpus.
+if ! grep -qE '^## Axioms[[:space:]]*$' "$SKILL"; then
+	fail "top-of-file '## Axioms' cross-reference block missing"
 else
-	pass "cross-reference to principle_cost_asymmetry_continue_vs_exit.md"
+	pass "top-of-file '## Axioms' cross-reference block"
 fi
 
 # --- Summary -----------------------------------------------------------------

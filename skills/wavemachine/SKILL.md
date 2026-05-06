@@ -5,6 +5,10 @@ description: Autopilot for wave-pattern execution. Runs a top-level loop that ca
 
 # Wavemachine — Autopilot for Wave-Pattern Execution
 
+## Axioms
+
+This skill is bound by WAVE_AXIOMS 2, 3, 4, 5, 6, 8, 9 — see `WAVE_AXIOMS.md` at the repo root. The autonomy contract (loop runs to terminal state or Legal Exit), the closed-list legal-exits enumeration, the Concerns Channel pressure valve, the cost-asymmetry default-forward stance, the approval-frequency rule (`/wavemachine` = approval at campaign end, no per-wave human gates), and the user-attention-as-cost framing live in that file. The mechanical detail below (procedure, exit detection, Discord wording, gate signals) is the operational binding for those axioms in this skill — when justification prose seems missing, it is in `WAVE_AXIOMS.md` by design.
+
 `/wavemachine` is the **Orchestrator-level autopilot** for a multi-wave plan. It runs in the top-level session (where `Agent` lives) as a simple loop: check health, pick the next pending wave, delegate that single wave to `/nextwave auto`, parse the result, repeat. The sophistication lives in the primitives — `/nextwave` does the real per-wave work, `wave_health_check()` decides whether to continue, the user controls when to interrupt.
 
 **Mental model (compiling natural language):** issue specs are source; planning/execution sub-agents are the compiler; MCP tools are the runtime; **wavemachine is `make all` for the wave-pattern compiler.** It exists so the human can hand off a vetted multi-wave Plan and get back a merged Plan (kahuna→main) — or a single clean blocker report when something breaks.
@@ -371,7 +375,7 @@ When waking up, re-enter the loop at step 1 (re-run `wave_health_check` from scr
 
 ## Exhaustive Legal Exits
 
-This loop halts if — and ONLY if — one of the following occurs. This list is closed: no other condition warrants stopping.
+Per WAVE_AXIOMS Axiom 3, the legal-exits list is closed: no other condition warrants stopping. Per Axiom 4, when unease doesn't match an exit below, route through the Concerns Channel (`[concern]` comment + optional Discord ping) and CONTINUE — do not halt. The forbidden-stop justification prose lives in `WAVE_AXIOMS.md`; this section is the mechanical detail (detection mechanism, action, tool calls) that operationalizes the axiom in this skill.
 
 ### Mechanical exits (tool returns)
 
@@ -415,11 +419,11 @@ The following conditions look like checkpoints but are NOT exits. The loop conti
 - **First-time execution of a known pattern.** If the skill body describes the event (phase transition, kahuna bootstrap, gate evaluation, PATH-inheritance drift), it is precedented. "I've never actually done this before" is not a new category.
 - **Recent successes increasing anxiety.** Each merged wave makes the Orchestrator more confident *in the harness*, not less confident *in the next wave*. Loss-aversion dressed as caution is the specific failure mode this section exists to prevent.
 - **General caution / "what if something goes wrong?"** This framing invents a new checkpoint category. If something does go wrong, it shows up as mechanical exit #1-4 or drift exit #5-7. Absence of those is presumption of healthy operation.
-- **"Something feels off and I was about to halt."** If the observation doesn't match any numbered exit above, it is NOT an exit. Use the Concerns Channel (§5.3.7) — post a `[concern]` comment + Discord ping, continue the loop. Commits can be rolled back; wall-clock time cannot. See `principle_cost_asymmetry_continue_vs_exit.md`.
+- **"Something feels off and I was about to halt."** If the observation doesn't match any numbered exit above, it is NOT an exit. Use the Concerns Channel (Axiom 4) — post a `[concern]` comment + Discord ping, continue the loop. See `WAVE_AXIOMS.md` (Axioms 4, 5, 9) for the reasoning.
 
 ### Cross-reference
 
-See memory files `principle_user_attention_is_the_cost.md` and `principle_cost_asymmetry_continue_vs_exit.md` for the reasoning that motivates this closed-list discipline. Stopping is a cost paid by the Pair's attention AND by unrecoverable wall-clock time; the list above enumerates the only costs worth paying.
+The closed-list discipline above is the operational binding of WAVE_AXIOMS Axioms 3, 4, 5, and 9. The justification prose (why stopping is the expensive operation, why the list is closed, why the Concerns Channel is the pressure valve) lives in `WAVE_AXIOMS.md` and is not repeated here.
 
 ## Non-Negotiables
 

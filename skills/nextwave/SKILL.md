@@ -5,6 +5,10 @@ description: Execute the next pending wave of spec-driven sub-agents, using flig
 
 # NextWave — Execute One Wave with the Orchestrator/Prime/Flight Protocol
 
+## Axioms
+
+This skill is bound by WAVE_AXIOMS 2, 3, 4, 5, 6, 8, 9 — see `WAVE_AXIOMS.md` at the repo root. The autonomy contract for the per-flight dispatch loop, the closed-list legal-exits enumeration, the Concerns Channel pressure valve, the cost-asymmetry default-forward stance, the approval-frequency rule (`/nextwave` = one consolidated batch gate per flight, never per-issue / per-sub-agent; `/nextwave auto` = no human gate), and the user-attention-as-cost framing live in that file. The mechanical detail below (procedure, gate format, exit detection) is the operational binding for those axioms in this skill — when justification prose seems missing, it is in `WAVE_AXIOMS.md` by design.
+
 Execute the next pending wave created by `/prepwaves`. Single-wave primitive. The top-level session is the **Orchestrator**; it spawns a **Prime** sub-agent for planning and post-flight merge work, and N **Flight** sub-agents in parallel for per-issue implementation. All inter-agent data flows through a filesystem message bus under `/tmp/wavemachine/{repo-slug}/wave-{N}/` — Orchestrator context holds only paths and status tokens.
 
 Two modes:
@@ -254,7 +258,7 @@ Collect the reviewer outputs and stash them keyed by issue — they feed directl
 
 **One gate, one approval, batched.** This is the only human checkpoint between local Flight commits and any remote-touching action (push / PR / merge). It fires AFTER all of the flight's Flights have returned AND the Step 3c.5 reviewer pass is complete, and BEFORE Prime(post-flight) is spawned. A single approval covers EVERY issue in the flight — no per-issue / per-sub-agent prompts, no sequential pile-up of N approvals for an N-issue flight.
 
-**Rationale (why per-wave/per-flight, not per-agent):** the real signal that work is correct comes from three already-completed checks — the worktree's `validate.sh` + full test suite (run by the Flight before commit), parent review (the Step 3c.5 code-reviewer pass over each diff), and the Flight's self-report against the spec's acceptance criteria. Once those three are green, a per-agent human gate is ceremony — the human cannot realistically read 1800+ lines of TypeScript across N handlers and catch something the reviewer missed. The human's value is sanity-checking aggregate outcomes (did the scope match the spec? does anything look weird?), and that's done once per batch, not N times. Batched approval also matches how the gate is used in practice: orchestrators have been approving multi-issue flights en bloc anyway. This rule formalizes the established practice and removes the per-sub-agent friction that scaled poorly past ~3 issues.
+**Rationale (per Axiom 6 + Axiom 9):** the gate is per-flight (not per-issue / per-sub-agent) because the slash-command choice IS the gate-frequency declaration — see `WAVE_AXIOMS.md` Axiom 6. The aggregate signals carry the correctness information: validate.sh per worktree, the Step 3c.5 reviewer pass, and the Flight's AC self-report. The human's value is sanity-checking the aggregate, once per batch — and per Axiom 9, every additional gate the agent invents burns user attention without recovering correctness signal the three aggregate checks already provide.
 
 **Note on multi-flight waves:** when a wave has multiple flights, inter-flight dependencies force flight 1 to merge before flight 2's Flights can run (flight 2 may rebase onto flight 1's changes — see Step 3g). The gate therefore fires once per flight in those waves; for the single-flight case (the dominant shape), this collapses to exactly one gate per wave. Either way, the gate is **never per-issue / per-sub-agent** — it batches every issue in the flight into one decision.
 
@@ -492,9 +496,9 @@ This prompt is what each Flight sub-agent receives. Preserve the SPEC EXECUTOR b
 
 ## Exhaustive Legal Exits
 
-This loop halts if — and ONLY if — one of the following occurs. This list is closed: no other condition warrants stopping.
+Per WAVE_AXIOMS Axiom 3, the legal-exits list is closed: no other condition warrants stopping. Per Axiom 4, when unease doesn't match an exit below, route through the Concerns Channel (`[concern]` comment + optional Discord ping) and CONTINUE — do not halt. The forbidden-stop justification prose lives in `WAVE_AXIOMS.md`; this section is the mechanical detail (detection mechanism, action, tool calls) that operationalizes the axiom in this skill.
 
-`/nextwave` is itself an autonomy-loop skill: Step 3's per-flight dispatch iterates until every flight in the wave has merged, and the only interactive checkpoint is the consolidated batch approval gate at Step 3d (interactive mode only; skipped in `auto` mode). Every other branch point — "the next flight could conflict", "this wave has more issues than the last one", "the reviewer pass returned clean but the commit is large" — is NOT an exit. The list below is the complete enumeration. See `principle_user_attention_is_the_cost.md` and `principle_cost_asymmetry_continue_vs_exit.md` for the reasoning.
+`/nextwave` is itself an autonomy-loop skill: Step 3's per-flight dispatch iterates until every flight in the wave has merged, and the only interactive checkpoint is the consolidated batch approval gate at Step 3d (interactive mode only; skipped in `auto` mode — per Axiom 6, the gate frequency is set by the invoked command). Every other branch point — "the next flight could conflict", "this wave has more issues than the last one", "the reviewer pass returned clean but the commit is large" — is NOT an exit. The list below is the complete enumeration.
 
 ### Mechanical exits (tool returns)
 
@@ -538,11 +542,11 @@ The following conditions look like checkpoints but are NOT exits. The loop conti
 - **First-time execution of a known pattern.** If the skill body describes the event (inter-flight re-validation in Step 3g, cross-repo worktree creation in Step 1, kahuna base-ref plumbing, consolidated batch approval gate), it is precedented. "I've never actually done this before" is not a new category.
 - **Recent successes increasing anxiety.** Each merged flight makes the Orchestrator more confident *in the harness*, not less confident *in the next flight*. Loss-aversion dressed as caution is the specific failure mode this section exists to prevent.
 - **General caution / "what if something goes wrong?"** This framing invents a new checkpoint category. If something does go wrong, it shows up as mechanical exit #1-4 or drift exit #5-7. Absence of those is presumption of healthy operation.
-- **"Something feels off and I was about to halt."** If the observation doesn't match any numbered exit above, it is NOT an exit. Use the Concerns Channel (Dev Spec §5.3.7) — post a `[concern]` comment + Discord ping, continue the loop. Commits can be rolled back; wall-clock time cannot. See `principle_cost_asymmetry_continue_vs_exit.md`.
+- **"Something feels off and I was about to halt."** If the observation doesn't match any numbered exit above, it is NOT an exit. Use the Concerns Channel (Axiom 4) — post a `[concern]` comment + Discord ping, continue the loop. See `WAVE_AXIOMS.md` (Axioms 4, 5, 9) for the reasoning.
 
 ### Cross-reference
 
-See memory files `principle_user_attention_is_the_cost.md` and `principle_cost_asymmetry_continue_vs_exit.md` for the reasoning that motivates this closed-list discipline. Stopping is a cost paid by the Pair's attention AND by unrecoverable wall-clock time; the list above enumerates the only costs worth paying. The consolidated batch approval gate at Step 3d is the ONE human checkpoint this skill deliberately preserves in interactive mode; everything else deferred to the human goes through the Concerns Channel, not a halt.
+The closed-list discipline above is the operational binding of WAVE_AXIOMS Axioms 3, 4, 5, 6, and 9. The justification prose (why stopping is the expensive operation, why the list is closed, why the Concerns Channel is the pressure valve, why the gate is per-flight not per-issue) lives in `WAVE_AXIOMS.md` and is not repeated here. The consolidated batch approval gate at Step 3d is the ONE human checkpoint this skill deliberately preserves in interactive mode (Axiom 6); everything else deferred to the human goes through the Concerns Channel, not a halt.
 
 ## Non-Negotiables
 
