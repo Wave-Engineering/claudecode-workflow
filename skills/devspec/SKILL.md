@@ -342,6 +342,8 @@ Format the `checks` array into a table (columns: #, Check, Result, Evidence). Re
 - All passing → "Dev Spec is ready for approval. Run `/devspec approve`."
 - Any failing → list each failure with the tool's evidence as the remediation starting point, then "Fix these issues and run `/devspec finalize` again."
 
+> `/devspec finalize` is **read-only** — it inspects the Dev Spec and reports, it does not write. The finalization workflow's on-disk writes (the spec file from `/devspec create`, the approval metadata block from `/devspec approve`) are committed by `/devspec approve` Step 5 — see the `devspec-approve` template below. The operator does not need a separate "stage + commit the Dev Spec" step.
+
 <!-- END TEMPLATE: devspec-finalize -->
 
 <!-- BEGIN TEMPLATE: devspec-approve -->
@@ -412,7 +414,35 @@ finalization_score: 7/7
 -->
 ```
 
-After the tool call succeeds and the Ledger entry is posted, confirm to the user: "Dev Spec approved. Approval metadata recorded. Ledger entry D-NNN posted to Plan issue #<plan_id>. Next step: run `/devspec upshift` to create Story issues and write `phases-waves.json`."
+3. **Commit the Dev Spec on the active branch.** The finalization workflow writes documentation files (the Dev Spec markdown, the approval metadata block); leaving them uncommitted in the working tree forces the operator to remember a separate stage+commit step and risks bundling those writes into the next `/precheck` run. The skill commits its own writes here — this is the natural close of the finalization process, since the Dev Spec content is stable from this point forward.
+
+   **Mechanics:**
+
+   a. **Refuse if the active branch is the project's protected base.** Resolve the project's default/protected branch from `.claude-project.md` (the `Default branch` field under `## Branching`); if absent, fall back to `main`. Run `git rev-parse --abbrev-ref HEAD`; if the result equals the protected base, abort with: `Cannot commit Dev Spec finalize on protected branch '<branch>'. Switch to a feature branch (e.g. 'feature/<plan_id>-devspec') and re-run /devspec approve.` Do NOT proceed to the commit, but the approval metadata that `devspec_approve` already wrote stays in place — the operator handles the move.
+
+   b. **Stage the Dev Spec file.** `git add <devspec_path>` — only the located Dev Spec file. Do not blanket-stage; the surrounding working tree may carry unrelated edits the operator wants to keep separate. If `devspec_approve` (Phase 3 of the rework) extends to writing additional finalization-track artifacts (e.g. memory-file updates that the approve tool itself authored), stage those by name as well — but only files this skill workflow produced.
+
+   c. **Compose the commit message:**
+
+      ```
+      docs(devspec): finalize Dev Spec for Plan #<plan_id> — <slug>
+
+      Updated:
+      - <devspec_path>
+      <one bullet per additional staged finalize-track file, if any>
+
+      Closes <Plan issue ref if a "Closes" relationship is appropriate, otherwise omit>
+      ```
+
+      The `<slug>` is the kebab-case slug used elsewhere in the Plan (e.g. the Plan issue title's slug or the Dev Spec filename's base — `docs/<slug>-devspec.md`). The `<plan_id>` is the Plan tracking issue number resolved in Step 0 of `/devspec create` (also recoverable from the Dev Spec's §0/§1 metadata).
+
+   d. **Create the commit.** `git commit -m "<message above>"`.
+
+   e. **Do NOT push.** The push remains the operator's affirmative act, in line with `/precheck` convention. Tell the user the commit landed locally and they should review + push when ready.
+
+4. **Confirm to the user:** "Dev Spec approved. Approval metadata recorded. Ledger entry D-NNN posted to Plan issue #<plan_id>. Committed locally as `<short SHA>` on `<branch>`. Review with `git show HEAD` and push when ready (the skill does not auto-push). Next step: run `/devspec upshift` to create Story issues and write `phases-waves.json`."
+
+> **Why the commit lives in `/devspec approve`, not `/devspec finalize`.** `/devspec finalize` is read-only — it runs the 7-item checklist via `devspec_finalize` and reports pass/fail. The on-disk writes that compose "finalization" happen in `/devspec create` (the spec file itself) and `/devspec approve` (the approval metadata block + any auxiliary writes the tool authors). `/devspec approve` is the inflection point where the spec transitions from draft to finalized, so a single commit at that boundary captures the whole doc cleanly. `/devspec finalize` invocations between create and approve are inspection-only and produce no on-disk changes to commit.
 
 **On rejection (no/reject/n):** Ask what needs to change, list the finalization results as a starting point, tell the user "Make the requested changes and run `/devspec approve` again.", **stop.** Do not call `devspec_approve`. Do not post a Ledger entry.
 
