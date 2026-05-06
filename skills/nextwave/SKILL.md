@@ -335,11 +335,34 @@ One `Agent` call, `subagent_type: general-purpose`. Pass the wave's `kahuna_bran
 > 6. `git checkout main && git pull` in the target repo.
 > 7. Write `<wave-root>/flight-<M>/merge-report.md` (per-issue PR URL, CI status, merge strategy, reviewer-pass summary per issue from the Step 3c.5 dispatch, anomalies).
 >
-> Final message — exactly one line:
+> ## Exit shape
+>
+> **This is your final-message contract. It overrides every prior conversational habit.** When you finish (or abort) the steps above, your **last assistant message MUST be exactly one line of JSON — nothing else.** No prose, no fences, no preamble, no narration about background processes, no "I'm done", no "let me ...", no status updates, no closing remarks. The Orchestrator parses this line by regex; anything else is recorded as a malformed return and the flight is marked FAIL.
+>
+> **Canonical line (verbatim shape — fill placeholders, emit nothing else):**
 >
 > ```
 > {"report_path":"<absolute-path-to-merge-report.md>","status":"PASS|FAIL|BLOCKED"}
 > ```
+>
+> **Concrete examples (these are the EXACT shapes — match one of them):**
+>
+> - PASS:    `{"report_path":"/tmp/wavemachine/foo/wave-2/flight-1/merge-report.md","status":"PASS"}`
+> - FAIL:    `{"report_path":"/tmp/wavemachine/foo/wave-2/flight-1/merge-report.md","status":"FAIL"}`
+> - BLOCKED: `{"report_path":"/tmp/wavemachine/foo/wave-2/flight-1/merge-report.md","status":"BLOCKED"}`
+>
+> **Forbidden phrases — NEVER emit any of these as your final message (this list is illustrative, not exhaustive — the rule is "JSON only, nothing else"):**
+>
+> - `"Sleep is still running. Let me wait for the notification."` — narrating Bash sleep state. **This is the exact failure that motivated this section (Plan #581 wave-2 flight-1 incident, 2026-05-05).** If a `Bash(sleep)` invocation in your CI-poll loop returns and you find yourself wanting to narrate the sleep, **DO NOT** — re-issue the next polling tool call (`pr_wait_ci`, `ci_wait_run`, etc.) silently, or if the loop is complete, emit the canonical JSON line instead.
+> - `"CI is still running, waiting..."` / `"Waiting for CI..."` / any narration about polling state.
+> - `"Let me check..."` / `"Now I'll..."` / `"Done."` / `"All merged."` / any conversational closer.
+> - `"Here is the merge report:"` followed by report content — the report is on disk; emit only the JSON pointer.
+> - Markdown code fences (```json, ```, etc.) wrapping the JSON line — emit the bare line.
+> - Any line that does NOT match the regex `^\{"report_path":"[^"]+","status":"(PASS|FAIL|BLOCKED)"\}$`.
+>
+> **Polling-loop discipline.** Your CI wait (`pr_wait_ci`, `ci_wait_run`, or any inline `Bash(sleep)`-based loop) may take many minutes. While the loop runs, do NOT emit assistant text between iterations — re-issue the next tool call directly. The Orchestrator does not read intermediate narration; it only parses your last message. Any text you emit between sleeps is wasted context and increases the risk of the final-message regex failing.
+>
+> **If you are about to emit your final message and you are NOT certain it matches the canonical shape, STOP and re-read this Exit shape section before sending.** This section is deliberately the LAST thing in your prompt so it is the most recent context when you compose the final message.
 
 ### 3f. Parse Prime(post-flight) return.
 
