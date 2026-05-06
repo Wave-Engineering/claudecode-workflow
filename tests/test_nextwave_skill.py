@@ -300,3 +300,195 @@ class TestDevSpecCrossReference:
         assert re.search(r"§\s*5\.2\.3|Dev Spec.*5\.2\.3", skill_text), (
             "Dev Spec §5.2.3 must be cross-referenced from the skill"
         )
+
+
+# ---------------------------------------------------------------------------
+# Regression: Prime(post-flight) prompt must declare the canonical-line
+# contract verbatim, list forbidden phrases, and place an Exit shape section
+# as the LAST section of the prompt template.
+#
+# Source incident: Plan #581 wave-2 flight-1 (2026-05-05). The Prime(post-
+# flight) sub-agent emitted ``"Sleep is still running. Let me wait for the
+# notification."`` instead of the canonical JSON line after a Bash(sleep)
+# returned mid-CI-poll loop, breaking the Orchestrator's parse contract.
+#
+# Issue: claudecode-workflow#606
+# Maps to AC-1 (canonical-line + forbidden-phrases sections in prompt) and
+# AC-2 (this regression test). AC-3 is integration-test-level.
+# ---------------------------------------------------------------------------
+
+
+def _prime_post_flight_prompt(text: str) -> str:
+    """Return the body of the Prime(post-flight) prompt template — the
+    blockquote that follows the Step 3e header and runs until the end of
+    the blockquote (the next non-blockquote line marks the end).
+
+    The prompt is a markdown blockquote (every line begins with ``> ``).
+    We slice from the first blockquote line after the 3e header to the
+    last consecutive blockquote line.
+    """
+    step3e = _section(text, "3e. Spawn Prime(post-flight)")
+    if not step3e:
+        return ""
+    lines = step3e.splitlines(keepends=True)
+    in_quote = False
+    quote_lines: list[str] = []
+    for line in lines:
+        if line.startswith(">"):
+            in_quote = True
+            quote_lines.append(line)
+        elif in_quote and line.strip() == "":
+            # Blank lines inside a blockquote are sometimes rendered as a
+            # bare newline rather than ``>`` — keep collecting unless the
+            # next non-blank line breaks out of the quote. Cheaper: append
+            # and let the regex assertions ignore it.
+            quote_lines.append(line)
+        elif in_quote:
+            # First non-blockquote, non-blank line after the quote — stop.
+            break
+    return "".join(quote_lines)
+
+
+class TestPrimePostFlightCanonicalLineUnderLongCi:
+    """Prime(post-flight) prompt declares the canonical-line contract,
+    lists forbidden phrases (including the Plan #581 narration), and
+    places an Exit shape section as the LAST section of the prompt.
+
+    Test name maps to issue #606's named regression test:
+    ``test_prime_post_flight_canonical_line_under_long_ci``.
+    """
+
+    def test_step3e_section_exists(self, skill_text: str) -> None:
+        """Sanity: Step 3e is present at all."""
+        assert _section(skill_text, "3e. Spawn Prime(post-flight)"), (
+            "Step 3e (Spawn Prime(post-flight)) section is missing"
+        )
+
+    def test_post_flight_prompt_has_exit_shape_section(
+        self, skill_text: str
+    ) -> None:
+        """The prompt template must contain a section literally headed
+        ``Exit shape`` (case-insensitive). This is the section that holds
+        the canonical-line contract.
+        """
+        prompt = _prime_post_flight_prompt(skill_text)
+        assert prompt, "Prime(post-flight) prompt body could not be located"
+        assert re.search(r"^>\s*##\s*Exit shape\s*$", prompt, re.MULTILINE), (
+            "Prime(post-flight) prompt must contain a `## Exit shape` section"
+        )
+
+    def test_exit_shape_is_last_section_of_prompt(self, skill_text: str) -> None:
+        """The ``Exit shape`` section must be the LAST section of the
+        prompt template — i.e. no other ``## ``- or ``### ``-level heading
+        appears after it inside the blockquote. Rationale: it must be the
+        most recent context when the agent composes its final message.
+        """
+        prompt = _prime_post_flight_prompt(skill_text)
+        # Find the Exit shape header line.
+        match = re.search(
+            r"^>\s*##\s*Exit shape\s*$", prompt, re.MULTILINE
+        )
+        assert match, "Exit shape header not found"
+        tail = prompt[match.end():]
+        # No further ``## `` / ``### `` headers in the same blockquote.
+        assert not re.search(r"^>\s*##+\s+\S", tail, re.MULTILINE), (
+            "Exit shape must be the LAST section in the Prime(post-flight) "
+            "prompt — found another header after it"
+        )
+
+    def test_canonical_line_shape_stated_verbatim(self, skill_text: str) -> None:
+        """The literal canonical-line shape must appear inside the Exit
+        shape section. Match the JSON skeleton with PASS|FAIL|BLOCKED.
+        """
+        prompt = _prime_post_flight_prompt(skill_text)
+        # The literal placeholder form used elsewhere in the skill.
+        assert re.search(
+            r'\{"report_path":"<absolute-path-to-merge-report\.md>",'
+            r'"status":"PASS\|FAIL\|BLOCKED"\}',
+            prompt,
+        ), "Canonical line shape must be stated verbatim with PASS|FAIL|BLOCKED"
+
+    def test_concrete_examples_present(self, skill_text: str) -> None:
+        """At least one concrete example of each terminal status must
+        appear, so the agent has a literal shape to copy from."""
+        prompt = _prime_post_flight_prompt(skill_text)
+        # Concrete PASS example — actual JSON, not the placeholder form.
+        assert re.search(
+            r'\{"report_path":"/tmp/wavemachine/[^"]+","status":"PASS"\}',
+            prompt,
+        ), "Concrete PASS example missing from Exit shape"
+        assert re.search(
+            r'\{"report_path":"/tmp/wavemachine/[^"]+","status":"FAIL"\}',
+            prompt,
+        ), "Concrete FAIL example missing from Exit shape"
+        assert re.search(
+            r'\{"report_path":"/tmp/wavemachine/[^"]+","status":"BLOCKED"\}',
+            prompt,
+        ), "Concrete BLOCKED example missing from Exit shape"
+
+    def test_forbidden_phrase_sleep_narration(self, skill_text: str) -> None:
+        """The exact narration that broke the contract on Plan #581 must
+        be listed as forbidden. This is the load-bearing assertion: if
+        someone re-introduces the narration pattern by relaxing this
+        section, the test catches it.
+        """
+        prompt = _prime_post_flight_prompt(skill_text)
+        assert re.search(
+            r"Sleep is still running\.?\s*Let me wait for the notification",
+            prompt,
+            re.IGNORECASE,
+        ), (
+            "Forbidden phrase 'Sleep is still running. Let me wait for the "
+            "notification.' must be cited verbatim in the Exit shape "
+            "section (Plan #581 incident reference)"
+        )
+
+    def test_forbidden_phrases_list_present(self, skill_text: str) -> None:
+        """A ``Forbidden phrases`` section must exist — it's the rubric
+        the agent reads before emitting its final message."""
+        prompt = _prime_post_flight_prompt(skill_text)
+        assert re.search(
+            r"[Ff]orbidden phrases?", prompt
+        ), "Exit shape must contain a 'Forbidden phrases' list"
+
+    def test_polling_loop_discipline_section(self, skill_text: str) -> None:
+        """The prompt must explicitly tell the agent NOT to emit narration
+        between polling iterations. This addresses the root cause: the
+        agent narrating sleep state during a long CI wait.
+        """
+        prompt = _prime_post_flight_prompt(skill_text)
+        # Look for an instruction tying polling-loop iterations to silence.
+        assert re.search(
+            r"polling[- ]loop|between iterations|between sleeps|"
+            r"do not emit.*between|silently",
+            prompt,
+            re.IGNORECASE,
+        ), (
+            "Exit shape must include polling-loop discipline — explicitly "
+            "instruct the agent to not narrate between sleep iterations"
+        )
+
+    def test_plan_581_incident_referenced(self, skill_text: str) -> None:
+        """The motivating incident (Plan #581) must be referenced inside
+        the prompt so future readers know why this section exists.
+        """
+        prompt = _prime_post_flight_prompt(skill_text)
+        assert re.search(r"Plan #?581|#?581", prompt), (
+            "Exit shape must reference Plan #581 (the source incident)"
+        )
+
+    def test_canonical_line_regex_cited(self, skill_text: str) -> None:
+        """The canonical-line regex (or an equivalent strict pattern) must
+        appear in the prompt so the agent has a mechanical check it can
+        run against its own output.
+        """
+        prompt = _prime_post_flight_prompt(skill_text)
+        # The regex pattern itself or an unambiguous reference to the JSON
+        # shape with PASS|FAIL|BLOCKED.
+        assert re.search(
+            r"\^\\\{|regex|report_path.*status.*PASS\|FAIL\|BLOCKED",
+            prompt,
+        ), (
+            "Exit shape must cite the canonical-line regex / strict shape "
+            "pattern so the agent can self-check before emitting"
+        )
