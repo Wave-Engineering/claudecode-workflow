@@ -18,8 +18,30 @@ Analyze one or more Plan tracking issues, validate their sub-issue specs, comput
 
 ## Procedure
 
-1. **Inputs.** Plan tracking-issue numbers passed by the user (`/prepwaves #2` or `/prepwaves #2 #3 ...`). Each Plan becomes one Phase in `phases-waves.json`.
-2. **Pre-flight readiness table.** For each Plan:
+1. **Sandbox cleanliness pre-flight (refuse if dirty).** Before doing anything else, verify the working tree is clean and on the project's protected base branch. Run **both** of these from the project root:
+
+   ```bash
+   git status --porcelain
+   git rev-parse --abbrev-ref HEAD
+   ```
+
+   Refuse to proceed and STOP if **either** of the following is true:
+
+   - `git status --porcelain` returns any output (untracked, modified, or staged files present).
+   - The current branch is not the project's protected base branch (read from `.claude-project.md`'s `Default branch` field — typically `main` on GitHub repos, may be `release/<ver>` on AnalogicDev GitLab repos, etc.).
+
+   The refusal message MUST include:
+
+   - The exact `git status --porcelain` output (so the operator sees every offending path and can choose between commit, stash, or `git checkout --`).
+   - The current branch (when wrong-branch is the cause) and the expected protected base branch.
+   - The remediation menu: commit, stash, discard, or checkout the protected base branch.
+
+   **Override (use sparingly, must be noisy).** If the operator passes `--force-dirty` (e.g. `/prepwaves --force-dirty #607`), proceed despite a dirty tree or wrong branch — but emit a loud banner BEFORE step 2 listing every offending path AND the current branch, plus the line `WARNING: --force-dirty bypasses sandbox cleanliness gate. Cross-talk risk is on the operator.` Do not silently absorb the override; the banner is the audit trail.
+
+   **Rationale (load-bearing — do not delete).** This gate exists because of the Plan #581 sandbox cross-talk incident (2026-05-05): another agent's uncommitted work in `fix/377-wave-init-base-branch-persist` (~394 lines) was sitting in the same checkout when `/prepwaves` ran, and required hand-rolled patch-and-revert to recover. A dirty sandbox at prep time is the leading indicator of inter-agent cross-talk. Refusing here is cheap; recovering from a polluted Plan-tracking commit is not.
+
+2. **Inputs.** Plan tracking-issue numbers passed by the user (`/prepwaves #2` or `/prepwaves #2 #3 ...`). Each Plan becomes one Phase in `phases-waves.json`.
+3. **Pre-flight readiness table.** For each Plan:
    a. Call `epic_sub_issues(N)` inline to get the list of sub-issue numbers (must complete before spawning validators — you need the list first).
    b. Launch **one Haiku sub-agent per sub-issue in a single message** (parallel). Each sub-agent runs `spec_validate_structure` for its issue and returns a one-line result: `#N | <title> | <deps> | Changes:✓/✗ | Tests:✓/✗ | AC:✓/✗ | <Ready/NOT READY>`. Sub-agents have no data dependencies on each other — all can run concurrently.
 
@@ -32,11 +54,11 @@ Analyze one or more Plan tracking issues, validate their sub-issue specs, comput
    ```
 
    Assemble the returned lines into the readiness table. If any sub-issue is NOT READY, stop and ask the user how to proceed.
-3. **Compute waves.** Call `wave_compute(epic_ref)` (param name is historical — pass the Plan's issue ref) to get the topologically-sorted wave plan, then `wave_topology(...)` to classify. Present the wave plan (waves, issues, dependency chain, branch naming `feature/<N>-<desc>`).
-4. **Cross-repo detection.** For each Phase about to be persisted, walk every sub-issue's ref. Resolve each ref's `owner/repo` (per-issue `repo` field, else plan-level `repo`, else the orchestrator's current project repo). Collect distinct repo slugs that differ from the orchestrator's project repo. If the set is non-empty, set `cross_repo: true` and `target_repos: [<slug>, ...]` on that Phase in the plan JSON. Single-repo Phases leave both fields unset. Cheap — no extra LLM calls; pure walk over refs already in `wave_compute`'s output.
-5. **Approval gate.** Wait for explicit user approval. Iterate on the plan here — not during `/nextwave`.
-6. **Persist.** Call `wave_init(plan_json)` — the tool auto-detects existing plans and uses extend mode, preserving completed waves. Use Phase-prefixed wave IDs (e.g., `wave-2a`) to avoid collisions when extending. Cross-repo fields (`cross_repo`, `target_repos`) round-trip without modification (the underlying `wave-status init` writes the plan dict verbatim to `phases-waves.json`).
-7. **Conditional recipe injection.** If any prepped Phase has `cross_repo: true`, append the cross-repo recipe to this skill's output by `cat`ing `skills/_shared/recipes/cross-repo-wave-orchestration.md`. Format:
+4. **Compute waves.** Call `wave_compute(epic_ref)` (param name is historical — pass the Plan's issue ref) to get the topologically-sorted wave plan, then `wave_topology(...)` to classify. Present the wave plan (waves, issues, dependency chain, branch naming `feature/<N>-<desc>`).
+5. **Cross-repo detection.** For each Phase about to be persisted, walk every sub-issue's ref. Resolve each ref's `owner/repo` (per-issue `repo` field, else plan-level `repo`, else the orchestrator's current project repo). Collect distinct repo slugs that differ from the orchestrator's project repo. If the set is non-empty, set `cross_repo: true` and `target_repos: [<slug>, ...]` on that Phase in the plan JSON. Single-repo Phases leave both fields unset. Cheap — no extra LLM calls; pure walk over refs already in `wave_compute`'s output.
+6. **Approval gate.** Wait for explicit user approval. Iterate on the plan here — not during `/nextwave`.
+7. **Persist.** Call `wave_init(plan_json)` — the tool auto-detects existing plans and uses extend mode, preserving completed waves. Use Phase-prefixed wave IDs (e.g., `wave-2a`) to avoid collisions when extending. Cross-repo fields (`cross_repo`, `target_repos`) round-trip without modification (the underlying `wave-status init` writes the plan dict verbatim to `phases-waves.json`).
+8. **Conditional recipe injection.** If any prepped Phase has `cross_repo: true`, append the cross-repo recipe to this skill's output by `cat`ing `skills/_shared/recipes/cross-repo-wave-orchestration.md`. Format:
 
    ```
    ## Cross-Repo Recipe (auto-loaded because Phase X spans repos: <target_repos>)
@@ -45,7 +67,7 @@ Analyze one or more Plan tracking issues, validate their sub-issue specs, comput
    ```
 
    Single-repo runs skip this step entirely — no context bloat. The recipe's content lives in one place; both `/prepwaves` (here) and `/nextwave` (preflight) `cat` from the same file.
-8. **Confirm.** Report wave count, issue count, readiness summary, cross-repo status (if any), and "Run `/nextwave` to begin execution."
+9. **Confirm.** Report wave count, issue count, readiness summary, cross-repo status (if any), and "Run `/nextwave` to begin execution."
 
 ## Reasoning Rules (Preserve)
 
