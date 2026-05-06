@@ -697,12 +697,22 @@ class TestAC2_ExhaustiveLegalExits:
             f"(found {len(bullets)})"
         )
 
-    def test_cross_reference_to_principle_memory_files(
+    def test_cross_reference_to_axiom_corpus(
         self, skill_text: str
     ) -> None:
-        """AC-3: the section must cross-reference both
-        ``principle_user_attention_is_the_cost.md`` and
-        ``principle_cost_asymmetry_continue_vs_exit.md``."""
+        """AC-3 (post-#605 structural rework): the section must
+        cross-reference ``WAVE_AXIOMS.md`` as the canonical source of
+        truth for the closed-list discipline.
+
+        The previous incarnation of this test asserted direct references
+        to ``principle_user_attention_is_the_cost.md`` and
+        ``principle_cost_asymmetry_continue_vs_exit.md``. cc-workflow#605
+        restructured the wave-pattern skill bodies so they cite
+        ``WAVE_AXIOMS.md`` as the single source of truth — those two
+        memory files are now reflected in Axiom 9 and the file's
+        cross-reference table. Asserting the axiom-file reference
+        transitively covers both memory files via the axiom corpus.
+        """
         lines = skill_text.splitlines(keepends=True)
         start = next(
             i for i, l in enumerate(lines)
@@ -715,9 +725,25 @@ class TestAC2_ExhaustiveLegalExits:
             len(lines),
         )
         body = "".join(lines[start:end])
-        assert "principle_user_attention_is_the_cost.md" in body, (
-            "Must cross-reference principle_user_attention_is_the_cost.md"
+        assert "WAVE_AXIOMS.md" in body, (
+            "Exhaustive Legal Exits section must cross-reference "
+            "WAVE_AXIOMS.md as the canonical source of truth."
         )
-        assert "principle_cost_asymmetry_continue_vs_exit.md" in body, (
-            "Must cross-reference principle_cost_asymmetry_continue_vs_exit.md"
+
+    def test_top_of_file_axioms_block(self, skill_text: str) -> None:
+        """Per cc-workflow#605: every wave-pattern skill body must begin
+        with a ``## Axioms`` H2 that names the axioms binding the skill
+        and points at ``WAVE_AXIOMS.md``. This is the contract that
+        prevents drift between the skill body and the axiom corpus."""
+        lines = skill_text.splitlines()
+        # The Axioms block must be near the top — within the first 50
+        # lines, before any deep procedural content.
+        head = "\n".join(lines[:50])
+        assert "## Axioms" in head, (
+            "Wave-pattern skill body must begin with a `## Axioms` H2 "
+            "block citing WAVE_AXIOMS.md (per cc-workflow#605)."
+        )
+        # And that block must point at WAVE_AXIOMS.md.
+        assert "WAVE_AXIOMS.md" in head, (
+            "Top-of-file `## Axioms` block must reference WAVE_AXIOMS.md."
         )
