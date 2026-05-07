@@ -5,6 +5,7 @@
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 ### Fixes
 
 - `wave_finalize`: durable-state fallback when wavebus has been cleaned up by `wave_complete`. Re-derives the MR body from `<project>/.claude/status/{phases-waves.json,state.json}` (issue #s + recorded `mr_urls`) so the kahuna→target finalize step succeeds at the end of the last wave instead of returning `no_artifacts`. Bus artifacts still take precedence when present. (#415, Plan #581 incident)
@@ -44,6 +45,15 @@
 
 - Added `docs/tools.md` (per-tool reference, seeded with `wave_wait_for_signal`).
 - Added `docs/wave-pattern-orchestration.md` with the canonical Orchestrator-wait-on-Flights example.
+>>>>>>> Stashed changes
+=======
+### Breaking
+
+- Wavemachine Classic mode retired; Kahuna is the only execution shape. Every Plan now bootstraps a `kahuna_branch` at launch and routes Flight PRs through that integration branch, with the four-signal trust gate at Plan completion auto-merging kahuna→protected-branch. The `legacy non-KAHUNA` / `KAHUNA mode` framing is gone from `/wavemachine`, `/nextwave`, `/prepwaves`, `/assesswaves`, and `/devspec`. Hardcoded `main` integration targets in skill bodies have been replaced with abstract phrasing (the project's protected branch, read from `.claude-project.md`). No mode-selection flag, no fallback path. Closes cc-workflow#580.
+
+### Chore
+
+- New regression check `scripts/ci/check-no-classic-mode.sh` (wrapped by `tests/regression/test_no_classic_mode.sh`) flags Classic-mode taint in wave-pattern skill bodies and the cross-repo recipe; wired into `scripts/ci/validate.sh`'s regression-tests pass.
 >>>>>>> Stashed changes
 
 All notable changes to this project will be documented in this file.
