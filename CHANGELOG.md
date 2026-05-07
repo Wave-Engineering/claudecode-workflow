@@ -1,5 +1,61 @@
 # Changelog
 
+## Unreleased
+
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+<<<<<<< Updated upstream
+### Fixes
+
+- `wave_finalize`: durable-state fallback when wavebus has been cleaned up by `wave_complete`. Re-derives the MR body from `<project>/.claude/status/{phases-waves.json,state.json}` (issue #s + recorded `mr_urls`) so the kahuna→target finalize step succeeds at the end of the last wave instead of returning `no_artifacts`. Bus artifacts still take precedence when present. (#415, Plan #581 incident)
+- `/wavemachine`: Wave-to-wave handoff is now a single tool-use boundary — skill body forbids narrative text between waves, and a new doc-shape regression test (`tests/regression/test_wavemachine_handoff_no_narrator.sh`) guards the contract. Closes "Bug B" from Plan #581 campaign A debrief (#600).
+- `/nextwave`: Prime(post-flight) prompt now declares the canonical-line contract verbatim with concrete PASS/FAIL/BLOCKED examples, a forbidden-phrases list (including the exact `"Sleep is still running. Let me wait for the notification."` narration that broke Plan #581 wave-2), and an `Exit shape` section as the LAST section of the prompt so it is the most recent context when the agent emits its final message. Closes #606.
+=======
+### Features
+
+- `/prepwaves` now ends with a `/clear` recommendation and a paste-ready `/wavemachine` seed prompt. The recommendation downgrades to a hint when `nerf_status` reports <30% of soft dart used. Reduces context drift between planning and execution sessions (Plan #581 debrief). Closes #602.
+
+### Chore
+
+- `/prepwaves` now refuses to run on a dirty working tree or a non-base branch, listing every offending path so the operator can choose between commit, stash, or discard. A `--force-dirty` override exists for legitimate edge cases and emits a noisy banner before proceeding. Rationale: Plan #581 sandbox cross-talk incident (#603).
+- `/devspec approve` now self-commits the Dev Spec (and any auxiliary finalization-track writes) on the active branch with a `docs(devspec): finalize Dev Spec for Plan #N — <slug>` message instead of leaving the changes uncommitted. Refuses to commit on the project's protected base branch. Push remains the operator's affirmative act. (#604)
+>>>>>>> Stashed changes
+=======
+### Features
+
+- /wavemachine: long-session drift mitigation — at every wave-to-wave handoff the loop body emits per-wave drift-signal events (`wave_message_length_main`, `wave_stop_hook_blocks`, `wave_concerns_posts`) via `scripts/wavemachine/drift-instrumentation.sh emit-wave-drift` and injects a system-reminder re-grounding payload citing `WAVE_AXIOMS.md` (with explicit Axiom 9 reference). The lightweight payload is unconditional at every wave boundary; mandatory `/engage` and `/compact`-on-N-waves are documented as rejected alternatives held in reserve for empirical escalation. (cc-workflow#601, "Bug C" from Plan #581 campaign A debrief.)
+
+### Chore
+
+- WAVE_AXIOMS.md restructured: each axiom now has a stable rule/why/how subsection layout, and a new Axiom 9 ("User attention is the cost. Autonomy is the protection.") binds the autonomy clauses in `/wavemachine`-class skills to the user-attention-protection rationale. The four wave-pattern skill bodies (`/wavemachine`, `/nextwave`, `/prepwaves`, `/assesswaves`) now begin with a `## Axioms` cross-reference block citing the binding axioms by number, and inline justification prose that duplicated the axiom corpus has been replaced with cross-references — single source of truth, no more skill-body drift. (#605)
+>>>>>>> Stashed changes
+=======
+### Features
+
+- `wave_wait_for_signal` MCP tool — sanctioned idle-wait for wave-pattern Orchestrators (and Primes) blocking on filesystem-bus completion artifacts. Polls every 5s with configurable timeout (default 1800s) and minimum match count (default 1); accepts literal paths or Bun.Glob patterns. Returns matched paths on success or `timed_out: true` + `partial_matches` on timeout. Replaces ad-hoc `Bash(sleep)` loops and the anxiety-driven premature-exit failure mode (#414).
+- **wave-watcher daemon (#578).** New standalone Bun daemon at
+- `/wave` skill: thin routing skill wrapping `mcp__sdlc-server__wave_show` so wave-pattern status (Project / Phase / Wave / Flight / Action / Progress / Deferrals) can be checked from any conversation without remembering the MCP tool name. Pure pass-through — no interpretation. Future routes (`/wave health`, `/wave topology`, `/wave next`) documented but reserved for follow-up issues. (#579)
+
+### Fixes
+
+- `pr_wait_ci` no longer hangs the full timeout window when a PR/MR has no required status checks. The handler now probes once at t=0; on empty rollup it returns `{ status: "no_checks_required", elapsed_sec, mergeable, blocker? }` instead of polling. Polling-loop behavior for non-empty rollups is unchanged. (#416)
+
+### Docs
+
+- Added `docs/tools.md` (per-tool reference, seeded with `wave_wait_for_signal`).
+- Added `docs/wave-pattern-orchestration.md` with the canonical Orchestrator-wait-on-Flights example.
+>>>>>>> Stashed changes
+=======
+### Breaking
+
+- Wavemachine Classic mode retired; Kahuna is the only execution shape. Every Plan now bootstraps a `kahuna_branch` at launch and routes Flight PRs through that integration branch, with the four-signal trust gate at Plan completion auto-merging kahuna→protected-branch. The `legacy non-KAHUNA` / `KAHUNA mode` framing is gone from `/wavemachine`, `/nextwave`, `/prepwaves`, `/assesswaves`, and `/devspec`. Hardcoded `main` integration targets in skill bodies have been replaced with abstract phrasing (the project's protected branch, read from `.claude-project.md`). No mode-selection flag, no fallback path. Closes cc-workflow#580.
+
+### Chore
+
+- New regression check `scripts/ci/check-no-classic-mode.sh` (wrapped by `tests/regression/test_no_classic_mode.sh`) flags Classic-mode taint in wave-pattern skill bodies and the cross-repo recipe; wired into `scripts/ci/validate.sh`'s regression-tests pass.
+>>>>>>> Stashed changes
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).

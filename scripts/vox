@@ -39,6 +39,160 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 USER_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/vox"
 BUNDLED_PROVIDERS_DIR="$SCRIPT_DIR/vox-providers"
 
+# --- mcp-log instrumentation --------------------------------------------------
+#
+# Every vox invocation emits ≥1 structured event to ~/.claude/logs/mcp.jsonl
+# via the `mcp-log` CLI (see docs/mcp-logging-standard.md). Three junctures:
+#   call_start    — after arg parse, before provider resolution
+#   call_complete — on the success path (ok=true)
+#   call_failed   — on every failure path (ok=false, stable reason tag)
+#
+# Plus a trap-based safety net: if vox exits non-zero without us having logged
+# a success or a known failure, emit call_failed reason=unknown_exit. This is
+# what makes the instrumentation "complete" — `set -euo pipefail` can fire
+# from any uncovered path, and the trap guarantees observability.
+#
+# Performance: mcp-log is a tiny bash CLI that appends one JSON line. Bound
+# is <50ms additional overhead per vox call.
+
+VOX_T0_MS=$(date +%s%3N 2>/dev/null || echo 0)
+VOX_LOGGED_TERMINAL=0 # set to 1 once a call_complete or call_failed fires
+
+vox_elapsed_ms() {
+	local now
+	now=$(date +%s%3N 2>/dev/null || echo 0)
+	if [[ "$VOX_T0_MS" == "0" || "$now" == "0" ]]; then
+		echo 0
+	else
+		echo $((now - VOX_T0_MS))
+	fi
+}
+
+# Pure-bash JSON-line appender. Conforms to the same wire format as the
+# `mcp-log` CLI (docs/mcp-logging-standard.md): one line, top-level keys
+# `ts, server, level, event` plus the supplied KEY=VALUE pairs. We don't
+# shell out to `mcp-log` because each invocation costs ~55ms wall-clock from
+# jq subprocess spawns, and the issue's <50ms additional-overhead budget
+# can't accommodate two of them per call. Two trade-offs vs `mcp-log`:
+#
+#   1. Type inference is shallow: we recognize `true`/`false`, integers, and
+#      bare floats as JSON-typed; everything else is a quoted string.
+#   2. String escaping covers the cases vox actually produces (basenames,
+#      provider stderr that we already truncated to ≤200 chars). Backslashes
+#      and double quotes are escaped; control characters are stripped.
+#
+# Best-effort: any failure here MUST NOT affect vox's exit code or audio.
+vox_log() {
+	# vox_log LEVEL EVENT [KEY=VALUE ...]
+	local level="$1" event="$2"
+	shift 2
+	local logfile="${LOG_FILE:-$HOME/.claude/logs/mcp.jsonl}"
+	logfile="${logfile/#\~/$HOME}"
+	local logdir
+	logdir="$(dirname "$logfile")"
+	[[ -d "$logdir" ]] || mkdir -p "$logdir" 2>/dev/null || return 0
+	local ts
+	ts=$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+	local line='{"ts":"'"$ts"'","server":"vox","level":"'"$level"'","event":"'"$event"'"'
+	local kv key value
+	for kv in "$@"; do
+		[[ "$kv" == *=* ]] || continue
+		key="${kv%%=*}"
+		value="${kv#*=}"
+		# JSON-typed: bool, integer, or float. Otherwise quoted string.
+		if [[ "$value" == "true" || "$value" == "false" ]]; then
+			line="${line},\"${key}\":${value}"
+		elif [[ "$value" =~ ^-?[0-9]+$ ]]; then
+			line="${line},\"${key}\":${value}"
+		elif [[ "$value" =~ ^-?[0-9]+\.[0-9]+$ ]]; then
+			line="${line},\"${key}\":${value}"
+		else
+			# Strip control chars, escape backslashes and double quotes.
+			value="${value//$'\\'/\\\\}"
+			value="${value//\"/\\\"}"
+			value="${value//$'\n'/ }"
+			value="${value//$'\r'/ }"
+			value="${value//$'\t'/ }"
+			line="${line},\"${key}\":\"${value}\""
+		fi
+	done
+	line="${line}}"
+	# Atomic append; ignore failures so a full disk or read-only logfile
+	# can't break vox.
+	printf '%s\n' "$line" >>"$logfile" 2>/dev/null || true
+}
+
+vox_log_failed() {
+	# vox_log_failed REASON [ERR_TEXT]
+	# Marks terminal-logged so the EXIT trap won't double-emit.
+	local reason="$1"
+	local err="${2:-}"
+	# Truncate err to ≤200 chars per logging-standard.
+	if [[ ${#err} -gt 200 ]]; then
+		err="${err:0:200}"
+	fi
+	local provider_name=""
+	if [[ -n "${PROVIDER:-}" ]]; then
+		provider_name="$(basename "$PROVIDER" 2>/dev/null || echo "")"
+	fi
+	local elapsed
+	elapsed=$(vox_elapsed_ms)
+	vox_log warn call_failed \
+		ok=false \
+		reason="$reason" \
+		ms="$elapsed" \
+		provider="$provider_name" \
+		err="$err"
+	VOX_LOGGED_TERMINAL=1
+}
+
+vox_log_complete() {
+	# vox_log_complete [BYTES]
+	local bytes="${1:-0}"
+	local provider_name=""
+	if [[ -n "${PROVIDER:-}" ]]; then
+		provider_name="$(basename "$PROVIDER" 2>/dev/null || echo "")"
+	fi
+	local elapsed
+	elapsed=$(vox_elapsed_ms)
+	vox_log info call_complete \
+		ok=true \
+		ms="$elapsed" \
+		bytes="$bytes" \
+		provider="$provider_name"
+	VOX_LOGGED_TERMINAL=1
+}
+
+# Cleanup trap: fires on any exit. If a known terminal event already logged,
+# do nothing extra. Otherwise emit unknown_exit so uncovered failure paths
+# (set -e from a pipefail path we didn't anticipate) still produce a log line.
+# Also handles the existing audio_out cleanup that previously lived in a
+# narrower trap.
+vox_exit_trap() {
+	local exit_code=$?
+	# Audio cleanup (was previously a separate EXIT trap inside the success path)
+	if [[ -n "${VOX_AUDIO_TMPFILE:-}" && -f "$VOX_AUDIO_TMPFILE" ]]; then
+		rm -f "$VOX_AUDIO_TMPFILE" 2>/dev/null || true
+	fi
+	# Provider stderr capture file (set right before the provider invocation;
+	# may still be on disk if we hit set -e mid-pipeline).
+	if [[ -n "${VOX_PROVIDER_ERR_FILE:-}" && -f "$VOX_PROVIDER_ERR_FILE" ]]; then
+		rm -f "$VOX_PROVIDER_ERR_FILE" 2>/dev/null || true
+	fi
+	if [[ "$exit_code" -ne 0 && "$VOX_LOGGED_TERMINAL" -eq 0 ]]; then
+		local elapsed
+		elapsed=$(vox_elapsed_ms)
+		vox_log warn call_failed \
+			ok=false \
+			reason=unknown_exit \
+			ms="$elapsed" \
+			provider=none \
+			err="exit_code=$exit_code"
+	fi
+	return $exit_code
+}
+trap vox_exit_trap EXIT
+
 # --- Resolve provider ---------------------------------------------------------
 
 resolve_provider() {
@@ -194,6 +348,7 @@ while [[ $# -gt 0 ]]; do
 		VOICE="${2:-}"
 		[[ -z "$VOICE" ]] && {
 			echo "Error: --voice requires a name" >&2
+			vox_log_failed bad_args "--voice requires a name"
 			exit 1
 		}
 		shift 2
@@ -206,6 +361,7 @@ while [[ $# -gt 0 ]]; do
 		OUTPUT_FILE="${2:-}"
 		[[ -z "$OUTPUT_FILE" ]] && {
 			echo "Error: --output requires a file path" >&2
+			vox_log_failed bad_args "--output requires a file path"
 			exit 1
 		}
 		shift 2
@@ -226,6 +382,7 @@ while [[ $# -gt 0 ]]; do
 		;;
 	-*)
 		echo "Error: unknown option '$1'" >&2
+		vox_log_failed bad_args "unknown option: $1"
 		exit 1
 		;;
 	*)
@@ -238,6 +395,16 @@ done
 # --- VOX_DISABLED short-circuit -----------------------------------------------
 
 if [[ "${VOX_DISABLED:-0}" == "1" ]]; then
+	# VOX_DISABLED is the explicit "no-op cleanly" mode (CI / headless / debug).
+	# Per the issue spec, we may "skip event entirely" — and we do, because
+	# even one `mcp-log` invocation (~70ms wall-clock from jq subprocess spawns)
+	# would blow past the <50ms additional-overhead budget on the disabled path
+	# whose baseline is ~5ms. A `vox_log` call here would dominate the entire
+	# disabled invocation. The trade-off: disabled invocations are invisible to
+	# the fleet log, which is consistent with their "explicit no-op" semantics.
+	# Mark VOX_LOGGED_TERMINAL so the EXIT trap doesn't synthesize an
+	# unknown_exit event for what is a clean exit 0.
+	VOX_LOGGED_TERMINAL=1
 	exit 0
 fi
 
@@ -249,33 +416,80 @@ elif [[ ! -t 0 ]]; then
 	TEXT="$(cat)"
 else
 	echo "Error: no message provided. Pass as arguments or pipe via stdin." >&2
+	vox_log_failed bad_args "no message provided"
 	exit 1
 fi
 
 if [[ -z "${TEXT//[$' \t\n\r']/}" ]]; then
 	echo "Error: empty message" >&2
+	vox_log_failed bad_args "empty message"
 	exit 1
 fi
 
+# --- call_start event ---------------------------------------------------------
+
+text_chars=$(printf '%s' "$TEXT" | wc -c)
+if [[ -n "$OUTPUT_FILE" ]]; then output_only=true; else output_only=false; fi
+vox_log info call_start \
+	text_chars="$text_chars" \
+	bg="$BACKGROUND" \
+	voice="${VOICE:-default}" \
+	output_only="$output_only"
+
 # --- Resolve + invoke provider ------------------------------------------------
 
-PROVIDER="$(resolve_provider)" || exit 1
+PROVIDER="$(resolve_provider)" || {
+	# resolve_provider already wrote a stderr line; classify by whether
+	# $VOX_PROVIDER was set (existed but unusable) vs. nothing was found.
+	if [[ -n "${VOX_PROVIDER:-}" ]]; then
+		vox_log_failed provider_missing "VOX_PROVIDER not executable: ${VOX_PROVIDER:-}"
+	else
+		vox_log_failed provider_missing "no provider found"
+	fi
+	exit 1
+}
 
 if [[ -n "$OUTPUT_FILE" ]]; then
 	audio_out="$OUTPUT_FILE"
 else
 	audio_out="$(mktemp --suffix=.wav)"
-	trap 'rm -f "$audio_out"' EXIT
+	# Track for the EXIT trap (vox_exit_trap handles cleanup). Do NOT
+	# install a separate `trap ... EXIT` here — it would clobber the
+	# instrumentation trap installed at the top of the script.
+	VOX_AUDIO_TMPFILE="$audio_out"
 fi
 
-VOX_OUTPUT_FILE="$audio_out" VOX_VOICE="$VOICE" "$PROVIDER" "$TEXT" || {
-	echo "Error: provider '$PROVIDER' failed" >&2
-	exit 1
-}
+# Capture provider stderr to a tmpfile while still streaming it to the user's
+# terminal (preserves pre-instrumentation behavior). The captured copy is read
+# only on failure, for reason-classification + truncated err= field.
+provider_err_file="$(mktemp -t vox-provider-err.XXXXXX)"
+VOX_PROVIDER_ERR_FILE="$provider_err_file" # surfaced for vox_exit_trap cleanup
+set +e
+VOX_OUTPUT_FILE="$audio_out" VOX_VOICE="$VOICE" "$PROVIDER" "$TEXT" \
+	2> >(tee "$provider_err_file" >&2)
+provider_rc=$?
+set -e
+if [[ "$provider_rc" -ne 0 ]]; then
+	echo "Error: provider '$PROVIDER' failed (exit $provider_rc)" >&2
+	provider_stderr=""
+	[[ -f "$provider_err_file" ]] && provider_stderr=$(cat "$provider_err_file")
+	rm -f "$provider_err_file" 2>/dev/null || true
+	# Heuristic classification: distinguish env_missing / network_failed
+	# from generic provider_failed by sniffing the provider's stderr.
+	reason=provider_failed
+	case "$provider_stderr" in
+	*"VOX_ENDPOINT"* | *"environment"* | *"env"*" not set"* | *"unset"*) reason=env_missing ;;
+	*"curl"* | *"network"* | *"timed out"* | *"Connection refused"* | *"Could not resolve"*) reason=network_failed ;;
+	esac
+	vox_log_failed "$reason" "$provider_stderr"
+	exit "$provider_rc"
+fi
+rm -f "$provider_err_file" 2>/dev/null || true
 
 # If --output was requested, we're done (audio is already at OUTPUT_FILE)
 if [[ -n "$OUTPUT_FILE" ]]; then
-	trap - EXIT
+	bytes=$(stat -c%s "$audio_out" 2>/dev/null || echo 0)
+	vox_log_complete "$bytes"
 	exit 0
 fi
 
@@ -313,8 +527,11 @@ prepend_wake_noise "$audio_out"
 PLAYER=$(resolve_player)
 if [[ -z "$PLAYER" ]]; then
 	echo "Error: no audio player found. Set \$VOX_PLAYER, symlink ~/.config/vox/player, or install aplay/paplay/afplay/ffplay." >&2
+	vox_log_failed player_missing "no audio player found (need afplay/paplay/aplay/ffplay)"
 	exit 1
 fi
+
+bytes_for_log=$(stat -c%s "$audio_out" 2>/dev/null || echo 0)
 
 if $BACKGROUND; then
 	bgfile="$(mktemp --suffix=.wav)"
@@ -325,7 +542,22 @@ if $BACKGROUND; then
 		timeout 60 $PLAYER "$bgfile" || true
 	) &>/dev/null &
 	disown
+	# Background playback: success is "we kicked off the player". We don't
+	# wait for audio to finish, so we can't observe player_failed here.
+	vox_log_complete "$bytes_for_log"
 else
+	# Foreground playback: temporarily disable -e so we can observe failure
+	# and emit a structured event before propagating the exit code. stderr
+	# from the player passes through to the user's terminal as before.
+	set +e
 	# shellcheck disable=SC2086
 	$PLAYER "$audio_out"
+	player_rc=$?
+	set -e
+	if [[ "$player_rc" -ne 0 ]]; then
+		echo "Error: player '$PLAYER' failed (exit $player_rc)" >&2
+		vox_log_failed player_failed "player exit_code=$player_rc"
+		exit "$player_rc"
+	fi
+	vox_log_complete "$bytes_for_log"
 fi

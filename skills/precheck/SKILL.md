@@ -67,7 +67,7 @@ prompt: "Review all files changed on the current branch vs main in <repo_root>.
 Wait for all four jobs to return. If Job D (code-reviewer) returned critical or important findings, fix them now before proceeding. Re-run Job D if the fixes were non-trivial. Haiku job failures (B or C) block the checklist item but do not block the gate unless validation itself fails.
 
 ### Step 4 — Assemble checklist and notify
-Collect results from all four jobs, assemble the checklist (see below), then **notify BJ**: `disc_send` to `#precheck`, **then `vox`** — **ALWAYS do both**. If `disc_send` fails (MCP unavailable, network), still do `vox`.
+Collect results from all four jobs, assemble the checklist (see below), then **notify BJ**: `disc_send` to `#precheck`, **then `vox`** — **ALWAYS do both**. If `disc_send` fails (MCP unavailable, network), still do `vox`. Capture the `vox` exit code and log a `vox_invocation_failed` event to `mcp.jsonl` if non-zero — see the instrumented pattern in **The Notification** below. Best-effort: vox failure does NOT block the gate.
 
 ### Step 5 — Sandbox detection + gate
 Run **sandbox-context detection** (see "Sandbox Auto-Approval" below): if the current branch's base ref matches `^kahuna/[0-9]+-`, emit the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invoke `/scpmmr` immediately with no wait; otherwise **STOP.** Wait for `/scp`/`/scpmr`/`/scpmmr`/affirmative. Negative/rework → return to work. Never bypass the STOP on notification failure in non-sandbox contexts.
@@ -85,6 +85,10 @@ Delegated to Job C (Haiku sub-agent) in the parallel batch. Interpret the result
 - [ ] Dependencies (trivy: 0 HIGH/CRITICAL, or exceptions documented, or [SKIPPED])
 
 **Summary:** `[codebase]` `[docs]` `[tests]` `[config]`. **Findings:** `[fixed]` / `[deferred]` / "(none)".
+
+**Notification status line** (append to checklist after notifications fire):
+- vox success: `vox: ✅ fired`
+- vox failure: `vox: ⚠️ failed (rc=N — see mcp.jsonl)`
 
 ## The Notification (Discord + vox)
 Resolve identity from `/tmp/claude-agent-<md5>.json` (md5 of project root path). Use it for both the Discord post and the vox announcement.
@@ -107,6 +111,28 @@ Ready for `/scp` / `/scpmr` / `/scpmmr` or rework.
 ```
 
 **`vox`:** same info, conversational, 1-2 sentences, ending with "Ready for your call."
+
+**Instrumented vox invocation (canonical pattern — do NOT use `|| true`):**
+
+Capture `vox`'s exit code and stderr; on non-zero, emit a structured `vox_invocation_failed` event to `mcp.jsonl`. The gate stays best-effort (no block on vox failure) — we just stop hiding it.
+
+```bash
+_vox_out=$(vox "<announcement>" 2>&1)
+_vox_rc=$?
+if [[ $_vox_rc -ne 0 ]]; then
+    mcp-log --server precheck --level warn vox_invocation_failed \
+        rc=$_vox_rc \
+        err="$(printf '%s' "$_vox_out" | head -c 300)" \
+        context="precheck"
+fi
+```
+
+This catches the failure mode `vox` itself can't catch (vox not on PATH, vox segfault, vox absent entirely). Pairs with `vox`-script-side instrumentation (cc-workflow#551), which catches provider/player failures *inside* a successfully-invoked vox. After both layers land, two distinct events are queryable:
+
+- `vox_invocation_failed` (this layer, from `/precheck`) — vox didn't run at all, or returned non-zero
+- `call_failed` (vox-script layer) — vox ran but TTS provider/audio player failed
+
+Reflect the outcome on the checklist via the **Notification status line** described above (`vox: ✅ fired` vs `vox: ⚠️ failed (rc=N — see mcp.jsonl)`).
 
 ## Sandbox Auto-Approval (KAHUNA Flight Agents)
 
@@ -147,7 +173,7 @@ The detection regex is `^kahuna/[0-9]+-`. Resolve `base_branch` from the most re
 **Non-bypassable items:** validation, code-reviewer (high+ findings still block), trivy scan, Discord `#precheck` post, `vox` announcement. These run in full regardless of `sandbox_context`. Only the human-approval STOP is replaced by the sentinel + auto-`/scpmmr`.
 
 ## Rules
-No diff. No commit. No skipping code-reviewer. Honesty over speed — no checking items you haven't verified. **Linting is not testing** — passing lint/typecheck does not mean code works. **`vox` is ALWAYS called** — it is NOT a fallback for disc_send failure. Both notifications happen every time.
+No diff. No commit. No skipping code-reviewer. Honesty over speed — no checking items you haven't verified. **Linting is not testing** — passing lint/typecheck does not mean code works. **`vox` is ALWAYS called** — it is NOT a fallback for disc_send failure. Both notifications happen every time. **Do NOT swallow vox's exit code with `|| true`** — use the instrumented pattern in the Notification section so a non-zero vox emits `vox_invocation_failed` to `mcp.jsonl`. Best-effort still applies (vox failure does not block the gate); we just stop hiding the failure.
 
 ## New-Repo Onboarding (Merge Queue End-to-End Dry-Run)
 
