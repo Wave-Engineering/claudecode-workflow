@@ -16,7 +16,7 @@ Two modes:
 - `/nextwave` — **interactive**. A single consolidated approval gate fires per flight (= per wave for the dominant single-flight case) after Flights return and after the orchestrator's reviewer pass, before Prime(post-flight) pushes anything to remote. One approval covers every issue in the batch; there are no per-sub-agent prompts.
 - `/nextwave auto` — **auto**. Skips the approval gate. Called by `/wavemachine`. `wave_ci_trust_level` stands in for human judgement.
 
-Merges always go through PR/MR — never direct-to-main.
+Merges always go through PR/MR — never direct-to-protected-branch.
 
 ## Why this shape
 
@@ -78,9 +78,10 @@ The default `/nextwave` flow assumes same-repo execution. Cross-repo waves requi
 ```bash
 TARGET_REPO=/home/bakerb/sandbox/github/mcp-server-sdlc
 
-# Verify target repo is clean and on main (or kahuna_branch if KAHUNA wave)
+# Verify target repo is clean and on the kahuna branch for this Plan
+# (kahuna_branch is bootstrapped by /wavemachine; capture from wave state)
 git -C "$TARGET_REPO" status --short
-git -C "$TARGET_REPO" checkout main
+git -C "$TARGET_REPO" checkout "$KAHUNA_BRANCH"
 git -C "$TARGET_REPO" pull
 ```
 
@@ -93,13 +94,13 @@ for issue in 76 77 78 79 80 81 82 83 84 85 86 87 88 89; do
           | tr '[:upper:]' '[:lower:]' | cut -c1-40)"
   branch="feature/${issue}-${slug}"
   worktree="/tmp/wt-sdlc-${issue}"
-  git -C "$TARGET_REPO" worktree add "$worktree" -b "$branch" origin/main
+  git -C "$TARGET_REPO" worktree add "$worktree" -b "$branch" "origin/$KAHUNA_BRANCH"
   # Worktrees lack node_modules — install dependencies if the project needs them
   ( cd "$worktree" && bun install ) || true
 done
 ```
 
-For KAHUNA waves, replace `origin/main` with `origin/<kahuna_branch>`.
+`$KAHUNA_BRANCH` is the wave's `kahuna_branch` (e.g. `kahuna/<plan-id>-<slug>`), bootstrapped by `/wavemachine` at Plan launch and read from wave state in Step 1.5.
 
 #### Sub-agent prompt template snippet
 
@@ -130,14 +131,14 @@ Closes #<num>"
 git -C /tmp/wt-sdlc-<num> push -u origin feature/<num>-<slug>
 
 gh pr create -R Wave-Engineering/mcp-server-sdlc \
-  --base main --head feature/<num>-<slug> \
+  --base "$KAHUNA_BRANCH" --head feature/<num>-<slug> \
   --title "..." --body "..."
 
 gh pr merge <pr-num> -R Wave-Engineering/mcp-server-sdlc \
   --squash --auto --delete-branch
 ```
 
-For KAHUNA waves, swap `--base main` for `--base <kahuna_branch>` — every Flight PR targets the kahuna branch, never `main` (Dev Spec §5.2.2).
+Every Flight PR targets the kahuna branch — never the project's protected branch. The kahuna→protected-branch MR is opened separately by `wave_finalize` at Plan completion (Dev Spec §5.2.2).
 
 #### Post-wave worktree cleanup
 
@@ -176,7 +177,7 @@ Run this after `wave_complete()` lands and the bus has been cleaned (Step 5).
    This handles the multi-session case: `/prepwaves` may have run in a different session and its scrollback is gone. The recipe content lives in one place — both skills `cat` from the same file. Single-repo waves skip this step entirely.
 2. Resolve **target repo slug** for the bus path. Same-repo waves: use the current repo's slug. Cross-repo waves (wave plan lives in this repo, stories live elsewhere): use the target repo's slug per `lesson_cross_repo_wave_orchestration.md`.
 3. **Emit observability anchor.** Run `mcp-log wave_start wave=<N> target=<repo-slug> issues=<COMPACT JSON array, no spaces, e.g. [418,419,420]>` so this anchor *precedes* every per-issue `spec_validate_structure`, `wave_show`, and `wave_previous_merged` call below — that ordering is what makes post-mortem temporal correlation work. The `kahuna` field is added later (Step 1.5) once `wave_show` has been called; it is fine for the initial `wave_start` to omit it.
-4. Verify main is clean in the target repo; `wave_previous_merged()` confirms prior wave landed. Then validate all issues in parallel — launch **one Haiku sub-agent per issue in a single message**:
+4. Verify the integration target (the wave's `kahuna_branch`) is clean in the target repo; `wave_previous_merged()` confirms the prior wave landed on it. Then validate all issues in parallel — launch **one Haiku sub-agent per issue in a single message**:
    ```
    subagent_type: general-purpose
    model: haiku
@@ -185,8 +186,8 @@ Run this after `wave_complete()` lands and the bus has been cleaned (Step 5).
    ```
    Collect results. Any INVALID → stop, report which issue(s) failed validation, exit.
 5. Call `scripts/wavebus/wave-init <repo-slug> <N> 1`. Flight count is `1` initially — Prime may re-invoke it with the real count (script is idempotent). Capture the printed wave root.
-6. **Read `kahuna_branch` from wave state** via `wave_show()` (or by reading `.claude/status/state.json` in the target repo). If the field is present and non-empty, the wave is executing under KAHUNA — capture the value (e.g. `kahuna/<plan-id>-<slug>`) and pass it into the Prime(pre-wave) prompt as the `kahuna_branch` input. If absent or empty, the wave is a legacy non-KAHUNA execution — flights base off `main` as before. Pre-created worktree branches (Step 7, cross-repo path) and `pr_create` `base` (Step 3e) honor this same value. See Dev Spec §5.2.3 for the authoritative contract.
-7. Pre-create worktrees per issue. Same-repo: `Agent` calls in Step 3 can use `isolation: "worktree"`. Cross-repo: create them now via `git -C <target-repo> worktree add /tmp/wt-<slug>-<issue> -b feature/<issue>-<desc> origin/<base-ref>` (one per issue), where `<base-ref>` is `kahuna_branch` if set, else `main`.
+6. **Read `kahuna_branch` from wave state** via `wave_show()` (or by reading `.claude/status/state.json` in the target repo). The field MUST be present and non-empty — kahuna is the only execution shape this skill supports, and `/wavemachine`'s pre-flight bootstrap guarantees the field is populated before any wave runs. Capture the value (e.g. `kahuna/<plan-id>-<slug>`) and pass it into the Prime(pre-wave) prompt as the `kahuna_branch` input. If the field is missing or empty, refuse to proceed and surface the error — wave state has not been bootstrapped through `/wavemachine`'s launch sequence and Plan execution should restart there. Pre-created worktree branches (Step 7, cross-repo path) and `pr_create` `base` (Step 3e) honor this value. See Dev Spec §5.2.3 for the authoritative contract.
+7. Pre-create worktrees per issue. Same-repo: `Agent` calls in Step 3 can use `isolation: "worktree"`. Cross-repo: create them now via `git -C <target-repo> worktree add /tmp/wt-<slug>-<issue> -b feature/<issue>-<desc> origin/<kahuna_branch>` (one per issue).
 8. Resolve identity from `/tmp/claude-agent-<md5>.json`; post to `#wave-status` (`1487386934094462986`): `"🏄 **Wave <N> started** — <project>, <issue-count> issues. Agent: **<dev-name>** <dev-avatar>"`. If `disc_send` fails, log and continue.
 9. Spawn **Prime(pre-wave)** — single `Agent` call, `subagent_type: general-purpose`. Prompt template below.
 
@@ -194,7 +195,7 @@ Run this after `wave_complete()` lands and the bus has been cleaned (Step 5).
 
 Prime(pre-wave) is a sub-agent. It does NOT have `Agent`; it cannot spawn Flights. Its job is to plan the wave into the bus.
 
-Prompt template (fill in `<repo-slug>`, `<N>`, `<wave-root>`, the issue list, and `<kahuna_branch>` — leave `<kahuna_branch>` blank or omit the line entirely if wave state had no `kahuna_branch`):
+Prompt template (fill in `<repo-slug>`, `<N>`, `<wave-root>`, the issue list, and `<kahuna_branch>` — `<kahuna_branch>` is always present, bootstrapped by `/wavemachine` at Plan launch):
 
 > You are the Prime agent for wave `<N>` of `<repo-slug>`. You plan the wave into the filesystem bus at `<wave-root>`.
 >
@@ -203,14 +204,14 @@ Prompt template (fill in `<repo-slug>`, `<N>`, `<wave-root>`, the issue list, an
 > - Issues in this wave: `<list-of-issue-numbers>`
 > - Wave root: `<wave-root>`
 > - Target repo: `<target-repo>`
-> - Kahuna branch: `<kahuna_branch>` (omit or leave empty for legacy non-KAHUNA waves)
+> - Kahuna branch: `<kahuna_branch>` (always populated; bootstrapped by `/wavemachine` at Plan launch)
 >
 > Steps:
 > 1. For each issue, fetch the spec via `spec_get` and acceptance criteria via `spec_acceptance_criteria`. Summarize files-to-create / files-to-modify / test files per issue.
 > 2. Run `flight_overlap` + `flight_partition` on the per-issue manifests to determine flight structure. Flight 1 maximizes issue count; later flights resolve file-level conflicts. When in doubt, sequence.
 > 3. If the partition needs more flights than the bus was pre-created for, call `scripts/wavebus/wave-init <repo-slug> <N> <final-flight-count>` (idempotent).
 > 4. Write `<wave-root>/plan.md` summarizing the flight structure (flight M → issues, per-issue file manifest, rationale).
-> 5. For each flight M and each issue X in it, write `<wave-root>/flight-<M>/issue-<X>/prompt.md` containing the full Flight instructions (see "Flight stub prompt" in the caller's skill body — reproduce verbatim, fill placeholders). **If `kahuna_branch` is set on this wave, pass it into each Flight prompt as `<kahuna_branch>` so the Flight bases its work on `origin/<kahuna_branch>` instead of `main`. If `kahuna_branch` is empty, omit the kahuna lines from the Flight prompt — flights branch off `main` as in legacy non-KAHUNA execution.**
+> 5. For each flight M and each issue X in it, write `<wave-root>/flight-<M>/issue-<X>/prompt.md` containing the full Flight instructions (see "Flight stub prompt" in the caller's skill body — reproduce verbatim, fill placeholders). Pass `<kahuna_branch>` into each Flight prompt so the Flight bases its work on `origin/<kahuna_branch>`. The Flight's PR targets `<kahuna_branch>`, never the project's protected branch — the kahuna→protected-branch MR is opened separately by `wave_finalize` at Plan completion (Dev Spec §5.2.2).
 > 6. Register the plan via `wave_flight_plan`.
 > 7. If any issue's spec is unbuildable (missing AC, structural contradiction, etc.), mark the plan `BLOCKED` and name the failing issue + reason in `plan.md`.
 >
@@ -311,7 +312,7 @@ In **auto mode**: call `wave_ci_trust_level`; if trust is sufficient, skip the g
 
 ### 3e. Spawn Prime(post-flight).
 
-One `Agent` call, `subagent_type: general-purpose`. Pass the wave's `kahuna_branch` (captured in Step 1.5) into the prompt — set base for `pr_create`. Empty/absent → flights PR against `main` as in legacy execution. Prompt template:
+One `Agent` call, `subagent_type: general-purpose`. Pass the wave's `kahuna_branch` (captured in Step 1.5) into the prompt — set base for `pr_create`. Prompt template:
 
 > You are the Prime(post-flight) agent for wave `<N>`, flight `<M>` of `<repo-slug>`. Flights have already committed in their worktrees. You push, PR, wait CI, verify commutativity, and merge.
 >
@@ -320,12 +321,12 @@ One `Agent` call, `subagent_type: general-purpose`. Pass the wave's `kahuna_bran
 > - Flight: `<M>`
 > - Issues in this flight: `<list>`
 > - Target repo: `<target-repo>`
-> - Kahuna branch: `<kahuna_branch>` (omit or leave empty for legacy non-KAHUNA waves)
+> - Kahuna branch: `<kahuna_branch>` (always populated; the integration target for every Flight PR)
 >
 > Steps:
 > 1. For each issue X in this flight, read `<wave-root>/flight-<M>/issue-<X>/results.md` and verify `DONE` contains `PASS`. If any FAIL, stop and write a `BLOCKED` report naming the failing issues.
 > 2. **Reviewer findings already in hand.** The Orchestrator dispatched the code-reviewer pass at Step 3c.5 (before the consolidated approval gate at Step 3d) and the human has already approved this batch in light of those findings. Do NOT re-dispatch the reviewer here. Reviewer-pass summaries per issue are recorded in the Step 3d batch checklist; surface them in the merge-report (step 7) for traceability.
-> 3. For each issue, push the Flight's commit from its worktree (`git -C <worktree> push -u origin <branch>`), create a PR via `pr_create({base: <kahuna_branch>})` if `kahuna_branch` is set else `pr_create({base: "main"})`, then wait for CI via `pr_wait_ci`. **Every Flight PR in a KAHUNA wave targets the kahuna branch — never `main`. The kahuna→main MR is opened separately by `wave_finalize` per Dev Spec §5.2.2.**
+> 3. For each issue, push the Flight's commit from its worktree (`git -C <worktree> push -u origin <branch>`), create a PR via `pr_create({base: <kahuna_branch>})`, then wait for CI via `pr_wait_ci`. **Every Flight PR targets the kahuna branch — never the project's protected branch. The kahuna→protected-branch MR is opened separately by `wave_finalize` per Dev Spec §5.2.2.**
 > 4. If this flight has multiple issues, run `commutativity_verify` on the changesets `{id, head_ref}`. Interpret the group verdict:
 >    - `STRONG` / `MEDIUM` → `pr_merge(skip_train=true)` for all.
 >    - `WEAK` / `ORACLE_REQUIRED` → sequential merge via the merge queue (no skip).
@@ -336,7 +337,7 @@ One `Agent` call, `subagent_type: general-purpose`. Pass the wave's `kahuna_bran
 >    c. Read `**Plan:** #M` from the story issue's `## Metadata` section (via `spec_get(issue_ref=X)`). If `M` is present and not `N/A`, call `plan_mark_story_done({plan_ref: M, story_id: X})`. The handler is `warn_only: true` — a failure is logged to the merge report but does NOT abort the merge sequence. (The handler ships in `mcp-server-sdlc`; until it lands, the call surfaces as a warn-only logged failure per the same contract.)
 >
 >    Call `wave_flight_done(M)` after all merges land. Then fire-and-forget the auto-updating Discord embed: `./scripts/discord-status-post --channel-id 1487386934094462986 --state-dir .claude/status` (background, non-blocking; failures logged and ignored — Discord is informational, never a gate).
-> 6. `git checkout main && git pull` in the target repo.
+> 6. `git checkout <kahuna_branch> && git pull` in the target repo (the kahuna branch is the integration target for the next flight; the project's protected branch is updated only at Plan completion via `wave_finalize`).
 > 7. Write `<wave-root>/flight-<M>/merge-report.md` (per-issue PR URL, CI status, merge strategy, reviewer-pass summary per issue from the Step 3c.5 dispatch, anomalies).
 >
 > ## Exit shape
@@ -375,7 +376,7 @@ One `Agent` call, `subagent_type: general-purpose`. Pass the wave's `kahuna_bran
 
 ### 3g. Inter-flight re-validation (before flight M+1, M ≥ 1).
 
-`drift_files_changed(prev_sha, HEAD)` on the target repo. If the changeset intersects any file in flight M+1's manifest, spawn a small re-validation Flight per affected issue (same mechanism as Step 3b, one `Agent` call per issue in a single tool-use block). Each returns `PLAN VALID` / `PLAN VALID (minor)` / `PLAN INVALIDATED` / `ESCALATE`. INVALIDATED → re-plan via a fresh Prime(pre-wave) narrowed to the affected issues; ESCALATE → stop and surface. Rebase feature branches onto updated main before the next flight.
+`drift_files_changed(prev_sha, HEAD)` on the target repo. If the changeset intersects any file in flight M+1's manifest, spawn a small re-validation Flight per affected issue (same mechanism as Step 3b, one `Agent` call per issue in a single tool-use block). Each returns `PLAN VALID` / `PLAN VALID (minor)` / `PLAN INVALIDATED` / `ESCALATE`. INVALIDATED → re-plan via a fresh Prime(pre-wave) narrowed to the affected issues; ESCALATE → stop and surface. Rebase feature branches onto the updated kahuna branch before the next flight.
 
 Serial fast-path: when both flights are single-issue and the changed file set is small/local, skip the re-validation Flight spawn. Judgment call — the next Flight will re-read fresh anyway.
 
@@ -394,7 +395,7 @@ After every flight has merged:
    >    - `SPEC CURRENT` → note in report; move on.
    >    - `SPEC STALE` → mechanical fix: update the issue with corrected paths/names; list changes in the report.
    >    - `SPEC BROKEN` → leave the issue alone; flag for user attention in the report.
-   > 4. **CHANGELOG aggregation (mechanical — no gate).** Run `scripts/wavebus/changelog-aggregate <wave-root> <target-repo-path> wave-<N>` to merge per-issue `CHANGELOG.fragment.md` files into the target repo's `CHANGELOG.md` under `## Unreleased`. If the aggregator wrote to `CHANGELOG.md`, commit on a fresh `chore/wave-<N>-changelog` branch in the target repo, push, open a PR (`pr_create`) targeting `<kahuna_branch>` if set else `main`, wait for CI (`pr_wait_ci`), then `pr_merge`. No human gate — content was already approved at each flight's Step 3d gate; this step is purely mechanical aggregation. If the aggregator reports `no fragments found`, skip the commit/PR step entirely (no-op).
+   > 4. **CHANGELOG aggregation (mechanical — no gate).** Run `scripts/wavebus/changelog-aggregate <wave-root> <target-repo-path> wave-<N>` to merge per-issue `CHANGELOG.fragment.md` files into the target repo's `CHANGELOG.md` under `## Unreleased`. If the aggregator wrote to `CHANGELOG.md`, commit on a fresh `chore/wave-<N>-changelog` branch in the target repo, push, open a PR (`pr_create`) targeting `<kahuna_branch>`, wait for CI (`pr_wait_ci`), then `pr_merge`. No human gate — content was already approved at each flight's Step 3d gate; this step is purely mechanical aggregation. If the aggregator reports `no fragments found`, skip the commit/PR step entirely (no-op).
    > 5. `wave_complete()` (marks the current wave complete — takes no args; the server uses the active wave from state).
    > 6. Write `<wave-root>/merge-report.md` (issues closed, PR URLs, flight breakdown, drift findings, CHANGELOG aggregation result + PR URL if applicable, deferred items, next-wave preview).
    >
@@ -456,7 +457,7 @@ This prompt is what each Flight sub-agent receives. Preserve the SPEC EXECUTOR b
 >
 > Your working directory is `<worktree-path>` (use absolute paths or `cd` into it before any git/file operations).
 > Your branch is `<branch-name>` (already checked out in the worktree).
-> **Base your work on origin/`<kahuna_branch>`, not main.** This wave is executing under KAHUNA; your branch was created from `origin/<kahuna_branch>` and your PR will target `<kahuna_branch>`. *(Omit this line entirely when `kahuna_branch` is unset — flights then base off `main` as in legacy non-KAHUNA execution.)*
+> **Base your work on origin/`<kahuna_branch>`, not the project's protected branch.** Your branch was created from `origin/<kahuna_branch>` and your PR will target `<kahuna_branch>`. The kahuna→protected-branch MR is opened separately by `wave_finalize` at Plan completion (Dev Spec §5.2.2).
 > Full instructions for this issue are at `<wave-root>/flight-<M>/issue-<X>/prompt.md` — re-read that file now; this block is only the contract for your return.
 >
 > **SPEC EXECUTOR rules (preserve verbatim):**
@@ -550,4 +551,4 @@ The closed-list discipline above is the operational binding of WAVE_AXIOMS Axiom
 
 ## Non-Negotiables
 
-EXECUTION skill — NO design decisions. Flight sub-agents are SPEC EXECUTORS. Default to safe: latency beats broken code. Flights prevent merge conflicts; planning is cheap, conflict resolution is expensive; single-issue flights take the fast-path. **NEVER merge directly to main.** NEVER skip the pre-commit checklist. **Interactive mode: NEVER push, PR, or merge without explicit user approval at the consolidated batch gate (Step 3d).** The gate is **per-wave / per-flight, batched** — one approval covers every issue in the batch — and **never per-issue / per-sub-agent**. Do not bypass it; do not split it; do not infer approval from silence. One wave per invocation — the user controls the pace in interactive mode; `/wavemachine` controls it in auto mode. When waiting: `wave_waiting("<reason>")`. When deferring: `wave_defer(desc, risk)` then accept after user approval. Compaction state is captured by the auto-crystallizer hook (rate-limited to once per 10 minutes per session); between crystallizations, the working state isn't snapshotted. If compaction is imminent partway through a wave and no recent crystallization has fired, write the current wave state as a memory file before compaction lands. Pair: `/prepwaves` plans, `/nextwave` executes, `/wavemachine` drives the loop.
+EXECUTION skill — NO design decisions. Flight sub-agents are SPEC EXECUTORS. Default to safe: latency beats broken code. Flights prevent merge conflicts; planning is cheap, conflict resolution is expensive; single-issue flights take the fast-path. **NEVER merge directly to the project's protected branch.** Flight PRs target the kahuna branch; the kahuna→protected-branch MR is the only path to the protected branch and is gated by the four-signal trust gate at Plan completion. NEVER skip the pre-commit checklist. **Interactive mode: NEVER push, PR, or merge without explicit user approval at the consolidated batch gate (Step 3d).** The gate is **per-wave / per-flight, batched** — one approval covers every issue in the batch — and **never per-issue / per-sub-agent**. Do not bypass it; do not split it; do not infer approval from silence. One wave per invocation — the user controls the pace in interactive mode; `/wavemachine` controls it in auto mode. When waiting: `wave_waiting("<reason>")`. When deferring: `wave_defer(desc, risk)` then accept after user approval. Compaction state is captured by the auto-crystallizer hook (rate-limited to once per 10 minutes per session); between crystallizations, the working state isn't snapshotted. If compaction is imminent partway through a wave and no recent crystallization has fired, write the current wave state as a memory file before compaction lands. Pair: `/prepwaves` plans, `/nextwave` executes, `/wavemachine` drives the loop.

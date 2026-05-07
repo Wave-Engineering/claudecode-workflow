@@ -11,9 +11,13 @@ This skill is bound by WAVE_AXIOMS 2, 3, 4, 5, 6, 8, 9 — see `WAVE_AXIOMS.md` 
 
 `/wavemachine` is the **Orchestrator-level autopilot** for a multi-wave plan. It runs in the top-level session (where `Agent` lives) as a simple loop: check health, pick the next pending wave, delegate that single wave to `/nextwave auto`, parse the result, repeat. The sophistication lives in the primitives — `/nextwave` does the real per-wave work, `wave_health_check()` decides whether to continue, the user controls when to interrupt.
 
-**Mental model (compiling natural language):** issue specs are source; planning/execution sub-agents are the compiler; MCP tools are the runtime; **wavemachine is `make all` for the wave-pattern compiler.** It exists so the human can hand off a vetted multi-wave Plan and get back a merged Plan (kahuna→main) — or a single clean blocker report when something breaks.
+**Mental model (compiling natural language):** issue specs are source; planning/execution sub-agents are the compiler; MCP tools are the runtime; **wavemachine is `make all` for the wave-pattern compiler.** It exists so the human can hand off a vetted multi-wave Plan and get back a merged Plan (kahuna→the project's protected branch) — or a single clean blocker report when something breaks.
 
 **Why the loop runs in the top-level session (v2 shape):** CC sub-agents do NOT have the `Agent` tool. v1 spawned the wave loop in a background Agent sub-agent, so every `/nextwave` call inside it collapsed to serial execution — the parallel Flight spawn that makes a wave fast was silently lost. v2 keeps the loop *here*, at the top level, where Agent lives and `/nextwave auto` can spawn its parallel Flights properly. There is no background worker. See `decision_wavemachine_v2.md` and `lesson_cc_subagent_tools.md`.
+
+## Migration note (cc-workflow#580)
+
+Wavemachine previously offered an alternative execution shape that merged each wave directly to the project's protected branch, with the kahuna sandbox available as an opt-in. cc-workflow#580 retired the alternative entirely: the kahuna sandbox is the only shape this skill supports. Every Plan bootstraps a `kahuna_branch` at launch, every Flight PR targets that branch, and the four-signal trust gate at Plan completion is the sole path that lands changes on the protected branch. There is no flag to disable the bootstrap, no env var to bypass the gate, and no fallback when `kahuna_branch` is unset — the launch sequence refuses to enter the loop instead. The retired alternative's prose patterns are flagged by `scripts/ci/check-no-classic-mode.sh` as regressions. See cc-workflow#580 for the full rationale and `docs/kahuna-devspec.md` for the architectural background.
 
 ## Tools Used
 
@@ -21,11 +25,11 @@ This skill is bound by WAVE_AXIOMS 2, 3, 4, 5, 6, 8, 9 — see `WAVE_AXIOMS.md` 
 - `mcp__sdlc-server__wave_next_pending` — identifies the next pending wave; loop exits when this returns null
 - `mcp__sdlc-server__wave_show` — pre-flight state inspection; also reads `kahuna_branch` for bootstrap and gate
 - `mcp__sdlc-server__wave_init` — pre-wave kahuna bootstrap (creates `kahuna/<plan_id>-<slug>` once per Plan)
-- `mcp__sdlc-server__wave_finalize` — opens kahuna→main MR at Plan completion
+- `mcp__sdlc-server__wave_finalize` — opens the kahuna→protected-branch MR at Plan completion (target is whatever `.claude-project.md` declares as protected — `main` on most GitHub repos, `release/<ver>` on AnalogicDev GitLab, `develop` elsewhere)
 - `mcp__sdlc-server__commutativity_verify` — trust-score signal; runs concurrently with the other three (R-23)
 - `mcp__sdlc-server__ci_wait_run` — trust-score signal; waits for CI on the kahuna branch
-- `mcp__sdlc-server__pr_merge` — auto-merge kahuna→main on all-green gate, with `skip_train: true` (semantics differ by platform — see "Platform note: `skip_train` semantics" below)
-- `mcp__sdlc-server__wave_previous_merged` — pre-flight verification that prior wave is on main
+- `mcp__sdlc-server__pr_merge` — auto-merge kahuna→protected-branch on all-green gate, with `skip_train: true` (semantics differ by platform — see "Platform note: `skip_train` semantics" below)
+- `mcp__sdlc-server__wave_previous_merged` — pre-flight verification that prior wave is integrated into the kahuna branch
 - `mcp__sdlc-server__wave_ci_trust_level` — cached by `/nextwave auto` for its internal gate decisions
 - `mcp__sdlc-server__wave_waiting` — mark the plan paused with a human-readable reason on any abort
 - `mcp__disc-server__disc_send` — announce to `#wave-status` (`1487386934094462986`) on start, completion, abort, gate pass/block
@@ -44,8 +48,8 @@ Before entering the loop:
 1. **Supporting CLIs on PATH.** **Run this check FIRST, before any MCP calls — if it fails, stop immediately and do not proceed to items #2–7.** Run `command -v wave-status generate-status-panel mcp-log` and verify all three resolve. If any is missing, refuse with a message that names every missing CLI individually: `"/wavemachine requires <name> on PATH. Re-run claudecode-workflow's ./install to deploy supporting tooling."` Do NOT fall back to relative paths or Python-module invocation forms — they are not portable across projects, and silent fallback hides installer regressions (this check exists because of issue #569).
 2. **Plan exists.** Call `wave_show()`. If it returns no state / empty state, refuse: "No wave plan exists. Run `/prepwaves <plan>` first."
 3. **No other wave active.** Inspect `wave_show()`'s output — if `action` is `in-flight`, `planning`, or any active state, refuse: "Wave <id> is already active (action: <X>). Let it finish or clear state before starting wavemachine."
-4. **Base branch clean.** `git status --porcelain` returns nothing on the configured base branch. Any untracked/modified files → refuse and list them.
-5. **Previous wave merged.** Call `wave_previous_merged()`. If the prior wave's work is not on main, refuse.
+4. **Base branch clean.** `git status --porcelain` returns nothing on the project's protected base branch (read from `.claude-project.md`'s `Default branch` field — typically `main` on GitHub repos, may be `release/<ver>` on AnalogicDev GitLab repos, etc.). Any untracked/modified files → refuse and list them.
+5. **Previous wave merged.** Call `wave_previous_merged()`. If the prior wave's work is not present on the integration target (the kahuna branch for this Plan, or the project's protected branch on the very first wave when the kahuna branch is being bootstrapped), refuse.
 6. **At least one pending wave remains.** Call `wave_next_pending()`. If null, refuse: "No pending waves. Plan is complete — run `/dod` to verify."
 7. **No concurrent wavemachine.** Read `.claude/status/state.json` — if `wavemachine_active` is already `true`, refuse: "Wavemachine is already running in this project. Wait for it to complete or abort first."
 
@@ -111,11 +115,11 @@ In both cases the regeneration is **fire-and-forget** — we do NOT block the lo
 **Procedure:**
 
 1. Read wave state via `wave_show()`. Inspect the `kahuna_branch` field.
-2. **If `kahuna_branch` is present and non-empty:** SKIP — this is the resume path (Procedure D, §4.4.5). The kahuna branch already exists on the platform and in wave state; do nothing and continue to step 5 of the launch sequence.
-3. **If `kahuna_branch` is absent or empty:** invoke `wave_init` with the `kahuna: { plan_id, slug }` argument, where:
+2. **Resume path (the field is already populated):** SKIP — this is the resume path (Procedure D, §4.4.5). The kahuna branch already exists on the platform and in wave state; do nothing and continue to step 5 of the launch sequence.
+3. **Bootstrap path (the field has not yet been populated for this Plan):** invoke `wave_init` with the `kahuna: { plan_id, slug }` argument, where:
    - `plan_id` is the Plan tracking-issue number for the current plan (read from wave state's plan metadata — the `type::plan` issue, per the Plan/Phase/Epic taxonomy locked 2026-04-26).
    - `slug` is a human-readable kebab-case slug derived from the Plan title (the same slug computation `wave_init` already documents).
-   `wave_init` creates `kahuna/<plan_id>-<slug>` off the current main head, writes the branch name into wave state's `kahuna_branch` field, and returns success. (See Dev Spec §5.1.3 for the tool contract.)
+   `wave_init` creates `kahuna/<plan_id>-<slug>` off the current head of the project's protected branch (whatever `.claude-project.md` declares — `main`, `release/<ver>`, `develop`, etc.), writes the branch name into wave state's `kahuna_branch` field, and returns success. (See Dev Spec §5.1.3 for the tool contract.)
 4. **Emit the bootstrap notification.** `disc_send` to `#wave-status` (`1487386934094462986`):
    `"🏝 **Kahuna sandbox created** — <project>, Plan #<plan_id>, branch `<kahuna_branch>`. Agent: **<dev-name>** <dev-avatar>"`. If `disc_send` fails, log and continue — Discord is informational.
 
@@ -138,9 +142,9 @@ loop:
   2. next = wave_next_pending()
      if next is None:
          # All waves merged — run the trust-score gate before announcing
-         # completion. KAHUNA mode (kahuna_branch present in wave state):
-         # invoke the gate step group below. Legacy mode (no kahuna_branch):
-         # skip the gate, announce completion as before.
+         # completion. The gate is unconditional: every Plan has a
+         # kahuna_branch (bootstrapped at launch), so the gate ALWAYS runs
+         # at this point and is the sole path to clean completion.
          run "Trust-Score Gate and Auto-Merge" step group
          (gate result determines completion vs gate_blocked exit; either
           branch unsets wavemachine_active and exits the loop)
@@ -287,18 +291,18 @@ WAVE_AXIOMS Axiom 9 (user attention as cost), Axiom 5 (cost-asymmetry), Axiom 4 
 
 **When this runs:** exactly once per Plan, at the loop's clean-completion path — after `wave_next_pending()` returns null (all waves across all Phases are merged) and §7 Definition-of-Done checks pass. This replaces the v1 "On clean completion" simple announcement with the autonomous gate evaluation specified in Dev Spec §5.2.2 ("New step group — trust-score gate and auto-merge").
 
-**Legacy short-circuit.** If wave state has no `kahuna_branch` (legacy non-KAHUNA execution), skip this entire step group and fall through to the "On Clean Completion" announcement below — there is no kahuna→main MR to gate. This preserves backward compatibility with non-KAHUNA plans.
+The gate is **unconditional**: every Plan has a `kahuna_branch` (bootstrapped during the launch sequence, see "Pre-Wave Kahuna Bootstrap"). The kahuna sandbox is the only execution shape this skill supports — there is no fallback path that bypasses the gate. The pre-flight refuses to start if the bootstrap cannot complete, so by the time we reach this step group `kahuna_branch` is guaranteed populated.
 
-### Gate procedure (KAHUNA mode only)
+### Gate procedure
 
-1. **Run §7 Definition-of-Done checks.** Test suites, VRTM updates, etc. (See Dev Spec §7 for the full checklist.) If any DoD check fails, transition `action` → `gate_blocked` with the DoD failure recorded; emit notifications per Procedure C; preserve the kahuna branch; exit the loop. DoD failure short-circuits the gate before we open the kahuna→main MR.
-2. **Invoke `wave_finalize`.** Opens the kahuna→main MR with an auto-assembled body derived from wavebus artifacts (one bullet per flight, linking the original flight MRs into kahuna). `wave_finalize` is idempotent: if an open kahuna→main MR already exists (resume path / Procedure D), it is reused (`created: false`). Capture the returned MR number.
+1. **Run §7 Definition-of-Done checks.** Test suites, VRTM updates, etc. (See Dev Spec §7 for the full checklist.) If any DoD check fails, transition `action` → `gate_blocked` with the DoD failure recorded; emit notifications per Procedure C; preserve the kahuna branch; exit the loop. DoD failure short-circuits the gate before we open the kahuna→protected-branch MR.
+2. **Invoke `wave_finalize`.** Opens the kahuna→protected-branch MR with an auto-assembled body derived from wavebus artifacts (one bullet per flight, linking the original flight MRs into kahuna). The target ref is read from `.claude-project.md`'s `Default branch` field (`main` on most GitHub repos, may be `release/<ver>` on AnalogicDev GitLab, etc.). `wave_finalize` is idempotent: if an open kahuna→protected-branch MR already exists (resume path / Procedure D), it is reused (`created: false`). Capture the returned MR number.
 3. **Transition wave state `action` → `gate_evaluating`.** This is the marker the wave-status CLI and dashboard read to render the trust-signal summary block (§5.2.5). It is also the marker Procedure D uses to detect a crashed-mid-gate session and re-enter idempotently (see "Procedure D — re-entry at the gate" below).
 4. **Invoke the four trust signals CONCURRENTLY (R-23).** This is a HARD requirement. All four signals MUST be issued in a **single tool-use block** — no signal sequenced behind another in the happy path. The wave-pattern parallelism pattern (one assistant message containing four parallel tool calls) applies here. The four signals are:
 
-   - **`commutativity_verify`** — `commutativity_verify(base_ref="main", changesets=[{id: "kahuna", head_ref: <kahuna_branch>}])`. Returns a verdict envelope (see "PROBE_UNAVAILABLE handling" below for the envelope shapes).
+   - **`commutativity_verify`** — `commutativity_verify(base_ref=<protected_branch>, changesets=[{id: "kahuna", head_ref: <kahuna_branch>}])` where `<protected_branch>` is read from `.claude-project.md`'s `Default branch` field. Returns a verdict envelope (see "PROBE_UNAVAILABLE handling" below for the envelope shapes).
    - **`ci_wait_run`** — `ci_wait_run(ref=<kahuna_branch>, timeout_sec=1800)`. Waits for the latest CI run on the kahuna branch to settle (success/failure/cancelled).
-   - **Code-reviewer Agent** — `Agent(subagent_type="feature-dev:code-reviewer", prompt=<composed diff over the full kahuna-vs-main range>)`. Returns a structured review with severity-tagged findings.
+   - **Code-reviewer Agent** — `Agent(subagent_type="feature-dev:code-reviewer", prompt=<composed diff over the full kahuna-vs-protected-branch range>)`. Returns a structured review with severity-tagged findings.
    - **Trivy dependency scan** — `Bash("trivy fs --scanners vuln --severity HIGH,CRITICAL --format json --quiet <repo_path>")`. Returns JSON with any HIGH/CRITICAL vulnerability findings (with available fixes).
 
    These four calls run concurrently in a single tool-use block. **Do NOT short-circuit** when one signal fails — collect all four results before evaluating the gate (per Procedure C, §4.4.4). The operator needs the complete signal set to triage a blocked gate.
@@ -310,18 +314,18 @@ WAVE_AXIOMS Axiom 9 (user attention as cost), Axiom 5 (cost-asymmetry), Axiom 4 
    - Trivy: pass = no HIGH/CRITICAL findings with available fixes; fail otherwise.
 
 6. **All-green path** (every signal passes):
-   - **Detect platform** before the merge call. Read `.claude-project.md`'s `Platform.Host` field (cached by `/ccfold`). On GitLab, additionally emit a one-line warning to `#wave-status` *before* invoking `pr_merge`: `"⚠️ **GitLab merge train detected** — <project>: \`skip_train: true\` is a no-op against GitLab merge trains; the kahuna→main MR will wait in the train regardless. Agent: **<dev-name>** <dev-avatar>"`. This sets operator expectations so "why is this taking so long?" doesn't surface as a surprise during the train wait. (See "Platform note: `skip_train` semantics" below for the full rationale.)
+   - **Detect platform** before the merge call. Read `.claude-project.md`'s `Platform.Host` field (cached by `/ccfold`). On GitLab, additionally emit a one-line warning to `#wave-status` *before* invoking `pr_merge`: `"⚠️ **GitLab merge train detected** — <project>: \`skip_train: true\` is a no-op against GitLab merge trains; the kahuna→<protected_branch> MR will wait in the train regardless. Agent: **<dev-name>** <dev-avatar>"`. This sets operator expectations so "why is this taking so long?" doesn't surface as a surprise during the train wait. (See "Platform note: `skip_train` semantics" below for the full rationale.)
    - Invoke `pr_merge({number: <kahuna_mr_number>, skip_train: true, squash_message: <assembled body from step 2>})`. `skip_train: true` is passed unconditionally — its platform-specific interpretation is the adapter's responsibility (`mcp-server-sdlc`'s `pr_merge`), not this skill's. On GitHub the flag bypasses the merge queue (the kahuna MR has already been gated by the four signals, so bypassing the queue is the whole point of the autonomous gate). On GitLab the flag is silently dropped by the platform — the merge train is enforced as a project-level merge method and there is no client-side bypass; the four-signal gate still ran, but the train wait still applies.
    - **Record disposition** in wave state's `kahuna_branches` history array: append `{branch: <kahuna_branch>, plan_id: <plan_id>, disposition: "merged", merged_at: <iso8601>, mr_number: <kahuna_mr_number>}`. (Schema per §5.1.)
    - **Delete the kahuna branch** from the platform (per R-03). On GitHub: `gh api -X DELETE repos/<owner>/<repo>/git/refs/heads/<kahuna_branch>` (or equivalent). On GitLab: `glab api -X DELETE projects/:id/repository/branches/<kahuna_branch_url_encoded>`.
-   - **Emit `#wave-status` notification** (R-19): `"✅ **Kahuna gate passed** — <project>, Plan #<plan_id> auto-merged to main. <N> flights, <M> commits. Agent: **<dev-name>** <dev-avatar>"`.
-   - **Vox announcement** (conversational, brief): name, team, project, "kahuna gate passed, Plan merged to main".
+   - **Emit `#wave-status` notification** (R-19): `"✅ **Kahuna gate passed** — <project>, Plan #<plan_id> auto-merged to <protected_branch>. <N> flights, <M> commits. Agent: **<dev-name>** <dev-avatar>"`.
+   - **Vox announcement** (conversational, brief): name, team, project, "kahuna gate passed, Plan merged to <protected_branch>".
    - Then fall through to the standard "On Clean Completion" announcement and `wave-status wavemachine-stop`.
 
 7. **Any-red path** (one or more signals fail):
    - Transition wave state `action` → `gate_blocked`, recording each failing signal's name + detail payload (so the dashboard's signal-failure detail block can render — §5.2.5).
-   - **Preserve the kahuna branch** (per Procedure C). Do NOT delete it. Do NOT merge the kahuna→main MR. The MR stays open for human review.
-   - **Emit `#wave-status` notification** per Procedure C, §4.4.4: Plan name, each failing signal's name + short detail, kahuna branch name, the open kahuna→main MR URL.
+   - **Preserve the kahuna branch** (per Procedure C). Do NOT delete it. Do NOT merge the kahuna→protected-branch MR. The MR stays open for human review.
+   - **Emit `#wave-status` notification** per Procedure C, §4.4.4: Plan name, each failing signal's name + short detail, kahuna branch name, the open kahuna→protected-branch MR URL.
    - **Vox announcement**: "Kahuna gate blocked for Plan <plan_id>. <N> signals red. Ready for your review."
    - Call `wave_waiting("kahuna gate blocked: <one-line summary>")` so the plan is explicitly marked paused.
    - `wave-status wavemachine-stop` and exit the loop.
@@ -333,7 +337,7 @@ WAVE_AXIOMS Axiom 9 (user attention as cost), Axiom 5 (cost-asymmetry), Axiom 4 
 - **Probe present:** `{ok: true, verdict: "STRONG" | "MEDIUM" | "WEAK" | "ORACLE_REQUIRED", ...}`.
 - **Probe missing:** `{ok: true, verdict: "PROBE_UNAVAILABLE", warnings: [...]}`. This is a **synthesized verdict** the sdlc-server emits when the `commutativity-probe` binary is not installed in the runtime environment. It is NOT a probe-side classification — it is a graceful-degradation marker.
 
-**Treatment in the gate:** `PROBE_UNAVAILABLE` is **conservative-fail** — equivalent to `ORACLE_REQUIRED`. The gate MUST NOT auto-merge when the commutativity signal is unavailable. This is a deliberate cross-server contract: when we cannot verify commutativity, we refuse to grant the auto-merge privilege the gate normally extends. The any-red path applies; the operator triages by either installing the probe binary and re-running `/wavemachine` (which re-enters at the gate via Procedure D) or merging the kahuna→main MR manually after review.
+**Treatment in the gate:** `PROBE_UNAVAILABLE` is **conservative-fail** — equivalent to `ORACLE_REQUIRED`. The gate MUST NOT auto-merge when the commutativity signal is unavailable. This is a deliberate cross-server contract: when we cannot verify commutativity, we refuse to grant the auto-merge privilege the gate normally extends. The any-red path applies; the operator triages by either installing the probe binary and re-running `/wavemachine` (which re-enters at the gate via Procedure D) or merging the kahuna→protected-branch MR manually after review.
 
 Document the treatment explicitly so future readers see it: the four-signal gate is a *unanimous* gate, and an unavailable signal is treated identically to a red signal.
 
@@ -352,15 +356,15 @@ The re-entry path is therefore: detect `gate_evaluating`, jump to step 4, run th
 
 ## Platform note: `skip_train` semantics
 
-`pr_merge`'s `skip_train` flag means different things on GitHub and GitLab. The kahuna→main merge in the all-green path passes `skip_train: true` unconditionally; this section documents what that flag actually does on each platform so operators and future agents are not surprised.
+`pr_merge`'s `skip_train` flag means different things on GitHub and GitLab. The kahuna→protected-branch merge in the all-green path passes `skip_train: true` unconditionally; this section documents what that flag actually does on each platform so operators and future agents are not surprised. ("protected branch" here = whatever `.claude-project.md` declares — `main` on most GitHub repos, `release/<ver>` on AnalogicDev GitLab projects, `develop` elsewhere.)
 
-**GitHub** (merge queue): `skip_train: true` requests a queue bypass. Wave-Engineering's GitHub repos enable merge-queue protection; under normal flow a PR enrolls in the queue and waits for serial validation. The four-signal trust gate above is an independent validation pipeline that gives equivalent (or stronger) guarantees, so once the gate is green the kahuna MR has earned the right to skip the queue. The adapter (`mcp-server-sdlc`'s `pr_merge`) translates `skip_train: true` into a direct GraphQL merge that bypasses the queue. Net effect: kahuna→main lands within seconds of the gate clearing.
+**GitHub** (merge queue): `skip_train: true` requests a queue bypass. Wave-Engineering's GitHub repos enable merge-queue protection; under normal flow a PR enrolls in the queue and waits for serial validation. The four-signal trust gate above is an independent validation pipeline that gives equivalent (or stronger) guarantees, so once the gate is green the kahuna MR has earned the right to skip the queue. The adapter (`mcp-server-sdlc`'s `pr_merge`) translates `skip_train: true` into a direct GraphQL merge that bypasses the queue. Net effect: kahuna→protected-branch lands within seconds of the gate clearing.
 
-**GitLab** (merge train): `skip_train` is a **no-op**. GitLab enforces merge trains as a *project-level merge method*, not a per-MR client option — there is no API to bypass the train for a single MR. The flag is silently dropped by the adapter; the kahuna→main MR enrolls in the train and waits for the train cycle to complete. The four-signal trust gate still ran, so correctness is preserved — only the wall-clock latency differs. Net effect: kahuna→main lands when the train says it lands, typically several minutes after the gate clears.
+**GitLab** (merge train): `skip_train` is a **no-op**. GitLab enforces merge trains as a *project-level merge method*, not a per-MR client option — there is no API to bypass the train for a single MR. The flag is silently dropped by the adapter; the kahuna→protected-branch MR enrolls in the train and waits for the train cycle to complete. The four-signal trust gate still ran, so correctness is preserved — only the wall-clock latency differs. Net effect: kahuna→protected-branch lands when the train says it lands, typically several minutes after the gate clears.
 
 **Operator-visible behavior:**
-- On GitHub, no extra notification fires — the merge happens fast enough that the standard "✅ Kahuna gate passed" notification is the whole story.
-- On GitLab, the all-green path emits a `⚠️ GitLab merge train detected` warning to `#wave-status` *before* the `pr_merge` call, so operators know the autopilot is correctly waiting on the train rather than stuck.
+- On GitHub, no extra notification fires — the merge happens fast enough that the standard "Kahuna gate passed" notification is the whole story.
+- On GitLab, the all-green path emits a "GitLab merge train detected" warning to `#wave-status` *before* the `pr_merge` call, so operators know the autopilot is correctly waiting on the train rather than stuck.
 
 **Why the asymmetry lives in the skill body, not just the adapter.** Per `decision_skills_ownership.md`, the skill orchestrates and the adapter executes — so the *interpretation* of `skip_train` on each platform belongs in `mcp-server-sdlc`'s `pr_merge`. But the *operator-facing expectation* (when to expect a fast merge vs a train wait) belongs here, because spec-driven agents reading this skill need to know what the flag will and won't do. The deferral path: if a future GitLab API exposes per-MR train-skip (none today), the adapter gains real `skip_train` support on GitLab and this section's GitLab paragraph gets a happy update; no skill change needed beyond removing the warning. Until then, the warning stands as the skill's contribution to operator clarity.
 
@@ -412,17 +416,16 @@ Before each terminal-event `disc_send` that includes `attach_path`, make sure th
 
 - Discord `#wave-status`: `"🌊 **Wavemachine started** — <project>, <N> waves pending. Agent: **<dev-name>** <dev-avatar>"`
 
-**On clean completion** (`wave_next_pending()` returned null AND, in KAHUNA mode, the trust-score gate passed all-green):
+**On clean completion** (`wave_next_pending()` returned null AND the trust-score gate passed all-green):
 
-- This announcement runs AFTER the trust-score gate's all-green path (see "Trust-Score Gate and Auto-Merge"). In KAHUNA mode, the gate has already auto-merged kahuna→main and posted its own `✅ **Kahuna gate passed**` notification — this announcement closes out the wavemachine session.
-- In legacy non-KAHUNA mode (no `kahuna_branch` in wave state), the gate is skipped and this announcement runs directly when `wave_next_pending()` returns null.
+- This announcement runs AFTER the trust-score gate's all-green path (see "Trust-Score Gate and Auto-Merge"). The gate has already auto-merged kahuna→main (where "main" = the project's protected branch) and posted its own `✅ **Kahuna gate passed**` notification — this announcement closes out the wavemachine session.
 - Regenerate `.status-panel.html` synchronously before posting so the attachment is current: `generate-status-panel`.
 - Fire-and-forget the embed update: `./scripts/discord-status-post --channel-id 1487386934094462986 --state-dir .claude/status` (background, non-blocking; failures logged and ignored).
 - Discord `#wave-status`: `disc_send(channel_id="1487386934094462986", message="✅ **Wavemachine complete** — <project>, all <N> waves merged. Run /dod to verify. Agent: **<dev-name>** <dev-avatar>", attach_path=".status-panel.html")`
 - `mcp-log wavemachine_complete plan=<plan_id> status=OK waves_merged=<N>`
 - Vox (conversational, brief): name, team, project, "wavemachine complete, all waves merged".
 
-**On gate-blocked completion** (KAHUNA mode, one or more trust signals failed):
+**On gate-blocked completion** (one or more trust signals failed):
 
 - Regenerate `.status-panel.html` synchronously before posting so the attachment captures the gate-blocked state: `generate-status-panel`.
 - Fire-and-forget the embed update: `./scripts/discord-status-post --channel-id 1487386934094462986 --state-dir .claude/status` (background, non-blocking; failures logged and ignored).
@@ -472,7 +475,7 @@ Per WAVE_AXIOMS Axiom 3, the legal-exits list is closed: no other condition warr
 
 2. **wave_next_pending returns null.** No more pending waves; all phases complete.
    Detected by: `wave_next_pending()` returns null.
-   Action: run §7 DoD checks → trust-score gate → merge kahuna→main on all-green; exit loop.
+   Action: run §7 DoD checks → trust-score gate → merge kahuna→protected-branch on all-green; exit loop.
 
 3. **/nextwave auto returns BLOCKED.** A wave cannot be planned (spec unbuildable, dependency violation).
    Detected by: skill invocation result `{"status": "BLOCKED", ...}`.
@@ -522,8 +525,8 @@ The closed-list discipline above is the operational binding of WAVE_AXIOMS Axiom
 - **Wave-to-wave handoff is a single tool-use boundary — no narrator gap.** When `/nextwave auto` returns OK, the immediately following assistant message MUST be a tool-use block (status-panel regen + discord-status-post + drift-instrumentation emit + next iteration's `wave_health_check`), NOT narrative text. Prose like "Wave N complete, starting wave N+1" between waves is forbidden — it costs wall-clock and is the specific failure mode this rule (cc-workflow#600 / Plan #581 campaign A "Bug B") exists to prevent. See "Wave-to-Wave Handoff" above. Stop hook with `decision:block` (config/settings.template.json) is the structural safety net for *premature termination*; this rule is the contract preventing the *in-turn narration* the Stop hook cannot catch.
 - **Re-grounding fires every wave-to-wave handoff.** The drift-instrumentation emit AND the system-reminder re-grounding payload (referencing `WAVE_AXIOMS.md`, with explicit citation of Axiom 9 — user attention as cost) are unconditional at every `wave_complete` boundary. They are not gated on user approval, campaign length, or drift-signal threshold. Per Axiom 6, the agent does not add gates the user did not invoke; per Axiom 9, the cost of re-grounding at wave 1 is dominated by the cost of NOT re-grounding at wave 6. This is the cc-workflow#601 contract; weakening it requires a tracked rework. See "Periodic Re-Grounding (drift mitigation)".
 - **Leave the bus alone on abort.** On any non-happy exit, the in-flight wave's bus tree stays on disk for forensics. `wave-cleanup` runs only on PASS, inside `/nextwave auto`.
-- **Block on green CI.** `/nextwave auto` handles the per-wave CI gate; `/wavemachine` does not merge wave PRs directly and does not fast-path around it. The kahuna→main MR is the *only* PR `/wavemachine` merges, and only after the four-signal gate passes all-green.
-- **`skip_train` is platform-asymmetric.** On GitHub it bypasses the merge queue (the gate has earned that bypass). On GitLab it is a no-op — the merge train is a project-level merge method with no per-MR client bypass. The flag is passed unconditionally; the adapter handles the platform difference; the all-green path emits a warning notification on GitLab so operators know the kahuna→main MR is correctly waiting on the train rather than stuck. See "Platform note: `skip_train` semantics".
+- **Block on green CI.** `/nextwave auto` handles the per-wave CI gate; `/wavemachine` does not merge wave PRs directly and does not fast-path around it. The kahuna→protected-branch MR is the *only* PR `/wavemachine` merges, and only after the four-signal gate passes all-green.
+- **`skip_train` is platform-asymmetric.** On GitHub it bypasses the merge queue (the gate has earned that bypass). On GitLab it is a no-op — the merge train is a project-level merge method with no per-MR client bypass. The flag is passed unconditionally; the adapter handles the platform difference; the all-green path emits a warning notification on GitLab so operators know the kahuna→protected-branch MR is correctly waiting on the train rather than stuck. See "Platform note: `skip_train` semantics".
 - **R-23 — gate signals run concurrently in a single tool-use block.** The four trust signals (`commutativity_verify`, `ci_wait_run`, `feature-dev:code-reviewer` Agent, `trivy` Bash) MUST be issued in a single tool-use block — no signal sequenced behind another. Sequencing them silently would inflate the gate's wall-clock cost by ~4x and is a hard regression to catch in tests.
 - **Do not short-circuit the gate.** Collect all four signal results before evaluating pass/fail (Procedure C, §4.4.4). The operator needs the complete signal set to triage a blocked gate.
 - **`PROBE_UNAVAILABLE` is conservative-fail.** When `commutativity_verify` returns the synthesized `PROBE_UNAVAILABLE` verdict (probe binary not installed; cross-server contract per `mcp-server-sdlc#218`), the gate treats it identically to `ORACLE_REQUIRED` — no auto-merge. Document this so it cannot be silently relaxed.
@@ -537,7 +540,7 @@ Wave state is persistent on disk (`.claude/status/state.json` + the bus tree). W
 **Resuming at the gate (Procedure D, §4.4.5).** If the prior `/wavemachine` session crashed or was interrupted with wave state in `action == gate_evaluating`, the next invocation:
 1. Skips the pre-wave kahuna bootstrap (the `kahuna_branch` field is already populated).
 2. The loop's first iteration finds `wave_next_pending() == null` (all waves merged on the prior run) and falls into the "Trust-Score Gate and Auto-Merge" step group.
-3. `wave_finalize` is idempotent: it returns the existing open kahuna→main MR with `created: false`.
+3. `wave_finalize` is idempotent: it returns the existing open kahuna→protected-branch MR with `created: false`.
 4. The four trust signals are re-invoked in a single tool-use block (R-23). They are pure reads — re-evaluating yields current truth (e.g. CI may now be green where it was timing out before).
 5. Gate evaluation proceeds normally — all-green merges and exits clean; any-red transitions to `gate_blocked` and exits paused.
 

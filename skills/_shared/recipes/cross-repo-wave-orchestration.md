@@ -2,9 +2,9 @@
 
 A **cross-repo wave** is one whose sub-issues live in a *different* repo than
 the orchestrator's working directory (`CLAUDE_PROJECT_DIR`). Example: the wave
-plan lives in `claudecode-workflow` (because the epic does) but every story
+plan lives in `claudecode-workflow` (because the Plan does) but every story
 modifies code in `mcp-server-sdlc`. This is the standard shape for sdlc-mcp
-migration epics.
+migration Plans.
 
 The default `/nextwave` flow assumes same-repo execution. Cross-repo waves
 require a handful of adjustments — none of them obvious the first time you
@@ -62,7 +62,7 @@ the existing whole-plan persistence path (the JSON is written verbatim as
    running from the target repo's directory, every `gh issue view`,
    `gh pr create`, `gh pr merge`, etc. needs `-R`. Do not rely on cwd-based
    repo detection.
-7. **`wave-status` state stays in the master plan repo** (where the epic
+7. **`wave-status` state stays in the master plan repo** (where the Plan
    lives), not the target repo. The wave-status CLI walks
    `.claude/status/phases-waves.json` from `CLAUDE_PROJECT_DIR`.
    Orchestrator and sub-agents have *different* working directories — that
@@ -75,9 +75,10 @@ the existing whole-plan persistence path (the JSON is written verbatim as
 ```bash
 TARGET_REPO=/home/bakerb/sandbox/github/mcp-server-sdlc
 
-# Verify target repo is clean and on main (or kahuna_branch if KAHUNA wave)
+# Verify target repo is clean and on the kahuna branch for this Plan
+# (kahuna_branch is bootstrapped by /wavemachine; capture from wave state)
 git -C "$TARGET_REPO" status --short
-git -C "$TARGET_REPO" checkout main
+git -C "$TARGET_REPO" checkout "$KAHUNA_BRANCH"
 git -C "$TARGET_REPO" pull
 ```
 
@@ -90,13 +91,13 @@ for issue in 76 77 78 79 80 81 82 83 84 85 86 87 88 89; do
           | tr '[:upper:]' '[:lower:]' | cut -c1-40)"
   branch="feature/${issue}-${slug}"
   worktree="/tmp/wt-sdlc-${issue}"
-  git -C "$TARGET_REPO" worktree add "$worktree" -b "$branch" origin/main
+  git -C "$TARGET_REPO" worktree add "$worktree" -b "$branch" "origin/$KAHUNA_BRANCH"
   # Worktrees lack node_modules — install dependencies if the project needs them
   ( cd "$worktree" && bun install ) || true
 done
 ```
 
-For KAHUNA waves, replace `origin/main` with `origin/<kahuna_branch>`.
+`$KAHUNA_BRANCH` is the wave's `kahuna_branch` (e.g. `kahuna/<plan-id>-<slug>`), bootstrapped by `/wavemachine` at Plan launch and read from wave state.
 
 ### Sub-agent prompt template snippet
 
@@ -128,15 +129,16 @@ Closes #<num>"
 git -C /tmp/wt-sdlc-<num> push -u origin feature/<num>-<slug>
 
 gh pr create -R Wave-Engineering/mcp-server-sdlc \
-  --base main --head feature/<num>-<slug> \
+  --base "$KAHUNA_BRANCH" --head feature/<num>-<slug> \
   --title "..." --body "..."
 
 gh pr merge <pr-num> -R Wave-Engineering/mcp-server-sdlc \
   --squash --auto --delete-branch
 ```
 
-For KAHUNA waves, swap `--base main` for `--base <kahuna_branch>` — every
-Flight PR targets the kahuna branch, never `main` (Dev Spec §5.2.2).
+Every Flight PR targets the kahuna branch — never the project's protected
+branch (Dev Spec §5.2.2). The kahuna→protected-branch MR is opened
+separately by `wave_finalize` at Plan completion.
 
 ### Post-wave worktree cleanup
 
