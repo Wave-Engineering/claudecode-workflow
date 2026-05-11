@@ -1,6 +1,6 @@
 ---
 name: nextwave
-description: Execute the next pending wave of spec-driven sub-agents, using flight-based conflict avoidance for parallel flights and a streamlined fast-path for serial flights
+description: Execute the next pending wave — flight-based conflict avoidance for parallel, fast-path for serial
 ---
 
 # NextWave — Execute One Wave with the Orchestrator/Prime/Flight Protocol

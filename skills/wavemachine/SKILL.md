@@ -1,6 +1,6 @@
 ---
 name: wavemachine
-description: Autopilot for wave-pattern execution. Runs a top-level loop that calls /nextwave auto per pending wave, guarded by wave_health_check as a circuit breaker. Stops at the first sniff of trouble. One plan at a time.
+description: Wave-pattern autopilot — loops /nextwave per pending wave, health-check circuit breaker, one plan at a time
 ---
 
 # Wavemachine — Autopilot for Wave-Pattern Execution
