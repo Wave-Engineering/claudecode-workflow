@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck source-path=SCRIPTDIR
 # pre-push-test-gate.sh — PreToolUse hook for Bash(git push*)
 #
 # Blocks git push if no test/lint/validate command has run this session.

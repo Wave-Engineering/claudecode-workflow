@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck source-path=SCRIPTDIR
 # post-tool-test-sentinel.sh — PostToolUse hook (Bash matcher)
 #
 # Watches for test/lint/validate commands that succeed, and creates a

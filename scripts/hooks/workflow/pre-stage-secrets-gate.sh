@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck source-path=SCRIPTDIR
 # pre-stage-secrets-gate.sh — PreToolUse hook for Bash(git add*)
 #
 # Scans the files being staged for secret-pattern filenames.

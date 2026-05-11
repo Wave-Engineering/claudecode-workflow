@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck source-path=SCRIPTDIR
 # post-compact-reread.sh — PostCompact hook
 #
 # After context compaction, injects a reminder to re-read CLAUDE.md

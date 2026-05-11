@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck source-path=SCRIPTDIR
 # post-tool-context-tracker.sh — PostToolUse hook (Skill|ToolSearch matcher)
 #
 # Logs when a skill is invoked or when ToolSearch loads deferred tool schemas.
