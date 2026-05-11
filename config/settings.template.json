@@ -36,13 +36,55 @@
   "model": "opus",
   "hooks": {
     "_comment": "Hook commands reference scripts that must exist at the specified paths. Remove or update these if you don't use context-crystallizer.",
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/pre-push-test-gate.sh"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/pre-stage-secrets-gate.sh"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/bakerb/.local/share/wtf-server/hooks/wtf-post-tool-use.sh"
+          }
+        ]
+      },
       {
         "matcher": "*",
         "hooks": [
           {
             "type": "command",
             "command": "~/.claude/context-crystallizer/hooks/post-tool-use.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/post-tool-test-sentinel.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Skill|ToolSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/post-tool-context-tracker.sh"
           }
         ]
       }
@@ -74,6 +116,17 @@
           {
             "type": "command",
             "command": "~/.claude/scripts/hooks/nerf/pre-compact.sh"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/post-compact-reread.sh"
           }
         ]
       }

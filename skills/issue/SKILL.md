@@ -1,6 +1,6 @@
 ---
 name: issue
-description: Create structured issues (plan, epic, feature, story, bug, chore, doc) with proper templates and labels. Supports both GitHub (gh) and GitLab (glab). Self-contained — does not depend on CLAUDE.md for templates. Sub-issue templates (feature, story, chore, doc, bug) emit the H2 sections that `/prepwaves` and `spec_validate_structure` require, so issues are wave-pattern-ready on first try. The `plan` type emits the canonical Plan tracking-issue body per Dev Spec `phase-epic-taxonomy-devspec.md` §5.1.2, and Story creation accepts an optional `--epic N` flag that attaches the `epic::N` PM-layer label.
+description: Create structured issues (plan, epic, feature, story, bug, chore, doc) with templates and labels. GitHub and GitLab. Wave-pattern-ready on first try.
 usage: |
   /issue plan <prompt>     Create a Plan tracking issue (canonical §5.1.2 body)
   /issue epic <prompt>     Create an Epic parent tracker (PM-layer)

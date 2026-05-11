@@ -111,28 +111,6 @@ if [ -n "$project_root" ] && [ -f "$project_root/.claude/status/state.json" ]; t
 	fi
 fi
 
-# --- wave-watcher indicator ---
-# wave-watcher writes a one-line digest to /tmp/wave-watcher-statusline.txt
-# at every poll. We surface a single-glyph view here so the statusline
-# reflects health across ALL local wave-pattern projects, not just this one.
-# Silent skip when the file is missing (daemon not running or surface off).
-ww_str=""
-ww_file="/tmp/wave-watcher-statusline.txt"
-if [ -f "$ww_file" ]; then
-	ww_line=$(head -1 "$ww_file" 2>/dev/null)
-	# ww_line shape: "wave-watcher: V ok=N blocked=M unhealthy=K (T total)"
-	ww_glyph=""
-	case "$ww_line" in
-	*": V "*) ww_glyph="$(printf '%b' "${c_green}")V$(printf '%b' "${c_reset}")" ;;
-	*": ! "*) ww_glyph="$(printf '%b' "${c_yellow}")!$(printf '%b' "${c_reset}")" ;;
-	*": X "*) ww_glyph="$(printf '%b' "${c_red}")X$(printf '%b' "${c_reset}")" ;;
-	*": O "*) ww_glyph="$(printf '%b' "${c_yellow}")O$(printf '%b' "${c_reset}")" ;;
-	esac
-	if [ -n "$ww_glyph" ]; then
-		ww_str="${ww_glyph} "
-	fi
-fi
-
 # --- Agent display string ---
 agent_str=""
 if [ -n "$dev_name" ]; then
@@ -142,9 +120,8 @@ if [ -n "$dev_name" ]; then
 	fi
 fi
 
-# === LINE 1: [indicators] [wave-watcher] [wavemachine] [pwd] [dev-name] [dev-avatar] ===
+# === LINE 1: [indicators] [wavemachine] [pwd] [dev-name] [dev-avatar] ===
 printf "%s" "$indicators_str"
-printf "%s" "$ww_str"
 printf "%s" "$wave_str"
 printf '%b' "${c_blue}${short_cwd}${c_reset}"
 printf "%s" "$agent_str"

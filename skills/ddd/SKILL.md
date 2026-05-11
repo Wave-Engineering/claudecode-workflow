@@ -1,6 +1,6 @@
 ---
 name: ddd
-description: Domain-Driven Design facilitation — event storming, domain modeling, and concept handoff (uses sdlc-server MCP tools for deterministic checks)
+description: Domain-Driven Design — event storming, domain modeling, concept handoff
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
