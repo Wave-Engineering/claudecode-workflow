@@ -15,7 +15,7 @@ Narration: "The most important foundation skill. `/engage` loads your rules, res
 ### What it does
 
 1. **Reads CLAUDE.md** and confirms the mandatory rules are loaded
-2. **Loads the current plan** if one exists (from plan mode or auto-crystallized state)
+2. **Loads the current plan** if one exists (from plan mode or plan files)
 3. **Reports ready state** — current branch, pending work, asks what's next
 
 ### When to use it
@@ -48,18 +48,11 @@ MEMORY_DIR="$HOME/.claude/projects/$(pwd | sed 's|/|-|g')/memory"
 ls "$MEMORY_DIR"/MEMORY.md 2>/dev/null && echo "  → project has memories" || echo "  → no memories yet for this project"
 ```
 
-### Mechanism 2: Auto-crystallization (working state)
+### Mechanism 2: Plan files (working state)
 
-The context-crystallizer hook runs automatically after every tool call. When context crosses a threshold, it writes a snapshot of the session state to `.claude/context-states/`. A `context-state.md` symlink always points at the latest snapshot. After compaction, a `SessionStart:compact` hook injects the snapshot into the new session — so `/engage` has something to thaw from.
+For long-running work, plan files (`.claude/plans/`) capture session state that survives compaction. Memory files hold durable facts; plan files hold in-progress context.
 
-The hook is rate-limited (at most once per 10 minutes per session) so heavy tool use doesn't loop-crystallize.
-
-```bash
-# Peek at the latest crystallized state (if any)
-readlink .claude/context-state.md 2>/dev/null || echo "  → no crystallized state yet in this project"
-```
-
-Narration: "Between these two mechanisms, you don't need to do anything manual before a compaction. Memory files survive because they're on disk; crystallized state survives because the SessionStart hook re-injects it. `/engage` is the thaw."
+Narration: "Between these two mechanisms, you don't need to do anything manual before a compaction. Memory files survive because they're on disk; plan files capture working state. `/engage` is the thaw."
 
 ---
 
@@ -168,7 +161,7 @@ Here is the full foundation skill set at a glance:
 | `/name` | Check or pick identity | Show/set Dev-Name, Dev-Avatar |
 | `/ibm` | Workflow check | Quick-reference for the dev loop |
 
-State preservation is automatic — memory files persist durable facts, and the auto-crystallizer hook snapshots working state on threshold. No manual "freeze" step.
+State preservation is automatic — memory files persist durable facts, and plan files capture working state. No manual "freeze" step.
 
 ---
 

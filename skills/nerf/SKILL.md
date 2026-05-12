@@ -55,9 +55,8 @@ filesystem-state assumptions. Passing `session_id` keeps the skill working
 even if the server's heuristic resolver regresses or runs in an environment
 where transcript paths differ.
 
-Find the session ID from, in order of preference: the transcript path in
-conversation context, or the crystallizer state. If neither is available,
-omit `session_id` entirely — do NOT attempt to derive it from shell commands
+Find the session ID from the transcript path in conversation context. If
+not available, omit `session_id` entirely — do NOT attempt to derive it from shell commands
 or filesystem reads (`history.jsonl` and similar files are racy across
 concurrent CC sessions and would silently feed the wrong UUID). Falling
 through to the server's resolver chain is safe; injecting a wrong value

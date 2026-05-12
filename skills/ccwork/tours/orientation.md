@@ -81,11 +81,11 @@ Narration: "The system enforces this loop — if you try to commit without `/pre
 
 ## Section 3: Session Lifecycle
 
-Narration: "Sessions have a rhythm: start, work, compact, resume. Durable state lives in memory files; auto-crystallization captures working state before compaction. Here's how the lifecycle skills fit in."
+Narration: "Sessions have a rhythm: start, work, compact, resume. Durable state lives in memory files; plan files capture working state. Here's how the lifecycle skills fit in."
 
 | Moment | What happens | Skill |
 |--------|-------------|-------|
-| Session start | Load rules, memories, crystallized state | `/engage` |
+| Session start | Load rules, memories, plan state | `/engage` |
 | After compaction | Resume — restore rules and context | `/engage` |
 | Any time | Check or pick your identity | `/name` |
 | Template update | Merge upstream CLAUDE.md changes | `/ccfold` |

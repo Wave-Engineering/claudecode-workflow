@@ -116,21 +116,11 @@ MCP servers are managed via `mcps.json` and installed from their own repos:
 
 Each MCP has its own `install-remote.sh` for standalone installation. Running `./install.sh` installs all MCPs from the manifest automatically.
 
-### Context Crystallizer
-
-The `context-crystallizer/` directory contains the hooks and libraries that power session state preservation. It installs to `~/.claude/context-crystallizer/` and provides:
-
-- **Hooks** — SessionStart (restore crystallized state), PostToolUse (auto-crystallize at high context usage), SubagentStop (capture subagent results)
-- **Libraries** — `context-analyzer.sh` (parse API payloads for token counts), `crystallizer.sh` (write crystal files)
-- **CLI** — `cc-context` (watch token usage in a terminal), `cc-cleanup` (prune old crystal files)
-
-Install standalone with `./install --crystallizer`.
-
 ### Settings Template
 
 `settings.template.json` provides a starting point for `~/.claude/settings.json` with:
 - **Permissions** — Granular tool allowlists for common CLIs (git, gh, glab, docker, terraform, aws, etc.)
-- **Hooks** — PostToolUse, SessionStart, and SubagentStop hook structure (requires [context-crystallizer](context-crystallizer/) for crystallization hooks)
+- **Hooks** — PreToolUse (push gate, secrets gate), PostToolUse (test sentinel, context tracker), PostCompact (re-read reminder)
 - **Status line** — Points to the custom statusline script
 - **Plugins** — Full plugin list (see Plugins section below)
 - **Effort level** — Set to `high` for thorough responses
@@ -180,7 +170,6 @@ This will:
 ./install.sh --scripts     # Install scripts only
 ./install.sh --config      # Install config files only
 ./install.sh --mcps         # Install MCP servers only (via mcps.json manifest)
-./install --crystallizer   # Install context-crystallizer only
 ./install.sh --no-mcps      # Install everything except MCP servers
 ./install.sh --prune        # Remove installed files whose source no longer exists
 ./install.sh --prune --yes  # ...non-interactively

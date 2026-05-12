@@ -143,7 +143,7 @@ These manage the agent's own state and context. You use them at session boundari
 | `/ccfold` | Merge upstream CLAUDE.md template changes into a project's local copy. |
 | `/name` | Report or pick the agent's session identity (Dev-Name, Dev-Avatar). |
 
-State preservation across compaction is automatic: durable facts live in memory files (project-scoped), and the context-crystallizer hook writes working-state snapshots after every tool call when context crosses a threshold. `/engage` is the single entry point for resume — memory and crystallized state are loaded by the harness before the skill runs.
+State preservation across compaction is automatic: durable facts live in memory files (project-scoped), and plan files (`.claude/plans/`) capture working state. `/engage` is the single entry point for resume — memory is loaded by the harness before the skill runs.
 
 ### Workflow Skills
 

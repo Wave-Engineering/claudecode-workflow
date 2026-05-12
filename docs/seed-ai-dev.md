@@ -10,15 +10,15 @@ Read this end-to-end, then **run `/engage`** before doing anything else. `/engag
 
 **BJ** is the human you work with. Address him by name. BJ + Agent = **"the Pair"** — the fundamental unit of this system's collaboration model. Your first durable reference:
 
-- `memory/concept_pair.md` — what the Pair is and why it matters
+- `memory/concept_pair.md` — what the Pair is and why it matters (exists on disk; not in auto-loaded index — read manually if you want the full model)
 
 BJ runs many concurrent agents across the fleet. He does not have time to micromanage. The following feedback memories are load-bearing for collaboration style — read them first:
 
 - `memory/feedback_design_partner.md` — terse, convicted, defends positions
 - `memory/feedback_take_initiative.md` — report-don't-ask on non-architectural calls
-- `memory/feedback_precheck_no_ask.md` — run `/precheck` automatically when work is done
-- `memory/feedback_stop_asking.md` — don't re-ask after precheck + engage
 - `memory/feedback_no_time_nagging.md` — do not comment on session length or hour
+
+The precheck-no-ask rule is now mechanically enforced in `CLAUDE.md` (the "MANDATORY: Pre-Commit Gate" section). You don't need a memory file for it — just read `CLAUDE.md`.
 
 ---
 
@@ -33,7 +33,7 @@ Orient on the architecture via these, in order:
 3. `docs/getting-started.md` — 15-minute hands-on walkthrough
 4. `docs/kahuna-devspec.md` — **the canonical Dev Spec** for the KAHUNA wave-pattern execution model; also a worked example of what a Dev Spec looks like when fully populated
 5. `docs/skill-reference.md` + `docs/tool-skill-map.md` — what each skill does and which MCP tools it calls
-6. `memory/project_sdlc_pipeline.md` — current architecture snapshot (skill chain `/ddd → /devspec → /prepwaves → /wavemachine → /dod`)
+6. `memory/project_sdlc_pipeline.md` — architecture snapshot (skill chain `/ddd → /devspec → /prepwaves → /wavemachine → /dod`). Note: exists on disk but is NOT in the auto-loaded `MEMORY.md` index — read it manually.
 
 ---
 
@@ -153,6 +153,32 @@ Reference:
 
 ---
 
+## 8b. The enforcement layer (hooks + metrics)
+
+Rules in `CLAUDE.md` are prose — agents can drift from them. The enforcement layer is a set of Claude Code hooks that mechanically gate dangerous actions with zero context cost (hooks run outside the agent's context window).
+
+### Active hooks
+
+| Hook | Type | What it does |
+|------|------|-------------|
+| `pre-push-test-gate.sh` | PreToolUse (Bash) | Blocks `git push` unless tests were run this session. Kill switch: `PUSH_GATE_DISABLED=1` |
+| `pre-stage-secrets-gate.sh` | PreToolUse (Bash) | Warns on `git add` of secret-pattern filenames (.env, .pem, credentials.json, etc.) |
+| `post-tool-test-sentinel.sh` | PostToolUse (Bash) | Records successful test runs — creates the sentinel that unblocks the push gate |
+| `post-tool-context-tracker.sh` | PostToolUse (Skill\|ToolSearch) | Logs skill invocations and tool-schema loads for context-diet monitoring |
+| `post-compact-reread.sh` | PostCompact | Injects reminder to re-read CLAUDE.md after compaction |
+
+### Metrics
+
+All hooks emit structured events to `~/.claude/logs/context-metrics.jsonl`. Documentation: `~/Documents/sdlc-metrics-tracking.md`. Key queries: event frequency (`jq -r '.event' | sort | uniq -c`), skill load frequency, hook blocks, compactions per session.
+
+### Hook lifecycle
+
+Hooks are registered in `~/.claude/settings.json` (deployed from `config/settings.template.json` via `./install`). Hook scripts live in `scripts/hooks/workflow/` in this repo and deploy to `~/.claude/scripts/hooks/workflow/` (the "Cellar" pattern — see `install` script).
+
+**Hooks are read from disk on every firing** — they are NOT cached at session start. If you update a hook script via `./install`, the new behavior takes effect immediately for all running sessions without restart.
+
+---
+
 ## 9. The institutional knowledge layer (memory)
 
 Your project memory lives at `~/.claude/projects/-home-bakerb-sandbox-github-claudecode-workflow/memory/`. It auto-loads at session start via `MEMORY.md`. Categories:
@@ -171,9 +197,11 @@ Your project memory lives at `~/.claude/projects/-home-bakerb-sandbox-github-cla
 
 **Always check `MEMORY.md` before adding a new memory file.** If a similar one exists, update it in place. Keep `MEMORY.md` index entries to one line under ~150 characters.
 
+**Note:** Memory was pruned from 71 → 23 entries in May 2026 (context diet Phase 0). Files may exist on disk but NOT appear in `MEMORY.md` — only indexed entries are auto-loaded. Some files referenced elsewhere in this doc exist on disk but must be read manually.
+
 ### High-value memory files to read early
 
-- `memory/project_upcoming_work.md` — what the fleet is working on RIGHT NOW (starts stale within a few days; verify against git before acting)
+- ~~`memory/project_upcoming_work.md`~~ — **pruned** (was permanently stale). Use `git log --oneline -20` + `gh issue list --state open` to see what's in-flight.
 - `memory/decision_plan_phase_epic_taxonomy.md` — locked 2026-04-26 taxonomy
 - `memory/lesson_cc_subagent_tools.md` — CC's sub-agent tool distribution (critical for any work that spawns Agents)
 - `memory/lesson_cross_repo_wave_orchestration.md` — seven non-obvious facts
@@ -226,10 +254,10 @@ These are indexed here so when you hit the failure mode, you know where to look:
 When you resume a session after compaction or you are a fresh agent brought in to pick up where someone left off:
 
 1. **Run `/engage`** — loads memory, reads CLAUDE.md, summarizes the active plan.
-2. **Read `memory/project_upcoming_work.md`** — what's in-flight.
-3. **`git log --oneline -10` + `git branch -a | head -20`** — verify memory against the codebase.
+2. **`git log --oneline -10` + `git branch -a | head -20`** — see what's in-flight (there is no `project_upcoming_work.md` — it was pruned for being permanently stale).
+3. **`gh issue list --state open --limit 10`** — current tracked work.
 4. **Check `.claude/status/`** for any active wave plan (`phases-waves.json`, `state.json`).
-5. **Look at `.claude/context-state.md`** — a symlink to the latest auto-crystallized snapshot, if one exists. That's the most recent working-state hand-off.
+5. **Check `.claude/plans/`** for session-state or plan files from prior sessions.
 
 Memory ages fast. If a memory file names a specific function, PR, or flag: verify it still exists before recommending it. See the "Before recommending from memory" section of the auto-memory system instructions in your system prompt.
 
@@ -252,7 +280,7 @@ Before your first commit in any session:
 
 - [ ] Run `/engage` — confirms rules, loads memory, summarizes plan
 - [ ] If no Dev-Name/Dev-Avatar yet: run `/name` to pick one, announced via Discord
-- [ ] Read `memory/project_upcoming_work.md`
+- [ ] `git log --oneline -10` — see what's in-flight
 - [ ] Verify `git status` + `git branch --show-current` match your expectation
 - [ ] Know which repo you are in and whether you are cross-repo-orchestrating
 
