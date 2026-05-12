@@ -12,7 +12,7 @@
 #   ./install --scripts          Install scripts only (also builds packages from src/)
 #   ./install --config           Install config files only (smart-merges settings.json)
 #   ./install --mcps             Install MCP servers only (via mcps.json manifest)
-#   ./install --crystallizer     Install context-crystallizer only
+#   ./install --crystallizer     (REMOVED — crystallizer is deprecated)
 #   ./install --no-mcps          Install everything except MCP servers
 #   ./install --with-logrotate   Install logrotate policy for ~/.claude/logs/mcp.jsonl
 #                                  (Linux only; no-op elsewhere). Implies non-interactive.
@@ -32,7 +32,7 @@
 #   Settings     → ~/.claude/settings.json (smart-merged: missing keys added, your
 #                   customizations preserved — see merge_settings() for rules)
 #   MCPs         → user-scope MCP servers (installed via each MCP's install-remote.sh)
-#   Crystallizer → ~/.claude/context-crystallizer/ (hooks, lib, bin)
+#   Deprecated   → Automatically removed from target machine on install
 #
 # Existing files are backed up to <file>.bak before overwriting.
 
@@ -55,7 +55,12 @@ INSTALL_SKILLS=true
 INSTALL_SCRIPTS=true
 INSTALL_CONFIG=true
 INSTALL_MCPS=true
-INSTALL_CRYSTALLIZER=true
+INSTALL_CRYSTALLIZER=false  # deprecated — kept for flag parsing compat only
+
+# Paths that are no longer part of the kit. Removed automatically on install.
+DEPRECATED_PATHS=(
+	"$HOME/.claude/context-crystallizer"
+)
 # Logrotate is a tri-state: "prompt" by default, forced on/off by flag.
 LOGROTATE_MODE=prompt
 
@@ -102,11 +107,9 @@ while [[ $# -gt 0 ]]; do
 		shift
 		;;
 	--crystallizer)
-		INSTALL_SKILLS=false
-		INSTALL_SCRIPTS=false
-		INSTALL_CONFIG=false
-		INSTALL_MCPS=false
-		shift
+		echo "WARNING: --crystallizer is deprecated. The context-crystallizer has been removed."
+		echo "         Running ./install will clean up any existing installation."
+		exit 0
 		;;
 	--no-mcps)
 		INSTALL_MCPS=false
@@ -234,6 +237,26 @@ do_check() {
 	else
 		info "$label (in sync)"
 		return 0
+	fi
+}
+
+# --- Deprecated path cleanup --------------------------------------------------
+# Paths listed in DEPRECATED_PATHS are removed on every install run.
+remove_deprecated() {
+	local path removed=0
+	for path in "${DEPRECATED_PATHS[@]}"; do
+		if [[ -e "$path" || -L "$path" ]]; then
+			if [[ "$DRY_RUN" == true ]]; then
+				info "(dry-run) Would remove deprecated: $path"
+			else
+				rm -rf "$path"
+				info "Removed deprecated: $path"
+			fi
+			removed=$((removed + 1))
+		fi
+	done
+	if [[ $removed -eq 0 ]]; then
+		skip "No deprecated paths to clean up."
 	fi
 }
 
@@ -949,19 +972,14 @@ if [[ "$CHECK_MODE" == true ]]; then
 		fi
 	fi
 
-	# Crystallizer: compare repo files vs ~/.claude/context-crystallizer/
-	if [[ -d "$REPO_DIR/context-crystallizer" ]]; then
-		echo ""
-		echo "Crystallizer"
-		echo "──────────────────────────────────────────"
-		CRYST_DEST="$CLAUDE_DIR/context-crystallizer"
-		while IFS= read -r src_file; do
-			rel="${src_file#"$REPO_DIR"/context-crystallizer/}"
-			dest="$CRYST_DEST/$rel"
+	# Deprecated paths: flag if still present
+	for dep_path in "${DEPRECATED_PATHS[@]}"; do
+		if [[ -e "$dep_path" || -L "$dep_path" ]]; then
 			total=$((total + 1))
-			do_check "$src_file" "$dest" "crystallizer/$rel" || drifted=$((drifted + 1))
-		done < <(find "$REPO_DIR/context-crystallizer" -type f | sort)
-	fi
+			drift "$dep_path — DEPRECATED (run ./install to remove)"
+			drifted=$((drifted + 1))
+		fi
+	done
 
 	# MCPs: check each MCP's install-remote.sh --check
 	if [[ -f "$REPO_DIR/mcps.json" ]] && command -v claude &>/dev/null; then
@@ -1028,6 +1046,12 @@ if [[ "$CHECK_MODE" == true ]]; then
 	fi
 	exit 0
 fi
+
+# --- Remove deprecated components ---------------------------------------------
+echo ""
+echo "Deprecated → cleanup"
+echo "──────────────────────────────────────────"
+remove_deprecated
 
 # --- Install scripts ----------------------------------------------------------
 # Cellar + symlink-farm layout (closes #560):
@@ -1159,23 +1183,8 @@ if [[ "$INSTALL_CONFIG" == true ]]; then
 	fi
 fi
 
-# --- Install context-crystallizer ---------------------------------------------
-if [[ "$INSTALL_CRYSTALLIZER" == true && -d "$REPO_DIR/context-crystallizer" ]]; then
-	echo ""
-	echo "Crystallizer → $CLAUDE_DIR/context-crystallizer"
-	echo "──────────────────────────────────────────"
-	CRYST_DEST="$CLAUDE_DIR/context-crystallizer"
-	while IFS= read -r src_file; do
-		rel="${src_file#"$REPO_DIR"/context-crystallizer/}"
-		dest="$CRYST_DEST/$rel"
-		do_copy "$src_file" "$dest"
-		if [[ "$DRY_RUN" != true ]]; then
-			case "$dest" in
-			*.sh | */bin/*) chmod +x "$dest" ;;
-			esac
-		fi
-	done < <(find "$REPO_DIR/context-crystallizer" -type f | sort)
-fi
+# --- Context-crystallizer (REMOVED — deprecated 2026-05-11) -------------------
+# Cleanup is handled by DEPRECATED_PATHS + remove_deprecated() above.
 
 # --- Build and install packages -----------------------------------------------
 if [[ "$INSTALL_SCRIPTS" == true && -d "$REPO_DIR/src" ]]; then

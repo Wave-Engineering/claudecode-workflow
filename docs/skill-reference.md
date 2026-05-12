@@ -27,9 +27,9 @@ Reads CLAUDE.md, confirms the mandatory development rules are loaded, restores a
 /engage
 ```
 
-No arguments -- it reads the environment and reports what it finds. Memory files and crystallized state are loaded automatically by the harness; `/engage` reads CLAUDE.md, summarizes the mandatory rules, surfaces any pending work, and ends with the current git branch and a prompt for direction.
+No arguments -- it reads the environment and reports what it finds. Memory files are loaded automatically by the harness; `/engage` reads CLAUDE.md, summarizes the mandatory rules, surfaces any pending work, and ends with the current git branch and a prompt for direction.
 
-**State preservation:** There is no explicit "freeze before compact" step. Durable facts are captured in memory files (plain file writes to the project's memory directory); working state is captured by the auto-crystallizer hook after every tool call when context crosses the threshold (rate-limited per session). The `SessionStart:compact` hook re-injects the crystallized snapshot after compaction.
+**State preservation:** There is no explicit "freeze before compact" step. Durable facts are captured in memory files (plain file writes to the project's memory directory); working state lives in plan files (`.claude/plans/`). The `PostCompact` hook reminds the agent to re-read CLAUDE.md after compaction.
 
 ---
 
@@ -699,7 +699,7 @@ No arguments. It identifies the next pending wave from the task list and auto-de
 
 **Flow (serial):** Pre-Flight Checks -> Flight 1 (execute + merge) -> Flight 2 (execute + merge) -> ... -> Drift Check -> Wave Complete.
 
-**Key detail:** One wave per invocation. The user controls the pace. Compaction between waves is handled automatically by the auto-crystallizer hook.
+**Key detail:** One wave per invocation. The user controls the pace.
 
 ---
 

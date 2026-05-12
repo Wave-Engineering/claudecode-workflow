@@ -1,18 +1,5 @@
 {
   "deps": {
-    "context-crystallizer": {
-      "type": "repo",
-      "description": "Hook scripts for context crystallization (PostToolUse, SessionStart, SubagentStop)",
-      "required_by": "settings.json hooks",
-      "files": [
-        "~/.claude/context-crystallizer/hooks/post-tool-use.sh",
-        "~/.claude/context-crystallizer/hooks/session-start.sh",
-        "~/.claude/context-crystallizer/hooks/subagent-stop.sh"
-      ],
-      "clone_url": "git@github.com:Wave-Engineering/context-crystallizer.git",
-      "clone_dest": "~/.claude/context-crystallizer",
-      "optional": false
-    },
     "discord-config": {
       "type": "config",
       "description": "Channel name-to-ID map for disc-server resolution (avoids API calls)",

@@ -87,7 +87,7 @@ Once you are in a session, run:
 This is the "rules of engagement" skill. It does three things:
 
 1. **Reads CLAUDE.md** and confirms the mandatory rules are loaded -- things like "never commit without `/precheck`", "always have an issue before starting work", and "test before push".
-2. **Loads the current plan** if one exists (from plan mode or auto-crystallized state). If no plan exists, it says so.
+2. **Loads the current plan** if one exists (from plan mode or plan files). If no plan exists, it says so.
 3. **Reports ready state** -- your current git branch, any pending work, and asks what you would like to work on.
 
 You should run `/engage` at the start of every session, and especially after context compaction (when Claude's context window fills up and gets summarized). `/engage` is the thaw cycle that restores context after compaction.
