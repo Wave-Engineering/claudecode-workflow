@@ -957,6 +957,7 @@ campaign-status dashboard-url --branch feature/42-work
 
 ## See Also
 
+- [Cheat Sheet](cheatsheet.md) -- one-page skill + MCP tool quick reference
 - [Getting Started](getting-started.md) -- hands-on walkthrough of your first session
 - [Concepts](concepts.md) -- how the pieces fit together
 - [Troubleshooting](troubleshooting.md) -- common failure modes and fixes
