@@ -564,7 +564,7 @@ Plan issue #<plan_id> updated: Phases checklist backfilled.
 
 Also post this summary as a plain comment (not a `[ledger]` entry) on the Plan issue so the Pair has a single place to read the backlog state.
 
-Confirm to the user: "Backlog populated. N Story issues created. `phases-waves.json` written with plan_id=<plan_id> and per-Story depends_on. Dev Spec and Plan issue updated with Story references. Run `/prepwaves` to plan execution."
+Confirm to the user: "Backlog populated. N Story issues created. `phases-waves.json` written with plan_id=<plan_id> and per-Story depends_on. Dev Spec and Plan issue updated with Story references. Run `/nextwave` to begin execution." (Do NOT recommend `/prepwaves` — upshift already wrote the complete multi-Phase topology to `phases-waves.json`; running `/prepwaves` on top of it would be redundant or destructive.)
 
 <!-- END TEMPLATE: devspec-upshift -->
 
