@@ -30,6 +30,7 @@ Determine the subcommand from the phrasing:
 | `tour orientation` | **tour-orientation** | `/ccwork tour orientation` |
 | `tour workflow` | **tour-workflow** | `/ccwork tour workflow` |
 | `tour foundations` | **tour-foundations** | `/ccwork tour foundations` |
+| `tour sdlc` | **tour-sdlc** | `/ccwork tour sdlc` |
 | `lab` (alone) | **lab-list** | `/ccwork lab` |
 | `lab "<name>"`, `lab <name>`, or `lab #N` | **lab-run** | `/ccwork lab "First Workflow"`, `/ccwork lab #3` |
 | `setup discord` | **setup-discord** | `/ccwork setup discord` |
@@ -44,7 +45,7 @@ Present the available subcommands as a concise menu:
 ```
 /ccwork — Claude Code Workflow Kit
 
-  tour                Full orientation tour (or: tour workflow, tour foundations)
+  tour                Full orientation tour (or: tour workflow, tour foundations, tour sdlc)
   lab                 List available labs (or: lab "<name>" to start one)
   setup discord       Guided Discord configuration
 
@@ -97,6 +98,14 @@ Read and execute `tours/workflow.md` using the same resolution logic as above.
 **Trigger:** `tour foundations`
 
 Read and execute `tours/foundations.md` using the same resolution logic as above.
+
+---
+
+## Tour: SDLC
+
+**Trigger:** `tour sdlc`
+
+Read and execute `tours/sdlc.md` using the same resolution logic as above.
 
 ---
 
