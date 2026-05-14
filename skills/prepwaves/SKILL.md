@@ -18,6 +18,11 @@ Analyze one or more Plan tracking issues, validate their sub-issue specs, comput
 
 ## Procedure
 
+0. **Multi-Phase guard.** Before any work, check if `.claude/status/phases-waves.json` already exists in the project. If it does, read it and inspect `phases.length`:
+   - If `phases.length > 1` (multi-Phase topology already written by `/devspec upshift`): **STOP.** Report to the user: "`phases-waves.json` already contains a multi-Phase topology (N phases, M waves, K stories). This was written by `/devspec upshift` — `/prepwaves` persist is unnecessary. Run `/nextwave` to begin execution, or delete `phases-waves.json` to re-plan from scratch."
+   - If `phases.length === 1` and the plan's `plan_id` matches one of the user's input Plan refs: this is a re-run of a single-Phase prep. Proceed normally (wave_init's extend/idempotent path handles it).
+   - If the file does not exist: proceed normally (fresh prep).
+
 1. **Inputs.** Plan tracking-issue numbers passed by the user (`/prepwaves #2` or `/prepwaves #2 #3 ...`). Each Plan becomes one Phase in `phases-waves.json`.
 2. **Pre-flight readiness table.** For each Plan:
    a. Call `epic_sub_issues(N)` inline to get the list of sub-issue numbers (must complete before spawning validators — you need the list first).
