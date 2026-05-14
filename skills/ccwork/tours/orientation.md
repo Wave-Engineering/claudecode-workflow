@@ -156,6 +156,7 @@ Narration: "That's the orientation. Here's where to go from here:"
 - **Learn the foundations** — `/ccwork tour foundations` covers the session lifecycle skills in depth
 - **Read the docs** — [Getting Started](../../../docs/getting-started.md) for the hands-on walkthrough, [Concepts](../../../docs/concepts.md) for architecture
 - **Run a lab** — `/ccwork lab` to see available hands-on exercises (requires the ccwork-lab repo)
-- **Explore skills** — run any `/command` to see what it does
+- **Explore skills** — run `/man <skill>` to see detailed usage for any skill
+- **AI agent onboarding** — if you're a new agent joining the fleet, read [New Agent Orientation](../../../docs/seed-ai-dev.md) for day-1 context
 
 Narration: "That's it. You know what's installed, how the loop works, and where the docs live. Ready when you are."

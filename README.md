@@ -16,6 +16,7 @@ This repo packages the custom skills, utility scripts, and project instructions 
 | [Discord Setup](docs/discord-config.md) | Bot token, watcher, inter-agent messaging |
 | [Statusline Indicators](docs/statusline-indicators.md) | Per-session indicator interface for skills and scripts |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and fixes |
+| [New Agent Orientation](docs/seed-ai-dev.md) | Day-1 context for AI agents joining the fleet |
 
 ## Install via Claude Code
 
