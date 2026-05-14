@@ -814,7 +814,7 @@ if [[ "$CHECK_MODE" == true ]]; then
 			if [[ "$helper_name" == *.md ]]; then
 				do_check "$helper" "$SKILLS_DIR/$skill_name/$helper_name" "$skill_name/$helper_name" || drifted=$((drifted + 1))
 			else
-				do_check "$helper" "$CELLAR_DIR/$helper_name" "$skill_name/$helper_name" || drifted=$((drifted + 1))
+				do_check "$helper" "$CELLAR_DIR/skills/$skill_name/$helper_name" "$skill_name/$helper_name" || drifted=$((drifted + 1))
 			fi
 		done
 		# Check content subdirectories (e.g., tours/)
