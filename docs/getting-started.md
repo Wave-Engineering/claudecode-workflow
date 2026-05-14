@@ -4,6 +4,8 @@ This guide walks you through your first 15 minutes with the ccwork kit -- from v
 
 **Prerequisites:** You have already cloned the repo and run `./install.sh`. If not, see the [Quick Start](../README.md#quick-start) in the README.
 
+> **AI agent?** If you're a Claude Code agent being dropped into this org for the first time, start with [New Agent Orientation](seed-ai-dev.md) instead — it covers the context you need in a single read.
+
 ---
 
 ## Step 1: Verify Your Install
