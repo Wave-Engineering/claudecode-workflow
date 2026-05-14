@@ -759,6 +759,131 @@ The bus root is namespaced under `/tmp/wavemachine/` so `wave-cleanup` can safel
 
 ---
 
+### `/sdlc` -- SDLC Workflow Tools
+
+Routes to sdlc-server MCP tools for work item creation and branch/PR compliance checking.
+
+**When to use it:**
+- To create work items (epics, stories, bugs, chores) via MCP instead of directly calling `gh`/`glab`
+- To check issue/branch/PR workflow compliance for the current branch
+
+**Examples:**
+
+```
+/sdlc work_item feature "Add retry logic to upload endpoint"
+/sdlc ibm
+```
+
+All operations are handled by MCP tools (`work_item`, `ibm`). Platform detection (GitHub vs GitLab) is automatic.
+
+---
+
+### `/wave` -- Wave-Pattern Status
+
+Shows the current wave-pattern execution status for the project via the `wave_show` MCP tool.
+
+**When to use it:**
+- To check which wave is currently active
+- To see the overall progress of a wave plan
+- To verify wave state after a merge or failure
+
+**Examples:**
+
+```
+/wave            # Show wave-pattern status
+/wave status     # Same as /wave
+```
+
+Read-only. Calls `wave_show` and formats the result.
+
+---
+
+## Troubleshooting Skills
+
+These help diagnose and record incidents using the WTF flight recorder (backed by `wtf-server` MCP).
+
+---
+
+### `/wtf` -- Start Troubleshooting Session
+
+Launches the WTF flight recorder for a new troubleshooting incident. Archives any prior incident, prompts for an optional title, then enters flight recorder mode where observations, theories, and corrective actions are journaled automatically.
+
+**When to use it:**
+- When something is broken and you want structured incident tracking
+- When you need to hand off a debugging session with full context
+- When you want automatic journaling of your diagnostic tool calls
+
+**Examples:**
+
+```
+/wtf                          # Start a new troubleshooting session
+/wtf record "DNS is flaky"   # Shorthand for /wtf now "DNS is flaky"
+```
+
+Archives the prior incident (if any) via `wtf_freshell`, then enters recording mode. All subsequent tool calls and observations are captured until `/wtf imout`.
+
+---
+
+### `/wtf happened` -- Incident Timeline
+
+Retrieves a distilled timeline of the current troubleshooting incident and generates a runbook skeleton.
+
+**When to use it:**
+- After a troubleshooting session, to review what happened
+- To generate a runbook from the incident for future reference
+- To share context with another agent or human
+
+**Examples:**
+
+```
+/wtf happened        # Summary timeline (max 50 lines)
+/wtf happened full   # Full timeline, no truncation
+```
+
+Returns a structured timeline of observations, theories, and actions taken during the incident.
+
+---
+
+### `/wtf now` -- Record Manual Journal Entry
+
+Adds a manual observation to the WTF flight recorder journal.
+
+**When to use it:**
+- To record an observation that isn't captured automatically (manual checks, external findings)
+- To log a theory or hypothesis during debugging
+- To note something for the timeline that didn't come from a tool call
+
+**Examples:**
+
+```
+/wtf now the DNS resolver is returning stale records
+/wtf now "checked nginx logs — 502s started at 14:32"
+/wtf now theory: might be connection pool exhaustion
+```
+
+The entry is stored as a crafted (intentional) record. Classification is handled by the background classifier.
+
+---
+
+### `/wtf imout` -- Suspend Troubleshooting Session
+
+Stops recording but preserves all captured data for later analysis via `/wtf happened`.
+
+**When to use it:**
+- When debugging is paused but not resolved
+- When handing off to another session or agent
+- When you want to stop automatic capture but keep the incident data
+
+**Examples:**
+
+```
+/wtf imout
+```
+
+Does NOT delete captured data. The suspended incident remains viewable with `/wtf happened`. Starting a new `/wtf` session creates a new incident; the suspended one stays archived.
+
+---
+
 ## Tools / CLI
 
 ### `campaign-status` -- SDLC Campaign Lifecycle CLI

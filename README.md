@@ -16,7 +16,15 @@ This repo packages the custom skills, utility scripts, and project instructions 
 | [Statusline Indicators](docs/statusline-indicators.md) | Per-session indicator interface for skills and scripts |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and fixes |
 
-## Quick Start
+## Install via Claude Code
+
+Paste this into a Claude Code session and watch the magic happen:
+
+> Fetch https://raw.githubusercontent.com/Wave-Engineering/claudecode-workflow/main/docs/seed-ai-install.md and follow every step in that document. It will walk you through cloning the repo, installing dependencies, running the installer, and verifying success. Execute each step — do not summarize or skip.
+
+That's it. Your agent handles environment detection, platform-specific dependency installation, corporate proxy workarounds, and verification — all from one prompt.
+
+## Quick Start (manual)
 
 **One-liner install (no clone needed):**
 

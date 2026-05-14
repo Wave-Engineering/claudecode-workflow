@@ -170,4 +170,4 @@ State preservation is automatic — memory files persist durable facts, and plan
 - **Try the workflow** — `/ccwork tour workflow` for the full issue-to-merge walkthrough
 - **Back to overview** — `/ccwork tour` for the orientation
 - **Read the reference** — [Concepts](../../../docs/concepts.md) covers everything in this tour in written form
-- **Explore a skill** — run any `/command` to see it in action
+- **Explore a skill** — run `/man <skill>` to see its usage
