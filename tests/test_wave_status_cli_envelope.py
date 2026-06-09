@@ -253,3 +253,85 @@ class TestEnvelopeSurvivesRegen:
         assert env_payload["state"]["current_action"]["action"] == "in-flight"
         # Failure surfaced as a best-effort stderr warning.
         assert "synthetic regen failure" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Regression: non-enveloped mutations (init, complete, ...) must ALSO survive
+# a dashboard-regen crash with exit 0. #495 hardened the envelope-printing
+# commands but left init/complete/planning/etc. calling the raw regen, so a
+# render crash ('str' object has no attribute 'get') surfaced as a non-zero
+# exit AFTER the state had already persisted — sdlc-server's wave_init /
+# wave_complete wrappers (which key on exit code) then reported ok:false on
+# full success, risking a retry into a wave-ID collision.
+# ---------------------------------------------------------------------------
+
+class TestNonEnvelopeMutationsSurviveRegen:
+    """Mutations that don't print an envelope (their MCP wrappers key on the
+    CLI exit code) must still exit 0 when the best-effort dashboard regen
+    crashes — the state mutation already persisted."""
+
+    @staticmethod
+    def _run_with_regen_boom(repo: Path, args: list[str]):
+        import os
+        import subprocess
+        import sys
+
+        inject_dir = repo / "_inject"
+        if not inject_dir.exists():
+            inject_dir.mkdir()
+            (inject_dir / "sitecustomize.py").write_text(
+                "import wave_status.dashboard.generator as _g\n"
+                "def _boom(*a, **kw):\n"
+                "    raise RuntimeError('synthetic regen failure')\n"
+                "_g.generate_dashboard = _boom\n",
+                encoding="utf-8",
+            )
+        env = os.environ.copy()
+        src_dir = str(Path(__file__).resolve().parent.parent / "src")
+        existing = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = os.pathsep.join(
+            p for p in [str(inject_dir), src_dir, existing] if p
+        )
+        return subprocess.run(
+            [sys.executable, "-m", "wave_status", *args],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    def test_complete_exits_zero_when_regen_raises(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        repo = temp_git_repo
+        _bootstrap_through_flight_started(repo, run_cli)
+
+        result = self._run_with_regen_boom(repo, ["complete"])
+
+        assert result.returncode == 0, (
+            f"complete must exit 0 despite a regen crash (state persisted); "
+            f"got rc={result.returncode}, stderr={result.stderr!r}"
+        )
+        assert "synthetic regen failure" in result.stderr
+        # The mutation landed: the wave is marked completed on disk.
+        state = json.loads(
+            (repo / ".claude" / "status" / "state.json").read_text(encoding="utf-8")
+        )
+        assert state["waves"]["wave-1"]["status"] == "completed"
+
+    def test_init_exits_zero_when_regen_raises(
+        self, temp_git_repo: Path
+    ) -> None:
+        repo = temp_git_repo
+        _write_plan(repo)
+
+        result = self._run_with_regen_boom(repo, ["init", "plan.json"])
+
+        assert result.returncode == 0, (
+            f"init must exit 0 despite a regen crash (plan persisted); "
+            f"got rc={result.returncode}, stderr={result.stderr!r}"
+        )
+        assert "synthetic regen failure" in result.stderr
+        # The plan persisted despite the regen crash.
+        assert (repo / ".claude" / "status" / "state.json").exists()
+        assert (repo / ".claude" / "status" / "phases-waves.json").exists()
