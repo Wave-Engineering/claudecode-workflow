@@ -18,6 +18,7 @@ import argparse
 import json
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
 from wave_status import deferrals
@@ -101,10 +102,15 @@ def _safe_regenerate_dashboard(root: Path) -> None:
     try:
         _regenerate_dashboard(root)
     except Exception as exc:  # noqa: BLE001 — best-effort; envelope must print
+        # The mutation already persisted; a derived-view refresh failure must
+        # not fail the command. Emit the full traceback (not just the message)
+        # so a render bug like #<this issue> is diagnosable from the warning
+        # even though the exit code stays 0.
         print(
             f"warning: dashboard regeneration failed: {exc}",
             file=sys.stderr,
         )
+        traceback.print_exc(file=sys.stderr)
 
 
 def _print_envelope(state: dict) -> None:
@@ -143,7 +149,7 @@ def _cmd_init(args: argparse.Namespace) -> None:
         extend_state(plan_data, root)
     else:
         init_state(plan_data, root, force=args.force)
-    _regenerate_dashboard(root)
+    _safe_regenerate_dashboard(root)
 
 
 def _cmd_flight_plan(args: argparse.Namespace) -> None:
@@ -152,21 +158,21 @@ def _cmd_flight_plan(args: argparse.Namespace) -> None:
     raw = _read_json_source(args.file)
     flights_data = json.loads(raw)
     store_flight_plan(flights_data, root)
-    _regenerate_dashboard(root)
+    _safe_regenerate_dashboard(root)
 
 
 def _cmd_preflight(args: argparse.Namespace) -> None:
     """Handle ``preflight``."""
     root = get_project_root()
     preflight(root)
-    _regenerate_dashboard(root)
+    _safe_regenerate_dashboard(root)
 
 
 def _cmd_planning(args: argparse.Namespace) -> None:
     """Handle ``planning``."""
     root = get_project_root()
     planning(root)
-    _regenerate_dashboard(root)
+    _safe_regenerate_dashboard(root)
 
 
 def _cmd_flight(args: argparse.Namespace) -> None:
@@ -189,14 +195,14 @@ def _cmd_review(args: argparse.Namespace) -> None:
     """Handle ``review``."""
     root = get_project_root()
     review(root)
-    _regenerate_dashboard(root)
+    _safe_regenerate_dashboard(root)
 
 
 def _cmd_complete(args: argparse.Namespace) -> None:
     """Handle ``complete``."""
     root = get_project_root()
     complete(root)
-    _regenerate_dashboard(root)
+    _safe_regenerate_dashboard(root)
 
 
 def _cmd_waiting(args: argparse.Namespace) -> None:
@@ -213,7 +219,7 @@ def _cmd_waiting_ci(args: argparse.Namespace) -> None:
     root = get_project_root()
     detail = args.detail if args.detail else ""
     waiting_ci(root, detail=detail)
-    _regenerate_dashboard(root)
+    _safe_regenerate_dashboard(root)
 
 
 def _cmd_close_issue(args: argparse.Namespace) -> None:
@@ -241,7 +247,7 @@ def _cmd_defer(args: argparse.Namespace) -> None:
         raise ValueError("no active wave — all waves are complete")
     deferrals.defer(state_data, args.desc, args.risk, state_data["current_wave"])
     save_json(d / "state.json", state_data)
-    _regenerate_dashboard(root)
+    _safe_regenerate_dashboard(root)
 
 
 def _cmd_defer_accept(args: argparse.Namespace) -> None:
@@ -251,14 +257,14 @@ def _cmd_defer_accept(args: argparse.Namespace) -> None:
     state_data = load_state(d / "state.json")
     deferrals.accept(state_data, args.index)
     save_json(d / "state.json", state_data)
-    _regenerate_dashboard(root)
+    _safe_regenerate_dashboard(root)
 
 
 def _cmd_set_current(args: argparse.Namespace) -> None:
     """Handle ``set-current <wave-id>``."""
     root = get_project_root()
     set_current_wave(args.wave_id, root)
-    _regenerate_dashboard(root)
+    _safe_regenerate_dashboard(root)
 
 
 def _cmd_set_kahuna_branch(args: argparse.Namespace) -> None:
@@ -266,14 +272,14 @@ def _cmd_set_kahuna_branch(args: argparse.Namespace) -> None:
     root = get_project_root()
     branch = args.branch.strip() if args.branch else ""
     set_kahuna_branch(branch or None, root)
-    _regenerate_dashboard(root)
+    _safe_regenerate_dashboard(root)
 
 
 def _cmd_wavemachine_start(args: argparse.Namespace) -> None:
     """Handle ``wavemachine-start [--launcher <tag>]``."""
     root = get_project_root()
     wavemachine_start(root, launcher=args.launcher or "")
-    _regenerate_dashboard(root)
+    _safe_regenerate_dashboard(root)
 
 
 def _cmd_wavemachine_stop(args: argparse.Namespace) -> None:
