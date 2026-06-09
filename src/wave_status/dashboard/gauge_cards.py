@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import html as _html
 
-from wave_status.state import current_phase_info
+from wave_status.state import current_phase_info, wave_flight_list
 
 
 def _flight_info(state_data: dict, flights_data: dict) -> dict:
@@ -24,7 +24,7 @@ def _flight_info(state_data: dict, flights_data: dict) -> dict:
         }
     """
     current_wave = state_data.get("current_wave") or ""
-    wave_flights = flights_data.get("flights", {}).get(current_wave, [])
+    wave_flights = wave_flight_list(flights_data, current_wave)
 
     if not wave_flights:
         return {"value": "\u2014", "pct": 0.0, "has_flights": False}

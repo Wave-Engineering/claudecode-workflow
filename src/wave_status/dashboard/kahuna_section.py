@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import html as _html
 
+from wave_status.state import wave_flight_list
+
 
 # Maximum number of history rows rendered before the table collapses.  The
 # spec calls for "last 10 entries" (devspec §5.2.5).
@@ -36,7 +38,7 @@ def _flight_counts(flights_data: dict, current_wave: str | None) -> tuple[int, i
     """
     if current_wave is None:
         return (0, 0)
-    wave_flights = flights_data.get("flights", {}).get(current_wave, [])
+    wave_flights = wave_flight_list(flights_data, current_wave)
     merged = 0
     pending = 0
     for fl in wave_flights:
