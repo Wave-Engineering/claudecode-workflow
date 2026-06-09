@@ -13,6 +13,7 @@ from __future__ import annotations
 import html as _html
 
 from wave_status.dashboard.theme import PHASE_COLORS
+from wave_status.state import wave_flight_list
 
 
 def _status_badge(status: str, data_wave: str = "", data_issue: str = "") -> str:
@@ -44,7 +45,7 @@ def _render_flight_badges(wave_id: str, flights_data: dict) -> str:
 
     Returns an empty string if no flight plan exists for *wave_id*.
     """
-    wave_flights = flights_data.get("flights", {}).get(wave_id, [])
+    wave_flights = wave_flight_list(flights_data, wave_id)
     if not wave_flights:
         return ""
 

@@ -651,6 +651,31 @@ def extend_state(plan_data: dict, root: Path) -> None:
     save_json(state_path, existing_state)
 
 
+def wave_flight_list(flights_data: dict, wave_id: str) -> list[dict]:
+    """Return the flat list of flight dicts for *wave_id*, shape-tolerant [#663].
+
+    ``flights.json`` stores per-wave flight data as ``flights[<wave_id>]``. The
+    canonical shape written by :func:`store_flight_plan` is a flat list of
+    flight dicts (``[{"issues": [...], "status": "..."}]``). A legacy
+    flight-partition writer persisted a nested *envelope* for some waves
+    instead (``{"flights": [...], "strategy": "safe", "conflict_count": 1}``).
+
+    Consumers that iterate the per-wave value directly crash on the envelope
+    shape — iterating a dict yields its keys (strings), so the subsequent
+    ``flight.get(...)`` raises ``'str' object has no attribute 'get'``. This
+    helper accepts either shape, unwraps the envelope, and drops any non-dict
+    element so a single legacy-shaped wave can never crash a renderer or the
+    CLI summary. Returns ``[]`` for a missing wave or any unexpected type.
+    """
+    raw = flights_data.get("flights", {}).get(wave_id, [])
+    if isinstance(raw, dict):
+        # Legacy envelope — the real list lives under the "flights" key.
+        raw = raw.get("flights", [])
+    if not isinstance(raw, list):
+        return []
+    return [flight for flight in raw if isinstance(flight, dict)]
+
+
 def store_flight_plan(flights_data: list, root: Path) -> None:
     """Store *flights_data* keyed by the current wave ID in ``flights.json`` [R-04].
 
@@ -841,7 +866,9 @@ def flight(n: int, root: Path) -> dict:
         )
 
     flights = load_json(d / "flights.json")
-    wave_flights = flights.get("flights", {}).get(current_wave, [])
+    # Shape-tolerant read (#663): normalize legacy envelope → flat list. The
+    # write-back below then persists the flat shape, self-healing the drift.
+    wave_flights = wave_flight_list(flights, current_wave)
 
     if n < 1 or n > len(wave_flights):
         raise ValueError(
@@ -895,7 +922,9 @@ def flight_done(n: int, root: Path) -> dict:
         )
 
     flights = load_json(d / "flights.json")
-    wave_flights = flights.get("flights", {}).get(current_wave, [])
+    # Shape-tolerant read (#663): normalize legacy envelope → flat list. The
+    # write-back below then persists the flat shape, self-healing the drift.
+    wave_flights = wave_flight_list(flights, current_wave)
 
     if n < 1 or n > len(wave_flights):
         raise ValueError(
@@ -1124,7 +1153,7 @@ def show(root: Path) -> dict:
     waves_in_current_phase = phase_info["waves_in_phase"]
 
     # Flight info.
-    wave_flights = flights_data.get("flights", {}).get(current_wave or "", [])
+    wave_flights = wave_flight_list(flights_data, current_wave or "")
     total_flights = len(wave_flights)
     running_flight = None
     for fi, fl in enumerate(wave_flights):
