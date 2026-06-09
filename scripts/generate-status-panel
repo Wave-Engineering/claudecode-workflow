@@ -126,6 +126,23 @@ def compute_stats(phases: list, state: dict) -> dict:
     }
 
 
+def wave_flight_list(flights: dict, wave_id: str) -> list[dict]:
+    """Return the flat list of flight dicts for *wave_id*, shape-tolerant.
+
+    Mirrors ``wave_status.state.wave_flight_list`` (#663): tolerates both the
+    canonical flat list and the legacy ``{"flights": [...], ...}`` envelope, and
+    drops any non-dict element. Inlined because this script is standalone
+    (stdlib only) and does not import the ``wave_status`` package. (See #665
+    follow-up to dedup this renderer against the package.)
+    """
+    raw = flights.get("flights", {}).get(wave_id, [])
+    if isinstance(raw, dict):
+        raw = raw.get("flights", [])
+    if not isinstance(raw, list):
+        return []
+    return [f for f in raw if isinstance(f, dict)]
+
+
 def render_phase_html(phase: dict, state: dict, flights: dict) -> str:
     phase_waves = phase["waves"]
     completed = sum(
@@ -140,7 +157,7 @@ def render_phase_html(phase: dict, state: dict, flights: dict) -> str:
     lines.append(f'<div class="phase {phase_status}">')
     lines.append(f'  <div class="phase-header">')
     lines.append(
-        f'    <h2>{html.escape(phase["name"])}'
+        f'    <h2>{html.escape(phase.get("name") or phase.get("title", ""))}'
         f' <span class="phase-progress">{completed}/{total} waves</span></h2>'
     )
     lines.append(f"  </div>")
@@ -162,7 +179,7 @@ def render_phase_html(phase: dict, state: dict, flights: dict) -> str:
             f"</div>"
         )
 
-        wave_flights = flights.get("flights", {}).get(wave_id, [])
+        wave_flights = wave_flight_list(flights, wave_id)
         if wave_flights:
             lines.append('    <div class="flights">')
             for i, flight in enumerate(wave_flights):
@@ -188,7 +205,10 @@ def render_phase_html(phase: dict, state: dict, flights: dict) -> str:
             issue_state = state.get("issues", {}).get(str(num), {})
             ist = issue_state.get("status", "pending")
             ic = status_class(ist)
-            dep_str = ", ".join(f"#{d}" for d in issue.get("deps", [])) or "none"
+            # v3 schema uses `depends_on`; older plans used `deps`. Two-key
+            # fallback so the Deps column renders on both (#665).
+            issue_deps = issue.get("deps") or issue.get("depends_on", [])
+            dep_str = ", ".join(f"#{d}" for d in issue_deps) or "none"
             mr_str = mr_urls.get(str(num), "")
 
             lines.append(
