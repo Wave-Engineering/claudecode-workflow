@@ -75,6 +75,33 @@ No arguments. If an identity file exists for this project, it reports the curren
 
 ---
 
+### `/reseed` -- Guided Context-Window Reduction
+
+Runs the decision when the context window is filling mid-flight: `/compact`, seed + `/clear`, or seed + `/compact`. It reasons about the current state and **recommends one** rather than just asking; for the seed options it authors the seed and hands you the exact human follow-up.
+
+**When to use it:**
+- When the context window is getting full and you are mid-task
+- Before a deliberate `/clear` or `/compact`, to protect valuable volatile state
+- Whenever you would otherwise hand-type a long "here is where we are" revival prompt
+
+**Examples:**
+
+```
+/reseed
+```
+
+No arguments. It assesses window pressure, the depth of the in-flight work, and how much state already lives on disk, then recommends one of three paths:
+
+- **`/compact`** -- summarizer compresses the transcript (no seed). Cheapest, but cedes the volatile state to the summarizer.
+- **Seed + `/clear`** -- writes a detailed seed, you `/clear`, then revive from the seed. Recommended when heavy state is already on disk (docs/memories/issues): the seed carries only volatile working-state and `/clear` gives the cleanest window.
+- **Seed + `/compact`** -- writes a seed, you `/compact`, then the agent reads the seed back to patch holes. Recommended when little is externalized and the in-conversation reasoning is valuable.
+
+**The kernel:** a good seed **points at durable artifacts and carries only volatile working-state** -- branch, uncommitted files, the immediate next action, open threads, and communication nuance. It never duplicates what is on disk or what auto-reloads at session start (CLAUDE.md, the memory index, hooks).
+
+**Durability caveat:** `/tmp` is reboot-wiped, so a `/tmp` seed is fine for same-session readback but not across a reboot. If the reduction might span a reboot, the skill writes the seed to a durable path under `.claude/` instead.
+
+---
+
 ### `/man` -- Skill Usage Display
 
 Displays the usage information for any installed skill by reading its SKILL.md frontmatter. A quick reference without loading the full skill into context.
