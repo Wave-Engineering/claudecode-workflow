@@ -53,6 +53,7 @@ const PROTECTED_BRANCH = params.protectedBranch ?? 'main' // promotion target on
 const ALL_ISSUES = (params.issues ?? []).map(Number) // the wave's issue numbers
 const MODE = params.mode ?? 'auto' // 'auto' (gate verdict drives promotion) | 'interactive' (verdict returned, human routes)
 const budget = params.budget ?? { total: 0, remaining: () => Infinity } // optional cost guard
+const budgetRemaining = typeof budget.remaining === 'function' ? budget.remaining : () => (budget.remaining ?? Infinity) // tolerate `remaining` passed as a number, not a fn
 
 // Closed numeric guards (§3.1) — the whole safety story is these + the exit set.
 const MAX_GROUPS = params.maxGroups ?? 24
@@ -317,11 +318,11 @@ phase('Flight loop')
 // state (script-held, free); mirrored durably to wave-status each iteration (§3.3)
 const pending = new Set(seed.pending)
 const merged = new Set(seed.merged)
-const reworkCount = { ...(seed.reworkCount || {}) }
+const reworkCount = Object.fromEntries(Object.entries(seed.reworkCount || {}).map(([k, v]) => [Number(k), v])) // numeric keys (JSON resume returns them as strings)
 let lastRework = []
 let idleRounds = seed.idleRounds || 0
 const groupsRun = [] // running record; length seeds from seed.groupsRun for the bound
-let groupsRunBase = seed.groupsRun || 0
+let groupsRunBase = Math.max(0, Number(seed.groupsRun) || 0) // rehydration-proof: corrupt/missing/negative seed → 0, so the runaway guard always fires
 let halt = null // null = still converging; else a HOLD reason (NEVER a success)
 
 // Collected §3.2 must-preserve data — recorded, never branched-on.
@@ -333,7 +334,7 @@ while (true) {
   if (pending.size === 0) break // success (halt stays null)
   if (groupsRunBase + groupsRun.length >= MAX_GROUPS) { halt = 'runaway'; break } // → human review
   if (idleRounds >= MAX_IDLE) { halt = 'thrash'; break } // groups with zero net merges → not converging
-  if (budget.total && budget.remaining() < COST_FLOOR) { halt = 'cost'; break } // stop before the ceiling
+  if (budget.total && budgetRemaining() < COST_FLOOR) { halt = 'cost'; break } // stop before the ceiling
 
   // ── PLAN next group from CURRENT state (Prime; judgment) ──
   const plan = await agent(primePlanPrompt(merged, pending, lastRework), {
@@ -388,14 +389,15 @@ while (true) {
 
   lastRework = []
   for (const r of rec.needs_rework || []) {
-    if ((reworkCount[r.issue] = (reworkCount[r.issue] || 0) + 1) > MAX_REWORK) {
-      halt = `rework:#${r.issue}` // per-issue breaker → HOLD, NOT success
+    const ri = Number(r.issue) // normalize: pending/merged/reworkCount are numeric-keyed (string keys leak in via JSON resume)
+    if ((reworkCount[ri] = (reworkCount[ri] || 0) + 1) > MAX_REWORK) {
+      halt = `rework:#${ri}` // per-issue breaker → HOLD, NOT success
       break
     }
-    pending.add(r.issue) // surfaced dep → re-opened → next group
-    merged.delete(r.issue)
+    pending.add(ri) // surfaced dep → re-opened → next group
+    merged.delete(ri)
     lastRework.push(r)
-    log(`Surfaced dependency: #${r.issue} re-opened (rework #${reworkCount[r.issue]}) — ${r.reason}`)
+    log(`Surfaced dependency: #${ri} re-opened (rework #${reworkCount[ri]}) — ${r.reason}`)
   }
 
   groupsRun.push({ group, merged: newlyMerged, needs_rework: rec.needs_rework || [], suite: rec.suite_summary })
@@ -425,6 +427,8 @@ if (!halt && pending.size === 0) {
         `Return signal="commutativity", passed (bool), detail.`,
       ].join('\n'),
       { label: 'gate:commutativity', phase: 'Trust gate', schema: SIG, agentType: 'general-purpose' },
+      // TODO(#687): each gate signal's .catch falls back to an always-PASS stub (skeleton only). When the
+      // real signals land, drop these fallbacks so an agent error HOLDs (conservative-fail), never PASSes.
     ).catch(() => gateSignalStub('commutativity')),
     // 2. CI on the MR merge-result pipeline — NOT the merge-commit branch HEAD (sdlc #452)
     () => agent(

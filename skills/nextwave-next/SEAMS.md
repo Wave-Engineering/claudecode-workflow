@@ -174,4 +174,6 @@ they are what make the loop deterministic and resumable:
    the same state is a no-op-or-overwrite, never a duplicate-side-effect.
 6. **The `#687` gate stubs are the ONLY always-pass placeholders.** Once #687 lands, real
    signals replace them; until then a skeleton run reaches PASS so the full spine is
-   exercisable end-to-end.
+   exercisable end-to-end. **When wiring #687, also drop the per-signal `.catch(() => gateSignalStub(...))`
+   fallbacks** — in production an agent/signal error must HOLD (conservative-fail), never silently PASS.
+   (Skeleton keeps the fallbacks so the spine runs before the real signals exist.)
