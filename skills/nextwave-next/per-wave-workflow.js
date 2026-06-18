@@ -583,7 +583,10 @@ if (!halt && pending.size === 0) {
       trivySignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, targetRepoDir: TARGET_REPO_DIR }),
       { label: 'gate:trivy', phase: 'Trust gate', schema: SIG, agentType: 'general-purpose' },
     ).catch((e) => conservativeFail('trivy', e)),
-  ])).filter(Boolean)
+    // A null/undefined slot (an SDK-level failure upstream of the per-signal .catch) must become a
+    // conservative-fail, NEVER be dropped — the gate must always weigh exactly 4 signals, or a
+    // missing signal silently becomes a PASS (absence-of-evidence-as-safety). #687 review.
+  ])).map((s, i) => s ?? conservativeFail(['commutativity', 'ci', 'review', 'trivy'][i], 'signal slot returned null/undefined'))
 
   const failed = signals.filter((s) => !s.passed)
   gate = failed.length === 0
