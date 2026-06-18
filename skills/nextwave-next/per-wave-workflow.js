@@ -31,6 +31,18 @@
 // agent prompts (the MCP record/close calls + the .claude/status/ blob write). See
 // wave-status.js + SEAMS.md (#688). The loop calls persistIteration/persistTerminal below.
 import { blobPath, toBlob, persistIterationPrompt, persistTerminalPrompt } from './wave-status.js'
+// #686 resumability + idempotency seam helper: the rehydrate read-back + agent prompt, and the
+// idempotent worktree setup / 3-point cleanup builders + prompts (§3.3/§4.2/§4.3). The pure halves
+// (parseRehydrate, the git-command builders) are unit-tested without a live sdlc-server. See resume.js.
+import {
+  rehydratePrompt,
+  setupWorktreesPrompt,
+  cleanupMergedPrompt,
+  cleanupTerminalPrompt,
+  wtRoot,
+  wtPathFor,
+  issueBranchFor,
+} from './resume.js'
 
 export const meta = {
   name: 'per-wave-workflow',
@@ -66,10 +78,11 @@ const MAX_REWORK = params.maxRework ?? 3
 const MAX_IDLE = params.maxIdle ?? 2
 const COST_FLOOR = params.costFloor ?? 80_000
 
-// Durable worktree root (§4.2) — NOT /tmp (reboot-wiped, resume-hostile). Gitignored, hyphenated stem shared by dir+branch.
-const WT_ROOT = `${TARGET_REPO_DIR}/.claude/.worktrees/wave-${WAVE_ID}`
-const wtPath = (n) => `${WT_ROOT}/issue-${n}`
-const issueBranch = (n) => `wave-${WAVE_ID}/issue-${n}` // shares the wave-<id>/ stem so `git branch -D wave-<id>/*` cleans both
+// Durable worktree root (§4.2) — NOT /tmp (reboot-wiped, resume-hostile). Gitignored, hyphenated
+// stem shared by dir+branch. The path/branch helpers live in resume.js (the #686 seam owner) so
+// the dir, branch, and the cleanup glob all derive from ONE fs-safe wave-id sanitization (§4.3).
+const WT_ROOT = wtRoot(TARGET_REPO_DIR, WAVE_ID)
+const issueBranch = (n) => issueBranchFor(WAVE_ID, n) // shares the wave-<id>/ stem so `git branch -D wave-<id>/*` cleans both
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STRUCTURED-RETURN SCHEMAS (real — these are the agent contracts)
@@ -147,6 +160,27 @@ const SIG = {
   required: ['signal', 'passed'],
   properties: { signal: { type: 'string' }, passed: { type: 'boolean' }, detail: { type: 'string' } },
 }
+// #686 — the worktree-setup agent's structured return: issue→path map (string-keyed, JSON-native).
+const WORKTREES = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['worktrees'],
+  properties: {
+    worktrees: { type: 'object', additionalProperties: { type: 'string' } }, // { "<issue>": "<absPath>" }
+    notes: { type: 'string' },
+  },
+}
+// #686 — the cleanup agent's structured return (side-effects, not judgment; never halts the wave).
+const CLEANUP_RESULT = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['persisted'],
+  properties: {
+    persisted: { type: 'boolean' },
+    recorded: { type: 'array', items: { type: 'integer' } }, // issues cleaned this call
+    notes: { type: 'string' },
+  },
+}
 // #688 — the persist agent's structured return (it does side-effects, not judgment).
 const PERSIST_RESULT = {
   type: 'object',
@@ -167,17 +201,27 @@ const PERSIST_RESULT = {
 // function names + return shapes here ARE the interface contract (see SEAMS.md).
 // ─────────────────────────────────────────────────────────────────────────────
 
-// SEAM #686 — durable resume. The script can't call MCP/CLI directly (§3.3), so a
-// cheap rehydrate agent reads wave-status and returns the loop blob. Stub: cold start.
+// SEAM #686 — durable resume (FILLED). The script can't call MCP/CLI directly (§3.3), so a
+// cheap rehydrate agent READS the durable wave-status blob (.claude/status/, NEVER /tmp) and
+// returns the REHYDRATE loop seed: {merged, pending, reworkCount, idleRounds, groupsRun}. On a
+// COLD start (no blob) it returns all issues pending / nothing merged; on a WARM start it returns
+// the persisted core so the loop SKIPS finished work (SEAMS invariant 3 — `merged` is authoritative
+// for skip-on-resume). reworkCount keys come back JSON-string-keyed; the loop Number-casts them
+// (see the `Object.fromEntries(... Number(k) ...)` seed below). The pure read-back logic is
+// resume.js parseRehydrate (unit-tested); the agent is the file read the script can't do itself.
 async function rehydrate() {
-  // TODO(#686 resumability/rehydrate): replace with an agent() that reads wave-status
-  // (.claude/status/, durable) for this wave and returns {merged, pending, reworkCount,
-  // idleRounds, groupsRun}. Must skip already-finished work on a cold restart.
-  // Real shape:
-  //   return agent(rehydratePrompt(WAVE_ID, ALL_ISSUES, TARGET_REPO),
-  //     { label: 'rehydrate', phase: 'Rehydrate', schema: REHYDRATE, agentType: 'general-purpose' })
-  log(`[SEAM #686] rehydrate stub → cold start (no prior wave-status state assumed)`)
-  return { merged: [], pending: [...ALL_ISSUES], reworkCount: {}, idleRounds: 0, groupsRun: 0 }
+  const seed = await agent(
+    rehydratePrompt({ waveId: WAVE_ID, allIssues: ALL_ISSUES, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR }),
+    { label: 'rehydrate', phase: 'Rehydrate', schema: REHYDRATE, agentType: 'general-purpose' },
+  ).catch((e) => {
+    // A rehydrate failure must NOT kill the resume — degrade to cold start (re-do, never crash on
+    // your own restart, §3.3). Idempotent workers/reconcile make the re-run safe.
+    log(`[#686] rehydrate soft-fail → cold start: ${e?.message || e}`)
+    return null
+  })
+  if (!seed) return { merged: [], pending: [...ALL_ISSUES], reworkCount: {}, idleRounds: 0, groupsRun: 0 }
+  log(`[#686] rehydrated — merged=[${(seed.merged || []).join(',') || 'none'}] pending=[${(seed.pending || []).join(',') || 'none'}] idle=${seed.idleRounds || 0} groups=${seed.groupsRun || 0}`)
+  return seed
 }
 
 // SEAM #688 — persistence (FILLED). Runs right after Prime(reconcile) each iteration (§3.3):
@@ -244,33 +288,49 @@ function gateSignalStub(name) {
   return { signal: name, passed: true, detail: `[SEAM #687] ${name} stub — always-pass placeholder` }
 }
 
-// Worktree setup is awaited as a SINGLE step before parallel() — workers are HANDED
-// a path, never asked to create one (race-safety is structural, §4.2). Idempotent:
-// reuse an existing branch on resume, never -b (§4.2). Stubbed as a seam of #686 idempotency.
+// SEAM #686 — idempotent worktree setup (FILLED). Awaited as a SINGLE step before parallel()
+// so workers are HANDED a path, never asked to create one (race-safety is structural, §4.2).
+// The agent runs the create-or-reuse git commands (the script can't run git itself, §3.3):
+// reuse an existing branch on resume (`git worktree add <path> <branch>`, NEVER -b), after a
+// crash-recovery prune/sweep (§4.3). Returns the issue→path map the worker prompt is handed.
+// Defensive: if the agent omits a path, fall back to the canonical wtPathFor() so the loop
+// always hands every worker a path (the dirs are durable + idempotent regardless).
 async function setupWorktrees(group) {
-  // TODO(#686 resumability/rehydrate): real idempotent worktree creation —
-  //   sweep prior wave-ids' dirs + `git worktree prune` (crash recovery, §4.3),
-  //   then per issue: if branch exists `git worktree add <path> <branch>` (reuse),
-  //   else `git worktree add <path> -b <branch> origin/<KAHUNA_BRANCH>`.
-  // Returns a map issue→path the worker prompt is handed.
+  const res = await agent(
+    setupWorktreesPrompt({ waveId: WAVE_ID, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR, kahunaBranch: KAHUNA_BRANCH, group }),
+    { label: `worktrees:${group.join(',')}`, phase: 'Flight loop', schema: WORKTREES, agentType: 'general-purpose' },
+  ).catch((e) => {
+    log(`[#686] setupWorktrees soft-fail (using canonical paths): ${e?.message || e}`)
+    return null
+  })
+  const got = (res && res.worktrees) || {}
   const map = {}
-  for (const n of group) map[n] = wtPath(n)
-  log(`[SEAM #686] worktree setup stub — group [${group.join(', ')}] → ${WT_ROOT}/issue-<n>`)
+  for (const n of group) map[n] = got[String(n)] || got[n] || wtPathFor(TARGET_REPO_DIR, WAVE_ID, n) // canonical fallback
+  log(`[#686] worktrees ready — group [${group.join(', ')}] → ${WT_ROOT}/issue-<n>`)
   return map
 }
 
-// 3-point cleanup (§4.3): per-merge removal keeps peak disk ≈ current group.
-// Prune branches too (shared wave-<id>/ stem → single glob cleans both).
+// SEAM #686 — per-merge cleanup (FILLED). 4-point sequence per just-merged issue (§4.3):
+// `worktree remove --force` → `worktree prune` → `rm -rf` → `git branch -D wave-<id>/issue-<n>`.
+// Keeps peak disk ≈ current group. The branch -D is load-bearing (worktree remove leaves the
+// branch behind — pilot 1 accreted dead refs without it). Never halts the wave on a soft error.
 async function cleanupMerged(issues) {
-  // TODO(#686 resumability/rehydrate): real per-merge cleanup —
-  //   git -C <repo> worktree remove --force <path>; git worktree prune; rm -rf <path>;
-  //   git -C <repo> branch -D wave-<id>/issue-<n>
-  if (issues.length) log(`[SEAM #686] cleanup stub — removed worktrees+branches for [${issues.join(', ')}]`)
+  if (!issues.length) return
+  await agent(
+    cleanupMergedPrompt({ waveId: WAVE_ID, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR, issues }),
+    { label: `cleanup:${issues.join(',')}`, phase: 'Flight loop', schema: CLEANUP_RESULT, agentType: 'general-purpose' },
+  ).catch((e) => { log(`[#686] cleanupMerged soft-fail (loop continues): ${e?.message || e}`); return null })
+  log(`[#686] cleaned worktrees+branches for [${issues.join(', ')}]`)
 }
+
+// SEAM #686 — wave-terminal cleanup (FILLED). Sweep the wave's remaining worktrees + prune +
+// glob-delete every wave-<id>/* branch (§4.3) — clean at BOTH ends, not end-only. Idempotent.
 async function cleanupTerminal() {
-  // TODO(#686 resumability/rehydrate): wave-terminal sweep — remove remaining
-  //   wave-<id> worktrees + `git worktree prune` + `git branch -D wave-<id>/*`.
-  log(`[SEAM #686] terminal cleanup stub — swept remaining wave-${WAVE_ID} worktrees+branches`)
+  await agent(
+    cleanupTerminalPrompt({ waveId: WAVE_ID, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR }),
+    { label: 'cleanup:terminal', phase: 'Promote', schema: CLEANUP_RESULT, agentType: 'general-purpose' },
+  ).catch((e) => { log(`[#686] cleanupTerminal soft-fail: ${e?.message || e}`); return null })
+  log(`[#686] swept remaining wave-${WAVE_ID} worktrees+branches`)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
