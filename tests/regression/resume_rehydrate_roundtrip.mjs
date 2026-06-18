@@ -130,6 +130,10 @@ try {
     // a blob that merged an issue NOT in ALL_ISSUES keeps it merged (still skipped) without crashing
     const extra = parseRehydrate({ merged: [3, 999], pending: [8] }, ALL_ISSUES)
     assert.ok(extra.merged.includes(999) && !extra.pending.includes(999), 'unknown merged issue stays skipped')
+    // adversarial: a blob (or hallucinated agent return) with a merged issue ALSO in pending must never re-schedule it
+    const overlap = parseRehydrate({ merged: [3, 12], pending: [3, 8, 100] }, ALL_ISSUES)
+    assert.ok(!overlap.pending.includes(3), 'overlap: a merged issue is removed from pending (no re-do of merged work)')
+    assert.ok(overlap.pending.includes(8) && overlap.pending.includes(100), 'overlap: non-merged pending preserved')
     ok('a missing/empty/corrupt/partial blob degrades to a safe state — a killed run resumes, never dies on restart')
   } catch (e) { bad('robust cold start', e) }
 

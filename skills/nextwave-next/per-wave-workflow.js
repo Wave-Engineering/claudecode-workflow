@@ -35,6 +35,8 @@ import { blobPath, toBlob, persistIterationPrompt, persistTerminalPrompt } from 
 // idempotent worktree setup / 3-point cleanup builders + prompts (§3.3/§4.2/§4.3). The pure halves
 // (parseRehydrate, the git-command builders) are unit-tested without a live sdlc-server. See resume.js.
 import {
+  parseRehydrate,
+  coldStart,
   rehydratePrompt,
   setupWorktreesPrompt,
   cleanupMergedPrompt,
@@ -219,9 +221,14 @@ async function rehydrate() {
     log(`[#686] rehydrate soft-fail → cold start: ${e?.message || e}`)
     return null
   })
-  if (!seed) return { merged: [], pending: [...ALL_ISSUES], reworkCount: {}, idleRounds: 0, groupsRun: 0 }
-  log(`[#686] rehydrated — merged=[${(seed.merged || []).join(',') || 'none'}] pending=[${(seed.pending || []).join(',') || 'none'}] idle=${seed.idleRounds || 0} groups=${seed.groupsRun || 0}`)
-  return seed
+  if (!seed) return coldStart(ALL_ISSUES)
+  // Structural defense (#686 review): normalize the AGENT return through parseRehydrate — excludes
+  // merged from pending (so a resume never re-does merged work even if the agent hallucinates an
+  // overlap), clamps counters, string-keys reworkCount, backfills dropped issues. The live path now
+  // gets the same guarantee the test pins, not the raw agent seed.
+  const norm = parseRehydrate(seed, ALL_ISSUES)
+  log(`[#686] rehydrated — merged=[${norm.merged.join(',') || 'none'}] pending=[${norm.pending.join(',') || 'none'}] idle=${norm.idleRounds} groups=${norm.groupsRun}`)
+  return norm
 }
 
 // SEAM #688 — persistence (FILLED). Runs right after Prime(reconcile) each iteration (§3.3):
