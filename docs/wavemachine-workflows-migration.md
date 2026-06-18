@@ -231,7 +231,16 @@ while (true) {
 - **Progress is structural.** Each iteration either promotes a wave (`PASS`) or halts — a campaign iteration cannot make zero net progress and continue, so no idle-round detector is needed; the retry breaker covers a wave that repeatedly fails to reach `PASS`.
 - **Resumability (mirrors §3.3).** On cold start the campaign rehydrates from wave-status's wave-completion records (`wave_previous_merged` / `wave_topology`) and skips already-promoted waves; `promoted` / `pendingWaves` seed from there. Same durable substrate as the inner loop, one level up.
 
-One Workflow per wave: workflows can't pause mid-run for human input, so the wave-workflow *ending* with a verdict IS the per-wave gate — something *outside* it consumes that verdict and decides whether to continue. **Who that "something" is, is mode-dependent and not yet committed (see §7-B):** in `auto` mode the campaign loop can itself be a Workflow that promotes and rolls on; interactive stops at each gate.
+One Workflow per wave: workflows can't pause mid-run for human input, so the wave-workflow *ending* with a verdict IS the per-wave gate — something *outside* it consumes that verdict and routes. **That something is the `/wavemachine` skill itself:** the loop above runs **in the main session, not as a nested Workflow.** The skill launches one wave-Workflow per wave, reads its verdict, and advances — `auto` advances on `PASS`; interactive surfaces the verdict and STOPS for the human, then advances on their go. Mode is a one-line advance-vs-wait branch, **not two architectures.**
+
+Why the skill, not a campaign-level Workflow nesting wave-workflows:
+
+1. **Interactive review-between-waves is a hard requirement, and a Workflow can't pause for it** — so the skill driver must exist regardless; a second auto-only nested-Workflow mechanism would merely duplicate it (maintenance + drift cost for no new capability).
+2. **The campaign loop is thin** — N pre-approved waves, one launch + verdict each. The determinism that matters, and *all* judgment (drift/merge/review via §3.1 reconcile + the §3.4 trust gate), live *inside* each wave-Workflow; there is almost nothing at the campaign altitude for an LLM to get wrong.
+3. **Resume is native and reboot-proof** — the skill rehydrates `promoted`/`pendingWaves` from wave-status (§3.3). A nested campaign-Workflow has only *within-session* resume and would fall back to the same wave-status substrate on reboot anyway.
+4. **Observability** — each wave is its own `/workflows` run, individually inspectable, not a child buried inside one giant campaign run.
+
+**Tradeoff accepted:** in unattended `auto`, the main session spends a thin sliver of turns between waves (launch → await → read → launch). Cheap — the heavy work is all inside the wave-workflows (billed, off the main window), so the peak-window/determinism wins are intact.
 
 ---
 
@@ -249,7 +258,8 @@ One Workflow per wave: workflows can't pause mid-run for human input, so the wav
 - **Clone location:** dedicated wave-clone vs. reuse the dev's `~/sandbox` clone. Leaning reuse (working-tree-safe; worktrees don't disturb the dev checkout) — the load-bearing fix was the *worktree* location (§4.2), not the clone. Infra call.
 - **Latent current-system bug (noted, deliberately unfiled):** today's `/tmp/wt-sdlc-*` + `-b` worktree convention loses in-flight worktrees on reboot and fails to resume (`branch already exists`). Independent of the migration; fix would move worktrees to a durable path + idempotent re-attach.
 - **Per-stage model assignment** (cheap stages on Haiku) and **budget** scaling — levers, to tune on the pilot.
-- **§7-B — where the §5 campaign loop physically lives.** Forced by "a Workflow can't pause for human input": **auto** mode → the campaign loop is itself a **Workflow** that calls each wave-workflow (one nesting level: campaign → wave → `agent`/`parallel`, so the wave-workflow stays a leaf), promoting between waves with no human checkpoint. **Interactive** mode → the loop lives in the **main session / `/wavemachine` skill**, launching one wave-workflow at a time and stopping at each wave gate for review. Same per-wave workflow underneath; the driver on top is chosen by mode. Framing pending review — this is the only part of §5 not yet committed.
+
+*(Resolved and moved into §5: where the campaign loop physically lives — it runs in the `/wavemachine` skill for both modes, not as a nested Workflow. See #677.)*
 
 ---
 
