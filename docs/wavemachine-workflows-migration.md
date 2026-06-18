@@ -192,18 +192,46 @@ Three cleanup points — clean at **both ends**, not just the end (end-only leak
 
 ## 5. Outer campaign loop (`/wavemachine`)
 
-`/wavemachine` wraps **one per-wave workflow per pending wave** — the same closed-legal-exits pattern lifted one level:
+`/wavemachine` runs **one per-wave workflow per pending wave** — the §3.1 closed-legal-exits pattern lifted one level. Campaign state (which waves promoted) is script-held and mirrored to wave-status each iteration:
 
-```
-while pending waves:
-  run wave-workflow(next wave)
-  PASS      → continue to next wave
-  HOLD      → stop for human review (wave-level legal exit)
-  plan done → success exit
-  repeated failure → circuit-breaker exit
+```javascript
+const pendingWaves = new Set(approvedWavePlan)    // the pre-approved phase/wave plan; rehydrate prunes promoted (below)
+let halt = null                                   // null = converging; else a HOLD reason (NEVER a success)
+const waveRetry = {}; const promoted = new Set()
+const MAX_WAVES = 64, MAX_WAVE_RETRY = 2, CAMPAIGN_FLOOR = 120_000
+
+while (true) {
+  // ── CLOSED LEGAL EXITS (campaign level) ──
+  if (pendingWaves.size === 0)        break                          // success — all waves promoted to main
+  if (promoted.size >= MAX_WAVES)     { halt='runaway'; break }      // defensive bound → human
+  if (budget.total && budget.remaining() < CAMPAIGN_FLOOR) { halt='cost'; break }
+
+  const wave    = nextPendingWave()                                 // from the approved phase/wave plan
+  const verdict = await runWaveWorkflow(wave)                       // §3 spine → { gate: PASS | HOLD | SKIPPED }
+
+  if (verdict.gate === 'PASS') {                                    // promoted to main → progress
+    promoted.add(wave); pendingWaves.delete(wave); waveRetry[wave] = 0; continue
+  }
+  if ((waveRetry[wave] = (waveRetry[wave]||0)+1) > MAX_WAVE_RETRY) { halt=`wave-breaker:${wave}`; break } // won't converge → human
+  halt = 'wave-hold'; break                                         // HOLD/SKIPPED → human review (the per-wave gate)
+}
 ```
 
-One Workflow per wave (workflows can't pause mid-run for human input; the workflow *ending* with a verdict IS the per-wave gate). In `auto` mode the campaign promotes and continues; interactive stops at each gate. *(Confirm-only; designed by analogy with §3.1.)*
+**Closed campaign-exit set** (mirrors §3.1; `halt` keeps HOLD distinct from success):
+
+| Exit | Condition | Meaning |
+|---|---|---|
+| success | `pendingWaves` empty | every wave promoted to main |
+| runaway | `promoted ≥ MAX_WAVES` | defensive bound → human |
+| cost | budget floor | stop before the ceiling |
+| wave-hold | a wave returns HOLD/SKIPPED | the per-wave gate fired → human review |
+| wave-breaker | a wave reworked > `MAX_WAVE_RETRY` | one wave won't converge → human |
+
+- **No campaign-level planner → no `plan done`/success collision.** Unlike §3.1's inner loop (which *plans each group* with a judgment agent and must guard `plan.done` against the success exit), §5 draws waves from the **pre-approved** phase/wave plan via `nextPendingWave()` — there is no planner verdict to misread, so success is `pendingWaves` empty and nothing else. The §3.1 sentinel-collision is designed out, not guarded against. (If a campaign ever needs to *re-plan* waves mid-run, it would add a planner agent plus an `impasse` exit, mirroring §3.1.)
+- **Progress is structural.** Each iteration either promotes a wave (`PASS`) or halts — a campaign iteration cannot make zero net progress and continue, so no idle-round detector is needed; the retry breaker covers a wave that repeatedly fails to reach `PASS`.
+- **Resumability (mirrors §3.3).** On cold start the campaign rehydrates from wave-status's wave-completion records (`wave_previous_merged` / `wave_topology`) and skips already-promoted waves; `promoted` / `pendingWaves` seed from there. Same durable substrate as the inner loop, one level up.
+
+One Workflow per wave: workflows can't pause mid-run for human input, so the wave-workflow *ending* with a verdict IS the per-wave gate — something *outside* it consumes that verdict and decides whether to continue. **Who that "something" is, is mode-dependent and not yet committed (see §7-B):** in `auto` mode the campaign loop can itself be a Workflow that promotes and rolls on; interactive stops at each gate.
 
 ---
 
@@ -221,6 +249,7 @@ One Workflow per wave (workflows can't pause mid-run for human input; the workfl
 - **Clone location:** dedicated wave-clone vs. reuse the dev's `~/sandbox` clone. Leaning reuse (working-tree-safe; worktrees don't disturb the dev checkout) — the load-bearing fix was the *worktree* location (§4.2), not the clone. Infra call.
 - **Latent current-system bug (noted, deliberately unfiled):** today's `/tmp/wt-sdlc-*` + `-b` worktree convention loses in-flight worktrees on reboot and fails to resume (`branch already exists`). Independent of the migration; fix would move worktrees to a durable path + idempotent re-attach.
 - **Per-stage model assignment** (cheap stages on Haiku) and **budget** scaling — levers, to tune on the pilot.
+- **§7-B — where the §5 campaign loop physically lives.** Forced by "a Workflow can't pause for human input": **auto** mode → the campaign loop is itself a **Workflow** that calls each wave-workflow (one nesting level: campaign → wave → `agent`/`parallel`, so the wave-workflow stays a leaf), promoting between waves with no human checkpoint. **Interactive** mode → the loop lives in the **main session / `/wavemachine` skill**, launching one wave-workflow at a time and stopping at each wave gate for review. Same per-wave workflow underneath; the driver on top is chosen by mode. Framing pending review — this is the only part of §5 not yet committed.
 
 ---
 
