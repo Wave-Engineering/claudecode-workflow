@@ -160,6 +160,8 @@ return { gate:'SKIPPED', reason: halt || 'loop did not reach clean success' }
 
 Two current gate bugs are **fixed by construction** here: the CI signal waits on the **MR merge-result pipeline**, not the merge-commit branch HEAD (#452); the review signal runs with **`isolation:'worktree'` on kahuna**, so it sees the branch natively — no diff-materialization workaround (#667). "Hold for review" is one more closed legal exit, lifted to the wave level.
 
+**Static analysis must be diff-scoped (kahuna-vs-main), never tree-scoped** — a refinement the pilot forced (§9). Lint/typecheck are **not a fifth gate signal**; in the real wave they ride **inside the CI signal** (`ci_wait_run` runs the project's full gate). Whatever evaluates static cleanliness — the review signal (already "the kahuna-vs-main diff") and CI's lint/typecheck — must look only at the wave's *changed files*, not the whole tree. Otherwise **pre-existing baseline debt spuriously HOLDs an otherwise-clean wave**: the iter-3 pilot hit exactly this when a standalone lint check (run as a CI stand-in, since a dry-run has no merge-result pipeline to wait on) flagged unused imports in untouched *baseline* test files. Scope static analysis to the diff and a wave is judged on what it changed, nothing else.
+
 ---
 
 ## 4. Cross-repo
@@ -265,16 +267,46 @@ Why the skill, not a campaign-level Workflow nesting wave-workflows:
 
 ## 8. Pilot plan (needs explicit opt-in — spawns agents that write code)
 
+**Executed 2026-06-17 — results in §9.** This is the plan as designed; §9 records what actually happened (including where these facts were wrong).
+
 **Dry-run first:** implement + verify + report, **no merge**, **static partition** (skip the dynamic re-plan + reconcile) — to validate the shape and measure cost safely.
 
-- Target: `Wave-Engineering/ccwork-testtarget` (#105/#106/#107 — 21 stories + a `phases-waves.json` already exist).
+- Target: `Wave-Engineering/ccwork-testtarget`. *(Correction: the real target was Tier-1 stories **#6/#7/#8** — the earlier `#105/#106/#107` + `phases-waves.json` were stale; that repo holds ~17 open stories #5–#21 and no plan file. The repo is a fully-built fixture, so the pilot branched from a pre-story baseline and used `main` as a correctness oracle — see §9.)*
 - Scope: one small wave, 2–3 issues, so the first `/workflows` observation is cheap and legible.
 - Measure: **per-flight token baseline** against our real CLAUDE.md + MCP load, vs. a current-model wave's accumulated cost. The measurement is itself a reason to run it.
 - Then iterate up: add the merge/reconcile stage → the dynamic re-plan loop → cross-repo worktrees → the trust gate.
 
 ---
 
-## 9. References
+## 9. Pilot validation (2026-06-17)
+
+The pilot ran as four Workflows against `ccwork-testtarget` stories #6/#7/#8, branched from baseline `5253228` (foundation present, the three stories absent), with `main` as a correctness oracle. **The per-wave spine is validated end-to-end on real code.** No merge to any `main` — all dry-run.
+
+### What ran, and what each run proved
+
+| Run | Added | Result |
+|---|---|---|
+| Dry-run | self-authored tests only | All 3 flights green — but **structurally divergent** from known-good; #7 silently reimplemented a missing artifact. **Green ≠ correct.** |
+| Iter 1 | trust-gate **review** | Reviewer (no test re-run, no peek at `main`) caught both divergent flights (#6 important, #7 critical) and **correctly passed** the one correct flight (#8). Review *discriminates*. |
+| Iter 2 | **oracle test** (canonical test as the gate, not self-authored) | All 3 converged to the canonical interface, independently verified not-copied. **~15× cheaper than review** (oracle verify is a mechanical pytest run). |
+| Iter 3 | **reconcile + full gate** | Reconcile merged 3 branches, resolved the add/add `tier1/__init__.py` conflict, **commutativity confirmed (51-test suite green, all flights coexisting)**. Gate returned **HOLD** correctly — suite PASS, review PASS w/ a minor incoherence, **lint FAIL** (run standalone as a CI stand-in; see §3.4). |
+
+### The load-bearing finding — verification is a non-redundant ladder
+
+Self-test (self-consistency) **<** oracle test (contract) **<** lint (hygiene) **<** review (intent/architecture). Each rung caught a class the rung below missed: self-tests passed on divergent code; the oracle pinned the interface; lint caught unused imports pytest ignored; review caught intent-divergence and an incoherent `__init__` docstring. The migration's value is that the **deterministic script composes all of them around judgment agents**, so none gets skipped on a "distracted orchestrator" turn — the whole thesis, demonstrated. Design corollary (§3.1/§3.2): a flight's *verify* should run the story's **acceptance test as an oracle** where one exists — self-authored tests are necessary but not sufficient.
+
+### Cost
+
+~1.0M output tokens across ~22 agent-runs, **all billed off the main-session window** (the §1 "billed vs window" economics, demonstrated). Per-flight implement ≈ 51k; trust-gate review ≈ 90k/flight (expensive — reserve for what a test can't encode); oracle verify ≈ 5k/flight (cheap, deterministic, *guiding*). Prefer oracle tests where the contract can be pinned; reserve LLM review for architecture / security / unstated intent.
+
+### Refinement applied + still-open rung
+
+- **Applied (§3.4):** static analysis is **diff-scoped**, not tree-scoped. Iter-3's HOLD came from a standalone lint check (a stand-in for CI's lint/typecheck, which a dry-run can't run) that partly flagged *pre-existing baseline* debt — which must not block a wave.
+- **Untested — §8's dynamic re-plan loop** (the re-plan rung of §8's iterate-up list): the three pilot stories are independent, so no dependency surfaces mid-wave and the re-plan trigger never fires. Exercising it needs a *constructed* scenario (a flight that mid-run surfaces a dependency requiring a new fix-flight) — the next pilot step.
+
+---
+
+## 10. References
 
 - **Memories:** `project_workflow_migration`, `lesson_cage_bars_signal_wrong_tool`, `lesson_cross_repo_wave_orchestration`, `lesson_cc_subagent_tools`, `lesson_stop_hook_with_block`, `pattern_exhaustive_legal_exits`, `pattern_concerns_channel`, `principle_user_attention_is_the_cost`, `lesson_tmp_identity_boot_wipe`.
 - **Issues:** #668 (flight vocab), #670 (single-repo-per-wave axiom), #667 (gate reviewer / un-checked-out branch), sdlc #452 (ci_wait_run GitLab merge-commit); parsing-crash family fixed: #663/#665, sdlc #445.
