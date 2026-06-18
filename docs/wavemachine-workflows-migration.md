@@ -190,6 +190,8 @@ Three cleanup points — clean at **both ends**, not just the end (end-only leak
 
 **Resume tension resolved:** the setup sweep is scoped to `wave-<id> ≠ current`; the current wave's dir is **preserved and re-attached** (idempotent). Removal order is defensive + idempotent: `worktree remove --force` → `worktree prune` → `rm -rf`.
 
+**Prune branches, not just worktrees** (refinement from the §9 multi-repo pilot): `git worktree remove` leaves the branch behind. At reconcile (per merge) and at wave-terminal, also `git branch -D` the wave's merged/abandoned branches, or the target clone slowly accretes dead refs — observed in pilot 1, where three per-wave branches survived worktree removal. **The worktree dir and its branches must share one `wave-<id>` stem** so a single glob (`git branch -D wave-<id>/*`) cleans both: pilot 1 used dir `wave-9001/` but branches `wave9001/…` (no hyphen), so the hyphenated glob would have missed them. Standardize on the hyphenated `wave-<id>/` for both dir and branch.
+
 ---
 
 ## 5. Outer campaign loop (`/wavemachine`)
@@ -291,6 +293,8 @@ The pilot ran as four Workflows against `ccwork-testtarget` stories #6/#7/#8, br
 | Iter 2 | **oracle test** (canonical test as the gate, not self-authored) | All 3 converged to the canonical interface, independently verified not-copied. **~15× cheaper than review** (oracle verify is a mechanical pytest run). |
 | Iter 3 | **reconcile + full gate** | Reconcile merged 3 branches, resolved the add/add `tier1/__init__.py` conflict, **commutativity confirmed (51-test suite green, all flights coexisting)**. Gate returned **HOLD** correctly — suite PASS, review PASS w/ a minor incoherence, **lint FAIL** (run standalone as a CI stand-in; see §3.4). |
 | 3b | **dynamic re-plan loop** (constructed surfaced-collision scenario) | Two stories collide on `tier1/pricing.py`'s `price()` (provider `(tokens,model)` vs consumer `(tokens)`); the plan grouped them parallel, unaware. The real §3.1 loop ran: **Group 1** built [A,B] → reconcile merged provider A, **reset consumer B keeping integration green (40 passed)**, reported `needs_rework:[B]` → loop re-opened B → **Group 2** re-ran B against merged A, it adapted (43 passed) → `outcome: success` in 2 groups, no human halt. Bounded by `MAX_REWORK`/`MAX_IDLE`/`MAX_GROUPS`. |
+| Multi-repo 1 | **target-repo worktree isolation** (§4.2; plan ≠ target) | Plan repo = claudecode-workflow, target = `ccwork-testtarget`. Setup **pre-created** worktrees at `.claude/.worktrees/wave-9001/issue-<n>` (not `isolation:'worktree'`); flights reported `created_own_worktree:false` (race-safe, handed paths); 3-point cleanup left **zero** wave worktrees; **dev checkout untouched** throughout; integration 48 green. |
+| Multi-repo 2 | **expand-contract across two repos** (§4.1; #670 one-repo-per-wave) | Constructed provider+consumer (consumer editable-installs provider → tests the live provider main). 3 serial waves, each one repo: **Expand**(provider, `+greet_v2` keeping `greet`) → **Adopt**(consumer, →`greet_v2`) → **Contract**(provider, `−greet`). `all_waves_both_green: true` — neither main ever broken; contract safe only because adopt preceded it. |
 
 ### The load-bearing finding — verification is a non-redundant ladder
 
@@ -305,7 +309,7 @@ Self-test (self-consistency) **<** oracle test (contract) **<** lint (hygiene) *
 - **Applied (§3.4):** static analysis is **diff-scoped**, not tree-scoped. Iter-3's HOLD came from a standalone lint check (a stand-in for CI's lint/typecheck, which a dry-run can't run) that partly flagged *pre-existing baseline* debt — which must not block a wave.
 - **Dynamic re-plan loop (3b) — validated.** The independent pilot stories never surfaced a cross-dependency, so 3b was exercised with the constructed collision above: a surfaced interface break re-opened a flight and the deterministic loop converged in two groups, no human halt. This is the failure class the LLM-orchestrator kept stalling on (#78/#79/#90), now expressed as bounded control flow — reconcile (judgment) detects and reports the break; the loop re-schedules it; the closed guards make non-convergence a bounded exit, not a thrash.
 
-**Every §8 rung except cross-repo worktrees is now exercised and passed** — shape, trust-gate review, oracle test, reconcile + gate, and the dynamic re-plan loop. The migration design is validated end-to-end (single-repo) on real and constructed scenarios. The one un-piloted rung is **cross-repo worktrees** (§4.2): all runs were single-repo against `ccwork-testtarget` with **clone-based** isolation — behavior-identical to worktrees, which are a disk/resume optimization, not a new behavior — so both the worktree mechanism and cross-repo (plan ≠ target) coordination remain design-only.
+**Every §8 rung and all of §4 (cross-repo) is now exercised and passed** — shape, trust-gate review, oracle test, reconcile + gate, the dynamic re-plan loop, target-repo worktree isolation (§4.2), and expand-contract coordination across two repos (§4.1). The migration design is validated end-to-end on real and constructed scenarios, single- **and** multi-repo. Nothing remains design-only. The remaining §7 items (clone location, the latent worktree bug, per-stage model/budget) are tuning levers, not unproven mechanisms.
 
 ---
 
