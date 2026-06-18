@@ -17,15 +17,18 @@
 //       wave-pilot-iter3b-replan-wf (the §3.1 dynamic re-plan loop)
 //   - the trust gate's 4-signal parallel fan-out + ff-or-hold verdict.
 //
-// WHAT IS A SEAM (stubbed, filled by a wave-2 foundational issue):
-//   - rehydrate / idempotency               → TODO(#686 resumability/rehydrate)
-//   - real gate signals via sdlc-server      → TODO(#687 gate wiring)
-//   - wave-status persistence (durable state) → TODO(#688 wave-status persistence)
+// SEAM STATUS (filled by the wave-2 foundational issues):
+//   - rehydrate / idempotency               → #686 (FILLED — resume.js)
+//   - real gate signals via sdlc-server      → #687 (FILLED — gate.js)
+//   - wave-status persistence (durable state) → #688 (FILLED — wave-status.js)
 //   See SEAMS.md (this dir) for the exact function/return signatures each seam expects.
 //
 // The agent() prompts below are REAL (worker / Prime-plan / Prime-reconcile /
-// signal). The sdlc-server MCP TOOL CALLS those agents make are the seam — the
-// stubs return obvious placeholders so the loop runs end-to-end in skeleton form.
+// signal). With #687 filled, the sdlc-server MCP TOOL CALLS those agents make are
+// REAL too: the four trust signals name commutativity_verify / ci_wait_run (on the MR
+// merge-result pipeline [#452]) / code-reviewer on a kahuna worktree [#667] / trivy,
+// each errors CONSERVATIVE-FAIL (HOLD, never silent PASS), and the auto-mode promotion
+// (wave_finalize → pr_merge) is wired as CODE that runs only on a live wave's success exit.
 
 // #688 wave-status persistence seam helper: durable blob shape/path + the persist
 // agent prompts (the MCP record/close calls + the .claude/status/ blob write). See
@@ -45,6 +48,20 @@ import {
   wtPathFor,
   issueBranchFor,
 } from './resume.js'
+// #687 trust-gate seam helper: the four trust-signal agent prompts (each naming the real
+// sdlc-server tool — commutativity_verify / ci_wait_run on the MR merge-result pipeline [#452] /
+// code-reviewer on a kahuna worktree [#667] / trivy), the conservative-fail SIG that replaces the
+// always-pass skeleton stub on a signal error (SEAMS invariant 6), and the auto-mode promotion
+// prompt (wave_finalize → pr_merge — CODE ONLY, run solely on a live wave's success exit). See gate.js.
+import {
+  conservativeFail,
+  commutativitySignalPrompt,
+  ciSignalPrompt,
+  reviewSignalPrompt,
+  trivySignalPrompt,
+  promotePrompt,
+  PROMOTE_RESULT,
+} from './gate.js'
 
 export const meta = {
   name: 'per-wave-workflow',
@@ -71,6 +88,7 @@ const KAHUNA_BRANCH = params.kahunaBranch ?? `kahuna/${WAVE_ID}` // integration 
 const PROTECTED_BRANCH = params.protectedBranch ?? 'main' // promotion target on the success exit
 const ALL_ISSUES = (params.issues ?? []).map(Number) // the wave's issue numbers
 const MODE = params.mode ?? 'auto' // 'auto' (gate verdict drives promotion) | 'interactive' (verdict returned, human routes)
+const PLAN_ID = params.planId ?? null // wave plan id — wave_finalize needs it to assemble the kahuna→protected MR body (#687 promote)
 const budget = params.budget ?? { total: 0, remaining: () => Infinity } // optional cost guard
 const budgetRemaining = typeof budget.remaining === 'function' ? budget.remaining : () => (budget.remaining ?? Infinity) // tolerate `remaining` passed as a number, not a fn
 
@@ -285,15 +303,9 @@ async function persistTerminal(disposition, detail) {
   log(`[#688] persisted terminal — wave ${WAVE_ID} ${disposition}: ${detail} → ${path}`)
 }
 
-// SEAM #687 — real gate signals. Stub returns a passing placeholder so the gate
-// fan-out runs end-to-end. The REAL signal is the agent() prompt shown inline in
-// the trust gate below; this helper is only the stubbed return for skeleton runs.
-function gateSignalStub(name) {
-  // TODO(#687 gate wiring): delete this stub. The trust gate below shows the real
-  // agent() calls (commutativity_verify / ci_wait_run on the MR merge-result
-  // pipeline [sdlc #452] / code-reviewer on a kahuna worktree [#667] / trivy).
-  return { signal: name, passed: true, detail: `[SEAM #687] ${name} stub — always-pass placeholder` }
-}
+// SEAM #687 — FILLED. The always-pass gateSignalStub() is GONE: a signal that ERRORS now
+// returns conservativeFail() (passed:false → HOLD), never a silent PASS (SEAMS invariant 6).
+// The real signal prompts + the conservative-fail SIG + the promotion prompt live in gate.js.
 
 // SEAM #686 — idempotent worktree setup (FILLED). Awaited as a SINGLE step before parallel()
 // so workers are HANDED a path, never asked to create one (race-safety is structural, §4.2).
@@ -358,7 +370,8 @@ function primePlanPrompt(merged, pending, lastRework) {
     `For each pending issue fetch its spec (sdlc-server spec_get / work_item) and file manifest, then run`,
     `flight_overlap + flight_partition to pick a maximal NON-CONFLICTING parallel group. A surfaced dependency`,
     `from "just re-opened" goes in THIS group (re-run against the now-merged provider). When in doubt, sequence.`,
-    `// TODO(#687 gate wiring): real spec_get / flight_partition / flight_overlap sdlc-server calls.`,
+    `Use the REAL sdlc-server tools: spec_get / work_item (specs + file manifests), flight_overlap +`,
+    `flight_partition (the conflict-free grouping). Do not guess a partition you can compute.`,
     ``,
     `Return: done (true ONLY if nothing schedulable remains — that is an IMPASSE, not success),`,
     `group (issue numbers for the next parallel flight-group), rationale (1-2 sentences).`,
@@ -378,8 +391,8 @@ function workerPrompt(n, worktree) {
     `target files exist + the acceptance test passes). If so, return status="already-present" and do NOT redo work.`,
     ``,
     `Otherwise — SPEC EXECUTOR rules:`,
-    `1. Fetch the spec + acceptance criteria (sdlc-server spec_get / spec_acceptance_criteria for #${n}).`,
-    `   // TODO(#687 gate wiring): real spec_get / spec_acceptance_criteria + work_item sdlc-server calls.`,
+    `1. Fetch the spec + acceptance criteria via the REAL sdlc-server tools for #${n}: spec_get,`,
+    `   spec_acceptance_criteria, work_item (the issue body + AC are the executable contract).`,
     `2. Implement EXACTLY what the issue specifies. Where the story has a canonical acceptance test, run it as an`,
     `   ORACLE (self-authored tests are necessary but not sufficient — §9 verification ladder).`,
     `3. Run the project gate in your worktree (./scripts/ci/validate.sh + the test suite). The pre-push test gate`,
@@ -411,8 +424,9 @@ function primeReconcilePrompt(built, merged) {
     `   IDEMPOTENT (§3.3): if a branch is already in ${KAHUNA_BRANCH}, SKIP it (do not double-merge).`,
     `2. Resolve conflicts coherently — combine, do not drop. A shared interface two issues touch is a CROSS-FLIGHT`,
     `   fix you make HERE (you have the multi-branch view); record it in conflicts_resolved (§3.2.3).`,
-    `3. Run commutativity_verify across the merged set + the FULL suite (the composition / commutativity check).`,
-    `   // TODO(#687 gate wiring): real commutativity_verify + merge (pr_create/pr_merge) sdlc-server calls.`,
+    `3. Run the REAL sdlc-server tools: commutativity_verify (PAIRWISE mode across this group's branches —`,
+    `   base_ref=${KAHUNA_BRANCH} — to decide whether a merge train is needed) BEFORE merging, then`,
+    `   pr_create + pr_merge to land each flight branch into ${KAHUNA_BRANCH}, plus the FULL suite.`,
     `4. If a flight's code BREAKS another's interface (signature mismatch surfaced at integration): UNDO just that`,
     `   flight's merge (keep integration green) and report it in needs_rework with the precise reason — the loop`,
     `   re-opens it as a surfaced dependency and re-schedules it next group (§3.1 dynamic re-plan).`,
@@ -538,40 +552,24 @@ log(`Flight loop done: ${loopOutcome} in ${groupsRun.length} groups (concerns: $
 phase('Trust gate')
 let gate
 if (!halt && pending.size === 0) {
-  // The 4 canonical signals run in PARALLEL (independent), aggregate to a verdict.
-  // The agent() prompts are REAL; the sdlc-server tool calls inside them are SEAM #687.
+  // The 4 canonical signals run in PARALLEL (independent), aggregate to a verdict. The agent()
+  // prompts (gate.js) name the REAL sdlc-server tools; each signal's `.catch` now returns
+  // conservativeFail() (passed:false → HOLD), NOT an always-pass stub — an agent/tool error is
+  // the absence of evidence, and a trust gate HOLDs on absence of evidence (SEAMS invariant 6).
   const signals = (await parallel([
-    // 1. commutativity across kahuna
+    // 1. commutativity — kahuna composed-diff safety vs the protected branch (single-target mode)
     () => agent(
-      [
-        `Trust-gate COMMUTATIVITY signal for wave ${WAVE_ID}. Run commutativity_verify across ${KAHUNA_BRANCH}`,
-        `(base ${PROTECTED_BRANCH}). pass = verdict ∈ {STRONG, MEDIUM}; fail otherwise (incl. PROBE_UNAVAILABLE`,
-        `= conservative-fail). // TODO(#687 gate wiring): real commutativity_verify sdlc-server call.`,
-        `Return signal="commutativity", passed (bool), detail.`,
-      ].join('\n'),
+      commutativitySignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepoDir: TARGET_REPO_DIR }),
       { label: 'gate:commutativity', phase: 'Trust gate', schema: SIG, agentType: 'general-purpose' },
-      // TODO(#687): each gate signal's .catch falls back to an always-PASS stub (skeleton only). When the
-      // real signals land, drop these fallbacks so an agent error HOLDs (conservative-fail), never PASSes.
-    ).catch(() => gateSignalStub('commutativity')),
-    // 2. CI on the MR merge-result pipeline — NOT the merge-commit branch HEAD (sdlc #452)
+    ).catch((e) => conservativeFail('commutativity', e)),
+    // 2. CI on the MR MERGE-RESULT pipeline — NOT the merge-commit branch HEAD (sdlc #452)
     () => agent(
-      [
-        `Trust-gate CI signal for wave ${WAVE_ID}. ci_wait_run for the ${KAHUNA_BRANCH}→${PROTECTED_BRANCH} MR`,
-        `MERGE-RESULT pipeline (NOT the merge-commit branch HEAD; skipped-branch + passing-merge-result =`,
-        `validated) [sdlc #452]. Lint/typecheck ride INSIDE this signal, diff-scoped to the wave's changed files`,
-        `(never tree-scoped — §3.4). // TODO(#687 gate wiring): real ci_wait_run sdlc-server call.`,
-        `Return signal="ci", passed (final_status==success), detail.`,
-      ].join('\n'),
+      ciSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO }),
       { label: 'gate:ci', phase: 'Trust gate', schema: SIG, agentType: 'general-purpose' },
-    ).catch(() => gateSignalStub('ci')),
-    // 3. review the full kahuna-vs-main diff — worktree of kahuna, native checkout (#667)
+    ).catch((e) => conservativeFail('ci', e)),
+    // 3. review the kahuna-vs-protected diff — code-reviewer on a WORKTREE of kahuna, native checkout (#667)
     () => agent(
-      [
-        `Trust-gate REVIEW signal for wave ${WAVE_ID}. Review the full ${KAHUNA_BRANCH}-vs-${PROTECTED_BRANCH}`,
-        `diff for correctness / architecture / unstated intent (the rung a test cannot encode — §9 ladder).`,
-        `Scope to the wave's CHANGED FILES only (§3.4). pass = no critical/important findings.`,
-        `Return signal="review", passed (bool), detail.`,
-      ].join('\n'),
+      reviewSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH }),
       {
         label: 'gate:review',
         phase: 'Trust gate',
@@ -579,18 +577,16 @@ if (!halt && pending.size === 0) {
         agentType: 'feature-dev:code-reviewer',
         isolation: 'worktree', // worktree of kahuna so the reviewer sees the branch natively (#667)
       },
-    ).catch(() => gateSignalStub('review')),
+    ).catch((e) => conservativeFail('review', e)),
     // 4. trivy HIGH/CRITICAL dependency scan of kahuna
     () => agent(
-      [
-        `Trust-gate TRIVY signal for wave ${WAVE_ID}. Run trivy fs --scanners vuln --severity HIGH,CRITICAL on`,
-        `${KAHUNA_BRANCH}. pass = no HIGH/CRITICAL findings with available fixes.`,
-        `// TODO(#687 gate wiring): the trivy scan rides the deterministic pre-push/secret hooks + this signal.`,
-        `Return signal="trivy", passed (bool), detail.`,
-      ].join('\n'),
+      trivySignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, targetRepoDir: TARGET_REPO_DIR }),
       { label: 'gate:trivy', phase: 'Trust gate', schema: SIG, agentType: 'general-purpose' },
-    ).catch(() => gateSignalStub('trivy')),
-  ])).filter(Boolean)
+    ).catch((e) => conservativeFail('trivy', e)),
+    // A null/undefined slot (an SDK-level failure upstream of the per-signal .catch) must become a
+    // conservative-fail, NEVER be dropped — the gate must always weigh exactly 4 signals, or a
+    // missing signal silently becomes a PASS (absence-of-evidence-as-safety). #687 review.
+  ])).map((s, i) => s ?? conservativeFail(['commutativity', 'ci', 'review', 'trivy'][i], 'signal slot returned null/undefined'))
 
   const failed = signals.filter((s) => !s.passed)
   gate = failed.length === 0
@@ -609,11 +605,28 @@ phase('Promote')
 let result
 if (gate.verdict === 'PASS') {
   if (MODE === 'auto') {
-    // TODO(#687 gate wiring): real promotion — wave_finalize opens the kahuna→protected MR,
-    //   pr_merge(skip_train:true) on all-green, delete the kahuna branch, record disposition.
-    log(`[SEAM #687] promote stub — would auto-merge ${KAHUNA_BRANCH}→${PROTECTED_BRANCH}`)
-    await persistTerminal('promoted', `gate PASS, ${KAHUNA_BRANCH}→${PROTECTED_BRANCH}`) // SEAM #688
-    result = { gate: 'PASS', promoted: true, wave: WAVE_ID }
+    // #687 promotion (CODE, runs ONLY here — a live wave's auto+PASS success exit, itself gated by
+    // the human cutover #691). wave_finalize opens the kahuna→protected MR; pr_merge(skip_train:true)
+    // lands it on all-green (commutativity already proved skip_train safe in the gate); the kahuna
+    // branch is deleted. The script can't call MCP/CLI directly (§3.3) — the promote agent does it.
+    const promo = await agent(
+      promotePrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, planId: PLAN_ID }),
+      { label: 'promote', phase: 'Promote', schema: PROMOTE_RESULT, agentType: 'general-purpose' },
+    ).catch((e) => {
+      // A promotion error must NOT be reported as a successful promote (conservative): record HELD,
+      // surface the error, and let the campaign driver / human route it (§5). The gate PASSed, so the
+      // kahuna branch is sound — promotion can be retried on resume; we never claim a merge that failed.
+      log(`[#687] promote soft-fail — wave HELD for manual promotion: ${e?.message || e}`)
+      return { promoted: false, notes: `promote error: ${e?.message || e}` }
+    })
+    const promoted = !!(promo && promo.promoted)
+    await persistTerminal(promoted ? 'promoted' : 'held',
+      promoted
+        ? `gate PASS, promoted ${KAHUNA_BRANCH}→${PROTECTED_BRANCH}${promo.mr_ref ? ` (${promo.mr_ref})` : ''}`
+        : `gate PASS, promotion did not land — ${promo?.notes || 'see promote node'}; HELD for manual promotion`) // SEAM #688
+    result = promoted
+      ? { gate: 'PASS', promoted: true, wave: WAVE_ID, mr_ref: promo.mr_ref }
+      : { gate: 'PASS', promoted: false, wave: WAVE_ID, reason: `promotion did not land: ${promo?.notes || 'see promote node'}` }
   } else {
     // INTERACTIVE: do NOT promote — return the verdict; the campaign driver surfaces it + the human routes.
     await persistTerminal('held', 'gate PASS, interactive — awaiting human promotion') // SEAM #688

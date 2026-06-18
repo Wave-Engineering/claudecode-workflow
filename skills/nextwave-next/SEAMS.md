@@ -19,9 +19,9 @@ depend only on the return shapes here — not on how they are produced.
 
 | Seam | Issue | What it provides |
 |---|---|---|
-| rehydrate / idempotency | **#686** | durable resume: seed loop state from wave-status; idempotent worktree setup + 3-point cleanup |
-| real gate signals | **#687** | the four trust signals via sdlc-server, the plan/worker/reconcile MCP tool calls, and promotion |
-| wave-status persistence | **#688** | the durable resume substrate: per-iteration loop blob + per-issue MR/close + terminal disposition |
+| rehydrate / idempotency | **#686** (FILLED) | durable resume: seed loop state from wave-status; idempotent worktree setup + 3-point cleanup |
+| real gate signals | **#687** (FILLED) | the four trust signals via sdlc-server, the plan/worker/reconcile MCP tool calls, and promotion |
+| wave-status persistence | **#688** (FILLED) | the durable resume substrate: per-iteration loop blob + per-issue MR/close + terminal disposition |
 
 ---
 
@@ -79,12 +79,16 @@ wave-status and returns the loop blob; worktree setup/cleanup are idempotent fil
 
 ---
 
-## #687 — real gate signals via sdlc-server (+ plan/worker/reconcile MCP + promote)
+## #687 — real gate signals via sdlc-server (+ plan/worker/reconcile MCP + promote) — FILLED
 
 The `agent()` **prompts** for plan / worker / reconcile / the four gate signals are
-**real and shipped** (not seams). The seam is the **sdlc-server tool calls those agents
-make** — currently `// TODO(#687 gate wiring)` lines inside the prompts, plus the
-`gateSignalStub()` fallback and the promotion stub.
+**real and shipped** (not seams). The seam was the **sdlc-server tool calls those agents
+make**. #687 **FILLED** it: the four trust-signal prompts + the conservative-fail SIG +
+the promotion prompt live in `gate.js`; the `// TODO(#687 gate wiring)` lines are gone, the
+`gateSignalStub()` always-pass placeholder is **deleted**, and each signal's `.catch` now
+returns `conservativeFail()` (passed:false → HOLD). The plan/worker/reconcile prompts name
+the real `spec_get` / `flight_partition` / `commutativity_verify` / `pr_create` / `pr_merge`
+calls. Promotion is wired as CODE that runs only on a live wave's auto+PASS success exit.
 
 ### The four trust signals (§3.4) — each returns `SIG`
 
@@ -172,8 +176,9 @@ they are what make the loop deterministic and resumable:
    HOLD reason (incl. per-issue breaker) skips it — that is by construction, not a seam.
 5. **Persistence is idempotent** — re-running `persistIteration` / `persistTerminal` with
    the same state is a no-op-or-overwrite, never a duplicate-side-effect.
-6. **The `#687` gate stubs are the ONLY always-pass placeholders.** Once #687 lands, real
-   signals replace them; until then a skeleton run reaches PASS so the full spine is
-   exercisable end-to-end. **When wiring #687, also drop the per-signal `.catch(() => gateSignalStub(...))`
-   fallbacks** — in production an agent/signal error must HOLD (conservative-fail), never silently PASS.
-   (Skeleton keeps the fallbacks so the spine runs before the real signals exist.)
+6. **A gate signal that ERRORS HOLDs the wave — it never silently PASSes** (#687 FILLED).
+   The skeleton's always-pass `gateSignalStub()` is deleted; each signal's `.catch` now
+   returns `conservativeFail()` (passed:false). An agent/tool error is the absence of
+   evidence, and a trust gate HOLDs on absence of evidence. The gate stays unanimous:
+   `failed.length === 0` ⇒ PASS. Any future signal added here MUST keep this property —
+   no `.catch` may resolve to a passing SIG.
