@@ -39,8 +39,17 @@ export function conservativeFail(signal, err) {
 
 // ── 1. commutativity signal ──────────────────────────────────────────────────────────
 // Single-target mode (one changeset = the whole kahuna composed diff): is kahuna safe to
-// land in the protected branch? pass = verdict ∈ {STRONG, MEDIUM}; PROBE_UNAVAILABLE (or a
-// timeout sharing its body shape) = conservative-fail, per the tool's own contract.
+// land in the protected branch? pass = verdict ∈ {STRONG, MEDIUM}; every other verdict —
+// explicitly PROBE_UNAVAILABLE and ORACLE_REQUIRED (and any timeout sharing their body
+// shape) — is conservative-fail (HOLD), per the tool's own contract.
+//
+// #6 (live-gate finding) — gate-vs-reconcile consistency: the RECONCILE node MAY adjudicate
+// an ORACLE_REQUIRED verdict via judgment DURING integration (it has the cross-flight view and
+// can run the suite to decide a merge train is unnecessary). The trust GATE — the auto-promotion
+// decision to land kahuna on the PROTECTED branch — does NOT: it HOLDs on ORACLE_REQUIRED so a
+// human reviews. "Don't auto-promote what the probe can't prove safe." The two are not
+// inconsistent — they answer different questions (is this group mergeable now? vs. is the whole
+// wave safe to ff onto the protected branch unattended?); the gate is the conservative one.
 export function commutativitySignalPrompt({ waveId, kahunaBranch, protectedBranch, targetRepoDir }) {
   return [
     `Trust-gate COMMUTATIVITY signal for wave ${waveId}.`,
@@ -49,32 +58,87 @@ export function commutativitySignalPrompt({ waveId, kahunaBranch, protectedBranc
     `  base_ref=${protectedBranch}`,
     `  changesets=[{ id: "kahuna", head_ref: "${kahunaBranch}" }]`,
     `Apply the pass predicate EXACTLY: passed = (verdict ∈ {STRONG, MEDIUM}). Every other verdict FAILS,`,
-    `INCLUDING PROBE_UNAVAILABLE and any timeout/handler-synthesized body — those are CONSERVATIVE-FAIL`,
-    `(the probe could not prove safety, so the gate must HOLD), per the tool's documented contract.`,
+    `INCLUDING PROBE_UNAVAILABLE and ORACLE_REQUIRED and any timeout/handler-synthesized body — those are`,
+    `CONSERVATIVE-FAIL (the probe could not PROVE the composed diff safe to land unattended, so the gate`,
+    `must HOLD for a human), per the tool's documented contract. Do NOT try to adjudicate ORACLE_REQUIRED`,
+    `yourself by running the suite — that is the reconcile node's job during integration; the GATE's job is`,
+    `to refuse auto-promotion of anything the probe cannot prove safe.`,
     `Do NOT do any other work. Return signal="commutativity", passed (bool), detail (the verdict + 1 line).`,
   ].join('\n')
 }
 
-// ── 2. CI signal (#452: MR merge-result pipeline, NOT merge-commit branch HEAD) ───────
-// ci_wait_run on the kahuna→protected MR. pass accepts BOTH the real green AND the GitHub
-// merge-queue "validated, nothing to run on push" shape the tool emits (final_status
-// "not_applicable" / reason "merge_group_validated") — else a clean merge-queue wave HOLDs
-// spuriously. Lint/typecheck ride INSIDE this signal (the project's full gate runs in CI),
-// diff-scoped to the wave's changed files (§3.4).
-export function ciSignalPrompt({ waveId, kahunaBranch, protectedBranch, targetRepo }) {
+// ── Open the promotion PR (DRAFT) — runs FIRST in the gate, before the signals ─────────
+// #5 (live-gate finding, BLOCKING): the CI signal's ci_wait_run on the kahuna→protected
+// merge-result pipeline returned `no_merge_result_pr` because the promotion PR used to be
+// created AT promotion — AFTER the gate. Chicken-and-egg. Fix (reorders §3.4): the gate opens
+// the kahuna→protected PR as a DRAFT FIRST, so there is a real PR (and its merge-result
+// pipeline) for the CI signal to wait on; the gate then decides; on PASS+auto the promote node
+// marks it ready and merges THAT SAME PR (it never opens a second one). DRAFT so a green CI
+// can't let the platform auto-merge it before the gate has aggregated all four signals.
+//
+// Idempotent: re-opening an already-open kahuna→protected PR returns the existing one (wave_finalize
+// is idempotent on the branch pair). opened=false (with a reason) ONLY when the branch/artifacts are
+// missing — in which case the gate HOLDs (it cannot prove a wave it can't even PR). Never fabricates.
+export function openPromotionPrPrompt({ waveId, kahunaBranch, protectedBranch, targetRepo, planId }) {
   return [
-    `Trust-gate CI signal for wave ${waveId}. Wait on the ${kahunaBranch}→${protectedBranch} MR/PR`,
-    `MERGE-RESULT pipeline — NOT the merge-commit branch HEAD [sdlc #452].`,
+    `You are the wave GATE PR-OPEN node for wave ${waveId} of ${targetRepo}. Open (idempotently) the`,
+    `${kahunaBranch}→${protectedBranch} promotion PR/MR as a DRAFT, then return its number. This runs`,
+    `BEFORE the trust signals so the CI signal has a real merge-result pipeline to wait on [#5].`,
+    `Do NOT merge anything, do NOT mark the PR ready, do NOT run the gate — just open-or-find the draft PR.`,
     ``,
-    `1. Find the open ${kahunaBranch}→${protectedBranch} PR/MR (sdlc-server pr_status / pr_list, or`,
-    `   gh -R ${targetRepo}). The CI you wait on is the pipeline produced by MERGING kahuna INTO`,
-    `   ${protectedBranch} (the merge result), not the branch's own latest push.`,
+    `1. Open (or return the existing — idempotent) ${kahunaBranch}→${protectedBranch} PR via sdlc-server`,
+    `   wave_finalize(plan_id=${planId ?? '<the wave plan id>'}, kahuna_branch="${kahunaBranch}",`,
+    `   target_branch="${protectedBranch}"). If it returns kahuna_branch_not_found or no_artifacts, STOP`,
+    `   and return opened=false with the reason in notes (the gate will HOLD — do NOT fabricate a PR).`,
+    `2. Ensure the PR is a DRAFT (so a green CI cannot auto-merge it before the gate decides): if`,
+    `   wave_finalize did not create it as a draft, convert it (gh -R ${targetRepo} pr ready --undo <number>).`,
+    `   Re-running on an already-draft PR is a no-op.`,
+    ``,
+    `Return: opened (true only if a PR exists for the pair), pr_number (integer), pr_ref (URL/ref),`,
+    `notes (1-2 sentences; on opened=false include the reason).`,
+  ].join('\n')
+}
+
+// The PR-open node's structured return (side-effect + the PR identity the later nodes need).
+export const OPEN_PR_RESULT = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['opened'],
+  properties: {
+    opened: { type: 'boolean' }, // a kahuna→protected PR exists for the pair (draft)
+    pr_number: { type: 'integer' }, // the CI signal waits on this PR; promote merges it
+    pr_ref: { type: 'string' },
+    notes: { type: 'string' },
+  },
+}
+
+// ── 2. CI signal (#452: MR merge-result pipeline, NOT merge-commit branch HEAD) ───────
+// ci_wait_run on the kahuna→protected MR — the DRAFT PR the gate's PR-OPEN node already
+// opened (#5), passed in by number so this signal never races to "find" it (the old
+// `no_merge_result_pr` failure). pass accepts BOTH the real green AND the GitHub merge-queue
+// "validated, nothing to run on push" shape the tool emits (final_status "not_applicable" /
+// reason "merge_group_validated") — else a clean merge-queue wave HOLDs spuriously. Lint/typecheck
+// ride INSIDE this signal (the project's full gate runs in CI), diff-scoped to the wave's changed
+// files (§3.4).
+export function ciSignalPrompt({ waveId, kahunaBranch, protectedBranch, targetRepo, prNumber }) {
+  const prRef = prNumber != null ? `PR #${prNumber}` : `the open ${kahunaBranch}→${protectedBranch} PR/MR`
+  return [
+    `Trust-gate CI signal for wave ${waveId}. Wait on the ${kahunaBranch}→${protectedBranch} MERGE-RESULT`,
+    `pipeline — NOT the merge-commit branch HEAD [sdlc #452].`,
+    ``,
+    `1. The gate's PR-OPEN node already opened the draft promotion PR: ${prRef} (repo=${targetRepo}).`,
+    prNumber != null
+      ? `   Use that number directly — do NOT search for it. (If for any reason it is not found, that is a`
+      : `   Find it via sdlc-server pr_status / pr_list (or gh -R ${targetRepo}). (If none is found, that is a`,
+    `   CONSERVATIVE-FAIL: return passed=false — the gate must not PASS without a pipeline to verify.)`,
+    `   The CI you wait on is the pipeline produced by MERGING kahuna INTO ${protectedBranch} (the merge`,
+    `   result), not the branch's own latest push.`,
     `2. Call sdlc-server ci_wait_run on that merge-result ref (repo=${targetRepo}).`,
     `3. Pass predicate — passed = ANY of:`,
     `     • final_status == "success", OR`,
     `     • final_status == "not_applicable" AND reason == "merge_group_validated"  (GitHub merge-queue:`,
     `       a skipped push pipeline + a passing merge_group run IS a validated merge result — do NOT HOLD on it).`,
-    `   Any other final_status (failure / timed_out / cancelled / unknown) FAILS.`,
+    `   Any other final_status (failure / timed_out / cancelled / unknown / no_merge_result_pr) FAILS.`,
     `   The project's lint + typecheck RIDE INSIDE this pipeline, diff-scoped to the wave's changed files`,
     `   (§3.4) — they are not a separate signal; pre-existing baseline debt must NOT fail this signal.`,
     `Do NOT do any other work. Return signal="ci", passed (bool), detail (final_status/reason + 1 line).`,
@@ -120,34 +184,38 @@ export function trivySignalPrompt({ waveId, kahunaBranch, targetRepoDir }) {
 
 // ── Promotion (the success-exit terminal step — CODE ONLY) ────────────────────────────
 // Called by the workflow ONLY when MODE==='auto' AND the gate verdict is PASS — i.e. only on
-// a live wave's success exit. wave_finalize opens (idempotent) the kahuna→protected MR;
-// pr_merge(skip_train:true) lands it once the merge-result CI is green (commutativity already
-// proved skip_train safe in the gate); the kahuna branch is deleted; disposition recorded.
-// On a merge-queue-ENFORCED repo skip_train is silently dropped and the PR is enrolled — the
-// agent waits for it to land (pr_merge_wait) rather than treating enrolled-but-not-merged as done.
+// a live wave's success exit. The kahuna→protected DRAFT PR was ALREADY OPENED by the gate's
+// PR-OPEN node (#5) and its merge-result CI was already validated by the CI signal — so promotion
+// no longer opens a PR; it marks the EXISTING draft ready and merges it. pr_merge(skip_train:true)
+// lands it (commutativity already proved skip_train safe in the gate); the kahuna branch is
+// deleted; disposition recorded. On a merge-queue-ENFORCED repo skip_train is silently dropped and
+// the PR is enrolled — the agent waits for it to land (pr_merge_wait) rather than treating
+// enrolled-but-not-merged as done.
 //
 // SAFETY (#691): this prompt is the CODE for promotion. It executes a real kahuna→protected
 // merge, so it runs SOLELY from the workflow's auto+PASS branch on a live wave that reached the
 // success exit — which is itself gated by the human cutover (#691). Building/validating this
 // module never invokes it.
-export function promotePrompt({ waveId, kahunaBranch, protectedBranch, targetRepo, planId }) {
+export function promotePrompt({ waveId, kahunaBranch, protectedBranch, targetRepo, prNumber }) {
+  const prRef = prNumber != null ? `PR #${prNumber}` : `the open ${kahunaBranch}→${protectedBranch} PR`
   return [
     `You are the wave PROMOTION node for wave ${waveId} of ${targetRepo}. The trust gate returned PASS`,
-    `and the wave is in AUTO mode. Land ${kahunaBranch} into ${protectedBranch}, then return. Do NOT do`,
-    `any other work; do NOT re-run the gate (it already PASSed).`,
+    `and the wave is in AUTO mode. The ${kahunaBranch}→${protectedBranch} DRAFT PR is ALREADY OPEN (${prRef})`,
+    `and its merge-result CI was already validated by the gate's CI signal. Land it, then return. Do NOT`,
+    `open a new PR (the gate's PR-OPEN node already did, #5); do NOT re-run the gate (it already PASSed).`,
     ``,
-    `1. Open (or return the existing — idempotent) ${kahunaBranch}→${protectedBranch} MR via sdlc-server`,
-    `   wave_finalize(plan_id=${planId ?? '<the wave plan id>'}, kahuna_branch="${kahunaBranch}",`,
-    `   target_branch="${protectedBranch}"). If it returns kahuna_branch_not_found or no_artifacts,`,
-    `   STOP and return promoted=false with the reason in notes (do NOT fabricate a merge).`,
-    `2. Merge it: sdlc-server pr_merge(number=<the MR number>, skip_train=true) — commutativity_verify`,
+    `1. Locate ${prRef}${prNumber != null ? '' : ` (sdlc-server pr_status / pr_list, or gh -R ${targetRepo})`}.`,
+    `   If no such PR exists, STOP and return promoted=false with the reason in notes (do NOT fabricate a`,
+    `   merge — the gate should have opened it; its absence is an error, not a green light).`,
+    `2. Mark it ready for review (un-draft): gh -R ${targetRepo} pr ready <number>. (No-op if already ready.)`,
+    `3. Merge it: sdlc-server pr_merge(number=<the PR number>, skip_train=true) — commutativity_verify`,
     `   already proved the composed diff safe, so the train is unnecessary. On a merge-queue-ENFORCED`,
     `   repo skip_train is silently dropped and the PR is ENROLLED (merged=false, queued): in that case`,
     `   wait for it to actually land on ${protectedBranch} (pr_merge_wait) before reporting promoted.`,
-    `3. Once ${kahunaBranch} is on ${protectedBranch}, delete the ${kahunaBranch} branch (gh -R ${targetRepo}`,
+    `4. Once ${kahunaBranch} is on ${protectedBranch}, delete the ${kahunaBranch} branch (gh -R ${targetRepo}`,
     `   api / git push origin --delete) — the wave is done; the integration branch is disposable.`,
     ``,
-    `Return: promoted (true ONLY if the merge actually landed on ${protectedBranch}), mr_ref (the MR`,
+    `Return: promoted (true ONLY if the merge actually landed on ${protectedBranch}), mr_ref (the PR`,
     `URL/number), notes (1-2 sentences; include any error — and on error, promoted=false).`,
   ].join('\n')
 }

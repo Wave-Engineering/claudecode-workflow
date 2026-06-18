@@ -97,13 +97,18 @@ calls. Promotion is wired as CODE that runs only on a live wave's auto+PASS succ
 { signal: string, passed: boolean, detail?: string }
 ```
 
-Run **in parallel** (single `parallel([...])` block — already wired). Each is an
-`agent()` whose prompt names the real sdlc-server call; #687 makes the call real:
+**Order (live-gate finding #5 — reorders §3.4):** the gate FIRST opens the kahuna→protected
+**draft PR** (`openPromotionPrPrompt` → `wave_finalize`, idempotent), THEN runs the four signals
+in **parallel** (single `parallel([...])` block). The draft PR exists before the CI signal so
+`ci_wait_run` has a real merge-result pipeline to wait on — the old order created the PR at
+promotion (after the gate), so `ci_wait_run` returned `no_merge_result_pr`. If the PR cannot be
+opened (kahuna branch / artifacts missing), the gate **HOLDs** (no PR ⇒ no evidence ⇒ no PASS).
+Each signal is an `agent()` whose prompt names the real sdlc-server call:
 
 | Signal | `agentType` | Real sdlc-server call | pass = |
 |---|---|---|---|
-| commutativity | `general-purpose` | `commutativity_verify(base_ref=<protected>, changesets=[{id:"kahuna", head_ref:<kahuna>}])` | verdict ∈ {STRONG, MEDIUM}; `PROBE_UNAVAILABLE` = **conservative-fail** |
-| ci | `general-purpose` | `ci_wait_run` on the **kahuna→protected MR merge-result pipeline** (NOT merge-commit branch HEAD) [sdlc #452] | `final_status == "success"` |
+| commutativity | `general-purpose` | `commutativity_verify(base_ref=<protected>, changesets=[{id:"kahuna", head_ref:<kahuna>}])` | verdict ∈ {STRONG, MEDIUM}; `PROBE_UNAVAILABLE` **and** `ORACLE_REQUIRED` = **conservative-fail** (#6 — the gate HOLDs on what the probe can't prove safe; reconcile may adjudicate ORACLE_REQUIRED during integration, the gate does not) |
+| ci | `general-purpose` | `ci_wait_run` on the **gate-opened draft PR's merge-result pipeline** (passed in by number — NOT merge-commit branch HEAD) [sdlc #452, #5] | `final_status == "success"` OR merge-queue `merge_group_validated` |
 | review | `feature-dev:code-reviewer` (`isolation:'worktree'` on kahuna [#667]) | code-reviewer over the **kahuna-vs-protected diff**, diff-scoped (§3.4) | no critical/important findings |
 | trivy | `general-purpose` | `trivy fs --scanners vuln --severity HIGH,CRITICAL` on kahuna | no HIGH/CRITICAL with available fixes |
 
@@ -125,10 +130,14 @@ Inside the (real) prompts, replace the `// TODO(#687 gate wiring)` lines with re
 
 ### Promotion (the success-exit terminal step)
 
-The `MODE === 'auto'` PASS branch currently logs a `[SEAM #687] promote stub`. #687 makes
-it real: `wave_finalize` opens the kahuna→protected MR, `pr_merge(skip_train:true)` on
-all-green, delete the kahuna branch, record disposition. `interactive` mode never
-promotes — it returns the verdict (the return IS the human gate, §5).
+`#687` made it real; `#5` reordered it. The kahuna→protected **draft PR was already opened by
+the gate's PR-OPEN node** and its merge-result CI already validated by the CI signal — so the
+`MODE === 'auto'` PASS branch (`promotePrompt`) no longer opens a PR. It **marks that same draft
+PR ready** (`gh pr ready`) and `pr_merge(skip_train:true)` lands it on all-green; on a
+merge-queue-enforced repo `skip_train` is dropped and it waits for the land (`pr_merge_wait`);
+then deletes the kahuna branch and records disposition. It never opens a second PR. `interactive`
+mode never promotes — it returns the verdict (the return IS the human gate, §5), leaving the
+draft PR as the human's review artifact.
 
 ---
 
