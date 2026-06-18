@@ -1,6 +1,6 @@
 ---
 name: wavemachine-next
-description: Campaign driver — loops one per-wave Workflow per pending wave, routes on its verdict, closed campaign exits; auto-vs-interactive is a one-line advance-vs-wait branch
+description: Campaign driver — loops one per-wave Workflow per pending wave; advances ONLY on gate PASS AND promoted (a PASS that did not land on the protected branch HOLDs); closed campaign exits; auto-vs-interactive is a one-line advance-vs-wait branch; cold-start rehydrate prunes already-promoted waves
 ---
 
 # Wavemachine-Next — Campaign Driver for the per-wave Workflow
@@ -16,9 +16,9 @@ description: Campaign driver — loops one per-wave Workflow per pending wave, r
 Bound by WAVE_AXIOMS 2, 3, 4, 5, 6, 8, 9 (`WAVE_AXIOMS.md`). The campaign autonomy
 contract (loop runs to terminal state or Legal Exit), the closed-list exits, the
 Concerns Channel, the cost-asymmetry default-forward stance, the approval-frequency
-rule (`auto` advances on PASS with no per-wave human gate; `interactive` surfaces the
-verdict per wave), and user-attention-as-cost all live in that file. This skill is the
-operational binding.
+rule (`auto` advances on a wave that PASSED **and promoted** with no per-wave human gate;
+`interactive` surfaces the verdict per wave), and user-attention-as-cost all live in that
+file. This skill is the operational binding.
 
 ## What this is
 
@@ -61,20 +61,55 @@ loop:
   if budget.total and budget.remaining() < CAMPAIGN_FLOOR: halt='cost'; break
 
   wave    = nextPendingWave()                    # from the approved plan
-  verdict = run /nextwave-next for `wave`        # §3 spine → { gate: PASS | HOLD | SKIPPED }
+  verdict = run /nextwave-next for `wave`        # §3 spine → { gate, promoted, ... } (per-wave-workflow.js return)
 
-  # ── ROUTE ON VERDICT — auto-vs-interactive is ONE advance-vs-wait line ──
-  if verdict.gate == 'PASS':
-      promoted.add(wave); pendingWaves.delete(wave); waveRetry[wave] = 0
-      if MODE == 'interactive':  surface verdict + kahuna diff; STOP for human; advance on their go
-      continue                                   # auto: advance immediately
+  # ── INTERACTIVE: a clean gate returns { gate:'PASS', promoted:false } BY DESIGN (the Workflow
+  #    never auto-promotes in interactive). Surface verdict + kahuna→protected diff, STOP for the
+  #    human; the human routes the kahuna→protected merge. Resume ONLY after they confirm it landed. ──
+  if MODE == 'interactive' and verdict.gate == 'PASS':
+      surface verdict + kahuna→protected diff; STOP for human
+      # on resume, the human has confirmed the merge landed (or aborted → they halt the campaign):
+      promoted.add(wave); pendingWaves.delete(wave); waveRetry[wave] = 0; continue
+
+  # ── AUTO: advance ONLY on PASS-AND-promoted (the #687 correctness rule) ──
+  if verdict.gate == 'PASS' and verdict.promoted == true:
+      promoted.add(wave); pendingWaves.delete(wave); waveRetry[wave] = 0; continue
+
+  # AUTO gate:'PASS' with promoted:false (kahuna→protected merge did NOT land — the Workflow's
+  # promote node soft-failed and recorded the wave HELD) falls through here. It is NOT advanceable:
+  # the wave's CODE is sound but it is not on the protected branch → HOLD for human attention.
   if (waveRetry[wave] = (waveRetry[wave]||0)+1) > MAX_WAVE_RETRY: halt=`wave-breaker:${wave}`; break
-  halt = 'wave-hold'; break                       # HOLD/SKIPPED → human review (the per-wave gate fired)
+  halt = 'wave-hold'; break                       # HOLD | SKIPPED | (auto) PASS-not-promoted → human review
 ```
 
-**Mode is a one-line advance-vs-wait branch, NOT two architectures.** `auto` advances
-on `PASS`; `interactive` surfaces the verdict and STOPS for the human, then advances on
-their go. Both run the identical loop body.
+**CRITICAL — advance ONLY on PASS AND promoted.** `verdict.gate === 'PASS'` is NOT
+sufficient. The per-wave Workflow (`per-wave-workflow.js`) returns `{ gate, promoted, ... }`,
+and the two are distinct facts:
+
+- `{ gate: 'PASS', promoted: true }` — trust gate passed **and** the kahuna→protected merge
+  landed. In `auto` this is the only auto-advanceable verdict. Add to `promoted`, drop from
+  `pendingWaves`.
+- `{ gate: 'PASS', promoted: false }` — the trust gate passed but the wave is NOT on the
+  protected branch. Two causes, distinguished by mode:
+  - **`auto`:** the promote node soft-failed — the kahuna→protected merge **did not land** and
+    the Workflow recorded the wave HELD. → **HOLD for human attention, do NOT advance.** Treating
+    this as success would mark a wave done while its code never reached the protected branch.
+  - **`interactive`:** the Workflow never auto-promotes by design — it returns the clean verdict
+    for the human to route. → STOP, surface the diff, advance only after the human confirms the
+    kahuna→protected merge landed.
+- `{ gate: 'HOLD' }` / `{ gate: 'SKIPPED' }` — a trust signal failed, or the flight loop hit a
+  HOLD exit before the gate → wave-hold (both modes).
+
+The auto-advance predicate is therefore `gate === 'PASS' && promoted === true`, evaluated
+against the verdict's own fields — never inferred from `gate` alone. In `interactive`, the
+PASS verdict (necessarily `promoted:false`) gates on the human, who owns the promotion.
+
+**Mode is a one-line advance-vs-wait branch, NOT two architectures.** `auto` advances on
+PASS-and-promoted; `interactive` runs the wave Workflow in interactive mode (which returns
+`{ gate:'PASS', promoted:false }` on a clean gate), surfaces the verdict + kahuna→protected
+diff, STOPS for the human, and — once the human routes the promotion and confirms it landed —
+advances. Both run the identical loop body; only the post-PASS handling differs by that one
+branch.
 
 ## Closed campaign-exit set (mirrors §3.1)
 
@@ -83,14 +118,16 @@ their go. Both run the identical loop body.
 | success | `pendingWaves` empty | every wave promoted to the protected branch |
 | runaway | `promoted ≥ MAX_WAVES` | defensive bound → human |
 | cost | budget floor | stop before the ceiling |
-| wave-hold | a wave returns HOLD/SKIPPED | the per-wave gate fired → human review |
+| wave-hold | a wave returns HOLD/SKIPPED, **or (auto) PASS-but-not-promoted** | the per-wave gate fired, or the gate passed but the kahuna→protected merge did not land → human review |
 | wave-breaker | a wave reworked > `MAX_WAVE_RETRY` | one wave won't converge → human |
 
 - **No campaign-level planner → no `plan done`/success collision.** Waves come from the
   pre-approved plan; there is no planner verdict to misread.
-- **Progress is structural.** Each iteration either promotes a wave (`PASS`) or halts —
-  a campaign iteration cannot make zero net progress and continue, so no idle-round
-  detector is needed; the retry breaker covers a wave that repeatedly fails to reach `PASS`.
+- **Progress is structural.** Each iteration either promotes a wave (`PASS` **and** `promoted`)
+  or halts — a campaign iteration cannot make zero net progress and continue, so no idle-round
+  detector is needed; the retry breaker covers a wave that repeatedly fails to reach
+  PASS-and-promoted. A `gate:'PASS'` that did not promote is NOT progress: it does not advance,
+  it HOLDs (auto) or waits on the human (interactive).
 
 ## Pre-flight (refuse to start on failure)
 
@@ -113,6 +150,27 @@ legacy `/wavemachine` pre-flight; see that skill for the detailed rationale.)
    Every per-wave Workflow is launched with that `kahunaBranch`.
 4. Announce to `#wave-status`; emit `mcp-log wavemachine_start`.
 
+## Launching a wave (the input blob — consistent with `/nextwave-next`)
+
+Each iteration launches the per-wave Workflow via `/nextwave-next` with the same input blob
+`per-wave-workflow.js` declares (its `params`, and `/nextwave-next`'s **Inputs** table). The
+campaign driver supplies, per wave, from the approved phase/wave plan + project config:
+
+| Field | Source |
+|---|---|
+| `waveId`, `issues` | `nextPendingWave()` + that wave's issue list (single repo, §4.1) |
+| `targetRepo`, `targetRepoDir` | the wave's resolved repo + its durable clone dir |
+| `kahunaBranch` | the per-Plan `kahuna_branch` from the launch-sequence bootstrap (step 3) |
+| `protectedBranch` | from `.claude-project.md` |
+| `mode` | the campaign's `MODE` (`auto` \| `interactive`) — passed through unchanged |
+| `planId` | the wave Plan id (the promote node assembles the MR body from it) |
+| `budget` | the campaign cost guard, if any |
+
+The verdict consumed back is exactly `per-wave-workflow.js`'s return — `{ gate, promoted, … }`
+— routed by the loop above. The driver passes `mode` straight through: in `interactive` the
+Workflow returns `{ gate:'PASS', promoted:false }` on a clean gate (it never auto-promotes),
+which the loop's interactive branch turns into the human STOP.
+
 ## Per-wave handoff (no narrator gap)
 
 When a per-wave Workflow returns, the immediately following assistant message is a
@@ -126,7 +184,15 @@ STOP is the one deliberate pause; everything else is a tight tool-use chain.
 On cold start the campaign rehydrates from wave-status's wave-completion records
 (`wave_previous_merged` / `wave_topology`) and skips already-promoted waves;
 `promoted` / `pendingWaves` seed from there. Same durable substrate as the inner loop.
-The per-wave Workflow itself rehydrates its own loop state (`per-wave-workflow.js`
+
+A wave is "already-promoted" (and therefore pruned from `pendingWaves` on resume) only when
+its per-wave Workflow recorded the terminal disposition `promoted` — i.e. `gate:'PASS'` **and**
+the kahuna→protected merge landed (`persistTerminal('promoted', …)`, SEAM #688). A wave whose
+Workflow recorded `held` (gate PASS-but-not-promoted, HOLD, or SKIPPED) is NOT pruned — it
+re-enters `pendingWaves` and the campaign re-runs it. This is the resume-side mirror of the
+advance rule: the same fact (did the wave reach the protected branch?) gates both the live
+advance and the cold-start prune, so a resumed campaign never skips a wave that only *looked*
+done. The per-wave Workflow itself rehydrates its own inner loop state (`per-wave-workflow.js`
 rehydrate phase, SEAM #686) — the campaign driver only tracks wave-grain completion.
 
 ## Exhaustive Legal Exits
@@ -150,7 +216,9 @@ absence of those is presumption of healthy operation.
 - **The per-wave Workflow owns all wave-internal work.** `/wavemachine-next` only launches
   one per wave and routes on its verdict — it never spawns flights/Prime/reconcile itself.
 - **The kahuna→protected merge is the per-wave Workflow's trust-gate job**, not the
-  campaign driver's. The driver advances on `PASS`; it never merges to the protected branch.
+  campaign driver's. The driver advances on `PASS` **AND** `promoted` (auto), or on the human's
+  confirmation that the merge landed (interactive); it never merges to the protected branch
+  itself. A `gate:'PASS'` without `promoted` is never treated as advanceable.
 - **Per-wave handoff is a single tool-use boundary** — no inter-wave narration.
 - **Structured blocker report on any abort** — name the wave (or failing signals), the
   exit type, and the remediation path.

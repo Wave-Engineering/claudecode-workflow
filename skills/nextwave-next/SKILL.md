@@ -63,6 +63,7 @@ Supplied by the caller (`/wavemachine-next` per wave, or a human launching one w
 | `kahunaBranch` | the integration target; every flight PR targets this, never the protected branch |
 | `protectedBranch` | the promotion target on the success exit |
 | `mode` | `auto` (verdict drives promotion) \| `interactive` (verdict returned; human routes) |
+| `planId` | wave plan id — the promote node needs it to assemble the kahuna→protected MR body (#687) |
 | `budget` | optional `{ total, remaining() }` cost guard (the `cost` legal exit) |
 
 The closed numeric guards (`maxGroups`, `maxRework`, `maxIdle`, `costFloor`) have
@@ -80,12 +81,22 @@ safe defaults in the script and rarely need overriding.
 3. **Launch the Workflow.** Run `per-wave-workflow.js` with the `input` blob above. The
    script owns everything from here: rehydrate → flight loop → trust gate → promote.
 4. **Consume the verdict.** The Workflow's return is the per-wave gate (§5): a Workflow
-   cannot pause mid-run for human input, so its *ending with a verdict* IS the gate.
-   The return carries `gate` ∈ `PASS | HOLD | SKIPPED` plus `concerns`/`deferrals`
-   (informational — surfaced and continued, never halted-on).
-   - `auto` mode: `PASS` ⇒ the Workflow already promoted (its terminal step). Report it.
-   - `interactive` mode: surface the verdict + the kahuna→protected diff and STOP for
-     the human; the human routes promotion. (`/wavemachine-next` owns this branch in a campaign.)
+   cannot pause mid-run for human input, so its *ending with a verdict* IS the gate. The
+   return carries `gate` ∈ `PASS | HOLD | SKIPPED` **and** `promoted` ∈ `true | false`, plus
+   `concerns`/`deferrals` (informational — surfaced and continued, never halted-on). **`gate`
+   and `promoted` are distinct facts** — read both:
+   - `auto` + `{ gate:'PASS', promoted:true }` ⇒ the Workflow's promote node landed the
+     kahuna→protected merge. The wave is DONE on the protected branch. Report it.
+   - `auto` + `{ gate:'PASS', promoted:false }` ⇒ the gate passed but the promote node
+     **soft-failed — the merge did NOT land** (the wave is recorded HELD; `reason` carries the
+     promote error). The code is sound but not on the protected branch → surface as a HOLD for
+     manual promotion, NOT as success. (Promotion can be retried on resume — the kahuna branch
+     is gate-clean.)
+   - `interactive` + `{ gate:'PASS', promoted:false }` ⇒ by design the Workflow never
+     auto-promotes; surface the verdict + the kahuna→protected diff and STOP for the human, who
+     routes promotion. (`/wavemachine-next` owns this branch in a campaign.)
+   - `{ gate:'HOLD' }` / `{ gate:'SKIPPED' }` (always `promoted:false`) ⇒ a trust signal failed
+     or the flight loop hit a HOLD exit before the gate; surface the failing signals / halt reason.
 5. **Report.** Surface a human-readable summary: groups run, issues merged, any HOLD
    reason, collected concerns/deferrals. Post wave status to `#wave-status` if running
    under a campaign.
