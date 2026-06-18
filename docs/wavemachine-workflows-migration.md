@@ -290,6 +290,7 @@ The pilot ran as four Workflows against `ccwork-testtarget` stories #6/#7/#8, br
 | Iter 1 | trust-gate **review** | Reviewer (no test re-run, no peek at `main`) caught both divergent flights (#6 important, #7 critical) and **correctly passed** the one correct flight (#8). Review *discriminates*. |
 | Iter 2 | **oracle test** (canonical test as the gate, not self-authored) | All 3 converged to the canonical interface, independently verified not-copied. **~15× cheaper than review** (oracle verify is a mechanical pytest run). |
 | Iter 3 | **reconcile + full gate** | Reconcile merged 3 branches, resolved the add/add `tier1/__init__.py` conflict, **commutativity confirmed (51-test suite green, all flights coexisting)**. Gate returned **HOLD** correctly — suite PASS, review PASS w/ a minor incoherence, **lint FAIL** (run standalone as a CI stand-in; see §3.4). |
+| 3b | **dynamic re-plan loop** (constructed surfaced-collision scenario) | Two stories collide on `tier1/pricing.py`'s `price()` (provider `(tokens,model)` vs consumer `(tokens)`); the plan grouped them parallel, unaware. The real §3.1 loop ran: **Group 1** built [A,B] → reconcile merged provider A, **reset consumer B keeping integration green (40 passed)**, reported `needs_rework:[B]` → loop re-opened B → **Group 2** re-ran B against merged A, it adapted (43 passed) → `outcome: success` in 2 groups, no human halt. Bounded by `MAX_REWORK`/`MAX_IDLE`/`MAX_GROUPS`. |
 
 ### The load-bearing finding — verification is a non-redundant ladder
 
@@ -299,10 +300,12 @@ Self-test (self-consistency) **<** oracle test (contract) **<** lint (hygiene) *
 
 ~1.0M output tokens across ~22 agent-runs, **all billed off the main-session window** (the §1 "billed vs window" economics, demonstrated). Per-flight implement ≈ 51k; trust-gate review ≈ 90k/flight (expensive — reserve for what a test can't encode); oracle verify ≈ 5k/flight (cheap, deterministic, *guiding*). Prefer oracle tests where the contract can be pinned; reserve LLM review for architecture / security / unstated intent.
 
-### Refinement applied + still-open rung
+### Refinement applied; progression complete
 
 - **Applied (§3.4):** static analysis is **diff-scoped**, not tree-scoped. Iter-3's HOLD came from a standalone lint check (a stand-in for CI's lint/typecheck, which a dry-run can't run) that partly flagged *pre-existing baseline* debt — which must not block a wave.
-- **Untested — §8's dynamic re-plan loop** (the re-plan rung of §8's iterate-up list): the three pilot stories are independent, so no dependency surfaces mid-wave and the re-plan trigger never fires. Exercising it needs a *constructed* scenario (a flight that mid-run surfaces a dependency requiring a new fix-flight) — the next pilot step.
+- **Dynamic re-plan loop (3b) — validated.** The independent pilot stories never surfaced a cross-dependency, so 3b was exercised with the constructed collision above: a surfaced interface break re-opened a flight and the deterministic loop converged in two groups, no human halt. This is the failure class the LLM-orchestrator kept stalling on (#78/#79/#90), now expressed as bounded control flow — reconcile (judgment) detects and reports the break; the loop re-schedules it; the closed guards make non-convergence a bounded exit, not a thrash.
+
+**Every §8 rung except cross-repo worktrees is now exercised and passed** — shape, trust-gate review, oracle test, reconcile + gate, and the dynamic re-plan loop. The migration design is validated end-to-end (single-repo) on real and constructed scenarios. The one un-piloted rung is **cross-repo worktrees** (§4.2): all runs were single-repo against `ccwork-testtarget` with **clone-based** isolation — behavior-identical to worktrees, which are a disk/resume optimization, not a new behavior — so both the worktree mechanism and cross-repo (plan ≠ target) coordination remain design-only.
 
 ---
 
