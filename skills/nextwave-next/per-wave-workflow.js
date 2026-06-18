@@ -457,7 +457,7 @@ while (true) {
   groupsRun.push({ group, merged: newlyMerged, needs_rework: rec.needs_rework || [], suite: rec.suite_summary })
   // SEAM #688 — newlyMerged are the issues that need their MR recorded + issue closed THIS
   // iteration; merged/pending/etc. are the full loop blob (the rehydrate substrate, §3.3).
-  await persistIteration({ merged, pending, reworkCount, idleRounds, groupsRun: groupsRunBase + groupsRun.length, newlyMerged })
+  await persistIteration({ merged, pending, reworkCount, idleRounds, groupsRun: groupsRunBase + groupsRun.length, newlyMerged: newlyMerged.filter((n) => merged.has(n)) }) // defensive: drop any newlyMerged that the rework loop re-opened
   if (halt) break // breaker tripped inside the for-loop → leave the while with pending still non-empty
 }
 

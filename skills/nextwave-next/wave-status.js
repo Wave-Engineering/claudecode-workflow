@@ -17,7 +17,8 @@
 //   - wave_record_mr / wave_close_issue are keyed on issue_number → recording an
 //     already-recorded MR or closing an already-closed issue is an overwrite/no-op.
 //   - the blob is a FULL OVERWRITE of one file per wave → replaying identical state
-//     produces a byte-identical file.
+//     produces a file whose rehydrate-core fields ({merged,pending,reworkCount,idleRounds,
+//     groupsRun}) are identical; only the `updatedAt` metadata timestamp may differ.
 //   - the terminal record is a single keyed wave-completion entry → overwrite, not append.
 
 // ── Durable location (§3.3 — .claude/status/, NEVER /tmp; lesson_tmp_identity_boot_wipe) ──
@@ -82,8 +83,8 @@ export function persistIterationPrompt({ waveId, targetRepo, kahunaBranch, newly
     `STEP 2 — write the durable loop blob (full overwrite, idempotent):`,
     `  Write EXACTLY this JSON to the file ${path} (create parent dirs as needed; mkdir -p the`,
     `  .claude/status/ directory first). Overwrite any existing content — do NOT merge or append.`,
-    `  This file is the resume substrate rehydrate() (#686) reads back, so the bytes must be this`,
-    `  object verbatim (you MAY stamp updatedAt with the current ISO-8601 time):`,
+    `  This file is the resume substrate rehydrate() (#686) reads back. Write the object EXACTLY as`,
+    `  given, changing ONLY the "updatedAt" field to the current ISO-8601 time — every other field verbatim:`,
     ``,
     JSON.stringify(blob, null, 2),
     ``,
@@ -111,7 +112,8 @@ export function persistTerminalPrompt({ waveId, targetRepo, disposition, detail,
     ``,
     `STEP 2 — stamp the durable blob (full overwrite): write EXACTLY this JSON to ${path} (mkdir -p`,
     `  the .claude/status/ dir first; overwrite, do not merge). Its "terminal" field carries the`,
-    `  disposition so a resume sees it (you MAY stamp updatedAt / terminal.at with the current time):`,
+    `  disposition so a resume sees it. Write EXACTLY as given, changing ONLY "updatedAt" and`,
+    `  "terminal.at" to the current ISO-8601 time — every other field verbatim:`,
     ``,
     JSON.stringify(blob, null, 2),
     ``,
