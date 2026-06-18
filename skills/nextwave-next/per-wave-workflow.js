@@ -608,7 +608,7 @@ if (!halt && pending.size === 0) {
   // the gate has weighed all four signals. If the PR can't be opened (kahuna branch/artifacts
   // missing), the gate HOLDs — we cannot prove a wave we cannot even PR (conservative, §3.4).
   const prOpen = await agent(
-    openPromotionPrPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, planId: PLAN_ID }),
+    openPromotionPrPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR, planId: PLAN_ID }),
     { label: 'gate:open-pr', phase: 'Trust gate', schema: OPEN_PR_RESULT, agentType: 'general-purpose' },
   ).catch((e) => {
     log(`[#5] open promotion PR soft-fail → gate HOLDs (no PR to verify): ${e?.message || e}`)

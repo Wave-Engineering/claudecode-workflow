@@ -76,6 +76,8 @@ try {
   assert.match(op, /idempotent/i) // re-open returns the existing PR
   assert.match(op, /do NOT merge/i) // PR-open node never merges
   assert.match(op, /692/) // plan_id threaded through
+  assert.match(op, new RegExp(`root="${A.targetRepoDir}"`)) // #8: wave_finalize rooted at the TARGET repo, not the session project
+  assert.match(op, /LOAD-BEARING/) // the root rationale is spelled out
   assert.equal(OPEN_PR_RESULT.required[0], 'opened')
   assert.equal(OPEN_PR_RESULT.properties.opened.type, 'boolean')
   assert.equal(OPEN_PR_RESULT.properties.pr_number.type, 'integer')

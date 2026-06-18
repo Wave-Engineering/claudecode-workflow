@@ -491,7 +491,7 @@ function commutativitySignalPrompt({ waveId, kahunaBranch, protectedBranch, targ
 // Idempotent: re-opening an already-open kahuna→protected PR returns the existing one (wave_finalize
 // is idempotent on the branch pair). opened=false (with a reason) ONLY when the branch/artifacts are
 // missing — in which case the gate HOLDs (it cannot prove a wave it can't even PR). Never fabricates.
-function openPromotionPrPrompt({ waveId, kahunaBranch, protectedBranch, targetRepo, planId }) {
+function openPromotionPrPrompt({ waveId, kahunaBranch, protectedBranch, targetRepo, targetRepoDir, planId }) {
   return [
     `You are the wave GATE PR-OPEN node for wave ${waveId} of ${targetRepo}. Open (idempotently) the`,
     `${kahunaBranch}→${protectedBranch} promotion PR/MR as a DRAFT, then return its number. This runs`,
@@ -500,7 +500,11 @@ function openPromotionPrPrompt({ waveId, kahunaBranch, protectedBranch, targetRe
     ``,
     `1. Open (or return the existing — idempotent) ${kahunaBranch}→${protectedBranch} PR via sdlc-server`,
     `   wave_finalize(plan_id=${planId ?? '<the wave plan id>'}, kahuna_branch="${kahunaBranch}",`,
-    `   target_branch="${protectedBranch}"). If it returns kahuna_branch_not_found or no_artifacts, STOP`,
+    `   target_branch="${protectedBranch}", root="${targetRepoDir}"). The root is LOAD-BEARING (#699 finding`,
+    `   #8): wave_finalize defaults to the SESSION's project for both the plan's durable wave-status AND the`,
+    `   git branch check — but this wave's plan + the ${kahunaBranch} branch live in the TARGET repo clone`,
+    `   ${targetRepoDir}, NOT the session project. Without root it returns kahuna_branch_not_found even though`,
+    `   the branch exists on the remote. If it STILL returns kahuna_branch_not_found or no_artifacts, STOP`,
     `   and return opened=false with the reason in notes (the gate will HOLD — do NOT fabricate a PR).`,
     `2. Ensure the PR is a DRAFT (so a green CI cannot auto-merge it before the gate decides): if`,
     `   wave_finalize did not create it as a draft, convert it (gh -R ${targetRepo} pr ready --undo <number>).`,
@@ -1225,7 +1229,7 @@ if (!halt && pending.size === 0) {
   // the gate has weighed all four signals. If the PR can't be opened (kahuna branch/artifacts
   // missing), the gate HOLDs — we cannot prove a wave we cannot even PR (conservative, §3.4).
   const prOpen = await agent(
-    openPromotionPrPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, planId: PLAN_ID }),
+    openPromotionPrPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR, planId: PLAN_ID }),
     { label: 'gate:open-pr', phase: 'Trust gate', schema: OPEN_PR_RESULT, agentType: 'general-purpose' },
   ).catch((e) => {
     log(`[#5] open promotion PR soft-fail → gate HOLDs (no PR to verify): ${e?.message || e}`)
