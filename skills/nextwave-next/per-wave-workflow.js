@@ -27,6 +27,11 @@
 // signal). The sdlc-server MCP TOOL CALLS those agents make are the seam — the
 // stubs return obvious placeholders so the loop runs end-to-end in skeleton form.
 
+// #688 wave-status persistence seam helper: durable blob shape/path + the persist
+// agent prompts (the MCP record/close calls + the .claude/status/ blob write). See
+// wave-status.js + SEAMS.md (#688). The loop calls persistIteration/persistTerminal below.
+import { blobPath, toBlob, persistIterationPrompt, persistTerminalPrompt } from './wave-status.js'
+
 export const meta = {
   name: 'per-wave-workflow',
   description:
@@ -142,6 +147,19 @@ const SIG = {
   required: ['signal', 'passed'],
   properties: { signal: { type: 'string' }, passed: { type: 'boolean' }, detail: { type: 'string' } },
 }
+// #688 — the persist agent's structured return (it does side-effects, not judgment).
+const PERSIST_RESULT = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['persisted'],
+  properties: {
+    persisted: { type: 'boolean' }, // the durable blob file was written
+    recorded: { type: 'array', items: { type: 'integer' } }, // issues whose MR+close ran this call
+    disposition: { type: 'string' }, // terminal only: promoted | held
+    path: { type: 'string' }, // the blob path written
+    notes: { type: 'string' }, // includes any soft tool error (never halts the wave)
+  },
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SEAM STUBS — return obvious placeholders. The foundational wave-2 issues
@@ -162,23 +180,58 @@ async function rehydrate() {
   return { merged: [], pending: [...ALL_ISSUES], reworkCount: {}, idleRounds: 0, groupsRun: 0 }
 }
 
-// SEAM #688 — persistence. Folded into Prime(post-flight) in the real design (it
-// already writes wave-status): record each merged issue's MR + close it, then the
-// loop blob. Stub: log only.
+// SEAM #688 — persistence (FILLED). Runs right after Prime(reconcile) each iteration (§3.3):
+// per newly-merged issue record its MR + close it, then full-overwrite the durable loop blob.
+// Both side-effects ride one persist agent() (the script can't call MCP/CLI directly); the
+// blob is the exact REHYDRATE-shape rehydrate() (#686) reads back. Implementation: wave-status.js.
 async function persistIteration(state) {
-  // TODO(#688 wave-status persistence): replace with the wave-status mirror —
-  // per merged issue: wave_record_mr + wave_close_issue; then write the loop blob
-  // {merged, pending, reworkCount, idleRounds, groupsRun} durably to .claude/status/.
-  // Called every iteration so a killed run resumes exactly where it died (§3.3).
-  log(`[SEAM #688] persist stub — merged=${[...state.merged].join(',') || 'none'} pending=${[...state.pending].join(',') || 'none'} idle=${state.idleRounds}`)
+  // #688 wave-status persistence (folded into the reconcile step, §3.3): per newly-merged
+  // issue record its MR + close it, then full-overwrite the durable loop blob under
+  // .claude/status/ — the EXACT shape rehydrate() (#686) reads back. The script can't call
+  // MCP/CLI directly, so both side-effects ride one persist agent() (wave-status.js prompt).
+  // Idempotent (SEAMS invariant 5): record/close are issue-keyed (overwrite/no-op); the blob
+  // is a full file overwrite — replaying the same state is a no-op-or-overwrite, never a dup.
+  const blob = toBlob({
+    waveId: WAVE_ID,
+    merged: state.merged, pending: state.pending,
+    reworkCount: state.reworkCount, idleRounds: state.idleRounds, groupsRun: state.groupsRun,
+  })
+  const newlyMerged = [...(state.newlyMerged || [])].map(Number)
+  const path = blobPath(TARGET_REPO_DIR, WAVE_ID)
+  await agent(
+    persistIterationPrompt({ waveId: WAVE_ID, targetRepo: TARGET_REPO, kahunaBranch: KAHUNA_BRANCH, newlyMerged, blob, path }),
+    {
+      label: `persist:${state.groupsRun}`,
+      phase: 'Flight loop',
+      schema: PERSIST_RESULT,
+      agentType: 'general-purpose',
+      // Persistence must never halt the wave (§3.2): a failed mirror falls back to a log line,
+      // and the loop carries on — the in-memory state is still authoritative this run.
+    },
+  ).catch((e) => { log(`[#688] persistIteration soft-fail (loop continues): ${e?.message || e}`); return null })
+  log(`[#688] persisted iter — merged=[${blob.merged.join(',') || 'none'}] pending=[${blob.pending.join(',') || 'none'}] idle=${blob.idleRounds} groups=${blob.groupsRun} → ${path}`)
 }
 
-// SEAM #688 — terminal persistence (promote OR hold disposition recorded durably).
+// SEAM #688 — terminal persistence (FILLED): promote OR hold disposition recorded durably
+// (wave-completion record + the blob's `terminal` field). Implementation: wave-status.js.
 async function persistTerminal(disposition, detail) {
-  // TODO(#688 wave-status persistence): record the wave's terminal disposition
-  // (promoted | held) + detail into wave-status's wave-completion record, so the
-  // campaign driver's rehydrate (§5) can prune a promoted wave on cold start.
-  log(`[SEAM #688] persist terminal stub — wave ${WAVE_ID} ${disposition}: ${detail}`)
+  // #688 wave-status persistence: record the wave's terminal disposition (promoted | held)
+  // + detail into wave-status's wave-completion record (so the campaign driver's cold-start
+  // rehydrate, §5, can prune a promoted wave) AND stamp it into the durable blob's `terminal`
+  // field (so a resume sees the same disposition). Idempotent: a single keyed wave-completion
+  // entry + a full blob overwrite — re-running with the same disposition is a no-op-or-overwrite.
+  // The terminal blob carries the FINAL loop state via closure (initialized before any call).
+  const blob = toBlob({
+    waveId: WAVE_ID,
+    merged, pending, reworkCount, idleRounds, groupsRun: groupsRunBase + groupsRun.length,
+    terminal: { disposition, detail, at: null }, // `at` stamped by the persist agent at write time
+  })
+  const path = blobPath(TARGET_REPO_DIR, WAVE_ID)
+  await agent(
+    persistTerminalPrompt({ waveId: WAVE_ID, targetRepo: TARGET_REPO, disposition, detail, blob, path }),
+    { label: `persist:terminal`, phase: 'Promote', schema: PERSIST_RESULT, agentType: 'general-purpose' },
+  ).catch((e) => { log(`[#688] persistTerminal soft-fail: ${e?.message || e}`); return null })
+  log(`[#688] persisted terminal — wave ${WAVE_ID} ${disposition}: ${detail} → ${path}`)
 }
 
 // SEAM #687 — real gate signals. Stub returns a passing placeholder so the gate
@@ -296,8 +349,9 @@ function primeReconcilePrompt(built, merged) {
     `4. If a flight's code BREAKS another's interface (signature mismatch surfaced at integration): UNDO just that`,
     `   flight's merge (keep integration green) and report it in needs_rework with the precise reason — the loop`,
     `   re-opens it as a surfaced dependency and re-schedules it next group (§3.1 dynamic re-plan).`,
-    `   // TODO(#688 wave-status persistence): per merged issue, wave_record_mr + wave_close_issue, then write the`,
-    `   //   loop blob durably — persistence is folded into THIS node (§3.3).`,
+    `   // #688 wave-status persistence is FILLED as a standalone step the LOOP runs right after you return`,
+    `   //   (persistIteration → wave_record_mr + wave_close_issue per newly-merged issue, then the durable`,
+    `   //   loop blob). Do NOT record MRs / close issues here — just return merged; the loop persists it (§3.3).`,
     ``,
     `Return: merged (issues now green in ${KAHUNA_BRANCH} this round), needs_rework (list of {issue, reason} you`,
     `reset), conflicts_resolved (files + 1-line how), concerns (array), suite_summary (final test line), notes.`,
@@ -401,7 +455,9 @@ while (true) {
   }
 
   groupsRun.push({ group, merged: newlyMerged, needs_rework: rec.needs_rework || [], suite: rec.suite_summary })
-  await persistIteration({ merged, pending, reworkCount, idleRounds, groupsRun: groupsRunBase + groupsRun.length }) // SEAM #688
+  // SEAM #688 — newlyMerged are the issues that need their MR recorded + issue closed THIS
+  // iteration; merged/pending/etc. are the full loop blob (the rehydrate substrate, §3.3).
+  await persistIteration({ merged, pending, reworkCount, idleRounds, groupsRun: groupsRunBase + groupsRun.length, newlyMerged })
   if (halt) break // breaker tripped inside the for-loop → leave the while with pending still non-empty
 }
 
