@@ -211,15 +211,27 @@ while (true) {
   if (budget.total && budget.remaining() < CAMPAIGN_FLOOR) { halt='cost'; break }
 
   const wave    = nextPendingWave()                                 // from the approved phase/wave plan
-  const verdict = await runWaveWorkflow(wave)                       // §3 spine → { gate: PASS | HOLD | SKIPPED }
+  const verdict = await runWaveWorkflow(wave)                       // §3 spine → { gate, promoted, ... }
 
-  if (verdict.gate === 'PASS') {                                    // promoted to main → progress
+  // Advance ONLY on PASS **and** promoted: gate==='PASS' is necessary but NOT sufficient — a
+  // { gate:'PASS', promoted:false } means the trust gate passed but the kahuna→main merge did NOT
+  // land (auto promote node soft-failed → wave recorded HELD; or interactive, where the Workflow
+  // never auto-promotes). Either way the wave is not on main → it HOLDs, it does not advance.
+  if (verdict.gate === 'PASS' && verdict.promoted === true) {       // landed on main → progress
     promoted.add(wave); pendingWaves.delete(wave); waveRetry[wave] = 0; continue
   }
+  // (interactive: surface the verdict + kahuna→main diff, STOP for the human, and on resume advance
+  //  only if wave-status durably records the wave `promoted` — symmetric with the auto fact above.)
   if ((waveRetry[wave] = (waveRetry[wave]||0)+1) > MAX_WAVE_RETRY) { halt=`wave-breaker:${wave}`; break } // won't converge → human
-  halt = 'wave-hold'; break                                         // HOLD/SKIPPED → human review (the per-wave gate)
+  halt = 'wave-hold'; break                                         // HOLD/SKIPPED/PASS-not-promoted → human review
 }
 ```
+
+> The per-wave Workflow returns `{ gate, promoted, ... }` (see `per-wave-workflow.js`) — `gate` and
+> `promoted` are **distinct facts**. The campaign advances only when both hold; a `gate:'PASS'` whose
+> `promoted` is false is a HOLD, not progress. The operational driver `/wavemachine-next` (#690)
+> implements this; the simplified `{ gate: PASS | HOLD | SKIPPED }` shorthand used elsewhere in this
+> section predates the `promoted` split and is superseded by the contract here.
 
 **Closed campaign-exit set** (mirrors §3.1; `halt` keeps HOLD distinct from success):
 
@@ -228,14 +240,14 @@ while (true) {
 | success | `pendingWaves` empty | every wave promoted to main |
 | runaway | `promoted ≥ MAX_WAVES` | defensive bound → human |
 | cost | budget floor | stop before the ceiling |
-| wave-hold | a wave returns HOLD/SKIPPED | the per-wave gate fired → human review |
-| wave-breaker | a wave reworked > `MAX_WAVE_RETRY` | one wave won't converge → human |
+| wave-hold | a wave returns HOLD/SKIPPED, or (auto) PASS-but-not-promoted | the per-wave gate fired, or the gate passed but the kahuna→main merge did not land → human review |
+| wave-breaker | a non-advanceable verdict > `MAX_WAVE_RETRY` times | one wave won't reach PASS-and-promoted → human |
 
 - **No campaign-level planner → no `plan done`/success collision.** Unlike §3.1's inner loop (which *plans each group* with a judgment agent and must guard `plan.done` against the success exit), §5 draws waves from the **pre-approved** phase/wave plan via `nextPendingWave()` — there is no planner verdict to misread, so success is `pendingWaves` empty and nothing else. The §3.1 sentinel-collision is designed out, not guarded against. (If a campaign ever needs to *re-plan* waves mid-run, it would add a planner agent plus an `impasse` exit, mirroring §3.1.)
-- **Progress is structural.** Each iteration either promotes a wave (`PASS`) or halts — a campaign iteration cannot make zero net progress and continue, so no idle-round detector is needed; the retry breaker covers a wave that repeatedly fails to reach `PASS`.
+- **Progress is structural.** Each iteration either promotes a wave (`PASS` **and** `promoted`) or halts — a campaign iteration cannot make zero net progress and continue, so no idle-round detector is needed; the retry breaker covers a wave that repeatedly fails to reach PASS-and-promoted. A `gate:'PASS'` that did not land on main is not progress.
 - **Resumability (mirrors §3.3).** On cold start the campaign rehydrates from wave-status's wave-completion records (`wave_previous_merged` / `wave_topology`) and skips already-promoted waves; `promoted` / `pendingWaves` seed from there. Same durable substrate as the inner loop, one level up.
 
-One Workflow per wave: workflows can't pause mid-run for human input, so the wave-workflow *ending* with a verdict IS the per-wave gate — something *outside* it consumes that verdict and routes. **That something is the `/wavemachine` skill itself:** the loop above runs **in the main session, not as a nested Workflow.** The skill launches one wave-Workflow per wave, reads its verdict, and advances — `auto` advances on `PASS`; interactive surfaces the verdict and STOPS for the human, then advances on their go. Mode is a one-line advance-vs-wait branch, **not two architectures.**
+One Workflow per wave: workflows can't pause mid-run for human input, so the wave-workflow *ending* with a verdict IS the per-wave gate — something *outside* it consumes that verdict and routes. **That something is the `/wavemachine` skill itself:** the loop above runs **in the main session, not as a nested Workflow.** The skill launches one wave-Workflow per wave, reads its verdict, and advances — `auto` advances on `PASS` **and** `promoted`; interactive surfaces the verdict and STOPS for the human, then advances on the human's go **once wave-status records the wave `promoted`** (both modes gate on a durable `promoted` fact). Mode is a one-line advance-vs-wait branch, **not two architectures.**
 
 Why the skill, not a campaign-level Workflow nesting wave-workflows:
 

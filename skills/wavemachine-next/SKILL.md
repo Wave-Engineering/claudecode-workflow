@@ -68,7 +68,14 @@ loop:
   #    human; the human routes the kahuna→protected merge. Resume ONLY after they confirm it landed. ──
   if MODE == 'interactive' and verdict.gate == 'PASS':
       surface verdict + kahuna→protected diff; STOP for human
-      # on resume, the human has confirmed the merge landed (or aborted → they halt the campaign):
+      # On resume, VERIFY the merge actually landed — do NOT advance on the operator's word alone.
+      # The human (or a /nextwave-next interactive-promote step) records the wave's terminal disposition
+      # in wave-status when the kahuna→protected merge lands. Re-read it; advance ONLY if it is durably
+      # 'promoted' — structurally symmetric with the auto branch's verdict.promoted check (a durable
+      # FACT, not an assertion). A human "go" without a recorded promotion (conflict mid-merge, aborted,
+      # not yet run) is NOT advanceable.
+      if waveDisposition(wave) != 'promoted':       # read from wave-status (the same record auto checks)
+          halt = 'wave-hold'; break                 # not on the protected branch → human review
       promoted.add(wave); pendingWaves.delete(wave); waveRetry[wave] = 0; continue
 
   # ── AUTO: advance ONLY on PASS-AND-promoted (the #687 correctness rule) ──
@@ -95,21 +102,27 @@ and the two are distinct facts:
     the Workflow recorded the wave HELD. → **HOLD for human attention, do NOT advance.** Treating
     this as success would mark a wave done while its code never reached the protected branch.
   - **`interactive`:** the Workflow never auto-promotes by design — it returns the clean verdict
-    for the human to route. → STOP, surface the diff, advance only after the human confirms the
-    kahuna→protected merge landed.
+    for the human to route. → STOP, surface the diff, and on resume advance **only if wave-status
+    durably records the wave `promoted`** — the same fact the auto branch reads off the verdict, now
+    read off the durable record. The operator's "go" alone is not sufficient: a go without a recorded
+    promotion (mid-merge conflict, aborted, not yet run) HOLDs (`wave-hold`). Interactive is thus
+    structurally symmetric with auto — both require a durable `promoted` fact, never an assertion.
 - `{ gate: 'HOLD' }` / `{ gate: 'SKIPPED' }` — a trust signal failed, or the flight loop hit a
   HOLD exit before the gate → wave-hold (both modes).
 
 The auto-advance predicate is therefore `gate === 'PASS' && promoted === true`, evaluated
 against the verdict's own fields — never inferred from `gate` alone. In `interactive`, the
-PASS verdict (necessarily `promoted:false`) gates on the human, who owns the promotion.
+PASS verdict (necessarily `promoted:false`) gates on the human routing the promotion **and** on
+wave-status durably recording it `promoted` — the human owns the *decision*, the durable record
+is the *fact* the loop advances on.
 
 **Mode is a one-line advance-vs-wait branch, NOT two architectures.** `auto` advances on
-PASS-and-promoted; `interactive` runs the wave Workflow in interactive mode (which returns
-`{ gate:'PASS', promoted:false }` on a clean gate), surfaces the verdict + kahuna→protected
-diff, STOPS for the human, and — once the human routes the promotion and confirms it landed —
-advances. Both run the identical loop body; only the post-PASS handling differs by that one
-branch.
+PASS-and-promoted (a verdict fact); `interactive` runs the wave Workflow in interactive mode
+(which returns `{ gate:'PASS', promoted:false }` on a clean gate), surfaces the verdict +
+kahuna→protected diff, STOPS for the human, and — once the human routes the promotion — advances
+**only if wave-status records the wave `promoted`** (a durable fact). Both run the identical loop
+body and both gate on a durable `promoted` fact; only *where* that fact comes from (the verdict
+vs. the post-STOP wave-status read) differs.
 
 ## Closed campaign-exit set (mirrors §3.1)
 
@@ -119,8 +132,16 @@ branch.
 | runaway | `promoted ≥ MAX_WAVES` | defensive bound → human |
 | cost | budget floor | stop before the ceiling |
 | wave-hold | a wave returns HOLD/SKIPPED, **or (auto) PASS-but-not-promoted** | the per-wave gate fired, or the gate passed but the kahuna→protected merge did not land → human review |
-| wave-breaker | a wave reworked > `MAX_WAVE_RETRY` | one wave won't converge → human |
+| wave-breaker | a wave hit a non-advanceable verdict > `MAX_WAVE_RETRY` times | one wave won't reach PASS-and-promoted → human |
 
+- **`waveRetry` counts EVERY non-advanceable verdict, regardless of cause.** A trust-gate `HOLD`,
+  a `SKIPPED`, and an auto PASS-but-not-promoted all increment the same counter — the campaign
+  re-runs the wave (the inner Workflow rehydrates and resumes its loop) until it either reaches
+  PASS-and-promoted or burns `MAX_WAVE_RETRY` attempts and trips `wave-breaker`. "Retry" here is
+  "the wave was re-driven", not specifically "an issue was reworked" (the inner §3.1 per-issue
+  rework breaker is a separate, finer-grained guard). The single counter is deliberate: the
+  campaign does not distinguish *why* a wave failed to land — a wave that can't reach the protected
+  branch after N attempts needs a human either way.
 - **No campaign-level planner → no `plan done`/success collision.** Waves come from the
   pre-approved plan; there is no planner verdict to misread.
 - **Progress is structural.** Each iteration either promotes a wave (`PASS` **and** `promoted`)

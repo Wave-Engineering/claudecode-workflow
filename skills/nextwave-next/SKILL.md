@@ -94,7 +94,10 @@ safe defaults in the script and rarely need overriding.
      is gate-clean.)
    - `interactive` + `{ gate:'PASS', promoted:false }` ⇒ by design the Workflow never
      auto-promotes; surface the verdict + the kahuna→protected diff and STOP for the human, who
-     routes promotion. (`/wavemachine-next` owns this branch in a campaign.)
+     routes promotion. When the human lands the kahuna→protected merge, the wave's terminal
+     disposition is updated to `promoted` in wave-status — that durable record is what
+     `/wavemachine-next`'s interactive branch reads (`waveDisposition`) to advance, so it never
+     advances on the operator's word alone. (`/wavemachine-next` owns this branch in a campaign.)
    - `{ gate:'HOLD' }` / `{ gate:'SKIPPED' }` (always `promoted:false`) ⇒ a trust signal failed
      or the flight loop hit a HOLD exit before the gate; surface the failing signals / halt reason.
 5. **Report.** Surface a human-readable summary: groups run, issues merged, any HOLD
