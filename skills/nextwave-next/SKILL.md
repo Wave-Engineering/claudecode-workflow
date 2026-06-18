@@ -7,10 +7,18 @@ description: Execute one wave via the per-wave Workflow — the §3 spine (rehyd
 
 > **Migration successor to `/nextwave`.** This is the Dynamic-Workflows shape of the
 > per-wave primitive: the orchestrator's deterministic control flow is moved into a
-> JS Workflow script (`per-wave-workflow.js`), and the LLM is called only for the
-> steps that genuinely need judgment (plan / implement / reconcile / review). The old
-> `/nextwave` (Orchestrator/Prime/Flight on a filesystem bus) is unchanged and stays in
-> place during migration. Design of record: `docs/wavemachine-workflows-migration.md`.
+> JS Workflow script, and the LLM is called only for the steps that genuinely need
+> judgment (plan / implement / reconcile / review). The old `/nextwave`
+> (Orchestrator/Prime/Flight on a filesystem bus) is unchanged and stays in place during
+> migration. Design of record: `docs/wavemachine-workflows-migration.md`.
+>
+> **Source vs. runnable artifact (live-gate finding #2):** a Dynamic Workflow must be ONE
+> self-contained file with `export const meta` first — cross-file `import`s do NOT run as a
+> Workflow. So the engine's tested halves live in modules (`per-wave-workflow.js` +
+> `wave-status.js`/`resume.js`/`gate.js`) and `bundle.mjs` inlines them into the single-file
+> artifact **`per-wave-workflow.bundled.js`** — the file the Workflow tool actually invokes.
+> Edit the source modules, then `node skills/nextwave-next/bundle.mjs`; a regression test
+> (`test_bundle_in_sync.sh`) fails if the committed bundle drifts from its source.
 
 ## Axioms
 
@@ -50,20 +58,26 @@ the control flow into deterministic JS and calls the LLM only inside bounded sub
 (a flight implements; a reconcile resolves a conflict), where a "distracted" agent can
 only fail *its own task*, never halt the wave. See migration doc §1.
 
-## Inputs (the Workflow's `input` blob)
+## Inputs (the Workflow's `args`)
+
+The engine reads the Workflow runtime global **`args`** (live-gate finding #1 — NOT `input`;
+the old engine read a non-existent `input`, silently got `{}`, and ran an empty wave). Pass
+`args` as a **JSON object** (a JSON string is tolerated and parsed, but the object form is
+canonical). An **empty / missing `issues` list is fail-loud** (#4): the engine refuses rather
+than reaching the trust gate with nothing merged and opening/promoting at the protected branch.
 
 Supplied by the caller (`/wavemachine-next` per wave, or a human launching one wave):
 
 | Field | Meaning |
 |---|---|
 | `waveId` | the wave id (e.g. `W-3`) |
-| `issues` | the wave's issue numbers (one repo — single-repo-per-wave axiom, §4.1) |
+| `issues` | the wave's issue numbers (one repo — single-repo-per-wave axiom, §4.1). **Required, non-empty.** |
 | `targetRepo` | `owner/repo` for `gh -R` scoping |
 | `targetRepoDir` | the clone the durable worktrees attach to (§4.2) |
 | `kahunaBranch` | the integration target; every flight PR targets this, never the protected branch |
 | `protectedBranch` | the promotion target on the success exit |
 | `mode` | `auto` (verdict drives promotion) \| `interactive` (verdict returned; human routes) |
-| `planId` | wave plan id — the promote node needs it to assemble the kahuna→protected MR body (#687) |
+| `planId` | wave plan id — the gate's PR-open node needs it to assemble the kahuna→protected MR body (#687/#5) |
 | `budget` | optional `{ total, remaining() }` cost guard (the `cost` legal exit) |
 
 The closed numeric guards (`maxGroups`, `maxRework`, `maxIdle`, `costFloor`) have
@@ -78,8 +92,10 @@ safe defaults in the script and rarely need overriding.
    bootstrapped through the campaign launch sequence.
 2. **Validate specs.** Confirm every wave issue is structurally buildable
    (`spec_validate_structure`). Any INVALID → report and exit (not an error — a Legal Exit).
-3. **Launch the Workflow.** Run `per-wave-workflow.js` with the `input` blob above. The
-   script owns everything from here: rehydrate → flight loop → trust gate → promote.
+3. **Launch the Workflow.** Invoke the single-file artifact `per-wave-workflow.bundled.js`
+   (via the Workflow tool's `scriptPath`) with the inputs above passed as **`args` (a JSON
+   object)**. The script owns everything from here: rehydrate → flight loop → trust gate (which
+   opens the kahuna→protected DRAFT PR first, then runs the four signals on it, #5) → promote.
 4. **Consume the verdict.** The Workflow's return is the per-wave gate (§5): a Workflow
    cannot pause mid-run for human input, so its *ending with a verdict* IS the gate. The
    return carries `gate` ∈ `PASS | HOLD | SKIPPED` **and** `promoted` ∈ `true | false`, plus

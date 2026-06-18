@@ -142,23 +142,47 @@ Runs **only if the loop reached the `success` exit** (all merged to kahuna). The
 
 ```javascript
 if (!halt && pending.size === 0) {   // success exit ONLY — any HOLD reason (incl. per-issue breaker) skips the gate
+  // #5 (live-gate): OPEN the kahuna→main DRAFT PR FIRST, so the CI signal has a real merge-result
+  // pipeline to wait on. The old order created the PR at promotion (after the gate) → ci_wait_run
+  // returned `no_merge_result_pr`. No PR ⇒ no evidence ⇒ HOLD.
+  const pr = await agent('wave_finalize → open the kahuna→main DRAFT PR (idempotent)', {schema:OPEN_PR, agentType:'general-purpose'})
+  if (!pr?.opened) return { gate:'HOLD', failing:[{signal:'open-pr', passed:false}] }
   const signals = await parallel([
-    () => agent('commutativity_verify across kahuna', {schema:SIG, agentType:'general-purpose'}),
-    () => agent('ci_wait_run for the kahuna→main MR merge-result pipeline (NOT the merge-commit ' +
-                'branch HEAD; skipped-branch + passing-merge-result = validated) [sdlc #452]',
+    () => agent('commutativity_verify across kahuna (STRONG/MEDIUM pass; PROBE_UNAVAILABLE + ' +
+                'ORACLE_REQUIRED = conservative-fail/HOLD [#6])', {schema:SIG, agentType:'general-purpose'}),
+    () => agent(`ci_wait_run on the gate-opened draft PR #${pr.pr_number} merge-result pipeline (NOT the ` +
+                'merge-commit branch HEAD; skipped-branch + passing-merge-result = validated) [sdlc #452, #5]',
                 {schema:SIG, agentType:'general-purpose'}),
     () => agent('review the full kahuna-vs-main diff',
                 {schema:SIG, agentType:'feature-dev:code-reviewer', isolation:'worktree'}), // worktree of kahuna [#667]
     () => agent('trivy HIGH/CRITICAL scan of kahuna', {schema:SIG, agentType:'general-purpose'}),
   ])
   const failed = signals.filter(Boolean).filter(s => !s.passed)
-  // AUTO: promote kahuna→main. INTERACTIVE: the workflow ENDS returning the verdict (the return IS the human gate).
-  return failed.length === 0 ? { gate:'PASS', promote:'kahuna→main' } : { gate:'HOLD', failing: failed }
+  // AUTO + PASS: promote = mark the SAME draft PR ready + pr_merge (no 2nd PR). INTERACTIVE: the
+  // workflow ENDS returning the verdict (the return IS the human gate; the draft PR is its artifact).
+  return failed.length === 0 ? { gate:'PASS', prNumber: pr.pr_number, promote:'kahuna→main' } : { gate:'HOLD', failing: failed }
 }
 return { gate:'SKIPPED', reason: halt || 'loop did not reach clean success' }
 ```
 
-Two current gate bugs are **fixed by construction** here: the CI signal waits on the **MR merge-result pipeline**, not the merge-commit branch HEAD (#452); the review signal runs with **`isolation:'worktree'` on kahuna**, so it sees the branch natively — no diff-materialization workaround (#667). "Hold for review" is one more closed legal exit, lifted to the wave level.
+Gate bugs **fixed by construction** here, three from the live integration gate:
+- The CI signal waits on the **MR merge-result pipeline** of a PR **opened first as a draft** (#452 + #5)
+  — so `ci_wait_run` always has a pipeline; promotion then merges that same PR rather than opening a
+  second one at the end.
+- The review signal runs with **`isolation:'worktree'` on kahuna**, so it sees the branch natively —
+  no diff-materialization workaround (#667).
+- Commutativity **HOLDs on `ORACLE_REQUIRED`** (and `PROBE_UNAVAILABLE`), not just non-STRONG/MEDIUM (#6):
+  the gate refuses to auto-promote anything the probe can't prove safe, even where the reconcile node
+  legitimately adjudicated it during integration — the two answer different questions.
+
+"Hold for review" is one more closed legal exit, lifted to the wave level.
+
+> **Packaging note (live-gate findings #1/#2/#3/#4).** The engine reads the Workflow runtime global
+> **`args`** (never `input`), parses string-or-object, and **fails loud on an empty wave** (an empty
+> issue list would reach this gate with nothing merged and open/promote at the protected branch). And
+> a Workflow must be **one self-contained file** with `export const meta` first — cross-file `import`s
+> don't run — so the tested source modules are inlined by `skills/nextwave-next/bundle.mjs` into
+> `per-wave-workflow.bundled.js` (the invoked artifact), guarded by a drift regression test.
 
 **Static analysis must be diff-scoped (kahuna-vs-main), never tree-scoped** — a refinement the pilot forced (§9). Lint/typecheck are **not a fifth gate signal**; in the real wave they ride **inside the CI signal** (`ci_wait_run` runs the project's full gate). Whatever evaluates static cleanliness — the review signal (already "the kahuna-vs-main diff") and CI's lint/typecheck — must look only at the wave's *changed files*, not the whole tree. Otherwise **pre-existing baseline debt spuriously HOLDs an otherwise-clean wave**: the iter-3 pilot hit exactly this when a standalone lint check (run as a CI stand-in, since a dry-run has no merge-result pipeline to wait on) flagged unused imports in untouched *baseline* test files. Scope static analysis to the diff and a wave is judged on what it changed, nothing else.
 
