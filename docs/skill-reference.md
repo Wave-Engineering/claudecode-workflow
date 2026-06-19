@@ -707,12 +707,12 @@ It validates the master issue structure, reads each sub-issue and checks for req
 
 ### `/nextwave` -- Execute One Wave
 
-Executes the next pending wave from a plan created by `/prepwaves`. Automatically selects the right execution mode: for multi-issue flights, planning agents detect file conflicts and agents execute on isolated worktrees. For single-issue flights (serial topology), the fast-path skips conflict detection and worktree isolation.
+Executes the next pending wave by launching a single deterministic **Dynamic Workflow** (`per-wave-workflow.js`) — the §3 spine: rehydrate prior state -> dynamic flight loop (parallel flights -> reconcile) -> trust gate -> promote to the protected branch. Control flow is JS, not LLM orchestration; agents are invoked only for the steps that need judgment (flight implementation, reconcile, gate review).
 
 **When to use it:**
 - After `/prepwaves` has created a wave plan (any topology)
 - To execute the next wave in the sequence (one wave per invocation)
-- When the previous wave has been merged and you are ready to continue
+- When the previous wave has been promoted and you are ready to continue
 
 **Examples:**
 
@@ -720,24 +720,19 @@ Executes the next pending wave from a plan created by `/prepwaves`. Automaticall
 /nextwave
 ```
 
-No arguments. It identifies the next pending wave from the task list and auto-detects topology. For parallel flights: launches planning agents, detects file conflicts, partitions into flights, executes on isolated worktrees. For serial flights: skips planning and worktree isolation, executes directly. Between flights, it runs re-validation. After all flights, it runs a drift check on the next wave's specs.
+Launches one per-wave Workflow for the next pending wave and returns its verdict `{ gate, promoted, ... }`. The flight loop is dynamic — a dependency that surfaces mid-wave (reported by reconcile as `needs_rework`) re-opens the issue as the next group, with closed legal exits bounding non-convergence. In `interactive` mode the Workflow stops at a clean gate for the human to route the kahuna->protected merge; in `auto` it promotes when the trust gate passes.
 
-**Flow (parallel):** Pre-Flight Checks -> Planning Phase -> Flight 1 (execute + merge) -> Re-Validate -> Flight 2 -> ... -> Drift Check -> Wave Complete.
-
-**Flow (serial):** Pre-Flight Checks -> Flight 1 (execute + merge) -> Flight 2 (execute + merge) -> ... -> Drift Check -> Wave Complete.
-
-**Key detail:** One wave per invocation. The user controls the pace.
+**Key detail:** One wave per invocation, run as a background Workflow with `/workflows` observability and within-session resume. Source of truth: `skills/nextwave/SKILL.md` + `SEAMS.md`.
 
 ---
 
-### `/wavemachine` -- Autopilot Wave Loop
+### `/wavemachine` -- Campaign Driver
 
-Top-level loop that drives `/nextwave` across every pending wave of the current plan, without per-wave human interaction. This is the "fire and forget" mode for wave execution: once started, it continues until the plan is exhausted, a wave fails, or `wave_health_check` trips the circuit breaker.
+Drives the campaign loop — one per-wave Workflow per pending wave — advancing ONLY on gate `PASS` **and** `promoted` (a clean gate that did not land on the protected branch HOLDs, never silently "succeeds"). The loop runs in the main session with closed legal exits; auto-vs-interactive is a one-line advance-vs-wait branch. Cold-start rehydrate prunes already-promoted waves.
 
 **When to use it:**
-- When a wave plan has multiple pending waves and you trust CI to gate merges (see `wave_ci_trust_level`)
-- When you want the full plan executed end-to-end without approving each wave individually
-- For dogfood runs on throwaway epics
+- When a wave plan has multiple pending waves and you want the full plan executed end-to-end
+- For walk-away campaigns (`auto`) or review-between-waves (`interactive`)
 
 **Examples:**
 
@@ -745,13 +740,15 @@ Top-level loop that drives `/nextwave` across every pending wave of the current 
 /wavemachine
 ```
 
-No arguments. It reads the current wave plan, then iterates: call `/nextwave auto` -> wait for completion -> call `/nextwave auto` again, until no pending waves remain or a circuit breaker fires.
+Reads the approved phase/wave plan, then iterates: launch the next wave's per-wave Workflow -> read its verdict -> advance on PASS-and-promoted (or STOP for the human in `interactive`). Continues until all waves are promoted (success) or a closed exit fires (`wave-hold`, `wave-breaker`, `runaway`, `cost`).
 
-**Key detail:** `/wavemachine` is a thin wrapper; `/nextwave(auto)` is the single-wave primitive and carries all of the planning/merge/reconcile logic. The "auto" mode skips the interactive approval gate that `/nextwave` uses by default -- CI status stands in for human approval. Use the interactive form (`/nextwave` on its own) if you want to inspect each wave before remote state changes.
+**Key detail:** The campaign loop is thin — all wave-internal work (flights, reconcile, gate, promotion) lives in the per-wave Workflow, billed off the main-session window. Per-wave handoff is a single tool-use boundary (no inter-wave narration). Source of truth: `skills/wavemachine/SKILL.md`.
 
 ---
 
 ### Agent Architecture -- Orchestrator / Prime / Flight
+
+> **⚠️ Superseded by the dynamic-workflows engine (#692/#691).** The section below describes the **legacy** LLM-orchestrated model (an Orchestrator agent driving the loop with the `Agent` tool, a Prime sub-agent per wave, and the filesystem message bus). The canonical `/wavemachine` + `/nextwave` are now a deterministic **Dynamic Workflow** (`skills/nextwave/per-wave-workflow.js`): control flow is JS, the flight loop + reconcile + trust gate + promote run inside the Workflow, and state flows through return values + wave-status rather than the wavebus. Authoritative: `docs/wavemachine-workflows-migration.md` §3, `skills/{wavemachine,nextwave}/SKILL.md`, `skills/nextwave/SEAMS.md`. This section is kept for historical context and a full rewrite is tracked as a follow-up.
 
 Wave execution uses three distinct agent roles. Knowing which role is which clarifies the tool distribution, the merge sequencing, and the forensic trail left on disk.
 

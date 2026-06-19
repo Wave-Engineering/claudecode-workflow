@@ -131,13 +131,15 @@ fi
 if ! grep -qE '\bmcp-log\b' "$WAVEMACHINE"; then
 	fail "wavemachine: no 'mcp-log' references"
 fi
-if ! grep -qE '\bmcp-log\b' "$NEXTWAVE"; then
-	fail "nextwave: no 'mcp-log' references"
+# The dynamic-workflows /nextwave (#692) drives wave-status (not mcp-log — its
+# Workflow handles its own logging). Guard the CLI it actually uses.
+if ! grep -qE '\bwave-status\b' "$NEXTWAVE"; then
+	fail "nextwave: no 'wave-status' references — did the skill lose its CLI calls entirely?"
 fi
-# nextwave must still reference the bus scripts — by bare name (#709).
-if ! grep -qE '\bwavebus-(wave-init|flight-finalize|wave-cleanup|changelog-aggregate)\b' "$NEXTWAVE"; then
-	fail "nextwave: no bare 'wavebus-<name>' references — did the bus call sites get lost?"
-fi
+# NB: the dynamic-workflows /nextwave does NOT use the wavebus scripts (those
+# belonged to the legacy engine, retired at cutover #691) — so there is no
+# positive wavebus-* assertion here. Pattern 5 above still forbids any relative
+# scripts/wavebus/ path if one ever creeps back in.
 
 echo ""
 if [[ "$FAILS" -gt 0 ]]; then

@@ -1,6 +1,6 @@
 # Wavemachine → Dynamic Workflows: Migration Design
 
-**Status:** on-paper design (no implementation). Closes the design phase tracked in #671.
+**Status:** IMPLEMENTED + cut over (#691). The dynamic-workflows engine is now the canonical `/wavemachine` + `/nextwave` (the `-next` dev names retired). Validated end-to-end — single- and multi-repo pilots plus a live integration gate with proven promotion (§9). Design phase closed #671.
 **Decision in one line:** migrate the wave orchestration to Claude Code **Dynamic Workflows** **for determinism + reliability, not tokens.**
 
 Background memories: `project_workflow_migration`, `lesson_cage_bars_signal_wrong_tool`.
@@ -142,23 +142,47 @@ Runs **only if the loop reached the `success` exit** (all merged to kahuna). The
 
 ```javascript
 if (!halt && pending.size === 0) {   // success exit ONLY — any HOLD reason (incl. per-issue breaker) skips the gate
+  // #5 (live-gate): OPEN the kahuna→main DRAFT PR FIRST, so the CI signal has a real merge-result
+  // pipeline to wait on. The old order created the PR at promotion (after the gate) → ci_wait_run
+  // returned `no_merge_result_pr`. No PR ⇒ no evidence ⇒ HOLD.
+  const pr = await agent('wave_finalize → open the kahuna→main DRAFT PR (idempotent)', {schema:OPEN_PR, agentType:'general-purpose'})
+  if (!pr?.opened) return { gate:'HOLD', failing:[{signal:'open-pr', passed:false}] }
   const signals = await parallel([
-    () => agent('commutativity_verify across kahuna', {schema:SIG, agentType:'general-purpose'}),
-    () => agent('ci_wait_run for the kahuna→main MR merge-result pipeline (NOT the merge-commit ' +
-                'branch HEAD; skipped-branch + passing-merge-result = validated) [sdlc #452]',
+    () => agent('commutativity_verify across kahuna (STRONG/MEDIUM pass; PROBE_UNAVAILABLE + ' +
+                'ORACLE_REQUIRED = conservative-fail/HOLD [#6])', {schema:SIG, agentType:'general-purpose'}),
+    () => agent(`ci_wait_run on the gate-opened draft PR #${pr.pr_number} merge-result pipeline (NOT the ` +
+                'merge-commit branch HEAD; skipped-branch + passing-merge-result = validated) [sdlc #452, #5]',
                 {schema:SIG, agentType:'general-purpose'}),
     () => agent('review the full kahuna-vs-main diff',
                 {schema:SIG, agentType:'feature-dev:code-reviewer', isolation:'worktree'}), // worktree of kahuna [#667]
     () => agent('trivy HIGH/CRITICAL scan of kahuna', {schema:SIG, agentType:'general-purpose'}),
   ])
   const failed = signals.filter(Boolean).filter(s => !s.passed)
-  // AUTO: promote kahuna→main. INTERACTIVE: the workflow ENDS returning the verdict (the return IS the human gate).
-  return failed.length === 0 ? { gate:'PASS', promote:'kahuna→main' } : { gate:'HOLD', failing: failed }
+  // AUTO + PASS: promote = mark the SAME draft PR ready + pr_merge (no 2nd PR). INTERACTIVE: the
+  // workflow ENDS returning the verdict (the return IS the human gate; the draft PR is its artifact).
+  return failed.length === 0 ? { gate:'PASS', prNumber: pr.pr_number, promote:'kahuna→main' } : { gate:'HOLD', failing: failed }
 }
 return { gate:'SKIPPED', reason: halt || 'loop did not reach clean success' }
 ```
 
-Two current gate bugs are **fixed by construction** here: the CI signal waits on the **MR merge-result pipeline**, not the merge-commit branch HEAD (#452); the review signal runs with **`isolation:'worktree'` on kahuna**, so it sees the branch natively — no diff-materialization workaround (#667). "Hold for review" is one more closed legal exit, lifted to the wave level.
+Gate bugs **fixed by construction** here, three from the live integration gate:
+- The CI signal waits on the **MR merge-result pipeline** of a PR **opened first as a draft** (#452 + #5)
+  — so `ci_wait_run` always has a pipeline; promotion then merges that same PR rather than opening a
+  second one at the end.
+- The review signal runs with **`isolation:'worktree'` on kahuna**, so it sees the branch natively —
+  no diff-materialization workaround (#667).
+- Commutativity **HOLDs on `ORACLE_REQUIRED`** (and `PROBE_UNAVAILABLE`), not just non-STRONG/MEDIUM (#6):
+  the gate refuses to auto-promote anything the probe can't prove safe, even where the reconcile node
+  legitimately adjudicated it during integration — the two answer different questions.
+
+"Hold for review" is one more closed legal exit, lifted to the wave level.
+
+> **Packaging note (live-gate findings #1/#2/#3/#4).** The engine reads the Workflow runtime global
+> **`args`** (never `input`), parses string-or-object, and **fails loud on an empty wave** (an empty
+> issue list would reach this gate with nothing merged and open/promote at the protected branch). And
+> a Workflow must be **one self-contained file** with `export const meta` first — cross-file `import`s
+> don't run — so the tested source modules are inlined by `skills/nextwave/bundle.mjs` into
+> `per-wave-workflow.bundled.js` (the invoked artifact), guarded by a drift regression test.
 
 **Static analysis must be diff-scoped (kahuna-vs-main), never tree-scoped** — a refinement the pilot forced (§9). Lint/typecheck are **not a fifth gate signal**; in the real wave they ride **inside the CI signal** (`ci_wait_run` runs the project's full gate). Whatever evaluates static cleanliness — the review signal (already "the kahuna-vs-main diff") and CI's lint/typecheck — must look only at the wave's *changed files*, not the whole tree. Otherwise **pre-existing baseline debt spuriously HOLDs an otherwise-clean wave**: the iter-3 pilot hit exactly this when a standalone lint check (run as a CI stand-in, since a dry-run has no merge-result pipeline to wait on) flagged unused imports in untouched *baseline* test files. Scope static analysis to the diff and a wave is judged on what it changed, nothing else.
 
@@ -192,6 +216,14 @@ Three cleanup points — clean at **both ends**, not just the end (end-only leak
 
 **Prune branches, not just worktrees** (refinement from the §9 multi-repo pilot): `git worktree remove` leaves the branch behind. At reconcile (per merge) and at wave-terminal, also `git branch -D` the wave's merged/abandoned branches, or the target clone slowly accretes dead refs — observed in pilot 1, where three per-wave branches survived worktree removal. **The worktree dir and its branches must share one `wave-<id>` stem** so a single glob (`git branch -D wave-<id>/*`) cleans both: pilot 1 used dir `wave-9001/` but branches `wave9001/…` (no hyphen), so the hyphenated glob would have missed them. Standardize on the hyphenated `wave-<id>/` for both dir and branch.
 
+### 4.4 Operating model — the wave session runs IN the target repo (live-gate finding #8)
+
+**Decision: a wave is driven from a session whose `CLAUDE_PROJECT_DIR` is the *target* repo, and wave-status lives there** (`<target>/.claude/status/`, per `kahuna-devspec.md` R-17). The wave-status MCP state tools — `wave_record_mr`, `wave_close_issue`, `wave_complete`, `wave_show` — bind to the session's project by design and take **no `root`/`repo` override**; only `wave_finalize` and `wave_init` accept an explicit root. So the single coherent model is **session = target repo**: then every state mutation lands in the target's `.claude/status/` with zero per-call rooting, and `wave_finalize(root=<targetRepoDir>)` (which the gate passes) is consistent-or-redundant.
+
+**Important scope caveat — what "cross-repo" does and does not cover.** §4.1/§4.2 establish cross-repo **worktree isolation** (plan repo ≠ target repo for the *flight workspace*), and §9 validated it. But cross-repo **wave-status** (the durable plan/state living in a *plan* repo while branches live in a *different target* repo) is **NOT wired** — the state tools have no way to target another repo's `.claude/status/`. The live integration gate hit this by running the wave from the `claudecode-workflow` session against `ccwork-testtarget` (session ≠ target): `wave_finalize` returned `kahuna_branch_not_found` until handed `root=<targetRepoDir>` (finding #8). Until the server grows `root` on the state mutators, **operate same-repo-rooted (session = target)**; treat true plan≠target wave-status as an open server-side item, not a supported mode.
+
+> **Latent server bug noted alongside #8:** even with `root`, `wave_finalize` only roots its state-read and branch-existence probe — its actual PR create/find still bind to `CLAUDE_PROJECT_DIR` (`lib/adapters/pr-create-github.ts`). Harmless when session = target; a real cross-repo bug otherwise. Tracked for an mcp-server-sdlc fix.
+
 ---
 
 ## 5. Outer campaign loop (`/wavemachine`)
@@ -211,15 +243,27 @@ while (true) {
   if (budget.total && budget.remaining() < CAMPAIGN_FLOOR) { halt='cost'; break }
 
   const wave    = nextPendingWave()                                 // from the approved phase/wave plan
-  const verdict = await runWaveWorkflow(wave)                       // §3 spine → { gate: PASS | HOLD | SKIPPED }
+  const verdict = await runWaveWorkflow(wave)                       // §3 spine → { gate, promoted, ... }
 
-  if (verdict.gate === 'PASS') {                                    // promoted to main → progress
+  // Advance ONLY on PASS **and** promoted: gate==='PASS' is necessary but NOT sufficient — a
+  // { gate:'PASS', promoted:false } means the trust gate passed but the kahuna→main merge did NOT
+  // land (auto promote node soft-failed → wave recorded HELD; or interactive, where the Workflow
+  // never auto-promotes). Either way the wave is not on main → it HOLDs, it does not advance.
+  if (verdict.gate === 'PASS' && verdict.promoted === true) {       // landed on main → progress
     promoted.add(wave); pendingWaves.delete(wave); waveRetry[wave] = 0; continue
   }
+  // (interactive: surface the verdict + kahuna→main diff, STOP for the human, and on resume advance
+  //  only if wave-status durably records the wave `promoted` — symmetric with the auto fact above.)
   if ((waveRetry[wave] = (waveRetry[wave]||0)+1) > MAX_WAVE_RETRY) { halt=`wave-breaker:${wave}`; break } // won't converge → human
-  halt = 'wave-hold'; break                                         // HOLD/SKIPPED → human review (the per-wave gate)
+  halt = 'wave-hold'; break                                         // HOLD/SKIPPED/PASS-not-promoted → human review
 }
 ```
+
+> The per-wave Workflow returns `{ gate, promoted, ... }` (see `per-wave-workflow.js`) — `gate` and
+> `promoted` are **distinct facts**. The campaign advances only when both hold; a `gate:'PASS'` whose
+> `promoted` is false is a HOLD, not progress. The operational driver `/wavemachine` (#690)
+> implements this; the simplified `{ gate: PASS | HOLD | SKIPPED }` shorthand used elsewhere in this
+> section predates the `promoted` split and is superseded by the contract here.
 
 **Closed campaign-exit set** (mirrors §3.1; `halt` keeps HOLD distinct from success):
 
@@ -228,14 +272,14 @@ while (true) {
 | success | `pendingWaves` empty | every wave promoted to main |
 | runaway | `promoted ≥ MAX_WAVES` | defensive bound → human |
 | cost | budget floor | stop before the ceiling |
-| wave-hold | a wave returns HOLD/SKIPPED | the per-wave gate fired → human review |
-| wave-breaker | a wave reworked > `MAX_WAVE_RETRY` | one wave won't converge → human |
+| wave-hold | a wave returns HOLD/SKIPPED, or (auto) PASS-but-not-promoted | the per-wave gate fired, or the gate passed but the kahuna→main merge did not land → human review |
+| wave-breaker | a non-advanceable verdict > `MAX_WAVE_RETRY` times | one wave won't reach PASS-and-promoted → human |
 
 - **No campaign-level planner → no `plan done`/success collision.** Unlike §3.1's inner loop (which *plans each group* with a judgment agent and must guard `plan.done` against the success exit), §5 draws waves from the **pre-approved** phase/wave plan via `nextPendingWave()` — there is no planner verdict to misread, so success is `pendingWaves` empty and nothing else. The §3.1 sentinel-collision is designed out, not guarded against. (If a campaign ever needs to *re-plan* waves mid-run, it would add a planner agent plus an `impasse` exit, mirroring §3.1.)
-- **Progress is structural.** Each iteration either promotes a wave (`PASS`) or halts — a campaign iteration cannot make zero net progress and continue, so no idle-round detector is needed; the retry breaker covers a wave that repeatedly fails to reach `PASS`.
+- **Progress is structural.** Each iteration either promotes a wave (`PASS` **and** `promoted`) or halts — a campaign iteration cannot make zero net progress and continue, so no idle-round detector is needed; the retry breaker covers a wave that repeatedly fails to reach PASS-and-promoted. A `gate:'PASS'` that did not land on main is not progress.
 - **Resumability (mirrors §3.3).** On cold start the campaign rehydrates from wave-status's wave-completion records (`wave_previous_merged` / `wave_topology`) and skips already-promoted waves; `promoted` / `pendingWaves` seed from there. Same durable substrate as the inner loop, one level up.
 
-One Workflow per wave: workflows can't pause mid-run for human input, so the wave-workflow *ending* with a verdict IS the per-wave gate — something *outside* it consumes that verdict and routes. **That something is the `/wavemachine` skill itself:** the loop above runs **in the main session, not as a nested Workflow.** The skill launches one wave-Workflow per wave, reads its verdict, and advances — `auto` advances on `PASS`; interactive surfaces the verdict and STOPS for the human, then advances on their go. Mode is a one-line advance-vs-wait branch, **not two architectures.**
+One Workflow per wave: workflows can't pause mid-run for human input, so the wave-workflow *ending* with a verdict IS the per-wave gate — something *outside* it consumes that verdict and routes. **That something is the `/wavemachine` skill itself:** the loop above runs **in the main session, not as a nested Workflow.** The skill launches one wave-Workflow per wave, reads its verdict, and advances — `auto` advances on `PASS` **and** `promoted`; interactive surfaces the verdict and STOPS for the human, then advances on the human's go **once wave-status records the wave `promoted`** (both modes gate on a durable `promoted` fact). Mode is a one-line advance-vs-wait branch, **not two architectures.**
 
 Why the skill, not a campaign-level Workflow nesting wave-workflows:
 
