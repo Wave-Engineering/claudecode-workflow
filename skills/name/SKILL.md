@@ -47,13 +47,7 @@ Report the current session identity, or pick one if not yet established.
 5. **Announce** — Always respond with:
    > I'm **\<Dev-Name\>** \<Dev-Avatar\> from team `<Dev-Team>`.
 
-6. **Set session display name** — So the Remote Control UI shows your identity:
-   ```
-   /rename <Dev-Name> <Dev-Avatar> (<Dev-Team>)
-   ```
-   Example: `/rename neuron ⚡ (cc-workflow)`. Skip silently if `/rename` is unavailable.
-
-7. **Check in via Discord** — Call `mcp__disc-server__disc_send` to announce yourself in `#roll-call`:
+6. **Check in via Discord** — Call `mcp__disc-server__disc_send` to announce yourself in `#roll-call`:
 
    ```
    mcp__disc-server__disc_send({
@@ -72,3 +66,23 @@ Report the current session identity, or pick one if not yet established.
    ```
 
    If the `disc-server` MCP is not registered or the call fails, skip silently — check-in is best-effort.
+
+7. **Close with the session-name next-step (FINAL output line)** — Claude Code's native
+   session name (shown in the session picker, prompt bar, and `--resume`) is **user-driven
+   only**: an agent cannot run `/rename` itself, and there is no hook/setting/API to set the
+   name programmatically. So do NOT emit a bare `/rename` and assume it ran. Instead, end the
+   skill's output with a single, paste-ready next-step so the operator can mirror the identity
+   into CC's UI in one action:
+
+   > Run `/rename <Dev-Name>` to mirror this identity into Claude Code's session name.
+
+   - Use the **bare Dev-Name** (e.g. `/rename babelfish`) — NOT the avatar emoji or the team.
+     CC's session name is a plain label; the emoji/parens form does not belong in it.
+   - Make this the **last line** of the skill's output. It is the deterministic paste path, and
+     because CC's Prompt-Suggestions ghost-text is a model prediction over the recent
+     conversation, a single unambiguous closing imperative also maximizes the chance CC
+     pre-fills `/rename <Dev-Name>` for →+Enter acceptance. (Non-deterministic — the paste is
+     the reliable path.)
+   - **Interactive sessions only.** A spawned/background/orchestrated agent has no operator to
+     accept the suggestion — skip this line when there is no human in the loop. The identity
+     file remains the source of truth; CC's session name is a one-way mirror, never a replacement.
