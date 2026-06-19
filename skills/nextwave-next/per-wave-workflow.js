@@ -393,34 +393,39 @@ async function cleanupTerminal() {
 // The sdlc-server tool calls inside them are seams; the prompt shape is real.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Prime(plan): sees CURRENT state (merged/pending/lastRework). A dependency that
-// surfaced mid-wave (in lastRework) becomes THIS group. Uses flight_partition/flight_overlap.
+// Prime(plan): sees CURRENT state (merged/pending/lastRework) and partitions the pending
+// issues into the next conflict-free parallel group via flight_overlap/flight_partition.
+//
+// #705 (re-home of finding #7): the planner does NOT reason about declared `## Dependencies`.
+// The wave was already dependency-ordered upstream by wave_compute (prepwaves) — issues WITHIN
+// one computed wave are mutually independent by construction, and any external dep is already
+// merged in an earlier wave / the base branch. So declared deps are irrelevant at this grain.
+// The ONLY ordering that matters here is (a) file conflicts (flight_partition) and (b) a
+// dependency that SURFACES at runtime (reconcile reports it in `lastRework`); the dynamic
+// re-plan loop is the safety net for any latent intra-wave ordering. Re-deriving dep
+// satisfaction from spec_dependencies in prose is what caused the #701 false-impasse — removed.
 function primePlanPrompt(merged, pending, lastRework) {
   return [
-    `You are the wave PRIME planner for wave ${WAVE_ID} of ${TARGET_REPO}. Plan the NEXT flight-group from`,
-    `CURRENT state — independent issues run in parallel within a group; dependency-ordered across groups.`,
-    `  this wave's FULL issue set: [${ALL_ISSUES.join(', ')}]`,
+    `You are the wave PRIME planner for wave ${WAVE_ID} of ${TARGET_REPO}. Pick the NEXT flight-group`,
+    `(a set of issues to build IN PARALLEL) from the pending set. This wave was ALREADY dependency-ordered`,
+    `upstream (wave_compute / prepwaves), so its issues are independent by construction — you do NOT need to`,
+    `read or reason about any issue's declared "## Dependencies"; treat them as already satisfied. Your only`,
+    `job is conflict-free parallel batching + scheduling surfaced rework.`,
     `  merged so far: [${[...merged].join(', ') || 'none'}]`,
     `  pending:       [${[...pending].join(', ') || 'none'}]`,
-    `  just re-opened (surfaced deps to schedule FIRST): ${JSON.stringify(lastRework)}`,
+    `  just re-opened by reconcile (surfaced rework — schedule FIRST): ${JSON.stringify(lastRework)}`,
     ``,
-    `CRITICAL — dependency scope (#699 live-gate finding #7): you enforce ordering ONLY among THIS wave's`,
-    `issues [${ALL_ISSUES.join(', ')}]. A spec may declare a dependency (e.g. "Depends on: 1.4") on an issue`,
-    `that is NOT in this wave's set — that dependency is ALREADY SATISFIED by an earlier wave or the base/kahuna`,
-    `branch (prepwaves topologically sorts waves so a wave's external deps are merged before it runs). Do NOT`,
-    `treat an out-of-wave dependency as unmet, and NEVER IMPASSE because of one. Only an INTRA-wave dependency`,
-    `(the provider is itself a pending issue in [${ALL_ISSUES.join(', ')}] that has not merged yet) constrains`,
-    `ordering — schedule that provider first, the consumer in a later group. A dependency whose provider is`,
-    `neither pending nor in this wave's set is met.`,
+    `1. Fetch each pending issue's FILE MANIFEST (sdlc-server spec_get / work_item — files it creates/modifies).`,
+    `2. Run flight_overlap + flight_partition over those manifests to pick a maximal NON-CONFLICTING parallel`,
+    `   group (issues that do not touch the same source files). Do not guess a partition you can compute.`,
+    `3. Any issue in "just re-opened" is a surfaced dependency reconcile reset — put it in THIS group so it`,
+    `   re-runs against the now-merged provider.`,
+    `Note: a runtime dependency you cannot see here will surface at integration — reconcile detects the break`,
+    `and re-opens the consumer (the §3.1 dynamic re-plan loop). You do NOT pre-empt that with declared-dep`,
+    `reasoning; you just keep partitioning the pending set.`,
     ``,
-    `For each pending issue fetch its spec (sdlc-server spec_get / work_item) and file manifest, then run`,
-    `flight_overlap + flight_partition to pick a maximal NON-CONFLICTING parallel group. A surfaced dependency`,
-    `from "just re-opened" goes in THIS group (re-run against the now-merged provider). When in doubt, sequence.`,
-    `Use the REAL sdlc-server tools: spec_get / work_item (specs + file manifests), flight_overlap +`,
-    `flight_partition (the conflict-free grouping). Do not guess a partition you can compute.`,
-    ``,
-    `Return: done (true ONLY if nothing schedulable remains because EVERY pending issue is blocked by an`,
-    `unmerged INTRA-wave provider — a genuine IMPASSE, not success; an out-of-wave dep is NEVER an impasse),`,
+    `Return: done (true ONLY if you genuinely cannot form ANY group from a non-empty pending set — a real`,
+    `IMPASSE, which should essentially never happen since the wave is pre-ordered; it is NOT a success state),`,
     `group (issue numbers for the next parallel flight-group), rationale (1-2 sentences).`,
   ].join('\n')
 }
