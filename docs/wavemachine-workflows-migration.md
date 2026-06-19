@@ -1,6 +1,6 @@
 # Wavemachine → Dynamic Workflows: Migration Design
 
-**Status:** on-paper design (no implementation). Closes the design phase tracked in #671.
+**Status:** IMPLEMENTED + cut over (#691). The dynamic-workflows engine is now the canonical `/wavemachine` + `/nextwave` (the `-next` dev names retired). Validated end-to-end — single- and multi-repo pilots plus a live integration gate with proven promotion (§9). Design phase closed #671.
 **Decision in one line:** migrate the wave orchestration to Claude Code **Dynamic Workflows** **for determinism + reliability, not tokens.**
 
 Background memories: `project_workflow_migration`, `lesson_cage_bars_signal_wrong_tool`.
@@ -181,7 +181,7 @@ Gate bugs **fixed by construction** here, three from the live integration gate:
 > **`args`** (never `input`), parses string-or-object, and **fails loud on an empty wave** (an empty
 > issue list would reach this gate with nothing merged and open/promote at the protected branch). And
 > a Workflow must be **one self-contained file** with `export const meta` first — cross-file `import`s
-> don't run — so the tested source modules are inlined by `skills/nextwave-next/bundle.mjs` into
+> don't run — so the tested source modules are inlined by `skills/nextwave/bundle.mjs` into
 > `per-wave-workflow.bundled.js` (the invoked artifact), guarded by a drift regression test.
 
 **Static analysis must be diff-scoped (kahuna-vs-main), never tree-scoped** — a refinement the pilot forced (§9). Lint/typecheck are **not a fifth gate signal**; in the real wave they ride **inside the CI signal** (`ci_wait_run` runs the project's full gate). Whatever evaluates static cleanliness — the review signal (already "the kahuna-vs-main diff") and CI's lint/typecheck — must look only at the wave's *changed files*, not the whole tree. Otherwise **pre-existing baseline debt spuriously HOLDs an otherwise-clean wave**: the iter-3 pilot hit exactly this when a standalone lint check (run as a CI stand-in, since a dry-run has no merge-result pipeline to wait on) flagged unused imports in untouched *baseline* test files. Scope static analysis to the diff and a wave is judged on what it changed, nothing else.
@@ -261,7 +261,7 @@ while (true) {
 
 > The per-wave Workflow returns `{ gate, promoted, ... }` (see `per-wave-workflow.js`) — `gate` and
 > `promoted` are **distinct facts**. The campaign advances only when both hold; a `gate:'PASS'` whose
-> `promoted` is false is a HOLD, not progress. The operational driver `/wavemachine-next` (#690)
+> `promoted` is false is a HOLD, not progress. The operational driver `/wavemachine` (#690)
 > implements this; the simplified `{ gate: PASS | HOLD | SKIPPED }` shorthand used elsewhere in this
 > section predates the `promoted` split and is superseded by the contract here.
 

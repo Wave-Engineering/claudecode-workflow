@@ -124,8 +124,10 @@ fi
 if ! grep -qE '\bmcp-log\b' "$WAVEMACHINE"; then
 	fail "wavemachine: no 'mcp-log' references"
 fi
-if ! grep -qE '\bmcp-log\b' "$NEXTWAVE"; then
-	fail "nextwave: no 'mcp-log' references"
+# The dynamic-workflows /nextwave (#692) drives wave-status (not mcp-log — its
+# Workflow handles its own logging). Guard the CLI it actually uses.
+if ! grep -qE '\bwave-status\b' "$NEXTWAVE"; then
+	fail "nextwave: no 'wave-status' references — did the skill lose its CLI calls entirely?"
 fi
 
 echo ""

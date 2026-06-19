@@ -19,7 +19,7 @@ import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
-import { toBlob, blobPath, statusDir } from '../../skills/nextwave-next/wave-status.js'
+import { toBlob, blobPath, statusDir } from '../../skills/nextwave/wave-status.js'
 
 let failures = 0
 const ok = (name) => console.log(`  [PASS] ${name}`)

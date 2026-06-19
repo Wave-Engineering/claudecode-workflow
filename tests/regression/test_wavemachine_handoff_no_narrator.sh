@@ -2,12 +2,13 @@
 # test_wavemachine_handoff_no_narrator.sh — regression test for issue #600.
 #
 # /wavemachine SKILL.md must structurally forbid inter-wave narrator gaps.
-# After `/nextwave auto` returns OK, the next assistant message MUST be a
-# tool-use block (status-panel regen + discord-status-post + the next
-# iteration's wave_health_check), NOT narrative text. This is "Bug B" from
-# Plan #581 campaign A — distinct from the sub-agent-level Prime stall in
-# that the OUTER LOOP itself stalls when the agent emits prose between
-# waves instead of looping cleanly.
+# After a per-wave Workflow returns its verdict, the next assistant message
+# MUST be a tool-use block (status-panel regen + discord-status-post + the
+# next iteration's wave launch), NOT narrative text. This is "Bug B" from
+# Plan #581 campaign A. The per-wave WORK is now a deterministic Workflow
+# (the dynamic-workflows engine, #692), but the CAMPAIGN loop still runs in
+# the main session ("a thin sliver of turns between waves" — migration doc
+# §5), so the outer-loop stall risk survives and this guard still applies.
 #
 # This is a doc-shape test (analogous to test_wavemachine_preflight_tools_check.sh)
 # because the contract is behavioural instruction the agent follows, not Bash
@@ -39,10 +40,10 @@ fi
 #    "single tool-use boundary" wording. This is the load-bearing phrase the
 #    skill body uses to bind the contract; if it's been softened, the rule
 #    has been weakened.
-if grep -qE "## Wave-to-Wave Handoff" "$SKILL"; then
-	pass "Wave-to-Wave Handoff section exists"
+if grep -qE "## Per-wave handoff" "$SKILL"; then
+	pass "Per-wave handoff section exists"
 else
-	fail "Wave-to-Wave Handoff section missing — rule cannot be enforced"
+	fail "Per-wave handoff section missing — rule cannot be enforced"
 fi
 
 if grep -qE "single tool-use boundary" "$SKILL"; then
@@ -65,13 +66,13 @@ fi
 #    tell is a reference to "Wave-to-Wave Handoff" (or the canonical "single
 #    tool-use boundary" wording) inside the loop's OK branch description.
 if awk '
-	/^## The Loop/,/^## Wave-to-Wave Handoff/{
+	/^## The campaign loop/,/^## Per-wave handoff/{
 		print
 	}
-' "$SKILL" | grep -qiE "Wave-to-Wave Handoff|single tool-use boundary|no narrative text|no narrator"; then
-	pass "loop OK-path defers to Wave-to-Wave Handoff contract (no narration-friendly enumeration)"
+' "$SKILL" | grep -qiE "Per-wave handoff|single tool-use boundary|no narrative text|no narrator"; then
+	pass "loop OK-path defers to Per-wave handoff contract (no narration-friendly enumeration)"
 else
-	fail "loop OK-path does not reference Wave-to-Wave Handoff — narrator gap may slip in"
+	fail "loop OK-path does not reference Per-wave handoff — narrator gap may slip in"
 fi
 
 # 4. Non-Negotiables must include a rule about wave-to-wave handoff. This is
@@ -83,10 +84,10 @@ if awk '
 	/^## Non-Negotiables/ { in_section = 1; print; next }
 	in_section && /^## / { exit }
 	in_section { print }
-' "$SKILL" | grep -qiE "Wave-to-wave handoff.*single tool-use boundary|no narrator gap"; then
-	pass "Non-Negotiables enumerates the wave-to-wave handoff rule"
+' "$SKILL" | grep -qiE "Per-wave handoff.*single tool-use boundary|no narrator gap"; then
+	pass "Non-Negotiables enumerates the per-wave handoff rule"
 else
-	fail "Non-Negotiables missing the wave-to-wave handoff rule"
+	fail "Non-Negotiables missing the per-wave handoff rule"
 fi
 
 # 5. The Stop hook (config/settings.template.json) must be in place with the
@@ -112,7 +113,7 @@ fi
 #    modes this rule prevents. The legitimate announcement points are
 #    terminal-only (clean completion, abort, gate-blocked).
 if awk '
-	/^## The Loop/,/^## Trust-Score Gate/{
+	/^## The campaign loop/,/^## Closed campaign-exit set/{
 		print
 	}
 ' "$SKILL" | grep -qiE "announce.{0,30}wave.{0,20}complete|report.{0,20}progress.{0,20}between|narrate.{0,20}wave"; then

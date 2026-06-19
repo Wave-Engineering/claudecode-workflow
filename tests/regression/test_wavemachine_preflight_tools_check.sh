@@ -46,7 +46,7 @@ fi
 #    Tolerant phrasing: any of "refuse", "abort", "do not enter the loop", or
 #    similar in the same paragraph as the command-v line.
 if awk '
-	/^## Pre-Flight Checks/,/^## /{
+	/^## Pre-flight/,/^## /{
 		# Capture the section block
 		print
 	}

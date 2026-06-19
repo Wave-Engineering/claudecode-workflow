@@ -1,7 +1,7 @@
 // wave-status.js — the #688 wave-status persistence seam helper for per-wave-workflow.js.
 //
 // Design of record: docs/wavemachine-workflows-migration.md §3.3 (resumability) + §6.
-// Seam contract: skills/nextwave-next/SEAMS.md (#688 — wave-status persistence).
+// Seam contract: skills/nextwave/SEAMS.md (#688 — wave-status persistence).
 //
 // WHY A HELPER MODULE: the workflow script cannot call MCP/CLI directly (§3.3) — every
 // side-effect is an agent() call. This module owns the two things that make persistence

@@ -23,9 +23,9 @@ if ! command -v node &>/dev/null; then
 	exit 1
 fi
 
-node --check "$REPO_DIR/skills/nextwave-next/gate.js"
+node --check "$REPO_DIR/skills/nextwave/gate.js"
 echo "  [PASS] gate.js syntax (node --check)"
-node --check "$REPO_DIR/skills/nextwave-next/per-wave-workflow.js"
+node --check "$REPO_DIR/skills/nextwave/per-wave-workflow.js"
 echo "  [PASS] per-wave-workflow.js syntax (node --check)"
 
 exec node "$REPO_DIR/tests/regression/gate_signals_roundtrip.mjs"

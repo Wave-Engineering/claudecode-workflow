@@ -14,7 +14,7 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-NW="skills/nextwave-next"
+NW="skills/nextwave"
 BUNDLE="$REPO_DIR/$NW/per-wave-workflow.bundled.js"
 fail=0
 

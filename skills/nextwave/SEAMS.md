@@ -162,7 +162,7 @@ Three call sites in the script, all currently log-only stubs:
 
 - `disposition ∈ {"promoted", "held"}`. Record the wave's terminal disposition + `detail`
   into wave-status's wave-completion record, so the **campaign driver's** rehydrate (§5,
-  `/wavemachine-next`) can prune a promoted wave on cold start.
+  `/wavemachine`) can prune a promoted wave on cold start.
 
 > **Durable state must NOT live in `/tmp`** (`lesson_tmp_identity_boot_wipe`). The
 > `/tmp/wavemachine/` bus is fine for within-run comms; resume state belongs in

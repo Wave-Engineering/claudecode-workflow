@@ -22,7 +22,7 @@ import {
   trivySignalPrompt,
   promotePrompt,
   PROMOTE_RESULT,
-} from '../../skills/nextwave-next/gate.js'
+} from '../../skills/nextwave/gate.js'
 
 let failures = 0
 const ok = (name) => console.log(`  [PASS] ${name}`)

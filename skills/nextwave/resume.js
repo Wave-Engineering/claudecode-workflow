@@ -4,7 +4,7 @@
 //   §3.3 resumability (rehydrate from wave-status; idempotent worker/reconcile — the crux)
 //   §4.2 durable worktrees (idempotent create, reuse-branch-on-resume, never -b)
 //   §4.3 cleanup discipline (the 3-point cleanup; prune BRANCHES too, shared wave-<id>/ stem)
-// Seam contract: skills/nextwave-next/SEAMS.md (#686 — resumability / rehydrate / idempotency).
+// Seam contract: skills/nextwave/SEAMS.md (#686 — resumability / rehydrate / idempotency).
 //
 // WHY A HELPER MODULE: the workflow script cannot call MCP/CLI directly (§3.3) — every
 // side-effect is an agent() call. This module owns the parts that make resume + idempotency

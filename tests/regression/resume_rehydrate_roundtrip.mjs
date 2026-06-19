@@ -32,7 +32,7 @@ import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
-import { toBlob, blobPath, statusDir } from '../../skills/nextwave-next/wave-status.js'
+import { toBlob, blobPath, statusDir } from '../../skills/nextwave/wave-status.js'
 import {
   parseRehydrate,
   coldStart,
@@ -41,7 +41,7 @@ import {
   cleanupTerminalCmds,
   issueBranchFor,
   wtPathFor,
-} from '../../skills/nextwave-next/resume.js'
+} from '../../skills/nextwave/resume.js'
 
 let failures = 0
 const ok = (name) => console.log(`  [PASS] ${name}`)
@@ -193,7 +193,7 @@ console.log('  all #686 resume + idempotency round-trip checks passed')
 //
 //   1. Provision a throwaway target repo + a multi-group wave (e.g. ccwork-testtarget, 4-5 issues
 //      with one cross-group dependency so the loop runs ≥2 groups).
-//   2. Launch the per-wave Workflow (skills/nextwave-next/per-wave-workflow.js) via the SDK
+//   2. Launch the per-wave Workflow (skills/nextwave/per-wave-workflow.js) via the SDK
 //      Workflow({ scriptPath }) with { waveId, targetRepo, targetRepoDir, kahunaBranch, issues }.
 //   3. KILL the process mid-reconcile of group 2 (after group 1's issues merged + persistIteration
 //      wrote .claude/status/wave-<id>.json, before the wave completes). Confirm the durable blob on

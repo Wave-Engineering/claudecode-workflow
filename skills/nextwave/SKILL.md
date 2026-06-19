@@ -1,554 +1,192 @@
 ---
 name: nextwave
-description: Execute the next pending wave — flight-based conflict avoidance for parallel, fast-path for serial
+description: Execute one wave via the per-wave Workflow — the §3 spine (rehydrate → dynamic flight loop → trust gate → promote) as a deterministic JS Workflow, not an LLM orchestrator
 ---
 
-# NextWave — Execute One Wave with the Orchestrator/Prime/Flight Protocol
+# NextWave-Next — Execute One Wave via the per-wave Workflow
+
+> **Migration successor to `/nextwave`.** This is the Dynamic-Workflows shape of the
+> per-wave primitive: the orchestrator's deterministic control flow is moved into a
+> JS Workflow script, and the LLM is called only for the steps that genuinely need
+> judgment (plan / implement / reconcile / review). The old `/nextwave`
+> (Orchestrator/Prime/Flight on a filesystem bus) is unchanged and stays in place during
+> migration. Design of record: `docs/wavemachine-workflows-migration.md`.
+>
+> **Source vs. runnable artifact (live-gate finding #2):** a Dynamic Workflow must be ONE
+> self-contained file with `export const meta` first — cross-file `import`s do NOT run as a
+> Workflow. So the engine's tested halves live in modules (`per-wave-workflow.js` +
+> `wave-status.js`/`resume.js`/`gate.js`) and `bundle.mjs` inlines them into the single-file
+> artifact **`per-wave-workflow.bundled.js`** — the file the Workflow tool actually invokes.
+> Edit the source modules, then `node skills/nextwave/bundle.mjs`; a regression test
+> (`test_bundle_in_sync.sh`) fails if the committed bundle drifts from its source.
 
 ## Axioms
 
-This skill is bound by WAVE_AXIOMS 2, 3, 4, 5, 6, 8, 9 — see `WAVE_AXIOMS.md` at the repo root. The autonomy contract for the per-flight dispatch loop, the closed-list legal-exits enumeration, the Concerns Channel pressure valve, the cost-asymmetry default-forward stance, the approval-frequency rule (`/nextwave` = one consolidated batch gate per flight, never per-issue / per-sub-agent; `/nextwave auto` = no human gate), and the user-attention-as-cost framing live in that file. The mechanical detail below (procedure, gate format, exit detection) is the operational binding for those axioms in this skill — when justification prose seems missing, it is in `WAVE_AXIOMS.md` by design.
+Bound by WAVE_AXIOMS 2, 3, 4, 5, 6, 8, 9 (`WAVE_AXIOMS.md` at the repo root). The
+closed-list legal-exits enumeration, the Concerns Channel pressure valve, the
+cost-asymmetry default-forward stance, the approval-frequency rule, and the
+user-attention-as-cost framing live in that file. In this successor those axioms are
+no longer prose the orchestrator must remember — they are **loop guards in the
+Workflow script it cannot forget or override** (`per-wave-workflow.js`, §3.1). When
+justification prose seems missing, it is in `WAVE_AXIOMS.md` by design.
 
-Execute the next pending wave created by `/prepwaves`. Single-wave primitive. The top-level session is the **Orchestrator**; it spawns a **Prime** sub-agent for planning and post-flight merge work, and N **Flight** sub-agents in parallel for per-issue implementation. All inter-agent data flows through a filesystem message bus under `/tmp/wavemachine/{repo-slug}/wave-{N}/` — Orchestrator context holds only paths and status tokens.
+## What this is
 
-Two modes:
-
-- `/nextwave` — **interactive**. A single consolidated approval gate fires per flight (= per wave for the dominant single-flight case) after Flights return and after the orchestrator's reviewer pass, before Prime(post-flight) pushes anything to remote. One approval covers every issue in the batch; there are no per-sub-agent prompts.
-- `/nextwave auto` — **auto**. Skips the approval gate. Called by `/wavemachine`. `wave_ci_trust_level` stands in for human judgement.
-
-Merges always go through PR/MR — never direct-to-protected-branch.
-
-## Why this shape
-
-CC sub-agents do not have the `Agent`/`Task` tool. Only the top-level session can spawn parallel sub-agents. That means the Orchestrator *must* own the parallel Flight spawn; Prime cannot do it. Prime is a sequential planner and merge-driver; Flights are the workers. Filesystem bus keeps Orchestrator tokens O(1) per flight regardless of flight content size. See `lesson_cc_subagent_tools.md` and `decision_wavemachine_v2.md`.
-
-## Tools Used
-
-- Lifecycle: `wave_preflight`, `wave_next_pending`, `wave_previous_merged`, `wave_flight_plan`, `wave_flight`, `wave_flight_done`, `wave_close_issue`, `wave_record_mr`, `wave_reconcile_mrs`, `wave_review`, `wave_complete`, `wave_waiting`, `wave_defer`, `wave_show`
-- Flight partitioning (used by Prime): `flight_overlap`, `flight_partition`
-- Drift (used by Prime post-wave): `drift_files_changed`, `drift_check_path_exists`, `drift_check_symbol_exists`
-- Spec: `spec_validate_structure`, `spec_get`, `spec_acceptance_criteria`
-- Commutativity + merge (used by Prime post-flight): `commutativity_verify`, `pr_create`, `pr_wait_ci`, `pr_merge`
-- CI trust (auto mode): `wave_ci_trust_level`
-- Bus primitives (bash): `scripts/wavebus/wave-init`, `scripts/wavebus/flight-finalize`, `scripts/wavebus/wave-cleanup`, `scripts/wavebus/changelog-aggregate`
-- Notifications: `mcp__disc-server__disc_send` — post wave status to `#wave-status` (`1487386934094462986`)
-- Observability: `mcp-log` — emit lifecycle events to `~/.claude/logs/mcp.jsonl` for temporal correlation against sdlc-server `tool_call` events. See `docs/mcp-logging-standard.md`.
-
-## Concepts
-
-- **Orchestrator** — this session. Has `Agent`. Drives the Step 1–6 loop below. Parses canonical status lines. Owns the approval gate in interactive mode.
-- **Prime** — `general-purpose` sub-agent. One per wave (re-spawned per role: pre-wave / post-flight / post-wave). Reads/writes bus files; runs MCP tools. Does NOT commit. Does NOT have `Agent`.
-- **Flight** — `general-purpose` sub-agent. One per issue in a flight. Reads `prompt.md` from the bus, works in an assigned worktree, runs mechanical precheck, commits in the worktree, writes `results.md.partial`, calls `flight-finalize`, returns the canonical line as its last message.
-- **Canonical Flight return regex:** `^(/tmp/wavemachine/[^\s]+/results\.md) (PASS|FAIL)$`. Anything else → Orchestrator treats as FAIL (malformed).
-- **Bus path scheme:**
-
-  ```
-  /tmp/wavemachine/{repo-slug}/wave-{N}/
-  ├── plan.md                                 # Prime(pre-wave) writes
-  ├── merge-report.md                         # Prime(post-wave) writes
-  ├── flight-{M}/
-  │   ├── merge-report.md                     # Prime(post-flight) writes
-  │   └── issue-{X}/
-  │       ├── prompt.md                       # Prime(pre-wave) writes
-  │       ├── results.md.partial              # Flight writes first
-  │       ├── results.md                      # atomic rename target
-  │       └── DONE                            # "PASS" or "FAIL"
-  ```
-
-## Cross-Repo Waves
-
-A **cross-repo wave** is a wave whose sub-issues live in a *different* repo than the orchestrator's working directory. Example: the wave plan lives in `claudecode-workflow` (because the Plan does) but every story modifies code in `mcp-server-sdlc`. This is the standard shape for sdlc-mcp migration Plans.
-
-The default `/nextwave` flow assumes same-repo execution. Cross-repo waves require a handful of adjustments — none of them obvious the first time you hit them. Source-of-truth backing document: `lesson_cross_repo_wave_orchestration.md` (memory). Read it for the source incident and additional sibling patterns (orchestrator direct-write fallback, etc.).
-
-### Seven non-obvious facts
-
-1. **`Agent` tool's `isolation: "worktree"` only works on the *current* repo.** It creates worktrees of `CLAUDE_PROJECT_DIR`, not an arbitrary target. You cannot use it to spawn parallel sub-agents in a different repo.
-2. **A single git checkout can only have one branch active at a time.** N parallel sub-agents cannot each `git checkout` a different branch in the same clone — they would race the working-tree state. You need N independent working trees.
-3. **`git worktree add` is the cheap solution.** It creates an additional working tree at a separate filesystem path with its own `HEAD`, sharing the underlying `.git` directory. No full-clone overhead. Each worktree can have a different branch checked out simultaneously.
-4. **The orchestrator (parent agent) must pre-create the worktrees.** Sub-agents must not create their own — race conditions and naming conflicts. Pre-create all N up front, one per issue, before spawning any execution agents.
-5. **Sub-agents are pointed at worktree paths via their prompt, not via `Agent` tool flags.** Each Flight prompt includes "Your working directory is `/tmp/wt-<slug>-<num>`. Use absolute paths or `cd` to that directory before any git/file operations." **No `isolation:` flag on the `Agent` call.**
-6. **`gh`/`glab` commands must be repo-scoped via `-R Wave-Engineering/<target-repo>`.** Since the orchestrator is not running from the target repo's directory, every `gh issue view`, `gh pr create`, `gh pr merge`, etc. needs `-R`. Do not rely on cwd-based repo detection.
-7. **`wave-status` state stays in the master plan repo** (where the Plan lives), not the target repo. The wave-status CLI walks `.claude/status/phases-waves.json` from `CLAUDE_PROJECT_DIR`. Orchestrator and sub-agents have *different* working directories — that is correct and intentional.
-
-### Recipe
-
-#### Pre-flight target-repo setup (orchestrator, before Step 1)
-
-```bash
-TARGET_REPO=/home/bakerb/sandbox/github/mcp-server-sdlc
-
-# Verify target repo is clean and on the kahuna branch for this Plan
-# (kahuna_branch is bootstrapped by /wavemachine; capture from wave state)
-git -C "$TARGET_REPO" status --short
-git -C "$TARGET_REPO" checkout "$KAHUNA_BRANCH"
-git -C "$TARGET_REPO" pull
-```
-
-#### Worktree creation loop (one per issue)
-
-```bash
-for issue in 76 77 78 79 80 81 82 83 84 85 86 87 88 89; do
-  slug="$(gh issue view "$issue" -R Wave-Engineering/mcp-server-sdlc --json title --jq '.title' \
-          | sed 's/.*: //; s/[^a-zA-Z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//' \
-          | tr '[:upper:]' '[:lower:]' | cut -c1-40)"
-  branch="feature/${issue}-${slug}"
-  worktree="/tmp/wt-sdlc-${issue}"
-  git -C "$TARGET_REPO" worktree add "$worktree" -b "$branch" "origin/$KAHUNA_BRANCH"
-  # Worktrees lack node_modules — install dependencies if the project needs them
-  ( cd "$worktree" && bun install ) || true
-done
-```
-
-`$KAHUNA_BRANCH` is the wave's `kahuna_branch` (e.g. `kahuna/<plan-id>-<slug>`), bootstrapped by `/wavemachine` at Plan launch and read from wave state in Step 1.5.
-
-#### Sub-agent prompt template snippet
-
-In the per-issue Flight prompt, drop in (replacing `<num>` and `<slug>`):
+`/nextwave` runs **one** Workflow — `per-wave-workflow.js` — for a single wave.
+That script IS the §3 spine:
 
 ```
-Your working directory is /tmp/wt-sdlc-<num> (use absolute paths or cd into it before any git/file operations).
-Your branch is feature/<num>-<slug> (already checked out in the worktree).
-
-For any GitHub interactions, repo-scope every command:
-  gh issue view <num> -R Wave-Engineering/mcp-server-sdlc
-  gh pr create   -R Wave-Engineering/mcp-server-sdlc ...
-  gh pr merge    -R Wave-Engineering/mcp-server-sdlc ...
-
-Run validation in the worktree:
-  cd /tmp/wt-sdlc-<num> && ./scripts/ci/validate.sh
+rehydrate (durable resume)
+   → flight loop  [ serial groups; parallel issues; dynamic re-plan; CLOSED legal exits ]
+       per group:  plan(Prime) → parallel issue-workers → merge+reconcile(Prime)
+   → trust gate   [ 4 signals in parallel → one more legal exit ]
+   → promote (kahuna→protected)  OR  hold-for-review
 ```
 
-**Do NOT pass `isolation: "worktree"` on the `Agent` call.** The pre-created worktree IS the isolation.
-
-#### Per-agent commit / push / PR / merge (Prime(post-flight) or orchestrator)
-
-```bash
-git -C /tmp/wt-sdlc-<num> add <files>
-git -C /tmp/wt-sdlc-<num> commit -m "type(scope): description
-
-Closes #<num>"
-git -C /tmp/wt-sdlc-<num> push -u origin feature/<num>-<slug>
-
-gh pr create -R Wave-Engineering/mcp-server-sdlc \
-  --base "$KAHUNA_BRANCH" --head feature/<num>-<slug> \
-  --title "..." --body "..."
-
-gh pr merge <pr-num> -R Wave-Engineering/mcp-server-sdlc \
-  --squash --auto --delete-branch
-```
-
-Every Flight PR targets the kahuna branch — never the project's protected branch. The kahuna→protected-branch MR is opened separately by `wave_finalize` at Plan completion (Dev Spec §5.2.2).
-
-#### Post-wave worktree cleanup
-
-```bash
-# CC's worktree-isolation mechanism (and Flight sub-agents in general) leaves a
-# git lock file on the worktree (lock reason: "claude agent <id> (pid ...)").
-# Single `--force` is NOT enough — git refuses to remove a locked working tree.
-# Unlock first (no-op if not locked), then force-remove. Do not switch to `-f -f`
-# alone: the unlock branch is also a useful diagnostic if removal still fails.
-for wt in /tmp/wt-sdlc-*; do
-  git -C "$TARGET_REPO" worktree unlock "$wt" 2>/dev/null || true
-  git -C "$TARGET_REPO" worktree remove "$wt" --force
-done
-```
-
-Run this after `wave_complete()` lands and the bus has been cleaned (Step 5).
-
-### What can go wrong
-
-- **Forgetting `-R` on `gh`/`glab` commands** — they fail with "no PRs found" or operate on the wrong repo silently. Every cross-repo `gh` invocation needs `-R Wave-Engineering/<target-repo>`.
-- **Not pre-creating worktrees** — sub-agents racing each other to `git checkout` will leave the target repo in a broken state (detached HEAD, half-applied stashes). Pre-create all N before spawning Flights.
-- **Accidentally using `isolation: "worktree"` on the `Agent` call** — you get a worktree of the *orchestrator's* repo (e.g. `claudecode-workflow`), not the target repo. The Flight ends up in the wrong codebase entirely and every file path it writes is wrong.
-- **Confusing orchestrator cwd with sub-agent cwd** — the orchestrator stays in the master plan repo so `wave_show`, `wave_complete`, and `wave-status` resolve against the right `.claude/status/`. Sub-agents work in their assigned target-repo worktrees. Both are correct; mixing them up corrupts wave state.
-
-## Step 1 — Orchestrator pre-flight
-
-1. `wave_preflight()` → `wave_next_pending()` → resolve wave id `N` and the issue list. If none, report and exit.
-1a. **Cross-repo recipe re-emit.** Read the active phase from `.claude/status/phases-waves.json` (the phase containing wave `N`). If the phase has `cross_repo: true`, `cat` `skills/_shared/recipes/cross-repo-wave-orchestration.md` into your context now and emit it as a preflight section formatted as:
-
-   ```
-   ## Cross-Repo Recipe (auto-loaded because Wave <N> spans repos: <target_repos>)
-
-   <recipe content here>
-   ```
-
-   This handles the multi-session case: `/prepwaves` may have run in a different session and its scrollback is gone. The recipe content lives in one place — both skills `cat` from the same file. Single-repo waves skip this step entirely.
-2. Resolve **target repo slug** for the bus path. Same-repo waves: use the current repo's slug. Cross-repo waves (wave plan lives in this repo, stories live elsewhere): use the target repo's slug per `lesson_cross_repo_wave_orchestration.md`.
-3. **Emit observability anchor.** Run `mcp-log wave_start wave=<N> target=<repo-slug> issues=<COMPACT JSON array, no spaces, e.g. [418,419,420]>` so this anchor *precedes* every per-issue `spec_validate_structure`, `wave_show`, and `wave_previous_merged` call below — that ordering is what makes post-mortem temporal correlation work. The `kahuna` field is added later (Step 1.5) once `wave_show` has been called; it is fine for the initial `wave_start` to omit it.
-4. Verify the integration target (the wave's `kahuna_branch`) is clean in the target repo; `wave_previous_merged()` confirms the prior wave landed on it. Then validate all issues in parallel — launch **one Haiku sub-agent per issue in a single message**:
-   ```
-   subagent_type: general-purpose
-   model: haiku
-   prompt: "Call mcp__sdlc-server__spec_validate_structure for issue #<X> in repo <owner/repo>.
-            Return a single line: #<X> | <VALID or INVALID: list missing sections>"
-   ```
-   Collect results. Any INVALID → stop, report which issue(s) failed validation, exit.
-5. Call `scripts/wavebus/wave-init <repo-slug> <N> 1`. Flight count is `1` initially — Prime may re-invoke it with the real count (script is idempotent). Capture the printed wave root.
-6. **Read `kahuna_branch` from wave state** via `wave_show()` (or by reading `.claude/status/state.json` in the target repo). The field MUST be present and non-empty — kahuna is the only execution shape this skill supports, and `/wavemachine`'s pre-flight bootstrap guarantees the field is populated before any wave runs. Capture the value (e.g. `kahuna/<plan-id>-<slug>`) and pass it into the Prime(pre-wave) prompt as the `kahuna_branch` input. If the field is missing or empty, refuse to proceed and surface the error — wave state has not been bootstrapped through `/wavemachine`'s launch sequence and Plan execution should restart there. Pre-created worktree branches (Step 7, cross-repo path) and `pr_create` `base` (Step 3e) honor this value. See Dev Spec §5.2.3 for the authoritative contract.
-7. Pre-create worktrees per issue. Same-repo: `Agent` calls in Step 3 can use `isolation: "worktree"`. Cross-repo: create them now via `git -C <target-repo> worktree add /tmp/wt-<slug>-<issue> -b feature/<issue>-<desc> origin/<kahuna_branch>` (one per issue).
-8. Resolve identity from `/tmp/claude-agent-<md5>.json`; post to `#wave-status` (`1487386934094462986`): `"🏄 **Wave <N> started** — <project>, <issue-count> issues. Agent: **<dev-name>** <dev-avatar>"`. If `disc_send` fails, log and continue.
-9. Spawn **Prime(pre-wave)** — single `Agent` call, `subagent_type: general-purpose`. Prompt template below.
-
-## Step 2 — Prime(pre-wave) prompt contract
-
-Prime(pre-wave) is a sub-agent. It does NOT have `Agent`; it cannot spawn Flights. Its job is to plan the wave into the bus.
-
-Prompt template (fill in `<repo-slug>`, `<N>`, `<wave-root>`, the issue list, and `<kahuna_branch>` — `<kahuna_branch>` is always present, bootstrapped by `/wavemachine` at Plan launch):
-
-> You are the Prime agent for wave `<N>` of `<repo-slug>`. You plan the wave into the filesystem bus at `<wave-root>`.
->
-> Inputs:
-> - Wave id: `<N>`
-> - Issues in this wave: `<list-of-issue-numbers>`
-> - Wave root: `<wave-root>`
-> - Target repo: `<target-repo>`
-> - Kahuna branch: `<kahuna_branch>` (always populated; bootstrapped by `/wavemachine` at Plan launch)
->
-> Steps:
-> 1. For each issue, fetch the spec via `spec_get` and acceptance criteria via `spec_acceptance_criteria`. Summarize files-to-create / files-to-modify / test files per issue.
-> 2. Run `flight_overlap` + `flight_partition` on the per-issue manifests to determine flight structure. Flight 1 maximizes issue count; later flights resolve file-level conflicts. When in doubt, sequence.
-> 3. If the partition needs more flights than the bus was pre-created for, call `scripts/wavebus/wave-init <repo-slug> <N> <final-flight-count>` (idempotent).
-> 4. Write `<wave-root>/plan.md` summarizing the flight structure (flight M → issues, per-issue file manifest, rationale).
-> 5. For each flight M and each issue X in it, write `<wave-root>/flight-<M>/issue-<X>/prompt.md` containing the full Flight instructions (see "Flight stub prompt" in the caller's skill body — reproduce verbatim, fill placeholders). Pass `<kahuna_branch>` into each Flight prompt so the Flight bases its work on `origin/<kahuna_branch>`. The Flight's PR targets `<kahuna_branch>`, never the project's protected branch — the kahuna→protected-branch MR is opened separately by `wave_finalize` at Plan completion (Dev Spec §5.2.2).
-> 6. Register the plan via `wave_flight_plan`.
-> 7. If any issue's spec is unbuildable (missing AC, structural contradiction, etc.), mark the plan `BLOCKED` and name the failing issue + reason in `plan.md`.
->
-> Final message — exactly one line, no prose, no fences:
->
-> ```
-> {"plan_path":"<absolute-path-to-plan.md>","status":"READY|BLOCKED","flights":[{"flight":1,"issues":[N,N,N]},{"flight":2,"issues":[N]}]}
-> ```
-
-Orchestrator parses that JSON. If `status=BLOCKED`, print the blocker from `plan.md`, post a BLOCKED notice to `#wave-status`, exit (leave bus in place for forensics). In **auto mode**, emit the canonical status line (see "Step 6 — Final status emission") before returning control. Else continue.
-
-If `status=READY`, for each flight in the parsed `flights` array emit `mcp-log flight_plan wave=<N> flight=<M> issues=<COMPACT JSON array, no spaces, e.g. [418,419,420]>` so the planned partition is recorded in the fleet logfile. This is the temporal anchor for correlating sdlc-server tool_call events to a specific flight in post-mortem. **Important:** the array must be compact (no inner spaces) — pretty-printed arrays will be word-split by the shell into broken tokens.
-
-## Step 3 — Per-flight execution loop
-
-For each flight M in the plan, in order:
-
-### 3a. `wave_flight(flight_number=M)` — register flight start.
-
-### 3b. Spawn parallel Flights in ONE tool-use block.
-
-The Orchestrator issues one `Agent` tool-use block containing N `Agent` calls — one per issue in flight M — **in the same assistant message**. This is the only place in the skill where parallelism actually happens. Do NOT issue the calls in separate messages; do NOT use `run_in_background`; do NOT shell out.
-
-**Non-negotiable — `run_in_background` is forbidden here.** The Orchestrator MUST omit the parameter entirely (the default routes synchronously). Passing `run_in_background: true` is a contract break, not a tuning knob. The collection step (3c) below assumes every same-block Agent call returns synchronously with its canonical PASS/FAIL line; an async/background return for any one of the N calls would split the batch and break deterministic collection. This is a **harness contract**: same-block Agent calls without the explicit `run_in_background: true` flag MUST all route synchronously, with no internal heuristic backgrounding any subset. If a harness ever returns an "Async agent launched" surface for a call the Orchestrator did not flag as background, that is a harness bug — file it; do NOT add a polling fallback here. (The explicit case — when a caller intentionally passes `run_in_background: true` — still routes async; the contract targets the implicit case only. See cc-workflow#490 for the source incident.)
-
-Each Agent call: `subagent_type: general-purpose`, prompt = the Flight stub below (filled in), and for same-repo waves `isolation: "worktree"` (for cross-repo, omit — worktrees were pre-created in Step 1.5 and are referenced by path in the prompt).
-
-### 3c. Collect returns.
-
-Each Flight's last message is exactly one line matching `^(/tmp/wavemachine/[^\s]+/results\.md) (PASS|FAIL)$`. Per the Step 3b harness contract, all N returns are synchronous and arrive together in the same tool-result block — no polling, no waiting on bus DONE sentinels for collection, no fallback path for "one of N came back async." Orchestrator:
-
-- Parses each line. Malformed → record as FAIL, note "malformed return".
-- Verifies the `DONE` sentinel (`/tmp/wavemachine/.../issue-<X>/DONE`) exists and contains `PASS` or `FAIL` matching the returned line. Mismatch → FAIL. (The DONE sentinel is a cross-check on the Flight's self-report, not a collection mechanism.)
-- Reads each `results.md` into context (small, summary + checklist).
-
-### 3c.5. Reviewer pass (Orchestrator dispatches — runs before the gate).
-
-Code-reviewer findings must be in hand at gate time so the human sees them in the batched checklist. Flights cannot dispatch the reviewer themselves (sub-agents lack the `Agent`/`Task` tool — see `lesson_cc_subagent_tools.md`). The Orchestrator does have `Agent`, so it dispatches the reviewer pass here, BEFORE the consolidated approval gate.
-
-In a SINGLE tool-use block, issue one `Agent` call per issue X in this flight, `subagent_type: feature-dev:code-reviewer`, `model: opus`. Each call's prompt: `"Review the diff for issue #<X> against the SPEC EXECUTOR rubric. Worktree: <worktree-path>. Diff: run git -C <worktree-path> diff origin/<base-ref>...HEAD. Report any high-confidence findings (correctness bugs, security issues, AC mismatches)."`
-
-Collect the reviewer outputs and stash them keyed by issue — they feed directly into the per-issue rows of the gate's batch checklist (Step 3d) and into the Prime(post-flight) prompt (Step 3e). If ANY issue surfaces a high-confidence finding, the gate at 3d still fires (so the human sees the finding in context), but the orchestrator must surface the finding prominently and recommend rejection.
-
-### 3d. Consolidated approval gate (per-wave / per-flight; interactive mode only — SKIP in auto mode).
-
-**One gate, one approval, batched.** This is the only human checkpoint between local Flight commits and any remote-touching action (push / PR / merge). It fires AFTER all of the flight's Flights have returned AND the Step 3c.5 reviewer pass is complete, and BEFORE Prime(post-flight) is spawned. A single approval covers EVERY issue in the flight — no per-issue / per-sub-agent prompts, no sequential pile-up of N approvals for an N-issue flight.
-
-**Rationale (per Axiom 6 + Axiom 9):** the gate is per-flight (not per-issue / per-sub-agent) because the slash-command choice IS the gate-frequency declaration — see `WAVE_AXIOMS.md` Axiom 6. The aggregate signals carry the correctness information: validate.sh per worktree, the Step 3c.5 reviewer pass, and the Flight's AC self-report. The human's value is sanity-checking the aggregate, once per batch — and per Axiom 9, every additional gate the agent invents burns user attention without recovering correctness signal the three aggregate checks already provide.
-
-**Note on multi-flight waves:** when a wave has multiple flights, inter-flight dependencies force flight 1 to merge before flight 2's Flights can run (flight 2 may rebase onto flight 1's changes — see Step 3g). The gate therefore fires once per flight in those waves; for the single-flight case (the dominant shape), this collapses to exactly one gate per wave. Either way, the gate is **never per-issue / per-sub-agent** — it batches every issue in the flight into one decision.
-
-**Batch checklist format.** Present the following block, then STOP:
-
-```
-═══════════════════════════════════════════════════════════════
-WAVE <N> · FLIGHT <M> — APPROVAL GATE (<I> issues, batched)
-═══════════════════════════════════════════════════════════════
-
-PER-ISSUE SUMMARY
-| Issue | Subject              | Files | Tests | AC  | Reviewer |
-|-------|----------------------|-------|-------|-----|----------|
-| #418  | feat(x): handler A   |   4   |  +12  | 6/6 | clean    |
-| #419  | feat(x): handler B   |   3   |  +8   | 4/4 | clean    |
-| #420  | fix(y): drift check  |   2   |  +3   | 3/3 | 1 note   |
-...
-
-AGGREGATE SIGNALS
-- validate.sh (per worktree): N/N green
-- Full test-suite delta vs HEAD: +<count> tests, all passing
-- Parent code-reviewer pass: <clean | N notes | M high-confidence findings>
-- Coverage concerns: <none | summary>
-
-PER-ISSUE PARENT-REVIEW FINDINGS
-- #418: clean
-- #419: clean
-- #420: [note] suggested rename — non-blocking
-...
-
-[fixed] / [deferred] PER ISSUE
-- #418: [fixed] typo in error message during review
-- #420: [deferred] rename to follow-up — opened #501
-...
-
-[parent-review] OVERALL
-- CI: <green | <details>>
-- Tests: <green | <details>>
-- Coverage: <ok | concerns>
-- Reviewer: <clean | high-confidence findings present — see above>
-
-═══════════════════════════════════════════════════════════════
-APPROVE this batch (one decision covers all <I> issues) — y/n?
-═══════════════════════════════════════════════════════════════
-```
-
-**STOP and wait for explicit user input.** Do not proceed autonomously. Approval responses: `y` / `yes` / `/scp` / `approve` → continue to Step 3e; `n` / `no` / `reject` / specific rework instructions → leave the bus in place, surface the wave root path, exit (nothing touches remote). The skill cannot continue past this point without explicit human input — re-read `feedback_precheck_no_ask.md` and `feedback_take_initiative.md`: those allow taking initiative on routine execution decisions, but **NOT on bypassing the human approval gate for a remote-touching batch of commits**.
-
-In **auto mode**: call `wave_ci_trust_level`; if trust is sufficient, skip the gate and proceed directly to Step 3e. If trust drops below threshold (e.g. recent CI instability), pause and surface to the parent `/wavemachine` caller.
-
-### 3e. Spawn Prime(post-flight).
-
-One `Agent` call, `subagent_type: general-purpose`. Pass the wave's `kahuna_branch` (captured in Step 1.5) into the prompt — set base for `pr_create`. Prompt template:
-
-> You are the Prime(post-flight) agent for wave `<N>`, flight `<M>` of `<repo-slug>`. Flights have already committed in their worktrees. You push, PR, wait CI, verify commutativity, and merge.
->
-> Inputs:
-> - Wave root: `<wave-root>`
-> - Flight: `<M>`
-> - Issues in this flight: `<list>`
-> - Target repo: `<target-repo>`
-> - Kahuna branch: `<kahuna_branch>` (always populated; the integration target for every Flight PR)
->
-> Steps:
-> 1. For each issue X in this flight, read `<wave-root>/flight-<M>/issue-<X>/results.md` and verify `DONE` contains `PASS`. If any FAIL, stop and write a `BLOCKED` report naming the failing issues.
-> 2. **Reviewer findings already in hand.** The Orchestrator dispatched the code-reviewer pass at Step 3c.5 (before the consolidated approval gate at Step 3d) and the human has already approved this batch in light of those findings. Do NOT re-dispatch the reviewer here. Reviewer-pass summaries per issue are recorded in the Step 3d batch checklist; surface them in the merge-report (step 7) for traceability.
-> 3. For each issue, push the Flight's commit from its worktree (`git -C <worktree> push -u origin <branch>`), create a PR via `pr_create({base: <kahuna_branch>})`, then wait for CI via `pr_wait_ci`. **Every Flight PR targets the kahuna branch — never the project's protected branch. The kahuna→protected-branch MR is opened separately by `wave_finalize` per Dev Spec §5.2.2.**
-> 4. If this flight has multiple issues, run `commutativity_verify` on the changesets `{id, head_ref}`. Interpret the group verdict:
->    - `STRONG` / `MEDIUM` → `pr_merge(skip_train=true)` for all.
->    - `WEAK` / `ORACLE_REQUIRED` → sequential merge via the merge queue (no skip).
->    Single-issue flights skip commutativity entirely.
-> 5. Merge all flight PRs via `pr_merge`. On merge, per issue X:
->    a. `wave_close_issue(X)`
->    b. `wave_record_mr(issue_number=X, mr_ref=<url>)`
->    c. Read `**Plan:** #M` from the story issue's `## Metadata` section (via `spec_get(issue_ref=X)`). If `M` is present and not `N/A`, call `plan_mark_story_done({plan_ref: M, story_id: X})`. The handler is `warn_only: true` — a failure is logged to the merge report but does NOT abort the merge sequence. (The handler ships in `mcp-server-sdlc`; until it lands, the call surfaces as a warn-only logged failure per the same contract.)
->
->    Call `wave_flight_done(M)` after all merges land. Then fire-and-forget the auto-updating Discord embed: `./scripts/discord-status-post --channel-id 1487386934094462986 --state-dir .claude/status` (background, non-blocking; failures logged and ignored — Discord is informational, never a gate).
-> 6. `git checkout <kahuna_branch> && git pull` in the target repo (the kahuna branch is the integration target for the next flight; the project's protected branch is updated only at Plan completion via `wave_finalize`).
-> 7. Write `<wave-root>/flight-<M>/merge-report.md` (per-issue PR URL, CI status, merge strategy, reviewer-pass summary per issue from the Step 3c.5 dispatch, anomalies).
->
-> ## Exit shape
->
-> **This is your final-message contract. It overrides every prior conversational habit.** When you finish (or abort) the steps above, your **last assistant message MUST be exactly one line of JSON — nothing else.** No prose, no fences, no preamble, no narration about background processes, no "I'm done", no "let me ...", no status updates, no closing remarks. The Orchestrator parses this line by regex; anything else is recorded as a malformed return and the flight is marked FAIL.
->
-> **Canonical line (verbatim shape — fill placeholders, emit nothing else):**
->
-> ```
-> {"report_path":"<absolute-path-to-merge-report.md>","status":"PASS|FAIL|BLOCKED"}
-> ```
->
-> **Concrete examples (these are the EXACT shapes — match one of them):**
->
-> - PASS:    `{"report_path":"/tmp/wavemachine/foo/wave-2/flight-1/merge-report.md","status":"PASS"}`
-> - FAIL:    `{"report_path":"/tmp/wavemachine/foo/wave-2/flight-1/merge-report.md","status":"FAIL"}`
-> - BLOCKED: `{"report_path":"/tmp/wavemachine/foo/wave-2/flight-1/merge-report.md","status":"BLOCKED"}`
->
-> **Forbidden phrases — NEVER emit any of these as your final message (this list is illustrative, not exhaustive — the rule is "JSON only, nothing else"):**
->
-> - `"Sleep is still running. Let me wait for the notification."` — narrating Bash sleep state. **This is the exact failure that motivated this section (Plan #581 wave-2 flight-1 incident, 2026-05-05).** If a `Bash(sleep)` invocation in your CI-poll loop returns and you find yourself wanting to narrate the sleep, **DO NOT** — re-issue the next polling tool call (`pr_wait_ci`, `ci_wait_run`, etc.) silently, or if the loop is complete, emit the canonical JSON line instead.
-> - `"CI is still running, waiting..."` / `"Waiting for CI..."` / any narration about polling state.
-> - `"Let me check..."` / `"Now I'll..."` / `"Done."` / `"All merged."` / any conversational closer.
-> - `"Here is the merge report:"` followed by report content — the report is on disk; emit only the JSON pointer.
-> - Markdown code fences (```json, ```, etc.) wrapping the JSON line — emit the bare line.
-> - Any line that does NOT match the regex `^\{"report_path":"[^"]+","status":"(PASS|FAIL|BLOCKED)"\}$`.
->
-> **Polling-loop discipline.** Your CI wait (`pr_wait_ci`, `ci_wait_run`, or any inline `Bash(sleep)`-based loop) may take many minutes. While the loop runs, do NOT emit assistant text between iterations — re-issue the next tool call directly. The Orchestrator does not read intermediate narration; it only parses your last message. Any text you emit between sleeps is wasted context and increases the risk of the final-message regex failing.
->
-> **If you are about to emit your final message and you are NOT certain it matches the canonical shape, STOP and re-read this Exit shape section before sending.** This section is deliberately the LAST thing in your prompt so it is the most recent context when you compose the final message.
-
-### 3f. Parse Prime(post-flight) return.
-
-- `PASS` → continue to the next flight. If the next flight exists, perform the inter-flight re-validation step 3g before spawning its Flights.
-- `FAIL` / `BLOCKED` → stop the per-flight loop. Leave the bus in place. Surface to user with the `report_path`. In **auto mode**, emit the canonical status line (see "Step 6 — Final status emission") before returning control.
-
-### 3g. Inter-flight re-validation (before flight M+1, M ≥ 1).
-
-`drift_files_changed(prev_sha, HEAD)` on the target repo. If the changeset intersects any file in flight M+1's manifest, spawn a small re-validation Flight per affected issue (same mechanism as Step 3b, one `Agent` call per issue in a single tool-use block). Each returns `PLAN VALID` / `PLAN VALID (minor)` / `PLAN INVALIDATED` / `ESCALATE`. INVALIDATED → re-plan via a fresh Prime(pre-wave) narrowed to the affected issues; ESCALATE → stop and surface. Rebase feature branches onto the updated kahuna branch before the next flight.
-
-Serial fast-path: when both flights are single-issue and the changed file set is small/local, skip the re-validation Flight spawn. Judgment call — the next Flight will re-read fresh anyway.
-
-## Step 4 — Post-wave Prime (terminal)
-
-After every flight has merged:
-
-1. Spawn **Prime(post-wave)** — one `Agent` call, `subagent_type: general-purpose`. Prompt:
-
-   > You are the Prime(post-wave) agent for wave `<N>` of `<repo-slug>`. The wave is fully merged. You reconcile state and emit the terminal report.
-   >
-   > Steps:
-   > 1. `wave_review()` — confirm every wave issue is closed.
-   > 2. `wave_reconcile_mrs()` — reconcile recorded MRs against actual PR state.
-   > 3. Drift check against wave N+1: read the next wave's issue specs; for each file path referenced call `drift_check_path_exists`, for each symbol call `drift_check_symbol_exists`, and `drift_files_changed(prev_sha, HEAD)` for summary.
-   >    - `SPEC CURRENT` → note in report; move on.
-   >    - `SPEC STALE` → mechanical fix: update the issue with corrected paths/names; list changes in the report.
-   >    - `SPEC BROKEN` → leave the issue alone; flag for user attention in the report.
-   > 4. **CHANGELOG aggregation (mechanical — no gate).** Run `scripts/wavebus/changelog-aggregate <wave-root> <target-repo-path> wave-<N>` to merge per-issue `CHANGELOG.fragment.md` files into the target repo's `CHANGELOG.md` under `## Unreleased`. If the aggregator wrote to `CHANGELOG.md`, commit on a fresh `chore/wave-<N>-changelog` branch in the target repo, push, open a PR (`pr_create`) targeting `<kahuna_branch>`, wait for CI (`pr_wait_ci`), then `pr_merge`. No human gate — content was already approved at each flight's Step 3d gate; this step is purely mechanical aggregation. If the aggregator reports `no fragments found`, skip the commit/PR step entirely (no-op).
-   > 5. `wave_complete()` (marks the current wave complete — takes no args; the server uses the active wave from state).
-   > 6. Write `<wave-root>/merge-report.md` (issues closed, PR URLs, flight breakdown, drift findings, CHANGELOG aggregation result + PR URL if applicable, deferred items, next-wave preview).
-   >
-   > Final message — exactly one line:
-   >
-   > ```
-   > {"report_path":"<absolute-path-to-merge-report.md>","status":"PASS|FAIL|BLOCKED"}
-   > ```
-
-2. Orchestrator reads the report, surfaces a human-readable summary, and — in interactive mode — prompts: "Wave N complete. Run `/nextwave` for Wave N+1, or pause here."
-3. Emit `mcp-log wave_complete wave=<N> status=<PASS|FAIL|BLOCKED> merged=<count> deferred=<count>` so the wave terminal state is timestamped in the fleet logfile.
-4. Post to `#wave-status` (`1487386934094462986`): `"✅ **Wave <N> complete** — <project>, <merged> merged, <deferred> deferred. Agent: **<dev-name>** <dev-avatar>"`, then vox announcement (conversational: name, team, project, wave, counts).
-5. In **auto mode**, emit the canonical status line (see "Step 6 — Final status emission") as the final assistant message. If Prime(post-wave) returned FAIL/BLOCKED, emit that status; otherwise emit OK.
-
-## Step 5 — Cleanup
-
-- **Success path** (Prime(post-wave) returned `PASS`): call `scripts/wavebus/wave-cleanup <wave-root>`. This rm -rf's the wave subtree, including every per-issue `CHANGELOG.fragment.md` written by the flights — Prime(post-wave) Step 4 already merged their content into the target repo's `CHANGELOG.md` under `## Unreleased` and opened the chore PR, so the fragments are intentionally ephemeral and disappear with the bus. Report "bus cleaned" in the final summary. Then remove any worktrees the wave created — both same-repo (CC `isolation: "worktree"`) and cross-repo (orchestrator-created).
-
-  **Worktree-removal contract.** CC's worktree-isolation mechanism (and Flight sub-agents in general) leaves a git lock file on each Flight's worktree (`lock reason: "claude agent <id> (pid ...)"`). A single `git worktree remove --force` is NOT enough — git refuses to remove a locked working tree. The cleanup MUST unlock first (no-op if unlocked) and then force-remove:
-
-  ```bash
-  # Same-repo (CC isolation) — paths under /tmp matching the CC-managed scheme.
-  # Cross-repo — the explicit /tmp/wt-<slug>-<issue> paths the orchestrator created in Step 1.5.
-  git -C <repo> worktree unlock <worktree-path> 2>/dev/null || true
-  git -C <repo> worktree remove <worktree-path> --force
-  ```
-
-  Do NOT collapse to `git worktree remove -f -f` alone — the explicit unlock makes the intent legible, the diagnostic obvious if removal still fails, and survives any future change to git's double-force semantics. If the lock file is ever absent the unlock is a harmless no-op (suppressed by `|| true`).
-
-- **Failure / abort path**: DO NOT cleanup the bus. Leave both the bus and the worktrees in place. Tell the user the exact wave root path so they can inspect `plan.md`, each `prompt.md`, each `results.md`, and each flight's `merge-report.md`, and the worktree paths so they can inspect uncommitted changes if any.
-
-## Step 6 — Final status emission (auto mode only)
-
-When `/nextwave auto` is invoked by `/wavemachine`, the Orchestrator's **last assistant message** must be exactly one line of JSON — nothing else, no prose, no fences. `/wavemachine`'s loop parses this line to decide whether to iterate or abort.
-
-Mapping from Prime's terminal `status` to the wavemachine-facing status:
-
-| Prime return | Exit path | Emitted line |
-|---|---|---|
-| Step 4 Prime(post-wave) `PASS` | Wave merged cleanly | `{"status":"OK","wave_id":"<N>"}` |
-| Step 2 Prime(pre-wave) `BLOCKED` | Wave cannot start | `{"status":"BLOCKED","wave_id":"<N>","reason":"<one-line from plan.md>"}` |
-| Step 3f Prime(post-flight) `BLOCKED` | A flight rejected merge on policy grounds | `{"status":"BLOCKED","wave_id":"<N>","reason":"<one-line from merge-report.md>"}` |
-| Step 3f Prime(post-flight) `FAIL` | A flight hit an unrecoverable failure (CI red, merge conflict, etc.) | `{"status":"FAIL","wave_id":"<N>","reason":"<one-line from merge-report.md>"}` |
-| Step 4 Prime(post-wave) `FAIL` / `BLOCKED` | Drift / reconciliation failed after all flights merged | `{"status":"FAIL","wave_id":"<N>","reason":"<one-line from merge-report.md>"}` / `{"status":"BLOCKED","wave_id":"<N>","reason":"..."}` |
-
-`<N>` is the wave id (e.g. `W-4`). The `reason` field is required on BLOCKED and FAIL; OK never carries a reason.
-
-**Auto-mode approval gate fallback:** Step 3d says auto mode pauses and surfaces to the caller if `wave_ci_trust_level` drops below threshold. Treat that as BLOCKED: emit `{"status":"BLOCKED","wave_id":"<N>","reason":"ci_trust_level below threshold — manual approval required"}`.
-
-**Interactive mode:** Do NOT emit the JSON line. Interactive `/nextwave` ends with the human-readable prompt described in Step 4 — emitting a machine-parseable line would pollute the user-facing flow.
-
-**Ordering:** the JSON line comes AFTER the Discord announcement and the cleanup step, as the **final** assistant message of the auto-mode run. If any later output would follow (a summary table, a vox call), move it BEFORE the JSON emission.
-
-## Flight stub prompt (template — Prime writes this into each `prompt.md`)
-
-This prompt is what each Flight sub-agent receives. Preserve the SPEC EXECUTOR block verbatim; it is load-bearing policy from v1.
-
-> You are a Flight agent for wave `<N>`, flight `<M>`, issue `<X>` of `<repo-slug>`.
->
-> Your working directory is `<worktree-path>` (use absolute paths or `cd` into it before any git/file operations).
-> Your branch is `<branch-name>` (already checked out in the worktree).
-> **Base your work on origin/`<kahuna_branch>`, not the project's protected branch.** Your branch was created from `origin/<kahuna_branch>` and your PR will target `<kahuna_branch>`. The kahuna→protected-branch MR is opened separately by `wave_finalize` at Plan completion (Dev Spec §5.2.2).
-> Full instructions for this issue are at `<wave-root>/flight-<M>/issue-<X>/prompt.md` — re-read that file now; this block is only the contract for your return.
->
-> **SPEC EXECUTOR rules (preserve verbatim):**
->
-> - Implement EXACTLY what the issue specifies. If the spec is wrong or needs a design change, STOP and report — do NOT improvise.
-> - Do NOT commit. Leave changes uncommitted.
-> - CI/CD: no more than 5 lines in any `run:`/`script:` block — extract shell scripts to `scripts/ci/`. No hardcoded secrets.
-> - Tests exercise REAL code paths. Mocks only for true external boundaries (network/fs/APIs). Every new function needs coverage. Assert meaningful outcomes. >2 mocks in one test = wrong approach.
-> - Report: what was implemented, files, test results, review findings, AC status, concerns. Do NOT report success on failing tests or unmet AC.
->
-> **CHANGELOG fragment rule.** Do NOT edit `CHANGELOG.md` directly. If the issue introduces a user-visible change worth a changelog entry, write `CHANGELOG.fragment.md` in your issue dir at `<wave-root>/flight-<M>/issue-<X>/CHANGELOG.fragment.md`. The fragment is a markdown document with H3 category headings (`### Breaking`, `### Features`, `### Fixes`, `### Docs`, `### Chore`) followed by bullet lines. Prime(post-wave) aggregates every fragment in the wave into the target repo's `CHANGELOG.md` under `## Unreleased` (deterministic order: numeric flight, then numeric issue; identical bullets deduplicated). This unblocks `flight_partition` parallelism for waves whose stories all touch `CHANGELOG.md` — see `pattern_changelog_fragment_aggregation.md`.
->
-> **After implementation, run the mechanical half of `/precheck` in the worktree:**
->
-> 1. `./scripts/ci/validate.sh` (or the project's equivalent)
-> 2. Project test suite
-> 3. **SKIP code-reviewer agent dispatch** — Flight context lacks the `Agent`/`Task` tool (CC sub-agents cannot spawn sub-sub-agents; see `lesson_cc_subagent_tools.md`). The reviewer pass runs from the Orchestrator instead (Step 3c.5), so its findings can feed the consolidated batch approval gate (Step 3d). Do a thorough self-review against the SPEC EXECUTOR rubric and document findings in `results.md`.
-> 4. AC verification — re-read the issue, walk every acceptance criterion, confirm each is met
->
-> **If all mechanical checks pass, commit in your worktree:**
->
-> ```
-> git -C <worktree-path> add <files>
-> git -C <worktree-path> commit -m "type(scope): description\n\nCloses #<X>"
-> ```
->
-> (Do NOT push. Prime(post-flight) pushes after the Orchestrator's consolidated batch approval gate at Step 3d.)
->
-> **Write your results file:**
->
-> 1. Write `<wave-root>/flight-<M>/issue-<X>/results.md.partial` with: commit SHA, files changed, test results, self-review findings (note that reviewer-agent dispatch is skipped here — the Orchestrator runs the reviewer pass at Step 3c.5 and folds its findings into the consolidated batch approval gate at Step 3d), AC checklist status, any deferred items, any concerns.
-> 2. Call `scripts/wavebus/flight-finalize <wave-root>/flight-<M>/issue-<X>/results.md.partial <PASS|FAIL>`.
->    - `PASS` if every AC is met and all mechanical checks are green.
->    - `FAIL` otherwise. `results.md.partial` must still be non-empty — explain the failure.
->
-> **Your LAST message must be exactly one line — the stdout of `flight-finalize` — nothing else. No prose, no fences.** The line must match `^(/tmp/wavemachine/[^\s]+/results\.md) (PASS|FAIL)$`. Anything else is a protocol violation and the Orchestrator will record this Flight as FAIL.
+Every halt is a coded condition; every judgment is an `agent()`; nothing can stall the
+campaign on a question it did not need to ask. The skill's job is thin: resolve the
+wave's inputs, launch the Workflow, and surface its verdict.
+
+## Why a Workflow, not an LLM orchestrator
+
+We ran the wave Orchestrator as an LLM doing deterministic control flow — a reasoner
+forced to act as a state machine — and patched every recurring stall inside that frame
+(WAVE_AXIOMS, the Concerns Channel, the Stop-hook `decision:block`, #78/#79/#90). The
+guard-count was the tell: when you keep adding rules to make a tool behave against its
+nature, question the tool (`lesson_cage_bars_signal_wrong_tool`). A Workflow relocates
+the control flow into deterministic JS and calls the LLM only inside bounded sub-tasks
+(a flight implements; a reconcile resolves a conflict), where a "distracted" agent can
+only fail *its own task*, never halt the wave. See migration doc §1.
+
+## Inputs (the Workflow's `args`)
+
+The engine reads the Workflow runtime global **`args`** (live-gate finding #1 — NOT `input`;
+the old engine read a non-existent `input`, silently got `{}`, and ran an empty wave). Pass
+`args` as a **JSON object** (a JSON string is tolerated and parsed, but the object form is
+canonical). An **empty / missing `issues` list is fail-loud** (#4): the engine refuses rather
+than reaching the trust gate with nothing merged and opening/promoting at the protected branch.
+
+Supplied by the caller (`/wavemachine` per wave, or a human launching one wave):
+
+| Field | Meaning |
+|---|---|
+| `waveId` | the wave id (e.g. `W-3`) |
+| `issues` | the wave's issue numbers (one repo — single-repo-per-wave axiom, §4.1). **Required, non-empty.** |
+| `targetRepo` | `owner/repo` for `gh -R` scoping |
+| `targetRepoDir` | the clone the durable worktrees attach to (§4.2) |
+| `kahunaBranch` | the integration target; every flight PR targets this, never the protected branch |
+| `protectedBranch` | the promotion target on the success exit |
+| `mode` | `auto` (verdict drives promotion) \| `interactive` (verdict returned; human routes) |
+| `planId` | wave plan id — the gate's PR-open node needs it to assemble the kahuna→protected MR body (#687/#5) |
+| `budget` | optional `{ total, remaining() }` cost guard (the `cost` legal exit) |
+
+The closed numeric guards (`maxGroups`, `maxRework`, `maxIdle`, `costFloor`) have
+safe defaults in the script and rarely need overriding.
+
+## Procedure
+
+1. **Resolve wave inputs.** Read the next pending wave for this Plan (`wave_next_pending`),
+   its issue list, the `kahuna_branch` (always populated — `/wavemachine` bootstraps it
+   at Plan launch), the target repo + clone dir, and the protected branch (from
+   `.claude-project.md`). Refuse if `kahuna_branch` is unset — wave state was not
+   bootstrapped through the campaign launch sequence.
+2. **Validate specs.** Confirm every wave issue is structurally buildable
+   (`spec_validate_structure`). Any INVALID → report and exit (not an error — a Legal Exit).
+3. **Launch the Workflow.** Invoke the single-file artifact `per-wave-workflow.bundled.js`
+   (via the Workflow tool's `scriptPath`) with the inputs above passed as **`args` (a JSON
+   object)**. The script owns everything from here: rehydrate → flight loop → trust gate (which
+   opens the kahuna→protected DRAFT PR first, then runs the four signals on it, #5) → promote.
+4. **Consume the verdict.** The Workflow's return is the per-wave gate (§5): a Workflow
+   cannot pause mid-run for human input, so its *ending with a verdict* IS the gate. The
+   return carries `gate` ∈ `PASS | HOLD | SKIPPED` **and** `promoted` ∈ `true | false`, plus
+   `concerns`/`deferrals` (informational — surfaced and continued, never halted-on). **`gate`
+   and `promoted` are distinct facts** — read both:
+   - `auto` + `{ gate:'PASS', promoted:true }` ⇒ the Workflow's promote node landed the
+     kahuna→protected merge. The wave is DONE on the protected branch. Report it.
+   - `auto` + `{ gate:'PASS', promoted:false }` ⇒ the gate passed but the promote node
+     **soft-failed — the merge did NOT land** (the wave is recorded HELD; `reason` carries the
+     promote error). The code is sound but not on the protected branch → surface as a HOLD for
+     manual promotion, NOT as success. (Promotion can be retried on resume — the kahuna branch
+     is gate-clean.)
+   - `interactive` + `{ gate:'PASS', promoted:false }` ⇒ by design the Workflow never
+     auto-promotes; surface the verdict + the kahuna→protected diff and STOP for the human, who
+     routes promotion. When the human lands the kahuna→protected merge, the wave's terminal
+     disposition is updated to `promoted` in wave-status — that durable record is what
+     `/wavemachine`'s interactive branch reads (`waveDisposition`) to advance, so it never
+     advances on the operator's word alone. (`/wavemachine` owns this branch in a campaign.)
+   - `{ gate:'HOLD' }` / `{ gate:'SKIPPED' }` (always `promoted:false`) ⇒ a trust signal failed
+     or the flight loop hit a HOLD exit before the gate; surface the failing signals / halt reason.
+5. **Report.** Surface a human-readable summary: groups run, issues merged, any HOLD
+   reason, collected concerns/deferrals. Post wave status to `#wave-status` if running
+   under a campaign.
+
+## What is REAL vs SEAM in the Workflow
+
+`per-wave-workflow.js` is the **anchor**: the loop / exits / re-plan / gate fan-out are
+real and complete (the validated pilot shape, hardened). The sdlc-server tool calls the
+agents make are **seams**, marked with `// TODO(#…)` and backed by obvious-placeholder
+stubs so the skeleton runs end-to-end. The seam contracts live in
+`skills/nextwave/SEAMS.md`:
+
+- **#686** — rehydrate / idempotency (durable resume, worktree setup/cleanup)
+- **#687** — real gate signals via sdlc-server (commutativity / CI / review / trivy + promote)
+- **#688** — wave-status persistence (the durable resume substrate)
+
+## Must-preserve behaviors (§3.2)
+
+All three live *inside* the Workflow and **none can halt the wave**:
+
+1. **Surface a concern + keep going** — a `concerns[]` field on the worker/reconcile
+   return; the script collects it (informational) and does NOT branch on it. "Keep
+   going" is the default.
+2. **Decide to defer a fix** — the agent decides; returns `deferrals:[{issue,reason,risk}]`;
+   the script records and proceeds.
+3. **Creatively fix mid-wave without asking** — intra-flight fixes inside the worker's
+   worktree; cross-flight fixes in the reconcile agent (the only multi-branch view);
+   surfaced dependencies re-open via the re-plan loop. `commutativity_verify` is the detector.
 
 ## Exhaustive Legal Exits
 
-Per WAVE_AXIOMS Axiom 3, the legal-exits list is closed: no other condition warrants stopping. Per Axiom 4, when unease doesn't match an exit below, route through the Concerns Channel (`[concern]` comment + optional Discord ping) and CONTINUE — do not halt. The forbidden-stop justification prose lives in `WAVE_AXIOMS.md`; this section is the mechanical detail (detection mechanism, action, tool calls) that operationalizes the axiom in this skill.
+Per WAVE_AXIOMS Axiom 3 the legal-exits list is closed — and here it is **mechanically
+closed**: the only ways the per-wave Workflow stops are the script's coded exits
+(`per-wave-workflow.js` §3.1 loop + §3.4 gate). They are:
 
-`/nextwave` is itself an autonomy-loop skill: Step 3's per-flight dispatch iterates until every flight in the wave has merged, and the only interactive checkpoint is the consolidated batch approval gate at Step 3d (interactive mode only; skipped in `auto` mode — per Axiom 6, the gate frequency is set by the invoked command). Every other branch point — "the next flight could conflict", "this wave has more issues than the last one", "the reviewer pass returned clean but the commit is large" — is NOT an exit. The list below is the complete enumeration.
+| Exit | Condition | Meaning |
+|---|---|---|
+| success | `pending` empty | all issues merged to kahuna → trust gate runs |
+| runaway | `groupsRun ≥ MAX_GROUPS` | too many groups → human review |
+| thrash | `idleRounds ≥ MAX_IDLE` | groups with zero net merges → not converging |
+| cost | `budget` floor | stop before the ceiling |
+| impasse | planner `done` with pending left | planner can't schedule remaining → human |
+| per-issue breaker | issue reworked > `MAX_REWORK` | one issue keeps breaking → human |
+| gate HOLD | a trust signal failed | post-success gate fired → human review |
 
-### Mechanical exits (tool returns)
-
-1. **wave_preflight / wave_next_pending returns empty.** No wave pending; nothing to execute.
-   Detected by: `wave_preflight()` / `wave_next_pending()` returns no pending wave.
-   Action: report "no pending wave", exit skill cleanly (not an error).
-
-2. **Prime(pre-wave) returns BLOCKED.** The wave cannot be planned — spec unbuildable, missing AC, structural contradiction, partition infeasible.
-   Detected by: Step 2 Prime final JSON `{"status":"BLOCKED", ...}`.
-   Action: print blocker reason from `plan.md`, post BLOCKED notice to `#wave-status`, leave bus in place for forensics, exit loop. In auto mode, emit canonical status line (Step 6).
-
-3. **Prime(post-flight) returns FAIL.** A flight's CI failed, a merge conflict was unrecoverable, or commutativity verification required oracle fallback that the environment cannot provide.
-   Detected by: Step 3e Prime final JSON `{"status":"FAIL", ...}`.
-   Action: surface `report_path` to user, leave bus + worktrees in place, exit loop. In auto mode, emit canonical status line (Step 6).
-
-4. **Prime(post-flight) returns BLOCKED.** A flight declined to merge on policy grounds (e.g. reviewer finding not yet resolved, branch-protection rule rejected the merge).
-   Detected by: Step 3e Prime final JSON `{"status":"BLOCKED", ...}`.
-   Action: surface `report_path` to user, leave bus + worktrees in place, exit loop. In auto mode, emit canonical status line (Step 6).
-
-### Plan-reality drift exits
-
-5. **Scope divergence.** A Flight committed files outside the declared scope of the Story it was implementing.
-   Detected by: `drift_files_changed(story_id)` returns files not in the Story's declared-scope manifest.
-   Action: post `[drift-halt]` comment to the Plan issue citing the divergent files, halt loop, await Pair triage.
-
-6. **Story count or dependency violation.** The number of stories completed ≠ the number planned for the current wave, or a Story whose dependencies are unmet landed anyway.
-   Detected by: post-wave reconciliation against `phases-waves.json` (Prime(post-wave) Step 4 / `wave_review()`).
-   Action: post `[drift-halt]` comment citing the mismatch, halt loop, await Pair triage.
-
-7. **AC materially unmet by committed code.** A Story's acceptance criteria include testable conditions that the committed code fails (e.g. a required file doesn't exist, a required function isn't exported, a required section is missing).
-   Detected by: `dod_verify_deliverable(story_id)` returns failures.
-   Action: post `[drift-halt]` comment citing the failing AC, halt loop, await Pair triage.
-
-### Explicit non-exits (DO NOT halt for these)
-
-The following conditions look like checkpoints but are NOT exits. The loop continues past each:
-
-- **Phase transitions.** Wave-N of Phase 1 → wave-1 of Phase 2 is a routine lifecycle event, not a checkpoint. Phase DoDs are validated at phase-complete time via `[phase-complete ...]` comment; the loop does not pause for human review of the transition.
-- **First multi-issue wave.** The first wave with >1 story is not categorically different from the fifth. Multi-issue parallelism is the normal case, validated by `flight_partition` at Prime(pre-wave) time.
-- **Session elapsed time.** How long the loop has been running is not evidence of anything. Short runs can have drift; long runs can be clean.
-- **First-time execution of a known pattern.** If the skill body describes the event (inter-flight re-validation in Step 3g, cross-repo worktree creation in Step 1, kahuna base-ref plumbing, consolidated batch approval gate), it is precedented. "I've never actually done this before" is not a new category.
-- **Recent successes increasing anxiety.** Each merged flight makes the Orchestrator more confident *in the harness*, not less confident *in the next flight*. Loss-aversion dressed as caution is the specific failure mode this section exists to prevent.
-- **General caution / "what if something goes wrong?"** This framing invents a new checkpoint category. If something does go wrong, it shows up as mechanical exit #1-4 or drift exit #5-7. Absence of those is presumption of healthy operation.
-- **"Something feels off and I was about to halt."** If the observation doesn't match any numbered exit above, it is NOT an exit. Use the Concerns Channel (Axiom 4) — post a `[concern]` comment + Discord ping, continue the loop. See `WAVE_AXIOMS.md` (Axioms 4, 5, 9) for the reasoning.
-
-### Cross-reference
-
-The closed-list discipline above is the operational binding of WAVE_AXIOMS Axioms 3, 4, 5, 6, and 9. The justification prose (why stopping is the expensive operation, why the list is closed, why the Concerns Channel is the pressure valve, why the gate is per-flight not per-issue) lives in `WAVE_AXIOMS.md` and is not repeated here. The consolidated batch approval gate at Step 3d is the ONE human checkpoint this skill deliberately preserves in interactive mode (Axiom 6); everything else deferred to the human goes through the Concerns Channel, not a halt.
+Unease that matches none of these is NOT an exit: it rides the `concerns[]` channel
+(Axiom 4) and the loop continues. The dynamic-flight insight: a dependency that surfaces
+mid-wave (reported by reconcile as `needs_rework`) re-opens the issue and becomes the
+next group — **no human halt**. That is the failure class the LLM-orchestrator kept
+stalling on (#78/#79/#90), now expressed as bounded control flow.
 
 ## Non-Negotiables
 
-EXECUTION skill — NO design decisions. Flight sub-agents are SPEC EXECUTORS. Default to safe: latency beats broken code. Flights prevent merge conflicts; planning is cheap, conflict resolution is expensive; single-issue flights take the fast-path. **NEVER merge directly to the project's protected branch.** Flight PRs target the kahuna branch; the kahuna→protected-branch MR is the only path to the protected branch and is gated by the four-signal trust gate at Plan completion. NEVER skip the pre-commit checklist. **Interactive mode: NEVER push, PR, or merge without explicit user approval at the consolidated batch gate (Step 3d).** The gate is **per-wave / per-flight, batched** — one approval covers every issue in the batch — and **never per-issue / per-sub-agent**. Do not bypass it; do not split it; do not infer approval from silence. One wave per invocation — the user controls the pace in interactive mode; `/wavemachine` controls it in auto mode. When waiting: `wave_waiting("<reason>")`. When deferring: `wave_defer(desc, risk)` then accept after user approval. If compaction is imminent partway through a wave, write the current wave state as a memory file before compaction lands. Pair: `/prepwaves` plans, `/nextwave` executes, `/wavemachine` drives the loop.
+- EXECUTION primitive — NO design decisions. Workers are SPEC EXECUTORS.
+- **NEVER merge directly to the protected branch.** Flight PRs target the kahuna branch;
+  the kahuna→protected merge is the only path to the protected branch and is gated by
+  the four-signal trust gate (§3.4).
+- **Single-repo per wave** (§4.1) — a wave resolves to exactly one `target_repo`.
+- **Durable worktrees, not `/tmp`** (§4.2, `lesson_tmp_identity_boot_wipe`): the wave's
+  worktrees live under `<target>/.claude/.worktrees/wave-<id>/`. Idempotent re-attach on
+  resume (reuse the branch, never `-b`); 3-point cleanup; prune branches not just worktrees.
+- Deterministic hooks (pre-push test gate, secret gate) fire inside each worker — the
+  Workflow orchestrates, it does not enforce.
+- One wave per invocation. `/wavemachine` drives the campaign loop over waves.
+
+## Pair
+
+- `/prepwaves` — plans the waves.
+- **`/nextwave` — executes one wave via `per-wave-workflow.js`. This skill.**
+- `/wavemachine` — drives the campaign loop, one per-wave Workflow per pending wave.
+- `/dod` — verifies the project at Plan end.
+
+Successor pairing mirrors the legacy `/prepwaves` → `/nextwave` → `/wavemachine` chain;
+`-next` skills are the Dynamic-Workflows variants and do not modify the originals.

@@ -26,9 +26,9 @@ if ! command -v node &>/dev/null; then
 	exit 1
 fi
 
-node --check "$REPO_DIR/skills/nextwave-next/resume.js"
+node --check "$REPO_DIR/skills/nextwave/resume.js"
 echo "  [PASS] resume.js syntax (node --check)"
-node --check "$REPO_DIR/skills/nextwave-next/per-wave-workflow.js"
+node --check "$REPO_DIR/skills/nextwave/per-wave-workflow.js"
 echo "  [PASS] per-wave-workflow.js syntax (node --check)"
 
 exec node "$REPO_DIR/tests/regression/resume_rehydrate_roundtrip.mjs"

@@ -1,7 +1,7 @@
 // gate.js — the #687 trust-gate seam helper for per-wave-workflow.js.
 //
 // Design of record: docs/wavemachine-workflows-migration.md §3.4 (trust gate).
-// Seam contract: skills/nextwave-next/SEAMS.md (#687 — real gate signals via sdlc-server
+// Seam contract: skills/nextwave/SEAMS.md (#687 — real gate signals via sdlc-server
 // (+ plan/worker/reconcile MCP + promote)).
 //
 // WHY A HELPER MODULE: the workflow script cannot call MCP/CLI directly (§3.3) — every

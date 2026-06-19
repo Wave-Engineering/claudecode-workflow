@@ -79,7 +79,7 @@ export const meta = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PARAMETERS — a per-wave Workflow is launched per wave with this input blob.
-// The campaign driver (skills/wavemachine-next) supplies it from the approved
+// The campaign driver (skills/wavemachine) supplies it from the approved
 // phase/wave plan. Defaults make the script self-describing when run bare.
 //
 // #1/#3/#4 (live-gate findings) — INPUT HANDLING:
