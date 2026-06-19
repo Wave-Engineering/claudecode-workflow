@@ -16,24 +16,18 @@
 #   ./scripts/generate-status-panel   (relative path — needs cwd=cc-workflow root)
 #   scripts/generate-status-panel     (same, no leading ./)
 #   scripts/mcp-log                   (relative path)
+#   scripts/wavebus/<name>            (relative path into the bus scripts; use wavebus-<name>)
 #   wave_status <subcommand>          (orphan: dropped python3 -m prefix)
 #
 # This test scans both skill bodies and fails if any forbidden pattern is
 # present. It is the locked-in invariant that prevents the regression from
 # coming back via a future "convenience" edit.
 #
-# Out of scope (DELIBERATELY NOT covered here):
-#   scripts/wavebus/{wave-init,flight-finalize,wave-cleanup}
-# These have the same shape of regression (relative paths into cc-workflow's
-# scripts/ tree) and appear in skills/nextwave/SKILL.md, but the wavebus
-# install layout is different — those scripts ship under
-# `~/.local/bin/wavebus/<name>` (a subdirectory NOT directly on PATH), so a
-# simple bare-name rename is insufficient. A separate issue should track
-# either flattening the install layout or rewriting the call sites to use
-# absolute paths. When that work happens, this test should grow a fifth
-# pattern. Until then, do NOT add wavebus checks here — passing this test
-# does NOT mean nextwave is fully portable, only that the three CLIs in
-# scope (#569) are clean.
+# Pattern 5 (wavebus, #709): the bus scripts were flattened from
+# scripts/wavebus/<name> to scripts/wavebus-<name>, so ./install now mirrors
+# them to ~/.local/bin/wavebus-<name> (directly on PATH). nextwave must invoke
+# them by bare name (wavebus-<name>), never by the old relative scripts/wavebus
+# path. This is the "fifth pattern" the earlier out-of-scope note deferred.
 
 set -uo pipefail
 
@@ -113,6 +107,19 @@ for f in "$WAVEMACHINE" "$NEXTWAVE"; do
 	fi
 done
 
+# Pattern 5: scripts/wavebus/<name> — relative path into the (now-removed)
+# bus subdir. The scripts were flattened to scripts/wavebus-<name> and install
+# puts them on PATH by bare name, so any relative scripts/wavebus/ reference is
+# a regression (#709).
+for f in "$WAVEMACHINE" "$NEXTWAVE"; do
+	if grep -qE "scripts/wavebus/" "$f"; then
+		fail "$(basename "$f"): contains forbidden 'scripts/wavebus/<name>' path (use bare 'wavebus-<name>')"
+		grep -nE "scripts/wavebus/" "$f" | sed 's/^/    /'
+	else
+		pass "$(basename "$f"): no relative-path scripts/wavebus/ invocations"
+	fi
+done
+
 # Positive checks — confirm the installed-binary names ARE present where
 # expected. (Defensive: catches a "mass deletion" regression.)
 if ! grep -qE '\bwave-status\b' "$WAVEMACHINE"; then
@@ -126,6 +133,10 @@ if ! grep -qE '\bmcp-log\b' "$WAVEMACHINE"; then
 fi
 if ! grep -qE '\bmcp-log\b' "$NEXTWAVE"; then
 	fail "nextwave: no 'mcp-log' references"
+fi
+# nextwave must still reference the bus scripts — by bare name (#709).
+if ! grep -qE '\bwavebus-(wave-init|flight-finalize|wave-cleanup|changelog-aggregate)\b' "$NEXTWAVE"; then
+	fail "nextwave: no bare 'wavebus-<name>' references — did the bus call sites get lost?"
 fi
 
 echo ""

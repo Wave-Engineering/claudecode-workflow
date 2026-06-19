@@ -312,7 +312,7 @@ A non-wave contributor pushing to main while `/wavemachine` runs overnight is a 
 **Detection:** Flight's `/precheck` validation step returns non-zero exit code.
 
 **Agent response:**
-1. Flight writes `results.md.partial` with error detail, then atomic-renames to `results.md` via `wavebus/flight-finalize <path> FAIL`
+1. Flight writes `results.md.partial` with error detail, then atomic-renames to `results.md` via `wavebus-flight-finalize <path> FAIL`
 2. `flight-finalize` writes `DONE` sentinel = `FAIL`, prints canonical return line
 3. Prime reads flight return, records FAIL in the wave's `merge-report.md`
 4. Prime returns `BLOCKED` to Orchestrator per canonical status-line protocol
