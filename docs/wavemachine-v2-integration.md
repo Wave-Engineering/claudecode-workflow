@@ -55,7 +55,7 @@ All live scenarios assume:
 - Identity file at `/tmp/claude-agent-<md5>.json` resolved via `/name` so
   Discord announcements include the agent label.
 - Commands are quoted with the wave root in angle brackets — substitute the
-  actual path printed by `scripts/wavebus/wave-init`.
+  actual path printed by `scripts/wavebus-wave-init`.
 
 Signals captured per live run (Scenarios 1–4, 8, 9):
 
@@ -146,7 +146,7 @@ every other scenario.
 - All three Prime returns are `PASS`.
 - `wave_show()` reports the wave complete.
 - PR merged, issue closed on remote.
-- `scripts/wavebus/wave-cleanup` succeeds (bus directory gone).
+- `scripts/wavebus-wave-cleanup` succeeds (bus directory gone).
 - Discord shows `🏄 Wave N started` and `✅ Wave N complete`.
 - **PASS criterion:** every expected observation above holds; no stray state
   on disk; issue closed.
@@ -277,7 +277,7 @@ Static inspection of the three wiring points:
 1. **Flight stub prompt** (`skills/nextwave/SKILL.md` lines 249–256) —
    instructs the Flight to call `flight-finalize <partial> FAIL` when any AC
    fails or mechanical check is red.
-2. **`scripts/wavebus/flight-finalize`** — confirms FAIL is accepted, DONE
+2. **`scripts/wavebus-flight-finalize`** — confirms FAIL is accepted, DONE
    sentinel gets `"FAIL"`, canonical line echoes `<results.md> FAIL`.
 3. **Orchestrator Step 3c** (`skills/nextwave/SKILL.md` lines 108–112) —
    parses the canonical line; verifies the DONE sentinel matches.
@@ -303,7 +303,7 @@ unambiguous from reading the skill + script.
 
 **Evidence:**
 
-1. `scripts/wavebus/flight-finalize` lines 30–33 — status validation:
+1. `scripts/wavebus-flight-finalize` lines 30–33 — status validation:
 
    ```bash
    if [[ "$status" != "PASS" && "$status" != "FAIL" ]]; then
@@ -312,7 +312,7 @@ unambiguous from reading the skill + script.
    fi
    ```
 
-2. `scripts/wavebus/flight-finalize` lines 65–68 — DONE sentinel + canonical
+2. `scripts/wavebus-flight-finalize` lines 65–68 — DONE sentinel + canonical
    echo (identical shape for PASS and FAIL):
 
    ```bash
@@ -374,7 +374,7 @@ Static inspection:
 
 1. **`flight-finalize` is the ONLY code path that writes `DONE`.** Grep the
    codebase for any other writer — there isn't one (confirmed via
-   `scripts/wavebus/` — no other script touches `DONE`; the Flight stub
+   `scripts/wavebus-*` — no other script touches `DONE`; the Flight stub
    doesn't write it directly).
 2. **If `flight-finalize` never runs**, `DONE` does not exist.
 3. **Orchestrator Step 3c** (`skills/nextwave/SKILL.md:108-112`) parses the
@@ -415,7 +415,7 @@ FAIL; the two guards are defense-in-depth.
    > exists and contains `PASS` or `FAIL` matching the returned line.
    > Mismatch → FAIL.
 
-4. `scripts/wavebus/flight-finalize` is the only writer of `DONE` (line 66:
+4. `scripts/wavebus-flight-finalize` is the only writer of `DONE` (line 66:
    `printf '%s' "$status" >"$done_path"`). If the Flight crashes before
    calling it, the file does not exist.
 
@@ -751,9 +751,9 @@ executor can mechanically fill in the numbers.
   - `skills/nextwave/SKILL.md` — Orchestrator/Prime/Flight protocol.
   - `skills/wavemachine/SKILL.md` — autopilot loop + circuit breaker.
   - `skills/wavemachine/introduction.md` — mental model.
-  - `scripts/wavebus/flight-finalize` — atomic completion primitive.
-  - `scripts/wavebus/wave-init` — bus creation primitive.
-  - `scripts/wavebus/wave-cleanup` — safe teardown primitive.
+  - `scripts/wavebus-flight-finalize` — atomic completion primitive.
+  - `scripts/wavebus-wave-init` — bus creation primitive.
+  - `scripts/wavebus-wave-cleanup` — safe teardown primitive.
   - `decision_wavemachine_v2.md` — v2 design doc (user memory).
   - `lesson_cc_subagent_tools.md` — the CC sub-agent tool distribution
     evidence (user memory).

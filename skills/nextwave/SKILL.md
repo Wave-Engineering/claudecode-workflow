@@ -30,7 +30,7 @@ CC sub-agents do not have the `Agent`/`Task` tool. Only the top-level session ca
 - Spec: `spec_validate_structure`, `spec_get`, `spec_acceptance_criteria`
 - Commutativity + merge (used by Prime post-flight): `commutativity_verify`, `pr_create`, `pr_wait_ci`, `pr_merge`
 - CI trust (auto mode): `wave_ci_trust_level`
-- Bus primitives (bash): `scripts/wavebus/wave-init`, `scripts/wavebus/flight-finalize`, `scripts/wavebus/wave-cleanup`, `scripts/wavebus/changelog-aggregate`
+- Bus primitives (bash): `wavebus-wave-init`, `wavebus-flight-finalize`, `wavebus-wave-cleanup`, `wavebus-changelog-aggregate`
 - Notifications: `mcp__disc-server__disc_send` — post wave status to `#wave-status` (`1487386934094462986`)
 - Observability: `mcp-log` — emit lifecycle events to `~/.claude/logs/mcp.jsonl` for temporal correlation against sdlc-server `tool_call` events. See `docs/mcp-logging-standard.md`.
 
@@ -185,7 +185,7 @@ Run this after `wave_complete()` lands and the bus has been cleaned (Step 5).
             Return a single line: #<X> | <VALID or INVALID: list missing sections>"
    ```
    Collect results. Any INVALID → stop, report which issue(s) failed validation, exit.
-5. Call `scripts/wavebus/wave-init <repo-slug> <N> 1`. Flight count is `1` initially — Prime may re-invoke it with the real count (script is idempotent). Capture the printed wave root.
+5. Call `wavebus-wave-init <repo-slug> <N> 1`. Flight count is `1` initially — Prime may re-invoke it with the real count (script is idempotent). Capture the printed wave root.
 6. **Read `kahuna_branch` from wave state** via `wave_show()` (or by reading `.claude/status/state.json` in the target repo). The field MUST be present and non-empty — kahuna is the only execution shape this skill supports, and `/wavemachine`'s pre-flight bootstrap guarantees the field is populated before any wave runs. Capture the value (e.g. `kahuna/<plan-id>-<slug>`) and pass it into the Prime(pre-wave) prompt as the `kahuna_branch` input. If the field is missing or empty, refuse to proceed and surface the error — wave state has not been bootstrapped through `/wavemachine`'s launch sequence and Plan execution should restart there. Pre-created worktree branches (Step 7, cross-repo path) and `pr_create` `base` (Step 3e) honor this value. See Dev Spec §5.2.3 for the authoritative contract.
 7. Pre-create worktrees per issue. Same-repo: `Agent` calls in Step 3 can use `isolation: "worktree"`. Cross-repo: create them now via `git -C <target-repo> worktree add /tmp/wt-<slug>-<issue> -b feature/<issue>-<desc> origin/<kahuna_branch>` (one per issue).
 8. Resolve identity from `/tmp/claude-agent-<md5>.json`; post to `#wave-status` (`1487386934094462986`): `"🏄 **Wave <N> started** — <project>, <issue-count> issues. Agent: **<dev-name>** <dev-avatar>"`. If `disc_send` fails, log and continue.
@@ -209,7 +209,7 @@ Prompt template (fill in `<repo-slug>`, `<N>`, `<wave-root>`, the issue list, an
 > Steps:
 > 1. For each issue, fetch the spec via `spec_get` and acceptance criteria via `spec_acceptance_criteria`. Summarize files-to-create / files-to-modify / test files per issue.
 > 2. Run `flight_overlap` + `flight_partition` on the per-issue manifests to determine flight structure. Flight 1 maximizes issue count; later flights resolve file-level conflicts. When in doubt, sequence.
-> 3. If the partition needs more flights than the bus was pre-created for, call `scripts/wavebus/wave-init <repo-slug> <N> <final-flight-count>` (idempotent).
+> 3. If the partition needs more flights than the bus was pre-created for, call `wavebus-wave-init <repo-slug> <N> <final-flight-count>` (idempotent).
 > 4. Write `<wave-root>/plan.md` summarizing the flight structure (flight M → issues, per-issue file manifest, rationale).
 > 5. For each flight M and each issue X in it, write `<wave-root>/flight-<M>/issue-<X>/prompt.md` containing the full Flight instructions (see "Flight stub prompt" in the caller's skill body — reproduce verbatim, fill placeholders). Pass `<kahuna_branch>` into each Flight prompt so the Flight bases its work on `origin/<kahuna_branch>`. The Flight's PR targets `<kahuna_branch>`, never the project's protected branch — the kahuna→protected-branch MR is opened separately by `wave_finalize` at Plan completion (Dev Spec §5.2.2).
 > 6. Register the plan via `wave_flight_plan`.
@@ -395,7 +395,7 @@ After every flight has merged:
    >    - `SPEC CURRENT` → note in report; move on.
    >    - `SPEC STALE` → mechanical fix: update the issue with corrected paths/names; list changes in the report.
    >    - `SPEC BROKEN` → leave the issue alone; flag for user attention in the report.
-   > 4. **CHANGELOG aggregation (mechanical — no gate).** Run `scripts/wavebus/changelog-aggregate <wave-root> <target-repo-path> wave-<N>` to merge per-issue `CHANGELOG.fragment.md` files into the target repo's `CHANGELOG.md` under `## Unreleased`. If the aggregator wrote to `CHANGELOG.md`, commit on a fresh `chore/wave-<N>-changelog` branch in the target repo, push, open a PR (`pr_create`) targeting `<kahuna_branch>`, wait for CI (`pr_wait_ci`), then `pr_merge`. No human gate — content was already approved at each flight's Step 3d gate; this step is purely mechanical aggregation. If the aggregator reports `no fragments found`, skip the commit/PR step entirely (no-op).
+   > 4. **CHANGELOG aggregation (mechanical — no gate).** Run `wavebus-changelog-aggregate <wave-root> <target-repo-path> wave-<N>` to merge per-issue `CHANGELOG.fragment.md` files into the target repo's `CHANGELOG.md` under `## Unreleased`. If the aggregator wrote to `CHANGELOG.md`, commit on a fresh `chore/wave-<N>-changelog` branch in the target repo, push, open a PR (`pr_create`) targeting `<kahuna_branch>`, wait for CI (`pr_wait_ci`), then `pr_merge`. No human gate — content was already approved at each flight's Step 3d gate; this step is purely mechanical aggregation. If the aggregator reports `no fragments found`, skip the commit/PR step entirely (no-op).
    > 5. `wave_complete()` (marks the current wave complete — takes no args; the server uses the active wave from state).
    > 6. Write `<wave-root>/merge-report.md` (issues closed, PR URLs, flight breakdown, drift findings, CHANGELOG aggregation result + PR URL if applicable, deferred items, next-wave preview).
    >
@@ -412,7 +412,7 @@ After every flight has merged:
 
 ## Step 5 — Cleanup
 
-- **Success path** (Prime(post-wave) returned `PASS`): call `scripts/wavebus/wave-cleanup <wave-root>`. This rm -rf's the wave subtree, including every per-issue `CHANGELOG.fragment.md` written by the flights — Prime(post-wave) Step 4 already merged their content into the target repo's `CHANGELOG.md` under `## Unreleased` and opened the chore PR, so the fragments are intentionally ephemeral and disappear with the bus. Report "bus cleaned" in the final summary. Then remove any worktrees the wave created — both same-repo (CC `isolation: "worktree"`) and cross-repo (orchestrator-created).
+- **Success path** (Prime(post-wave) returned `PASS`): call `wavebus-wave-cleanup <wave-root>`. This rm -rf's the wave subtree, including every per-issue `CHANGELOG.fragment.md` written by the flights — Prime(post-wave) Step 4 already merged their content into the target repo's `CHANGELOG.md` under `## Unreleased` and opened the chore PR, so the fragments are intentionally ephemeral and disappear with the bus. Report "bus cleaned" in the final summary. Then remove any worktrees the wave created — both same-repo (CC `isolation: "worktree"`) and cross-repo (orchestrator-created).
 
   **Worktree-removal contract.** CC's worktree-isolation mechanism (and Flight sub-agents in general) leaves a git lock file on each Flight's worktree (`lock reason: "claude agent <id> (pid ...)"`). A single `git worktree remove --force` is NOT enough — git refuses to remove a locked working tree. The cleanup MUST unlock first (no-op if unlocked) and then force-remove:
 
@@ -489,7 +489,7 @@ This prompt is what each Flight sub-agent receives. Preserve the SPEC EXECUTOR b
 > **Write your results file:**
 >
 > 1. Write `<wave-root>/flight-<M>/issue-<X>/results.md.partial` with: commit SHA, files changed, test results, self-review findings (note that reviewer-agent dispatch is skipped here — the Orchestrator runs the reviewer pass at Step 3c.5 and folds its findings into the consolidated batch approval gate at Step 3d), AC checklist status, any deferred items, any concerns.
-> 2. Call `scripts/wavebus/flight-finalize <wave-root>/flight-<M>/issue-<X>/results.md.partial <PASS|FAIL>`.
+> 2. Call `wavebus-flight-finalize <wave-root>/flight-<M>/issue-<X>/results.md.partial <PASS|FAIL>`.
 >    - `PASS` if every AC is met and all mechanical checks are green.
 >    - `FAIL` otherwise. `results.md.partial` must still be non-empty — explain the failure.
 >
