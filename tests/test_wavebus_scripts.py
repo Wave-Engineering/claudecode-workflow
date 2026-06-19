@@ -1,4 +1,4 @@
-"""Tests for scripts/wavebus/ — filesystem message bus primitives.
+"""Tests for the scripts/wavebus-* filesystem message bus primitives.
 
 Exercises the real bash scripts via subprocess.run().  No mocking of the
 scripts under test.  The ``tmp_path`` fixture isolates each test so no
@@ -26,10 +26,10 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-WAVEBUS_DIR = REPO_ROOT / "scripts" / "wavebus"
-WAVE_INIT = WAVEBUS_DIR / "wave-init"
-FLIGHT_FINALIZE = WAVEBUS_DIR / "flight-finalize"
-WAVE_CLEANUP = WAVEBUS_DIR / "wave-cleanup"
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+WAVE_INIT = SCRIPTS_DIR / "wavebus-wave-init"
+FLIGHT_FINALIZE = SCRIPTS_DIR / "wavebus-flight-finalize"
+WAVE_CLEANUP = SCRIPTS_DIR / "wavebus-wave-cleanup"
 
 CANONICAL_RE = re.compile(r"^(/tmp/wavemachine/[^\s]+/results\.md) (PASS|FAIL)$")
 

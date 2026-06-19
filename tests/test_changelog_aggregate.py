@@ -1,4 +1,4 @@
-"""Tests for scripts/wavebus/changelog-aggregate.
+"""Tests for scripts/wavebus-changelog-aggregate.
 
 Exercises the real bash script via subprocess.run() against a tmp-dir wave
 root and a tmp-dir target repo. No mocking of the script under test.
@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SCRIPT = REPO_ROOT / "scripts" / "wavebus" / "changelog-aggregate"
+SCRIPT = REPO_ROOT / "scripts" / "wavebus-changelog-aggregate"
 
 
 # ---------------------------------------------------------------------------

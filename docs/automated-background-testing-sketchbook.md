@@ -56,7 +56,7 @@ The wave-pattern pipeline, end-to-end:
   `/issue`, `/devspec`, `/assesswaves`, `/prepwaves`, `/nextwave`,
   `/wavemachine`, `/scp*`, `/mmr`, ...).
 - **CLIs** — `wave-status`, `generate-status-panel`, `mcp-log`.
-- **Bus scripts** — `scripts/wavebus/{wave-init,flight-finalize,
+- **Bus scripts** — `scripts/wavebus-*{wave-init,flight-finalize,
   changelog-aggregate,wave-cleanup}`.
 - **Wave-pattern v2 architecture** — Orchestrator / Prime / Flight
   protocol, filesystem bus, worktree management, KAHUNA sandbox,
