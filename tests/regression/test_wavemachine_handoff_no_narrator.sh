@@ -36,7 +36,7 @@ if [[ ! -f "$SKILL" ]]; then
 	exit 1
 fi
 
-# 1. The "Wave-to-Wave Handoff" section must exist and use the canonical
+# 1. The "Per-wave handoff" section must exist and use the canonical
 #    "single tool-use boundary" wording. This is the load-bearing phrase the
 #    skill body uses to bind the contract; if it's been softened, the rule
 #    has been weakened.
@@ -52,7 +52,7 @@ else
 	fail "'single tool-use boundary' canonical wording missing"
 fi
 
-# 2. The Wave-to-Wave Handoff section must explicitly forbid narrative text
+# 2. The Per-wave handoff section must explicitly forbid narrative text
 #    between waves. Tolerant phrasing: any of "no narrative text", "no narrator
 #    gap", "MUST NOT contain narrative", "narration is forbidden", etc.
 if grep -qiE "no narrator gap|no narrative text|MUST NOT contain narrative|narration.{0,40}forbidden|narrator.{0,40}forbidden" "$SKILL"; then
@@ -61,12 +61,15 @@ else
 	fail "skill does not explicitly forbid inter-wave narration — agent may rationalize prose between waves"
 fi
 
-# 3. The loop body's step-4 OK-path must defer to "Wave-to-Wave Handoff"
-#    rather than enumerating side effects in narration-friendly prose. The
-#    tell is a reference to "Wave-to-Wave Handoff" (or the canonical "single
-#    tool-use boundary" wording) inside the loop's OK branch description.
+# 3. The loop body's OK-path (the `continue` that advances to the next wave)
+#    must defer to the "Per-wave handoff" contract rather than enumerating side
+#    effects in narration-friendly prose. The tell is a reference to "Per-wave
+#    handoff" (or the canonical "single tool-use boundary" wording) inside the
+#    loop section itself. The awk range ends at the NEXT section heading (Closed
+#    campaign-exit set) so it scans the loop body only — NOT the handoff heading
+#    it would otherwise match tautologically.
 if awk '
-	/^## The campaign loop/,/^## Per-wave handoff/{
+	/^## The campaign loop/,/^## Closed campaign-exit set/{
 		print
 	}
 ' "$SKILL" | grep -qiE "Per-wave handoff|single tool-use boundary|no narrative text|no narrator"; then

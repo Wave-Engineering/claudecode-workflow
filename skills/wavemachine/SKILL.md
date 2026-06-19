@@ -3,12 +3,12 @@ name: wavemachine
 description: Campaign driver — loops one per-wave Workflow per pending wave; advances ONLY on gate PASS AND promoted (a PASS that did not land on the protected branch HOLDs); closed campaign exits; auto-vs-interactive is a one-line advance-vs-wait branch; cold-start rehydrate prunes already-promoted waves
 ---
 
-# Wavemachine-Next — Campaign Driver for the per-wave Workflow
+# Wavemachine — Campaign Driver for the per-wave Workflow
 
-> **Migration successor to `/wavemachine`.** The campaign loop runs **in the main
-> session** (not as a nested Workflow): it launches one per-wave Workflow per pending
-> wave, reads its verdict, and advances. The old `/wavemachine` (loops `/nextwave auto`)
-> is unchanged and stays in place during migration. Design of record:
+> **The dynamic-workflows wave engine (cut over #691).** The campaign loop runs **in the
+> main session** (not as a nested Workflow): it launches one per-wave Workflow per pending
+> wave, reads its verdict, and advances. This replaced the legacy LLM-orchestrated
+> `/wavemachine` (which looped `/nextwave auto`). Design of record:
 > `docs/wavemachine-workflows-migration.md` §5.
 
 ## Axioms
@@ -88,6 +88,10 @@ loop:
   if (waveRetry[wave] = (waveRetry[wave]||0)+1) > MAX_WAVE_RETRY: halt=`wave-breaker:${wave}`; break
   halt = 'wave-hold'; break                       # HOLD | SKIPPED | (auto) PASS-not-promoted → human review
 ```
+
+On every `continue` (the OK-path that advances to the next wave), the next iteration's
+launch is a **single tool-use boundary** — it follows the **Per-wave handoff (no narrator
+gap)** contract below: no narrative text between waves.
 
 **CRITICAL — advance ONLY on PASS AND promoted.** `verdict.gate === 'PASS'` is NOT
 sufficient. The per-wave Workflow (`per-wave-workflow.js`) returns `{ gate, promoted, ... }`,

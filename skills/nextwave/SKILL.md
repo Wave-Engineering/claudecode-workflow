@@ -3,14 +3,13 @@ name: nextwave
 description: Execute one wave via the per-wave Workflow — the §3 spine (rehydrate → dynamic flight loop → trust gate → promote) as a deterministic JS Workflow, not an LLM orchestrator
 ---
 
-# NextWave-Next — Execute One Wave via the per-wave Workflow
+# NextWave — Execute One Wave via the per-wave Workflow
 
-> **Migration successor to `/nextwave`.** This is the Dynamic-Workflows shape of the
-> per-wave primitive: the orchestrator's deterministic control flow is moved into a
-> JS Workflow script, and the LLM is called only for the steps that genuinely need
-> judgment (plan / implement / reconcile / review). The old `/nextwave`
-> (Orchestrator/Prime/Flight on a filesystem bus) is unchanged and stays in place during
-> migration. Design of record: `docs/wavemachine-workflows-migration.md`.
+> **The dynamic-workflows per-wave primitive (cut over #691).** Deterministic control flow
+> lives in a JS Workflow script, and the LLM is called only for the steps that genuinely
+> need judgment (plan / implement / reconcile / review). This replaced the legacy
+> LLM-orchestrated `/nextwave` (Orchestrator/Prime/Flight on a filesystem bus). Design of
+> record: `docs/wavemachine-workflows-migration.md`.
 >
 > **Source vs. runnable artifact (live-gate finding #2):** a Dynamic Workflow must be ONE
 > self-contained file with `export const meta` first — cross-file `import`s do NOT run as a
