@@ -216,6 +216,14 @@ Three cleanup points — clean at **both ends**, not just the end (end-only leak
 
 **Prune branches, not just worktrees** (refinement from the §9 multi-repo pilot): `git worktree remove` leaves the branch behind. At reconcile (per merge) and at wave-terminal, also `git branch -D` the wave's merged/abandoned branches, or the target clone slowly accretes dead refs — observed in pilot 1, where three per-wave branches survived worktree removal. **The worktree dir and its branches must share one `wave-<id>` stem** so a single glob (`git branch -D wave-<id>/*`) cleans both: pilot 1 used dir `wave-9001/` but branches `wave9001/…` (no hyphen), so the hyphenated glob would have missed them. Standardize on the hyphenated `wave-<id>/` for both dir and branch.
 
+### 4.4 Operating model — the wave session runs IN the target repo (live-gate finding #8)
+
+**Decision: a wave is driven from a session whose `CLAUDE_PROJECT_DIR` is the *target* repo, and wave-status lives there** (`<target>/.claude/status/`, per `kahuna-devspec.md` R-17). The wave-status MCP state tools — `wave_record_mr`, `wave_close_issue`, `wave_complete`, `wave_show` — bind to the session's project by design and take **no `root`/`repo` override**; only `wave_finalize` and `wave_init` accept an explicit root. So the single coherent model is **session = target repo**: then every state mutation lands in the target's `.claude/status/` with zero per-call rooting, and `wave_finalize(root=<targetRepoDir>)` (which the gate passes) is consistent-or-redundant.
+
+**Important scope caveat — what "cross-repo" does and does not cover.** §4.1/§4.2 establish cross-repo **worktree isolation** (plan repo ≠ target repo for the *flight workspace*), and §9 validated it. But cross-repo **wave-status** (the durable plan/state living in a *plan* repo while branches live in a *different target* repo) is **NOT wired** — the state tools have no way to target another repo's `.claude/status/`. The live integration gate hit this by running the wave from the `claudecode-workflow` session against `ccwork-testtarget` (session ≠ target): `wave_finalize` returned `kahuna_branch_not_found` until handed `root=<targetRepoDir>` (finding #8). Until the server grows `root` on the state mutators, **operate same-repo-rooted (session = target)**; treat true plan≠target wave-status as an open server-side item, not a supported mode.
+
+> **Latent server bug noted alongside #8:** even with `root`, `wave_finalize` only roots its state-read and branch-existence probe — its actual PR create/find still bind to `CLAUDE_PROJECT_DIR` (`lib/adapters/pr-create-github.ts`). Harmless when session = target; a real cross-repo bug otherwise. Tracked for an mcp-server-sdlc fix.
+
 ---
 
 ## 5. Outer campaign loop (`/wavemachine`)
