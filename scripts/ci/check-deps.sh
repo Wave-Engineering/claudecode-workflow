@@ -60,6 +60,12 @@ _check_hook_scripts() {
 		# is a known interpreter.
 		local script_path first_token
 		first_token=$(echo "$cmd" | awk '{print $1}')
+		# Inline shell snippets (leading assignment, sequenced statements, or
+		# pipelines) are not single hook-script paths — skip the file-existence
+		# check so they don't register as a phantom missing dependency (#669).
+		if [[ "$first_token" == *'='* || "$cmd" == *';'* || "$cmd" == *'&&'* || "$cmd" == *'||'* || "$cmd" == *'|'* ]]; then
+			continue
+		fi
 		case "$first_token" in
 		bash | sh | zsh | env)
 			# Interpreter prefix — the actual script is the last non-flag token
