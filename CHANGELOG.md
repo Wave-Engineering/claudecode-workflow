@@ -6,11 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [6.0.0] - 2026-06-20
+
 ### Breaking
 
 - Wavemachine Classic mode retired; Kahuna is the only execution shape. Every Plan now bootstraps a `kahuna_branch` at launch and routes Flight PRs through that integration branch, with the four-signal trust gate at Plan completion auto-merging kahuna→protected-branch. The `legacy non-KAHUNA` / `KAHUNA mode` framing is gone from `/wavemachine`, `/nextwave`, `/prepwaves`, `/assesswaves`, and `/devspec`. Hardcoded `main` integration targets in skill bodies have been replaced with abstract phrasing (the project's protected branch, read from `.claude-project.md`). No mode-selection flag, no fallback path. Closes cc-workflow#580.
 
 ### Added
+
+- **Campaign-oversight stack (#745).** The between-wave judgment facility, built as three composable pieces: a **durable cross-wave concern-trajectory** (#748) — `wave-status` accumulates each completed wave's terminal record (`{gate, promoted}`, the four trust signals, concerns/deferrals/rework, commutativity verdict, issues; reboot-proof, idempotent, with `trajectory-append`/`trajectory-show` CLI); a **deterministic auto-mode campaign Workflow** (#749) — `campaign-loop.js` + `campaign-workflow.js` iterate pending waves, run each per-wave spine, route on the `{gate, promoted}` verdict, and call the judgment seam — no LLM in the loop control flow, so it provably cannot stall; and the **wave-oversight judgment agent + seed contract** (#750) — seeded no-distillation from tiered intent (devspec → DDD/sketchbook → issues) + the durable trajectory + live inspection, with a failure-shape lens (accumulation / intent-drift / adaptation-vs-drift across trend / absence / confound-control modes).
+- Coarse driver-states for the async campaign loop in `wave-status` (#738).
 
 - `/prepwaves` now ends with a `/clear` recommendation and a paste-ready `/wavemachine` seed prompt. The recommendation downgrades to a hint when `nerf_status` reports <30% of soft dart used. Reduces context drift between planning and execution sessions (Plan #581 debrief). Closes #602.
 - /wavemachine: long-session drift mitigation — at every wave-to-wave handoff the loop body emits per-wave drift-signal events (`wave_message_length_main`, `wave_stop_hook_blocks`, `wave_concerns_posts`) via `scripts/wavemachine/drift-instrumentation.sh emit-wave-drift` and injects a system-reminder re-grounding payload citing `WAVE_AXIOMS.md` (with explicit Axiom 9 reference). The lightweight payload is unconditional at every wave boundary; mandatory `/engage` and `/compact`-on-N-waves are documented as rejected alternatives held in reserve for empirical escalation. (cc-workflow#601, "Bug C" from Plan #581 campaign A debrief.)
