@@ -376,3 +376,71 @@ def test_matcher_union_is_idempotent(sandbox_home: Path) -> None:
     # And the matcher set is exactly {"*", "compact"}.
     matchers = sorted(e["matcher"] for e in after_second["hooks"]["SessionStart"])
     assert matchers == ["*", "compact"]
+
+
+# ---------------------------------------------------------------------------
+# #734: distinct KIT hooks sharing matcher "*" must all deploy (Stop array)
+# ---------------------------------------------------------------------------
+
+@_SKIP_NO_BASH
+@_SKIP_NO_JQ
+def test_kit_multi_hook_same_matcher_all_deploy(sandbox_home: Path) -> None:
+    """The kit ships several distinct hooks under matcher '*' (e.g. the Stop
+    array). When local already has one of them, the OTHER kit hooks must be
+    merged in (not dropped by a matcher-keyed union), while a user's own '*'
+    hook is preserved and identical kit hooks are not duplicated."""
+    template = {
+        "hooks": {
+            "Stop": [
+                {"matcher": "*", "hooks": [{"type": "command", "command": "~/.local/bin/precheck-asking-detector.sh"}]},
+                {"matcher": "*", "hooks": [{"type": "command", "command": "~/.local/bin/stop-action-bias-detector.sh"}]},
+                {"matcher": "*", "hooks": [{"type": "command", "command": "state=\"${CLAUDE_PROJECT_DIR:-.}/.claude/status/state.json\"; exit 0"}]},
+            ]
+        }
+    }
+    local = {
+        "hooks": {
+            "Stop": [
+                # one kit hook already present (must not be duplicated)
+                {"matcher": "*", "hooks": [{"type": "command", "command": "~/.local/bin/precheck-asking-detector.sh"}]},
+                # a user's own '*' hook (non-kit) — must be preserved, never clobbered
+                {"matcher": "*", "hooks": [{"type": "command", "command": "my-custom-stop-hook.sh"}]},
+            ]
+        }
+    }
+    settings_path = sandbox_home / ".claude" / "settings.json"
+    _write_json(settings_path, local)
+
+    sandbox_install = _override_template(sandbox_home, template)
+    rc, _stdout, _stderr = _run_sandbox_install(sandbox_install, ["--config"], sandbox_home)
+    assert rc == 0
+
+    merged = _read_json(settings_path)
+    commands = [h["command"] for e in merged["hooks"]["Stop"] for h in e["hooks"]]
+    # All three kit hooks present.
+    assert sum(c == "~/.local/bin/precheck-asking-detector.sh" for c in commands) == 1, "precheck-asking present exactly once (no duplicate)"
+    assert any("stop-action-bias-detector.sh" in c for c in commands), "the absent kit hook must be merged in (#734)"
+    assert any(".claude/status/state.json" in c for c in commands), "the kit's inline wavemachine guard (kit path) must be merged in"
+    # User's own hook preserved.
+    assert any(c == "my-custom-stop-hook.sh" for c in commands), "user's custom '*' hook must be preserved"
+
+
+@_SKIP_NO_BASH
+@_SKIP_NO_JQ
+def test_user_override_of_kit_hook_not_resurrected(sandbox_home: Path) -> None:
+    """A NON-kit user hook under '*' still overrides per #556 AC2 — a bare
+    template command sharing the matcher is not layered on top."""
+    template = {
+        "hooks": {"Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "default-bare.sh"}]}]}
+    }
+    local = {
+        "hooks": {"Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "user-customized.sh"}]}]}
+    }
+    settings_path = sandbox_home / ".claude" / "settings.json"
+    _write_json(settings_path, local)
+    sandbox_install = _override_template(sandbox_home, template)
+    rc, _, _ = _run_sandbox_install(sandbox_install, ["--config"], sandbox_home)
+    assert rc == 0
+    commands = [h["command"] for e in _read_json(settings_path)["hooks"]["Stop"] for h in e["hooks"]]
+    assert "user-customized.sh" in commands
+    assert "default-bare.sh" not in commands, "a non-kit template hook must not override a user hook on a shared matcher"

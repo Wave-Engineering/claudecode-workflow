@@ -638,14 +638,37 @@ merge_settings() {
 		((.[1].hooks // {}) | keys) as $local_hook_keys |
 		# New event keys (template only) — add wholesale
 		($tpl_hooks | map(select(.key | IN($local_hook_keys[]) | not))) as $new_hooks |
-		# Shared event keys — union their matcher arrays by .matcher value
+		# Shared event keys — union hook arrays, preserving user overrides while
+		# still deploying the multi-hook kit events (#734, option C).
+		# (No apostrophes in these comments — they live inside a single-quoted jq
+		# program and an apostrophe would terminate the shell string.)
+		# Three add-conditions for a template entry, gated first on de-dup
+		# (its command-signature must not already be present locally):
+		#   1. NEW matcher (not in local) — add (preserves #556 AC1).
+		#   2. EXISTING matcher, but the entry is KIT-OWNED (a command referencing
+		#      a kit path: ~/.local/bin/ or .claude/) — add. This is the #734 fix:
+		#      the kit ships multiple distinct "*" Stop hooks (precheck-asking +
+		#      wavemachine guard + stop-action-bias) that must coexist; a plain
+		#      matcher-keyed union silently dropped all but the first.
+		#   3. EXISTING matcher, NOT kit-owned — DO NOT add. A user hook under a
+		#      shared matcher still overrides the kit version (preserves #556 AC2);
+		#      the kit never resurrects or layers onto a genuinely-custom user hook.
+		# Local/user hooks are always preserved; identical hooks never duplicated.
+		# Signature = sorted list of .hooks[].command.
 		($tpl_hooks | map(select(.key | IN($local_hook_keys[]))) | map({
 			key: .key,
 			value: (
 				(.value // []) as $tpl_arr |
 				(($local_hooks | from_entries)[.key] // []) as $local_arr |
+				($local_arr | map([.hooks[].command // empty] | sort)) as $local_sigs |
 				($local_arr | map(.matcher)) as $local_matchers |
-				$local_arr + ($tpl_arr | map(select(.matcher as $m | $local_matchers | index($m) | not)))
+				$local_arr + ($tpl_arr | map(select(
+					(([.hooks[].command // empty] | sort) as $sig | ($local_sigs | map(. == $sig) | any) | not)
+					and (
+						(.matcher as $m | $local_matchers | index($m) | not)
+						or ([.hooks[].command // empty] | map(test("\\.local/bin/|\\.claude/")) | any)
+					)
+				)))
 			)
 		}) | from_entries) as $merged_shared_hooks |
 
