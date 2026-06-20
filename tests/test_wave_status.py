@@ -1273,3 +1273,50 @@ class TestNoExternalDependencies:
             env=env,
         )
         assert result.returncode == 0, f"import failed: {result.stderr}"
+
+
+# ---------------------------------------------------------------------------
+# Dynamic-driver coarse states (#738) — the states the stall-guard reads (#736)
+# ---------------------------------------------------------------------------
+
+class TestCoarseDriverStates:
+    """The /wavemachine driver writes coarse current_action states at its
+    in-session boundaries under the async dynamic-workflows engine."""
+
+    def test_coarse_states_set_current_action(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        repo = temp_git_repo
+        _write_plan(repo)
+        rc, _out, err = run_cli(["init", "plan.json"], repo)
+        assert rc == 0, f"init failed: {err}"
+
+        state_path = repo / ".claude" / "status" / "state.json"
+
+        cases = [
+            (["awaiting-verdict", "wave-1"], "awaiting-verdict", "wave-1"),
+            (["hold", "gate-blocked: trivy"], "hold", "gate-blocked: trivy"),
+            (["launching", "wave-2"], "launching", "wave-2"),
+            (["promoting", "wave-1"], "promoting", "wave-1"),
+        ]
+        for argv, expect_action, expect_detail in cases:
+            rc, _out, err = run_cli(argv, repo)
+            assert rc == 0, f"{argv[0]} failed: {err}"
+            ca = json.loads(state_path.read_text(encoding="utf-8"))["current_action"]
+            assert ca["action"] == expect_action, f"{argv[0]}: action={ca}"
+            assert ca["detail"] == expect_detail, f"{argv[0]}: detail={ca}"
+
+    def test_awaiting_verdict_and_hold_are_the_noop_states_for_736(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """The two states the stall-guard must no-op on are settable and distinct
+        from a 'should-be-launching' state."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        state_path = repo / ".claude" / "status" / "state.json"
+
+        run_cli(["awaiting-verdict", "wave-3"], repo)
+        assert json.loads(state_path.read_text())["current_action"]["action"] == "awaiting-verdict"
+        run_cli(["hold", "interactive"], repo)
+        assert json.loads(state_path.read_text())["current_action"]["action"] == "hold"

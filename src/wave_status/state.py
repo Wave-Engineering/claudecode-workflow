@@ -754,6 +754,43 @@ def waiting_ci(root: Path, detail: str = "") -> dict:
     return _set_action(root, "waiting-ci", "waiting-ci", detail)
 
 
+# ---------------------------------------------------------------------------
+# Dynamic-workflows campaign-driver coarse states (#738).
+#
+# The dynamic engine runs wave-internal phases inside the async per-wave
+# Workflow (off-session); it does NOT drive the fine per-phase lifecycle above
+# (preflight/planning/flight/...), which is legacy-synchronous-orchestrator
+# vocabulary. Instead the /wavemachine driver writes these COARSE states at the
+# in-session boundaries it genuinely knows — the same boundaries where it sets
+# wavemachine_active. They keep the dashboard truthful during an async wave AND
+# are the signal the stall-guard Stop hook keys on (#736): it no-ops on
+# ``awaiting-verdict`` (legitimate async await) and ``hold`` (human adjudication
+# pause), and only blocks when the driver should be launching the next wave.
+# ---------------------------------------------------------------------------
+
+def launching(root: Path, wave_id: str = "") -> dict:
+    """Coarse state: the driver is about to launch the per-wave Workflow (#738)."""
+    return _set_action(root, "launching", "launching", wave_id)
+
+
+def awaiting_verdict(root: Path, wave_id: str = "") -> dict:
+    """Coarse state: the per-wave Workflow is in flight; the driver has ended its
+    turn and is awaiting the async completion verdict (#738). The stall-guard
+    no-ops on this — it is a legitimate await, not a stall (#736)."""
+    return _set_action(root, "awaiting-verdict", "awaiting-verdict", wave_id)
+
+
+def promoting(root: Path, wave_id: str = "") -> dict:
+    """Coarse state: a PASS verdict came back; the wave is being promoted (#738)."""
+    return _set_action(root, "promoting", "promoting", wave_id)
+
+
+def hold(root: Path, reason: str = "") -> dict:
+    """Coarse state: the campaign is paused for human attention — a HOLD verdict
+    or interactive adjudication (#738). The stall-guard no-ops on this (#736)."""
+    return _set_action(root, "hold", "hold", reason)
+
+
 def set_current_wave(wave_id: str, root: Path) -> dict:
     """Set ``current_wave`` to *wave_id* in ``state.json``.
 

@@ -205,6 +205,27 @@ narrative prose. "Wave N complete, starting N+1" between waves is forbidden — 
 wall-clock (the cc-workflow#600 "Bug B" failure mode). In `interactive` mode the human
 STOP is the one deliberate pause; everything else is a tight tool-use chain.
 
+## Coarse driver status (#738) — and the stall-guard contract (#736)
+
+The per-wave Workflow runs **async**: the driver launches it, **ends its turn**, and is
+re-invoked on the completion verdict. So the campaign loop writes a **coarse
+`current_action`** at its boundaries (the dynamic-model replacement for the legacy
+per-phase lifecycle, which the engine no longer drives), via the `wave-status` CLI:
+
+- **Immediately before launching a per-wave Workflow** — `wave-status awaiting-verdict <waveId>`.
+  This is the LAST status write of the launch tool-use block, so when the turn ends to await
+  the async verdict, `current_action.action == "awaiting-verdict"`.
+- **On a HOLD / interactive verdict** (the one deliberate human pause) — `wave-status hold "<reason>"`
+  before surfacing the diff and stopping.
+- (Optional, for dashboard truthfulness) `wave-status promoting <waveId>` while a PASS wave promotes.
+
+**This is the contract the stall-guard Stop hook depends on (#736).** The guard no-ops when
+`current_action.action` is `awaiting-verdict` (a legitimate async await — NOT a stall) or
+`hold` (a legitimate human pause); it blocks only when `wavemachine_active` is set and the
+action implies the driver should be launching the next wave but the turn ended without it.
+Writing `awaiting-verdict` in the same tool-use block as the launch is therefore
+**load-bearing** — omit it and the guard false-fires on the await (cc-workflow#736).
+
 ## Resumability (mirrors §3.3, one level up)
 
 On cold start the campaign rehydrates from wave-status's wave-completion records
