@@ -746,40 +746,25 @@ Reads the approved phase/wave plan, then iterates: launch the next wave's per-wa
 
 ---
 
-### Agent Architecture -- Orchestrator / Prime / Flight
+### Agent Architecture -- the per-wave Dynamic Workflow
 
-> **⚠️ Superseded by the dynamic-workflows engine (#692/#691).** The section below describes the **legacy** LLM-orchestrated model (an Orchestrator agent driving the loop with the `Agent` tool, a Prime sub-agent per wave, and the filesystem message bus). The canonical `/wavemachine` + `/nextwave` are now a deterministic **Dynamic Workflow** (`skills/nextwave/per-wave-workflow.js`): control flow is JS, the flight loop + reconcile + trust gate + promote run inside the Workflow, and state flows through return values + wave-status rather than the wavebus. Authoritative: `docs/wavemachine-workflows-migration.md` §3, `skills/{wavemachine,nextwave}/SKILL.md`, `skills/nextwave/SEAMS.md`. This section is kept for historical context and a full rewrite is tracked as a follow-up.
+Wave execution is a deterministic **Dynamic Workflow** (`skills/nextwave/per-wave-workflow.js`, bundled to `per-wave-workflow.bundled.js`). The control flow -- the loop, the closed legal exits, the dynamic re-plan, the trust-gate fan-out -- is **JavaScript**, not an LLM. Agents are still used, but only for the steps that genuinely need judgment (implementing an issue, reconciling a merge, reviewing a diff); everything *between* them (sequencing, exits, aggregation) is code. State flows through schema-validated Workflow return values plus durable **wave-status** (`<target>/.claude/status/`) -- the legacy filesystem "wavebus" is retired.
 
-Wave execution uses three distinct agent roles. Knowing which role is which clarifies the tool distribution, the merge sequencing, and the forensic trail left on disk.
+**The spine (`docs/wavemachine-workflows-migration.md` §3).** One Workflow runs one wave, top to bottom:
 
-**The three roles:**
+1. **Rehydrate** (§3.3) -- seed loop state from durable wave-status so a killed wave resumes where it stopped (idempotent worktree re-attach, never `-b`).
+2. **Dynamic flight loop** (§3.1) -- each iteration:
+   - a **plan** `agent()` (judgment) picks the next group of still-pending issues from current state;
+   - the group's issues run as **parallel flight `agent()`s** -- each in its own pre-created durable worktree (`<target>/.claude/.worktrees/wave-<id>/issue-<n>`), implementing one issue, running the mechanical half of `/precheck`, returning a schema-validated result (never pushing -- reconcile owns the merge);
+   - a **reconcile** `agent()` (the only cross-flight view) runs `commutativity_verify` (pairwise, to detect whether a merge train is needed), merges the group into the kahuna branch, resolves cross-flight interface breaks, and reports surfaced dependencies as `needs_rework` -- which re-open and re-schedule in a later group. Closed legal exits: `success` / `runaway` / `thrash` / `cost` / `impasse` / per-issue breaker / `reconcile-blocked`.
+3. **Trust gate** (§3.4) -- only on the clean-success exit. Opens the kahuna→protected **draft PR first**, then four signals run in parallel and aggregate to PASS/HOLD: `commutativity_verify`, CI on the MR merge-result pipeline, `code-reviewer` on the kahuna-vs-protected diff, and trivy. Any signal's error is a conservative HOLD, never a silent PASS.
+4. **Promote** -- on PASS in `auto` mode, mark the draft PR ready and merge it (kahuna→protected); `interactive` mode returns the verdict for a human to route. HOLD returns the failing signals.
 
-- **Orchestrator Agent** -- the top-level Claude Code session that chats with you. It has the `Agent` tool, drives the wave loop directly (whether from `/nextwave` or `/wavemachine`), and is the only agent that can spawn sub-agents in parallel.
-- **Prime Agent** -- one sub-agent per wave. Handles pre-wave planning (reads specs, runs `flight_overlap` / `flight_partition`, writes the flight prompts) and post-flight merge/CI/reconcile work. Cannot spawn further sub-agents; returns paths and status tokens only.
-- **Flight Agent** -- one sub-agent per issue in a flight. Reads its prompt from a file, implements a single issue in its assigned worktree, runs the mechanical half of `/precheck`, writes results to a file, and returns only a result path plus `PASS|FAIL`.
+**Where agents live vs. where code lives.** The `agent()` calls -- plan, flight, reconcile, and the gate's review signal -- are the judgment seams (all FILLED; contracts in `skills/nextwave/SEAMS.md`, #686/#687/#688). The Workflow runtime itself does the parallel fan-out (`parallel()` / `pipeline()`), so there is no "Orchestrator agent" spawning siblings -- the determinism that used to be an LLM driving a loop is now the JS engine.
 
-**Where parallelism lives:** the Orchestrator spawns N Flight Agents in a single tool-use block. Flights are siblings of each other, not grandchildren. Prime is sequential per wave (one pre-wave, one post-flight per flight, one post-wave).
+**How `/wavemachine` relates to `/nextwave`.** `/nextwave` executes **one** wave via the Workflow above. `/wavemachine` is the **campaign driver**: a thin loop (in the skill / main session, since a Workflow cannot pause for human input) that launches one per-wave Workflow per pending wave and routes on its verdict -- advance only on `PASS` **and** promoted-to-protected, otherwise HOLD. The judgment is not in the driver; it is in the `agent()` calls inside each wave. Authoritative sources: `docs/wavemachine-workflows-migration.md` §3 and §5, `skills/{wavemachine,nextwave}/SKILL.md`, `skills/nextwave/SEAMS.md`.
 
-**Filesystem message bus.** Agents communicate by writing files under a namespaced bus root, not by passing content through Orchestrator context:
-
-```
-/tmp/wavemachine/{repo-slug}/wave-{N}/
-├── plan.md                                 # Prime pre-wave plan
-├── merge-report.md                         # Prime post-wave report
-├── flight-{M}/
-│   ├── merge-report.md                     # Prime post-flight report
-│   └── issue-{X}/
-│       ├── prompt.md                       # Flight input (written by Prime)
-│       ├── results.md.partial              # Flight writes here first
-│       ├── results.md                      # atomic rename target
-│       └── DONE                            # contents: "PASS" or "FAIL"
-```
-
-The bus root is namespaced under `/tmp/wavemachine/` so `wave-cleanup` can safely refuse paths outside that prefix, and `ls /tmp/wavemachine/` enumerates active waves across all repos. The `flight-{M}` level is preserved even when a wave has a single flight -- it keeps forensic archaeology straightforward.
-
-**How `/wavemachine` relates to `/nextwave`.** `/wavemachine` is a thin top-level loop that calls `/nextwave(auto)` once per pending wave. All of the Prime + Flight orchestration lives inside `/nextwave`; `/wavemachine` only decides when to stop (plan exhausted, wave failure, or circuit breaker). The parallelism lives in the Orchestrator's tool-use blocks inside `/nextwave`, not inside `/wavemachine`.
-
-**Why this split exists.** Claude Code sub-agents do not have the `Agent` tool, so nested parallelism is impossible -- the top-level session is the only place N Flights can be spawned concurrently. See `~/.claude/projects/-home-bakerb-sandbox-github-claudecode-workflow/memory/lesson_cc_subagent_tools.md` for the bisect evidence and the design implication. Full architecture rationale is in `~/.claude/projects/-home-bakerb-sandbox-github-claudecode-workflow/memory/decision_wavemachine_v2.md`.
+**Historical note.** The legacy engine was an LLM **Orchestrator** agent driving the loop with the `Agent` tool, a **Prime** sub-agent per wave, **Flight** sub-agents per issue, and a `/tmp/wavemachine/` filesystem message bus. It was retired in the #691 cutover (epic #692); the migration was driven by the determinism + reliability wins (control flow as code, schema-validated returns, within-session resume) documented in `docs/wavemachine-workflows-migration.md`. The sub-agent tool-distribution constraint that shaped the old design (`lesson_cc_subagent_tools` -- sub-agents lack the `Agent` tool, so only the top level could fan out) is now moot: the Workflow runtime owns the fan-out.
 
 ---
 

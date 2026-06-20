@@ -144,13 +144,14 @@ the `preserveKahuna` flag:
 
 `per-wave-workflow.js` is the **anchor**: the loop / exits / re-plan / gate fan-out are
 real and complete (the validated pilot shape, hardened). The sdlc-server tool calls the
-agents make are **seams**, marked with `// TODO(#…)` and backed by obvious-placeholder
-stubs so the skeleton runs end-to-end. The seam contracts live in
+agents make were originally staged as **seams** — now all **FILLED**: the bundle ships
+real `agent()` calls plus real `pr_merge` / `wave_finalize` / `commutativity_verify`, not
+placeholder stubs. The seam contracts (the interface each fill honors) live in
 `skills/nextwave/SEAMS.md`:
 
-- **#686** — rehydrate / idempotency (durable resume, worktree setup/cleanup)
-- **#687** — real gate signals via sdlc-server (commutativity / CI / review / trivy + promote)
-- **#688** — wave-status persistence (the durable resume substrate)
+- **#686** (FILLED) — rehydrate / idempotency (durable resume, worktree setup/cleanup)
+- **#687** (FILLED) — real gate signals via sdlc-server (commutativity / CI / review / trivy + promote)
+- **#688** (FILLED) — wave-status persistence (the durable resume substrate)
 
 ## Must-preserve behaviors (§3.2)
 
