@@ -19,3 +19,5 @@ Route all /disc intents to `disc-server` MCP tool calls.
 - list → `disc_list(guild_id, type="text")` — format as clean list
 - create channel → `disc_create_channel(guild_id, name)` — confirm with created id
 - create thread → `disc_create_thread(channel_id, name)` — confirm with created id
+
+**Turn-taking on shared channels** — before answering a team-addressed question when many agents are listening, follow the mic convention (claim the talking-stick or defer): `docs/discord-mic-convention.md`.
