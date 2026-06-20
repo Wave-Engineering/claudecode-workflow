@@ -126,6 +126,16 @@
         "matcher": "*",
         "hooks": [
           {
+            "_comment": "Default to Action (cc-workflow#732): block a turn that ends by asking permission to do something the agent already knows how to do. General sibling of precheck-asking-detector. Kill-switch: STOP_ACTION_BIAS_HOOK_DISABLED=1.",
+            "type": "command",
+            "command": "~/.local/bin/stop-action-bias-detector.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
             "_comment": "Block stop attempts during active /wavemachine campaigns. Validated 2026-05-05 in blueshift-cue Plan #179 (wave-4 → wave-5 without stall). See lesson_stop_hook_with_block.md.",
             "type": "command",
             "command": "state=\"${CLAUDE_PROJECT_DIR:-.}/.claude/status/state.json\"; [ -f \"$state\" ] || exit 0; active=$(jq -r '.wavemachine_active // false' \"$state\" 2>/dev/null); [ \"$active\" = \"true\" ] || exit 0; printf '{\"decision\":\"block\",\"reason\":\"/wavemachine is active and the loop has not completed. After /nextwave auto returns OK, you must immediately invoke /nextwave auto again for the next wave (or trigger the trust-score gate if no more pending waves). Do NOT stall — emit the next tool call now.\"}'"
