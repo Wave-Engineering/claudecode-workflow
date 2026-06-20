@@ -16,6 +16,7 @@ import {
   parseArgs,
   computePending,
   waveIdOf,
+  resolveIntentTier,
   runCampaign,
   waveOversightPrompt,
   JUDGMENT_RESULT,
@@ -37,7 +38,7 @@ const PLAN_ID = params.planId ?? null
 const TARGET_REPO = params.targetRepo ?? 'Wave-Engineering/ccwork-testtarget'
 const TARGET_REPO_DIR = params.targetRepoDir ?? '/home/bakerb/sandbox/github/ccwork-testtarget'
 const PROTECTED_BRANCH = params.protectedBranch ?? 'main'
-const INTENT_TIER = params.intentTier ?? 'issues-only' // devspec | plan/ddd/sketchbook | issues-only (§3)
+const INTENT_TIER_OVERRIDE = params.intentTier ?? null // explicit override; else resolved by the #750 intent-discovery step (§3)
 // The full ordered wave plan: [{ id, issues:[...], kahunaBranch? }, ...]. Fail loud on empty —
 // a campaign with no waves is a misconfiguration, not a no-op (mirrors per-wave's empty-wave guard).
 const ALL_WAVES = Array.isArray(params.waves) ? params.waves : []
@@ -93,6 +94,41 @@ const pending = computePending(ALL_WAVES, rehydrated?.promotedWaveIds ?? [])
 const baseTrajectory = Array.isArray(rehydrated?.trajectory) ? rehydrated.trajectory : []
 log(`[#749] rehydrated — ${(rehydrated?.promotedWaveIds ?? []).length} promoted, ${pending.length} pending: [${pending.map(waveIdOf).join(', ') || 'none'}]`)
 
+// #750 INTENT-TIER RESOLVER (§3 — tiered intent, graceful degradation). One-time discovery: an
+// agent runs the sdlc-server locators (devspec_locate → ddd_locate_domain_model / ddd_locate_sketchbook)
+// and reports WHAT EXISTS + its refs; the pure resolveIntentTier() picks the richest tier, which the
+// judgment agent is then told (so it calibrates instead of faking/hedging). An explicit args override
+// (params.intentTier) wins; a discovery failure degrades conservatively to issues-only.
+const INTENT_DISCOVERY = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    devspec: { type: ['string', 'null'] },
+    domainModel: { type: ['string', 'null'] },
+    sketchbook: { type: ['string', 'null'] },
+  },
+}
+const intent = INTENT_TIER_OVERRIDE
+  ? { devspec: null, domainModel: null, sketchbook: null }
+  : await agent(
+      [
+        `You are the campaign INTENT-DISCOVERY node for ${TARGET_REPO} (plan ${PLAN_ID ?? 'n/a'}). Detect the`,
+        `richest available intent artifact for the wave-oversight judgment seed (§3). Do NOT do other work.`,
+        `Run the sdlc-server locators and return the REF of each that exists (else null):`,
+        `  devspec     → devspec_locate`,
+        `  domainModel → ddd_locate_domain_model`,
+        `  sketchbook  → ddd_locate_sketchbook`,
+        `Return EXACTLY: devspec (string ref|null), domainModel (string ref|null), sketchbook (string ref|null).`,
+      ].join('\n'),
+      { label: 'intent-discovery', phase: 'Rehydrate', schema: INTENT_DISCOVERY, agentType: 'general-purpose' },
+    ).catch((e) => {
+      log(`[#750] intent-discovery soft-fail → issues-only tier (conservative): ${e?.message || e}`)
+      return { devspec: null, domainModel: null, sketchbook: null }
+    })
+const INTENT_TIER = INTENT_TIER_OVERRIDE ?? resolveIntentTier({ devspec: intent.devspec, domainModel: intent.domainModel, sketchbook: intent.sketchbook })
+const INTENT_REFS = { devspec: intent.devspec ?? null, domainModel: intent.domainModel ?? null, sketchbook: intent.sketchbook ?? null }
+log(`[#750] intent tier: ${INTENT_TIER}${INTENT_TIER_OVERRIDE ? ' (override)' : ''} — refs ${JSON.stringify(INTENT_REFS)}`)
+
 // ── PHASE 2 — CAMPAIGN LOOP (§2 — control flow is code; judgment is a seam) ───────────────────
 phase('Campaign loop')
 
@@ -114,19 +150,27 @@ async function runWave(wave) {
   return workflow({ scriptPath: PER_WAVE_SCRIPT }, perWaveArgs)
 }
 
-// Seam 2 — the wave-oversight judgment sub-agent (§2.2). Seeded NO-distillation from the durable
-// trajectory (rehydrated base + this run's completed verdicts) + the remaining plan. Placeholder
-// prompt body until #750/§6.2 lands the full seed contract + failure-shape lens; the routing + the
-// JUDGMENT_RESULT contract are final, so #750 swaps the prompt without touching the loop.
+// Seam 2 — the wave-oversight judgment sub-agent (§2.2, #750). Seeded NO-distillation (§3) from the
+// resolved intent tier + the durable trajectory (rehydrated base + this run's completed verdicts) +
+// the remaining plan + live inspection (the wave's kahuna branch). The §4/§7 failure-shape lens lives
+// in waveOversightPrompt; routing + JUDGMENT_RESULT are the stable contract.
 async function judge(wave, context) {
   const id = waveIdOf(wave)
-  const trajectory = [...baseTrajectory, ...context.completed.map((c) => ({ wave: c.wave, ...(c.verdict || {}) }))]
+  // The trajectory the lens reads as a TIME SERIES must INCLUDE the just-landed wave — context.completed
+  // holds only PRIOR waves (this wave isn't pushed until judge returns), so append context.verdict here.
+  const trajectory = [
+    ...baseTrajectory,
+    ...context.completed.map((c) => ({ wave: c.wave, ...(c.verdict || {}) })),
+    { wave: id, ...(context.verdict || {}) },
+  ]
   return agent(
     waveOversightPrompt({
-      justLanded: { wave: id, verdict: context.completed[context.completed.length - 1]?.verdict ?? null },
+      justLanded: { wave: id, verdict: context.verdict ?? null },
       trajectory,
       remainingPlan: context.remaining,
       intentTier: INTENT_TIER,
+      intentRefs: INTENT_REFS,
+      kahunaBranch: wave.kahunaBranch ?? `kahuna/${id}`,
     }),
     { label: `judgment:${id}`, phase: 'Campaign loop', schema: JUDGMENT_RESULT, agentType: 'general-purpose' },
   )
