@@ -612,8 +612,21 @@ function trivySignalPrompt({ waveId, kahunaBranch, targetRepoDir }) {
 // merge, so it runs SOLELY from the workflow's auto+PASS branch on a live wave that reached the
 // success exit — which is itself gated by the human cutover (#691). Building/validating this
 // module never invokes it.
-function promotePrompt({ waveId, kahunaBranch, protectedBranch, targetRepo, prNumber }) {
+function promotePrompt({ waveId, kahunaBranch, protectedBranch, targetRepo, prNumber, preserveKahuna = false }) {
   const prRef = prNumber != null ? `PR #${prNumber}` : `the open ${kahunaBranch}→${protectedBranch} PR`
+  // #722: a PER-PLAN kahuna (e.g. kahuna/56-…, shared across a plan's waves 1..N) must PERSIST —
+  // deleting it after wave 1 strands waves 2..N off a diverged base. The default (false) keeps the
+  // current per-wave disposable behavior: KAHUNA_BRANCH defaults to kahuna/<waveId>, deleted here.
+  const step4 = preserveKahuna
+    ? [
+      `4. Do NOT delete ${kahunaBranch} (#722: preserveKahuna) — it is a PERSISTENT per-plan integration`,
+      `   branch shared across this plan's remaining waves; deleting it would strand them off a diverged`,
+      `   base. Leave it on origin; the plan's final wave (or the campaign driver) retires it.`,
+    ]
+    : [
+      `4. Once ${kahunaBranch} is on ${protectedBranch}, delete the ${kahunaBranch} branch (gh -R ${targetRepo}`,
+      `   api / git push origin --delete) — the wave is done; this per-wave integration branch is disposable.`,
+    ]
   return [
     `You are the wave PROMOTION node for wave ${waveId} of ${targetRepo}. The trust gate returned PASS`,
     `and the wave is in AUTO mode. The ${kahunaBranch}→${protectedBranch} DRAFT PR is ALREADY OPEN (${prRef})`,
@@ -628,8 +641,7 @@ function promotePrompt({ waveId, kahunaBranch, protectedBranch, targetRepo, prNu
     `   already proved the composed diff safe, so the train is unnecessary. On a merge-queue-ENFORCED`,
     `   repo skip_train is silently dropped and the PR is ENROLLED (merged=false, queued): in that case`,
     `   wait for it to actually land on ${protectedBranch} (pr_merge_wait) before reporting promoted.`,
-    `4. Once ${kahunaBranch} is on ${protectedBranch}, delete the ${kahunaBranch} branch (gh -R ${targetRepo}`,
-    `   api / git push origin --delete) — the wave is done; the integration branch is disposable.`,
+    ...step4,
     ``,
     `Return: promoted (true ONLY if the merge actually landed on ${protectedBranch}), mr_ref (the PR`,
     `URL/number), notes (1-2 sentences; include any error — and on error, promoted=false).`,
@@ -733,6 +745,7 @@ const WAVE_ID = params.waveId ?? 'W-?'
 const TARGET_REPO = params.targetRepo ?? 'Wave-Engineering/ccwork-testtarget' // owner/repo for gh -R scoping
 const TARGET_REPO_DIR = params.targetRepoDir ?? '/home/bakerb/sandbox/github/ccwork-testtarget' // clone the worktrees attach to
 const KAHUNA_BRANCH = params.kahunaBranch ?? `kahuna/${WAVE_ID}` // integration target; never the protected branch
+const PRESERVE_KAHUNA = params.preserveKahuna ?? false // #722: true ⇒ persistent per-plan kahuna (shared across a plan's waves) — promote does NOT delete it; default false = per-wave disposable (delete on promote)
 const PROTECTED_BRANCH = params.protectedBranch ?? 'main' // promotion target on the success exit
 const ALL_ISSUES = (params.issues ?? []).map(Number).filter(Number.isFinite) // the wave's issue numbers
 // #4 fail-loud: refuse an empty wave rather than silently defaulting the gate at the protected branch.
@@ -1330,7 +1343,7 @@ if (gate.verdict === 'PASS') {
     // skip_train safe); the kahuna branch is deleted. It never opens a second PR. The script can't
     // call MCP/CLI directly (§3.3) — the promote agent does it.
     const promo = await agent(
-      promotePrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, prNumber: promotionPrNumber }),
+      promotePrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, prNumber: promotionPrNumber, preserveKahuna: PRESERVE_KAHUNA }),
       { label: 'promote', phase: 'Promote', schema: PROMOTE_RESULT, agentType: 'general-purpose' },
     ).catch((e) => {
       // A promotion error must NOT be reported as a successful promote (conservative): record HELD,
