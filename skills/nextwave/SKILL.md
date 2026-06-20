@@ -158,6 +158,7 @@ closed**: the only ways the per-wave Workflow stops are the script's coded exits
 | cost | `budget` floor | stop before the ceiling |
 | impasse | planner `done` with pending left | planner can't schedule remaining → human |
 | per-issue breaker | issue reworked > `MAX_REWORK` | one issue keeps breaking → human |
+| reconcile-blocked | reconcile returns `blocked` | a push to origin was rejected (pre-push gate / permissions / protected ref) → HOLD with the reason; reconcile never substitutes local merges (#724) |
 | gate HOLD | a trust signal failed | post-success gate fired → human review |
 
 Unease that matches none of these is NOT an exit: it rides the `concerns[]` channel
@@ -179,6 +180,23 @@ stalling on (#78/#79/#90), now expressed as bounded control flow.
 - Deterministic hooks (pre-push test gate, secret gate) fire inside each worker — the
   Workflow orchestrates, it does not enforce.
 - One wave per invocation. `/wavemachine` drives the campaign loop over waves.
+
+### Troubleshooting: docs/config waves + the pre-push test gate (#724)
+
+`scripts/hooks/workflow/pre-push-test-gate.sh` blocks `git push` unless a per-session
+test sentinel exists. A **docs/config wave** runs no test suite, so reconcile's push to
+`kahuna/<N>` had no sentinel and was blocked — and reconcile used to *silently* fall back
+to local merge commits, stranding the wave's work off origin and emitting a degenerate
+`kahuna→release` MR (`has_conflicts` / `no_merge_result_pr`) that can never promote.
+
+Fixed two ways (#724): (1) the gate now **exempts integration refs** — a push whose
+destination refs are all `kahuna/*` or `wave-*/*` exits 0 without a sentinel (those refs
+are governed by the four-signal trust gate, not the session heuristic; protected-ref
+pushes in the same session still gate). (2) reconcile now **fails loud** — a rejected
+push returns `blocked` and HOLDs the wave (the `reconcile-blocked` exit), never a local
+merge. **Recovery for a wave stranded by the old behavior:**
+`PUSH_GATE_DISABLED=1 git push origin kahuna/<N>` to fast-forward origin, then re-trigger
+the promotion MR's gate — fix-forward into the gate, not a bypass.
 
 ## Pair
 
