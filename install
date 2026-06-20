@@ -240,6 +240,93 @@ do_check() {
 	fi
 }
 
+# Prune orphaned installed files for ONE skill — parity with the Cellar wipe
+# for scripts (#714). After a skill's current source files are copied, remove
+# any installed file under ~/.claude/skills/<name>/ (and the skill's Cellar
+# helper dir) that no longer has a source counterpart. Two orphan vectors:
+#   - $SKILLS_DIR/<name>/   : SKILL.md, *.md helpers, content subdirs
+#   - $CELLAR_DIR/skills/<name>/ : non-.md helper scripts (the Cellar is wiped
+#     wholesale only when --scripts runs; on --skills-alone it is not, so its
+#     stale helpers — and their farm symlinks — would otherwise linger)
+# *.bak rollback artifacts are ALWAYS preserved. Whole-skill removal stays the
+# job of DEPRECATED_PATHS; this prunes WITHIN an installed skill only.
+prune_orphaned_skill_files() {
+	local skill_name="$1" src_dir="${2%/}"
+
+	# Expected files in $SKILLS_DIR/<name>/ (relative paths).
+	local -A expected_skill=()
+	[[ -f "$src_dir/SKILL.md" ]] && expected_skill["SKILL.md"]=1
+	local f name subdir sub content
+	for f in "$src_dir"/*; do
+		[[ -f "$f" ]] || continue
+		name="$(basename "$f")"
+		[[ "$name" == "SKILL.md" ]] && continue
+		# Only .md files install into the skill dir; helpers go to the Cellar.
+		[[ "$name" == *.md ]] && expected_skill["$name"]=1
+	done
+	for subdir in "$src_dir"/*/; do
+		[[ -d "$subdir" ]] || continue
+		sub="$(basename "$subdir")"
+		for content in "$subdir"*; do
+			[[ -f "$content" ]] || continue
+			expected_skill["$sub/$(basename "$content")"]=1
+		done
+	done
+
+	local installed_dir="$SKILLS_DIR/$skill_name" dest rel
+	if [[ -d "$installed_dir" ]]; then
+		# `-maxdepth 2` keeps prune SYMMETRIC with the installer, which writes
+		# only top-level files (SKILL.md, *.md) and ONE level of content subdir
+		# (<subdir>/<file>) — it never descends deeper. `expected_skill` is built
+		# to the same depth, so bounding find here means prune can only ever
+		# consider files at depths the installer actually writes. A deeper file
+		# (e.g. tours/deep/page.md) is left untouched (safe — leak over delete);
+		# if a skill ever ships nested subdirs, update BOTH walks together.
+		while IFS= read -r dest; do
+			rel="${dest#"$installed_dir"/}"
+			[[ "$rel" == *.bak ]] && continue
+			[[ -n "${expected_skill[$rel]:-}" ]] && continue
+			if [[ "$DRY_RUN" == true ]]; then
+				info "(dry-run) Would prune orphaned skill file: $dest"
+			else
+				rm -f "$dest"
+				info "Pruned orphaned skill file: $dest"
+			fi
+		done < <(find "$installed_dir" -maxdepth 2 -type f 2>/dev/null)
+	fi
+
+	# Expected non-.md helpers in $CELLAR_DIR/skills/<name>/.
+	local -A expected_helper=()
+	for f in "$src_dir"/*; do
+		[[ -f "$f" ]] || continue
+		name="$(basename "$f")"
+		[[ "$name" == "SKILL.md" || "$name" == *.md ]] && continue
+		expected_helper["$name"]=1
+	done
+
+	local cellar_dir="$CELLAR_DIR/skills/$skill_name" hname link
+	if [[ -d "$cellar_dir" ]]; then
+		while IFS= read -r dest; do
+			hname="$(basename "$dest")"
+			[[ "$hname" == *.bak ]] && continue
+			[[ -n "${expected_helper[$hname]:-}" ]] && continue
+			# Drop the bare-name farm symlink too, but ONLY if it points at this
+			# orphaned Cellar target (never touch an unrelated symlink — a
+			# same-named helper from another skill, or a user/foreign symlink).
+			# Depends on farm_symlink_skill_helper writing an ABSOLUTE target, so
+			# bare `readlink` (literal target) equals the absolute `$dest`.
+			link="$SCRIPTS_DIR/$hname"
+			if [[ "$DRY_RUN" == true ]]; then
+				info "(dry-run) Would prune orphaned skill helper: $dest"
+			else
+				[[ -L "$link" && "$(readlink "$link")" == "$dest" ]] && rm -f "$link"
+				rm -f "$dest"
+				info "Pruned orphaned skill helper: $dest"
+			fi
+		done < <(find "$cellar_dir" -maxdepth 1 -type f 2>/dev/null)
+	fi
+}
+
 # --- Deprecated path cleanup --------------------------------------------------
 # Paths listed in DEPRECATED_PATHS are removed on every install run.
 remove_deprecated() {
@@ -1131,6 +1218,9 @@ if [[ "$INSTALL_SKILLS" == true ]]; then
 				do_copy "$content_file" "$SKILLS_DIR/$skill_name/$subdir_name/$content_name"
 			done
 		done
+		# Prune installed files this skill no longer ships (#714 — e.g. a removed
+		# introduction.md). Mirrors the scripts-farm Cellar wipe; preserves *.bak.
+		prune_orphaned_skill_files "$skill_name" "$skill_dir"
 	done
 fi
 
