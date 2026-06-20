@@ -60,6 +60,17 @@ INSTALL_CRYSTALLIZER=false  # deprecated — kept for flag parsing compat only
 # Paths that are no longer part of the kit. Removed automatically on install.
 DEPRECATED_PATHS=(
 	"$HOME/.claude/context-crystallizer"
+	# Retired /tmp/wavemachine wavebus scripts (#739) — the dynamic-workflows
+	# engine flows state via Workflow return values + wave-status, not the bus.
+	# Prune both the symlink-farm and Cellar copies from already-installed hosts.
+	"$HOME/.local/bin/wavebus-wave-init"
+	"$HOME/.local/bin/wavebus-flight-finalize"
+	"$HOME/.local/bin/wavebus-wave-cleanup"
+	"$HOME/.local/bin/wavebus-changelog-aggregate"
+	"$HOME/.claude/scripts/wavebus-wave-init"
+	"$HOME/.claude/scripts/wavebus-flight-finalize"
+	"$HOME/.claude/scripts/wavebus-wave-cleanup"
+	"$HOME/.claude/scripts/wavebus-changelog-aggregate"
 )
 # Logrotate is a tri-state: "prompt" by default, forced on/off by flag.
 LOGROTATE_MODE=prompt
