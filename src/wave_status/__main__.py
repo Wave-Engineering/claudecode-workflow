@@ -25,17 +25,21 @@ from wave_status import deferrals
 from wave_status.dashboard.derived_state import compute_derived_state
 from wave_status.dashboard.generator import generate_dashboard
 from wave_status.state import (
+    awaiting_verdict,
     close_issue,
     complete,
     extend_state,
     flight,
     flight_done,
     get_project_root,
+    hold,
     init_state,
+    launching,
     load_json,
     load_state,
     planning,
     preflight,
+    promoting,
     record_mr,
     review,
     save_json,
@@ -219,6 +223,34 @@ def _cmd_waiting_ci(args: argparse.Namespace) -> None:
     root = get_project_root()
     detail = args.detail if args.detail else ""
     waiting_ci(root, detail=detail)
+    _safe_regenerate_dashboard(root)
+
+
+def _cmd_launching(args: argparse.Namespace) -> None:
+    """Handle ``launching [wave]`` — dynamic-driver coarse state (#738)."""
+    root = get_project_root()
+    launching(root, wave_id=args.wave or "")
+    _safe_regenerate_dashboard(root)
+
+
+def _cmd_awaiting_verdict(args: argparse.Namespace) -> None:
+    """Handle ``awaiting-verdict [wave]`` — coarse state (#738)."""
+    root = get_project_root()
+    awaiting_verdict(root, wave_id=args.wave or "")
+    _safe_regenerate_dashboard(root)
+
+
+def _cmd_promoting(args: argparse.Namespace) -> None:
+    """Handle ``promoting [wave]`` — coarse state (#738)."""
+    root = get_project_root()
+    promoting(root, wave_id=args.wave or "")
+    _safe_regenerate_dashboard(root)
+
+
+def _cmd_hold(args: argparse.Namespace) -> None:
+    """Handle ``hold [reason]`` — coarse state (#738)."""
+    root = get_project_root()
+    hold(root, reason=args.reason or "")
     _safe_regenerate_dashboard(root)
 
 
@@ -490,6 +522,23 @@ def _build_parser() -> argparse.ArgumentParser:
     p_wci = sub.add_parser("waiting-ci", help="Heartbeat during CI polling")
     p_wci.add_argument("detail", nargs="?", default="", help="Optional detail string")
     p_wci.set_defaults(func=_cmd_waiting_ci)
+
+    # dynamic-driver coarse states (#738)
+    p_lc = sub.add_parser("launching", help="Coarse state: about to launch the per-wave Workflow")
+    p_lc.add_argument("wave", nargs="?", default="", help="Wave id")
+    p_lc.set_defaults(func=_cmd_launching)
+
+    p_av = sub.add_parser("awaiting-verdict", help="Coarse state: per-wave Workflow in flight, awaiting verdict")
+    p_av.add_argument("wave", nargs="?", default="", help="Wave id")
+    p_av.set_defaults(func=_cmd_awaiting_verdict)
+
+    p_pr = sub.add_parser("promoting", help="Coarse state: promoting a PASS wave")
+    p_pr.add_argument("wave", nargs="?", default="", help="Wave id")
+    p_pr.set_defaults(func=_cmd_promoting)
+
+    p_hd = sub.add_parser("hold", help="Coarse state: paused for human attention (HOLD / adjudication)")
+    p_hd.add_argument("reason", nargs="?", default="", help="Hold reason")
+    p_hd.set_defaults(func=_cmd_hold)
 
     # close-issue
     p_ci = sub.add_parser("close-issue", help="Close an issue by number or qualified ref")
