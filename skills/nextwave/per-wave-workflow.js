@@ -250,6 +250,7 @@ const PERSIST_RESULT = {
     recorded: { type: 'array', items: { type: 'integer' } }, // issues whose MR+close ran this call
     disposition: { type: 'string' }, // terminal only: promoted | held
     path: { type: 'string' }, // the blob path written
+    trajectory_appended: { type: 'boolean' }, // #748 terminal only: the cross-wave trajectory entry was upserted
     notes: { type: 'string' }, // includes any soft tool error (never halts the wave)
   },
 }
@@ -335,8 +336,29 @@ async function persistTerminal(disposition, detail) {
     terminal: { disposition, detail, at: null }, // `at` stamped by the persist agent at write time
   })
   const path = blobPath(TARGET_REPO_DIR, WAVE_ID)
+  // #748 — the wave's terminal entry for the durable cross-wave trajectory (the #745/#750
+  // judgment seed). The SCRIPT authors every field it already knows (reliable, no agent
+  // guesswork); the persist agent adds ONLY the two shell-derived catalog fields
+  // (files_touched, engine_fingerprint) best-effort in STEP 3. `signals` carries all four
+  // trust signals; `commutativity` lifts that signal's verdict out for the intent-drift lens.
+  const trajectoryEntry = {
+    gate: gate?.verdict ?? null,                 // PASS | HOLD | SKIPPED
+    promoted: disposition === 'promoted',
+    detail,
+    signals: (gate?.signals || []).map((s) => ({ signal: s.signal, passed: s.passed, detail: s.detail })),
+    commutativity: (gate?.signals || []).find((s) => s.signal === 'commutativity')?.detail ?? null,
+    concerns: allConcerns,                        // [{issue, concern}] — §3.2 surfaced-and-continued
+    deferrals: allDeferrals,                      // §3.2 decided-and-recorded
+    rework: reworkCount,                          // {issue: count} — re-open events (catalog C)
+    issues: [...merged].map(Number).sort((a, b) => a - b), // issues shipped this wave (catalog A/B)
+    groups: groupsRunBase + groupsRun.length,
+  }
   await agent(
-    persistTerminalPrompt({ waveId: WAVE_ID, targetRepo: TARGET_REPO, disposition, detail, blob, path }),
+    persistTerminalPrompt({
+      waveId: WAVE_ID, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR,
+      kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH,
+      disposition, detail, blob, path, trajectoryEntry,
+    }),
     { label: `persist:terminal`, phase: 'Promote', schema: PERSIST_RESULT, agentType: 'general-purpose' },
   ).catch((e) => { log(`[#688] persistTerminal soft-fail: ${e?.message || e}`); return null })
   log(`[#688] persisted terminal — wave ${WAVE_ID} ${disposition}: ${detail} → ${path}`)

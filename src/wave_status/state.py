@@ -551,6 +551,14 @@ def init_state(plan_data: dict, root: Path, *, force: bool = False) -> None:
         "deferrals": [],
         "last_updated": _now_iso(),
     }
+    # Preserve any durable cross-wave trajectory (#748) across (re-)init. A wave can record its
+    # terminal entry before a lifecycle init writes state.json (cold-start, design §5); init must
+    # not blind the judgment seed by clobbering that history. No-op in the normal init-first path
+    # (no prior state.json → nothing to carry).
+    prior = _load_state_or_empty(d / "state.json")
+    prior_traj = prior.get("trajectory")
+    if isinstance(prior_traj, list) and prior_traj:
+        state_data["trajectory"] = prior_traj
     save_json(d / "state.json", state_data)
 
     # --- flights.json (empty initially) ---
@@ -789,6 +797,64 @@ def hold(root: Path, reason: str = "") -> dict:
     """Coarse state: the campaign is paused for human attention — a HOLD verdict
     or interactive adjudication (#738). The stall-guard no-ops on this (#736)."""
     return _set_action(root, "hold", "hold", reason)
+
+
+# ---------------------------------------------------------------------------
+# Durable cross-wave campaign trajectory (#748) — the wave-oversight judgment
+# seed (#745). Each completed wave upserts its terminal entry (verdict, signals,
+# concerns, deferrals, rework, commutativity, merged issues) into a campaign-level
+# list in state.json. Durable (survives reboot, unlike Workflow memory) and
+# idempotent per wave_id (a resumed/re-run wave overwrites its entry, never dups).
+# One artifact, three consumers: judgment seed, resume substrate, dashboard.
+# ---------------------------------------------------------------------------
+
+def _load_state_or_empty(path: Path) -> dict:
+    """``load_state`` but tolerant of a not-yet-created ``state.json``.
+
+    The trajectory co-locates with the resume substrate in the target repo's
+    ``.claude/status/`` (design doc §5) and must survive a cold start: a wave
+    can complete and record its entry before any lifecycle ``init`` has
+    written ``state.json`` there. A missing file is an empty state, not an
+    error — ``save_json`` (mkdir -p) creates it on first write.
+    """
+    try:
+        return load_state(path)
+    except FileNotFoundError:
+        return {}
+
+
+def append_trajectory(root: Path, wave_id: str, entry: dict) -> dict:
+    """Upsert *wave_id*'s terminal entry into the durable cross-wave trajectory."""
+    d = status_dir(root)
+    state_data = _load_state_or_empty(d / "state.json")
+    traj = state_data.get("trajectory")
+    if not isinstance(traj, list):
+        traj = []
+    record = {**entry, "wave": wave_id}
+    for i, existing in enumerate(traj):
+        if existing.get("wave") == wave_id:
+            traj[i] = record
+            break
+    else:
+        traj.append(record)
+    state_data["trajectory"] = traj
+    state_data["last_updated"] = _now_iso()
+    save_json(d / "state.json", state_data)
+    return state_data
+
+
+def read_trajectory(root: Path) -> list:
+    """Return the durable cross-wave trajectory (list of per-wave entries).
+
+    The single read path the two consumers share (design doc §5): the
+    wave-oversight judgment seed (#750) and the #738 dashboard. Returns the
+    entries in append order (wave-completion order); ``[]`` when no wave has
+    recorded yet. A dedicated helper so consumers never re-parse ``state.json``
+    or need to know the ``trajectory`` key — the storage shape stays internal.
+    """
+    state_data = _load_state_or_empty(status_dir(root) / "state.json")
+    traj = state_data.get("trajectory")
+    return traj if isinstance(traj, list) else []
 
 
 def set_current_wave(wave_id: str, root: Path) -> dict:
