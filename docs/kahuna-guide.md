@@ -16,33 +16,33 @@ The contract in one sentence: **MRs into kahuna are relaxed (CI-gated, no human 
                          └──────────────────┬──────────────────┘
                                             ▼
                          ┌─────────────────────────────────────┐
-                         │   Orchestrator (top-level CC)       │
+                         │  /wavemachine campaign loop          │
+                         │  (thin, in the main session)         │
+                         │  launches one per-wave Workflow per  │
+                         │  pending wave; advances on verdict   │
                          └──────────────────┬──────────────────┘
-                                            │ spawns per wave
+                                            │ launch per wave (async)
                                             ▼
-                         ┌─────────────────────────────────────┐
-                         │   Prime (per wave) — flight planner │
-                         └─────┬───────────────────────────────┘
-                               │ spawns per story
-                               ▼
-                ┌──────────────────────────┐
-                │ Flight (per story)       │
-                │ feature/<N>-xyz          │
-                │ base = kahuna/<epic>-xyz │
-                └──────────┬───────────────┘
-                           │ MR auto-merges on CI-green
+                ┌─────────────────────────────────────────────┐
+                │ per-wave Dynamic Workflow (deterministic JS) │
+                │   plan → parallel flight agent()s (each in   │
+                │   its own worktree) → reconcile → trust gate │
+                │   → promote kahuna→protected                 │
+                │   returns { gate, promoted }                 │
+                └──────────┬──────────────────────────────────┘
+                           │ each flight PR auto-merges into kahuna on CI-green
                            ▼
     ┌────────────────────────────────────────────────────────────┐
-    │   kahuna/<epic>-xyz                                        │
-    │   — accumulates every flight for the epic                  │
-    │   — MRs in: no review, CI-gated                            │
-    │   — MRs out: trust-score-gated                             │
+    │   kahuna/<id>-xyz                                          │
+    │   — accumulates the wave's flights                         │
+    │   — PRs in: no review, CI-gated                            │
+    │   — PR out: four-signal-trust-gated                        │
     └──────────────────────┬─────────────────────────────────────┘
-                           │ wave_finalize opens final MR
-                           │ when epic complete + DoD passes
+                           │ the Workflow's trust gate opens the
+                           │ kahuna→protected draft PR, then promotes
                            ▼
     ┌────────────────────────────────────────────────────────────┐
-    │   main (production-visible, normal protections)            │
+    │   protected branch (production-visible, normal protections)│
     │   — auto-merges iff all four trust signals are green       │
     └────────────────────────────────────────────────────────────┘
 ```
@@ -105,14 +105,14 @@ That's it. Pick the approved epic when prompted, or pass it directly:
 
 ### Expected Behavior
 
-`/wavemachine` runs an Orchestrator → Prime → Flight loop per the Wavemachine v2 protocol:
+`/wavemachine` is a thin campaign loop in the main session that launches **one per-wave Dynamic Workflow** (`skills/nextwave/per-wave-workflow.js`) per pending wave and routes on its verdict. The control flow inside a wave is deterministic JS, not an LLM:
 
-1. **Kahuna creation.** First wave: the Orchestrator detects no existing `kahuna_branch` in wave state and calls `wave_init` to create `kahuna/<epic-id>-<slug>` off the current main head. Wave state records the branch name.
-2. **Wave execution.** The Orchestrator spawns a Prime per wave. Prime partitions the wave's stories into parallel-safe flights and spawns one Flight Agent per flight. Each Flight branches off kahuna, implements its story, runs `/precheck`, and auto-approves its own `/scpmmr` (sandbox auto-approval per Dev Spec §3.2 R-07).
-3. **Per-flight auto-merge.** Each Flight's MR/PR targets kahuna and auto-merges as soon as CI is green — no human review required, by design.
-4. **Final wave + gate.** When the last wave completes and Definition-of-Done checks pass, the Orchestrator invokes `wave_finalize`. That opens a kahuna→main MR/PR with an assembled body listing every flight that landed, and evaluates the four trust signals in parallel.
-5. **Auto-merge to main.** All four signals green → `pr_merge(skip_train=true)`. The kahuna branch is deleted (per R-03). Wave state records the disposition in `kahuna_branches` history.
-6. **Notifications.** Discord `#wave-status` gets an embed with phase/wave/action/flight progress and a color-coded status sidebar. On final merge, you get a `#wave-status` message and a vox announcement summarizing the epic, merged-flight count, and final commit SHA.
+1. **Kahuna creation.** The first wave creates `kahuna/<id>-<slug>` (via `wave_init`) off the protected branch head; wave-status records the branch name. (A per-plan campaign can pass a persistent `kahuna_branch` shared across waves — see `preserveKahuna`.)
+2. **Wave execution.** The per-wave Workflow runs the spine: a **plan** `agent()` picks the next group of stories from current state; the group's stories run as **parallel flight `agent()`s**, each in its own pre-created worktree, implementing one story and running the mechanical half of `/precheck` (no push — reconcile owns the merge); a **reconcile** `agent()` merges the group into kahuna, runs `commutativity_verify`, and re-opens any surfaced dependency. The Workflow runtime owns the fan-out — there is no Orchestrator or Prime agent.
+3. **Per-flight merge into kahuna.** Reconcile lands each flight branch into kahuna (CI-gated, no human review, by design).
+4. **Trust gate (per wave).** On a clean success exit, the Workflow opens the kahuna→protected **draft PR first**, then evaluates the four trust signals in parallel against the composed diff.
+5. **Promote.** All four signals green → in `auto` mode the Workflow marks the draft PR ready and `pr_merge(skip_train=true)` lands it on the protected branch; the kahuna branch is deleted unless `preserveKahuna` is set. The Workflow returns `{ gate: 'PASS', promoted: true }`; the campaign loop advances to the next wave. `interactive` mode returns the verdict for a human to route.
+6. **Notifications.** Discord `#wave-status` gets an embed with phase/wave/action/flight progress and a color-coded sidebar; major transitions get a vox announcement.
 
 ### Reading the Notifications
 
@@ -130,11 +130,11 @@ If `#wave-status` shows action `gate_blocked`, see the next section.
 
 The kahuna→main gate evaluates four signals concurrently. If any one returns a non-passing result, the run pauses — it does **not** abandon the epic, **does not** merge anyway, **does not** delete the kahuna branch. The sequence (Dev Spec §4.4.4 Procedure C):
 
-1. Orchestrator captures all four signal results, even after one fails (so you get the complete picture, not a short-circuited one).
+1. The Workflow's trust gate captures all four signal results, even after one fails (so you get the complete picture, not a short-circuited one), and aggregates to a HOLD verdict.
 2. Wave state transitions `action` → `gate_blocked`. The failing signals and their detail payloads are recorded.
-3. Discord `#wave-status` gets a message with: epic name, each failing signal's name and detail, the kahuna branch name, and the open kahuna→main MR/PR URL.
-4. vox announces: *"Kahuna gate blocked for epic X. N signals red. Ready for your review."*
-5. The Orchestrator exits the loop. The kahuna branch is preserved. The kahuna→main MR/PR stays open and un-merged.
+3. Discord `#wave-status` gets a message with: wave/epic name, each failing signal's name and detail, the kahuna branch name, and the open kahuna→protected MR/PR URL.
+4. vox announces: *"Kahuna gate blocked for wave X. N signals red. Ready for your review."*
+5. The Workflow returns `{ gate: 'HOLD' }` and the campaign loop stops advancing. The kahuna branch is preserved; the kahuna→protected MR/PR stays open and un-merged.
 
 ### How to Resume
 
@@ -152,9 +152,9 @@ The "fix and re-gate" path is idempotent: calling `wave_finalize` on an epic who
 
 `#wave-status` shows other action states for non-gate failures. The full catalog is in Dev Spec §4.4:
 
-- **`failed` after a flight validation failure** — Procedure A. Inspect the flight's `results.md` in the wavebus, fix in the worktree, re-run `/wavemachine`.
+- **`failed` after a flight validation failure** — Procedure A. Inspect the flight's structured return (recorded in wave-status under `.claude/status/`) and the worktree under `<target>/.claude/.worktrees/wave-<id>/`, fix, re-run `/wavemachine`.
 - **`failed` after a flight rebase conflict** — Procedure B. Resolve the conflict manually in the flight's worktree, push, re-run.
-- **Crash mid-epic (Orchestrator exits abnormally)** — Procedure D. Re-run `/wavemachine`; wave state and the kahuna branch persist on disk and on the platform, and R-02 reuse picks up where the crash hit.
+- **Crash mid-wave (the Workflow or driver exits abnormally)** — Procedure D. Re-run `/wavemachine`; wave-status and the kahuna branch persist on disk and on the platform, and the Workflow rehydrates (SEAM #686) to pick up where the crash hit.
 
 ---
 
@@ -172,7 +172,7 @@ No, on both counts. KAHUNA is designed to be invisible to non-wave contributors 
 
 **For the wave run:**
 
-- When the next Flight Agent creates its branch, the Flight branches off kahuna — not off main. The Flight's work is isolated from the main drift caused by the teammate's commit.
+- When the next flight runs, it branches off kahuna — not off main. The flight's work is isolated from the main drift caused by the teammate's commit.
 - The next Flight's MR/PR merges into kahuna, not main. No interaction with the teammate's commit happens until the kahuna→main gate at epic close.
 - At the gate, `commutativity_verify` computes the composed diff against the **current** main HEAD (not a snapshot from when kahuna was created), so the teammate's commit is part of the analysis.
 - If main has drifted enough that commutativity returns WEAK or ORACLE_REQUIRED, the gate goes red and you handle the reconciliation per [Procedure C above](#what-happens-when-a-trust-signal-goes-red) — typically by merging main into kahuna and re-running the gate. This is intentional: the gate exists precisely to catch this case.
@@ -189,14 +189,14 @@ No. Dev Spec §2 CP-03: only one active run per epic. The skill detects an exist
 
 > *"Can I push to a kahuna branch directly?"*
 
-You can, but you shouldn't. The branch is owned by the wave run. If you want to fix something in-flight, do it in the relevant Flight's worktree (the wavebus exposes the path) and let the Flight push. Direct pushes to kahuna risk fighting the Orchestrator's reconciliation.
+You can, but you shouldn't. The branch is owned by the wave run. If you want to fix something in-flight, do it in the relevant flight's worktree (under `<target>/.claude/.worktrees/wave-<id>/`) and let the flight push. Direct pushes to kahuna risk fighting the Workflow's reconcile stage.
 
 ---
 
 ## Pointers
 
 - **Architecture deep-dive:** [`docs/kahuna-devspec.md`](kahuna-devspec.md) — full Dev Spec including requirements, design, test plan, and VRTM.
-- **Wavemachine v2 reference:** [`docs/wavemachine-v2-integration.md`](wavemachine-v2-integration.md) — Orchestrator/Prime/Flight protocol, filesystem bus, status-line contract.
+- **Current wave-execution architecture:** [`docs/wavemachine-workflows-migration.md`](wavemachine-workflows-migration.md) §3/§5 — the dynamic-workflows engine (the per-wave Workflow spine, the campaign loop, state via return values + wave-status). This supersedes the legacy `docs/wavemachine-v2-integration.md` (Orchestrator/Prime/Flight protocol + filesystem bus), which is **historical** — retired by the #691 cutover.
 - **Onboarding tour:** run `/ccwork tour workflow` for the standard Issue → Branch → Code → Precheck → Ship loop. The KAHUNA-specific tour section will be added in `tours/sdlc.md` (forthcoming).
 - **Concepts:** [`docs/concepts.md`](concepts.md) — how skills, scripts, and settings fit together.
 - **Getting started:** [`docs/getting-started.md`](getting-started.md) — first-session walkthrough; KAHUNA is the next step after that loop is comfortable.

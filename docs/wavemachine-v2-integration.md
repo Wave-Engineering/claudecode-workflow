@@ -1,5 +1,7 @@
 # Wavemachine v2 — Integration Test Plan
 
+> **⚠️ HISTORICAL — superseded by the #691 dynamic-workflows cutover.** This document is the integration-test plan for the **retired** wavemachine v2 Orchestrator/Prime/Flight pipeline (the LLM-orchestrated loop + `/tmp/wavemachine` filesystem bus). A wave now runs as a deterministic per-wave Dynamic Workflow (`skills/nextwave/per-wave-workflow.js`); the Orchestrator/Prime/Flight roles and the filesystem bus no longer exist. Kept for historical reference only. Current architecture + its validation: `docs/wavemachine-workflows-migration.md` §3/§5/§9.
+
 ## Overview
 
 This document is the integration-test harness for the wavemachine v2

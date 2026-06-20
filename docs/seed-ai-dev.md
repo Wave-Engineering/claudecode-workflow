@@ -24,12 +24,12 @@ The precheck-no-ask rule is now mechanically enforced in `CLAUDE.md` (the "MANDA
 
 ## 2. What you are working on
 
-The headline project is a **wave-pattern SDLC pipeline** built as Claude Code skills + Model Context Protocol (MCP) servers. The pipeline takes a design intent (via `/ddd` event storming or `/devspec create` directly), compiles it into an executable Plan, decomposes the Plan into Waves of parallel Stories, and executes those Stories via orchestrated parallel sub-agents.
+The headline project is a **wave-pattern SDLC pipeline** built as Claude Code skills + Model Context Protocol (MCP) servers. The pipeline takes a design intent (via `/ddd` event storming or `/devspec create` directly), compiles it into an executable Plan, decomposes the Plan into Waves of parallel Stories, and executes each Wave as a deterministic **per-wave Dynamic Workflow** (`skills/nextwave/per-wave-workflow.js`) that runs the Stories as parallel flight agents and gates the result before promoting.
 
 Orient on the architecture via these, in order:
 
 1. `docs/SDLC-VISION.md` — the founding design vision (why skills-as-markdown → MCP-as-handlers; why "big documents in context" had to go)
-2. `docs/concepts.md` — concept inventory (Plan / Phase / Wave / Story / Flight / Epic; Orchestrator / Prime / Flight agent roles)
+2. `docs/concepts.md` — concept inventory (Plan / Phase / Wave / Story); `docs/wavemachine-workflows-migration.md` §3/§5 — the per-wave Dynamic Workflow execution model
 3. `docs/getting-started.md` — 15-minute hands-on walkthrough
 4. `docs/kahuna-devspec.md` — **the canonical Dev Spec** for the KAHUNA wave-pattern execution model; also a worked example of what a Dev Spec looks like when fully populated
 5. `docs/skill-reference.md` + `docs/tool-skill-map.md` — what each skill does and which MCP tools it calls
@@ -47,7 +47,7 @@ The pipeline's vocabulary was locked on 2026-04-26 after a major rework (cc-work
 | **Phase** | Sequential ordering unit within a Plan (Phase 1 → 2 → 3) | `.claude/status/phases-waves.json` |
 | **Wave** | Batch of Stories executed together (parallel or serial) within a Phase | same file |
 | **Story** | Single unit of implementable work | GitHub/GitLab issue with `depends_on` metadata |
-| **Flight** | Sub-agent execution of a Story inside a Wave | filesystem bus at `/tmp/wavemachine/...` |
+| **Flight** | A flight `agent()` implementing one Story in its own worktree, inside the per-wave Workflow | worktree under `<target>/.claude/.worktrees/wave-<id>/`; result via wave-status |
 | **Epic** | **PM-layer only.** Optional `epic::N` label for thematic grouping. **The pipeline ignores it.** | label |
 
 Backing memory:
@@ -104,7 +104,7 @@ idea → /ddd (optional)       → event storming, domain model
 **Skill bodies to read when you have time** (not all at once — on demand):
 
 - `skills/wavemachine/SKILL.md` — the autopilot loop
-- `skills/nextwave/SKILL.md` — single-wave execution with Orchestrator/Prime/Flight protocol
+- `skills/nextwave/SKILL.md` — single-wave execution via the per-wave Dynamic Workflow (`per-wave-workflow.js`)
 - `skills/prepwaves/SKILL.md` — wave planning
 - `skills/devspec/SKILL.md` — Dev Spec creation + approval + upshift
 - `skills/precheck/SKILL.md` — pre-commit gate (includes KAHUNA sandbox auto-approval path)
@@ -118,13 +118,13 @@ These are the "why the code looks this way" load-bearing patterns. Each has a me
 
 | Pattern | Memory | Why it exists |
 |---|---|---|
-| **Orchestrator / Prime / Flight** | `decision_wavemachine_v2.md`, `lesson_cc_subagent_tools.md` | CC sub-agents lack the `Agent` tool — only the top-level session can spawn parallel sub-agents. Prime plans; Orchestrator spawns Flights. |
-| **Filesystem message bus** | `decision_wavemachine_v2.md` | Orchestrator context stays O(1) per flight regardless of Flight output size. All flight artifacts at `/tmp/wavemachine/<repo>/wave-<N>/`. |
+| **Per-wave Dynamic Workflow** | `docs/wavemachine-workflows-migration.md` §3/§5, `skills/nextwave/SEAMS.md` | A wave runs as a deterministic JS Workflow (`skills/nextwave/per-wave-workflow.js`): the loop, closed legal exits, dynamic re-plan, and parallel fan-out are code, not an LLM. Agents (`agent()`) run only the judgment seams — plan, flight, reconcile, gate review. Replaced the legacy Orchestrator/Prime/Flight model in the #691 cutover (historical: `decision_wavemachine_v2.md`). |
+| **State via return values + wave-status** | `skills/nextwave/SEAMS.md` (#688) | Flights return schema-validated results; the loop persists them to durable wave-status (`<target>/.claude/status/`). Replaced the legacy `/tmp/wavemachine` filesystem bus (retired in the #691 cutover). |
 | **KAHUNA sandbox** | `docs/kahuna-devspec.md`, `memory/decision_plan_phase_epic_taxonomy.md` | Flights PR to a per-Plan `kahuna/<plan_id>-<slug>` integration branch, not `main`. `/precheck` auto-approves inside the sandbox. Trust-score gate on the final `kahuna→main` merge. |
 | **Plan issue body/comments split** | `pattern_plan_issue_body_comments_split.md` | Body = frozen post-approval. Runtime state (Decision Ledger, status updates, lifecycle events) = typed-prefix comments (`[ledger D-NNN]`, `[status ...]`, `[phase-start ...]`, etc.). Platform enforces append-only. |
 | **Exhaustive Legal Exits** | `pattern_exhaustive_legal_exits.md` | Every autonomy-loop skill body has a closed enumeration of legal halt conditions + explicit non-exits list. Agents do not invent new halt conditions. |
 | **Concerns Channel** | `pattern_concerns_channel.md` | When unease doesn't match any Legal Exit: post `[concern]` comment + Discord ping, then **continue** the loop. The concern is durable; the human responds async. |
-| **CHANGELOG fragment aggregation** | `pattern_changelog_fragment_aggregation.md` | Flights write `CHANGELOG.fragment.md` per issue; Prime(post-wave) aggregates into one PR. Unblocks parallelism when multiple stories would otherwise serialize on CHANGELOG.md. |
+| **CHANGELOG fragment aggregation** | `pattern_changelog_fragment_aggregation.md` | Flights write `CHANGELOG.fragment.md` per issue; the Workflow's reconcile stage aggregates into one PR. Unblocks parallelism when multiple stories would otherwise serialize on CHANGELOG.md. |
 | **Cross-repo wave orchestration** | `lesson_cross_repo_wave_orchestration.md` | Pre-create worktrees of target repo; point sub-agents via prompt; `-R <owner/repo>` on every `gh` call. |
 | **Handler registry + test auto-discovery** | `decision_handler_registry.md` | Eliminates per-story shared-file conflicts in MCP servers via `import.meta.glob` (codegen'd for Bun). |
 
