@@ -1320,3 +1320,99 @@ class TestCoarseDriverStates:
         assert json.loads(state_path.read_text())["current_action"]["action"] == "awaiting-verdict"
         run_cli(["hold", "interactive"], repo)
         assert json.loads(state_path.read_text())["current_action"]["action"] == "hold"
+
+
+# ---------------------------------------------------------------------------
+# Durable cross-wave campaign trajectory (#748) — the wave-oversight judgment seed
+# ---------------------------------------------------------------------------
+
+class TestTrajectory:
+    """append_trajectory upserts per-wave terminal entries into a durable,
+    reboot-proof campaign-level record (the judgment seed / resume substrate)."""
+
+    def test_append_and_idempotent_upsert(self, temp_git_repo: Path, run_cli) -> None:
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        state_path = repo / ".claude" / "status" / "state.json"
+
+        e1 = json.dumps({"gate": "PASS", "promoted": True, "concerns": ["x"], "commutativity": "STRONG"})
+        e2 = json.dumps({"gate": "PASS", "promoted": True, "deferrals": ["d"], "commutativity": "MEDIUM"})
+        # entry passed via stdin ('-')
+        rc, _o, err = run_cli(["trajectory-append", "wave-1", "-"], repo, input_text=e1)
+        assert rc == 0, f"append wave-1 failed: {err}"
+        rc, _o, err = run_cli(["trajectory-append", "wave-2", "-"], repo, input_text=e2)
+        assert rc == 0, f"append wave-2 failed: {err}"
+
+        traj = json.loads(state_path.read_text())["trajectory"]
+        assert [e["wave"] for e in traj] == ["wave-1", "wave-2"]
+        assert traj[0]["commutativity"] == "STRONG"
+
+        # Re-running wave-1 (resume / idempotency) UPSERTS — never duplicates.
+        e1b = json.dumps({"gate": "PASS", "promoted": True, "concerns": ["x", "y"], "commutativity": "STRONG"})
+        rc, _o, err = run_cli(["trajectory-append", "wave-1", "-"], repo, input_text=e1b)
+        assert rc == 0
+        traj = json.loads(state_path.read_text())["trajectory"]
+        assert len(traj) == 2, "wave-1 re-append must upsert, not duplicate"
+        w1 = [e for e in traj if e["wave"] == "wave-1"][0]
+        assert w1["concerns"] == ["x", "y"], "wave-1 entry must be overwritten with the new value"
+
+    def test_trajectory_survives_on_disk(self, temp_git_repo: Path, run_cli) -> None:
+        """The record is on disk in state.json (not in-memory), so it is
+        reboot-durable — a fresh process reads the full prior trajectory."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        run_cli(["trajectory-append", "wave-1", "-"], repo, input_text=json.dumps({"gate": "PASS"}))
+        # a brand-new CLI invocation (separate process) sees it
+        rc, out, _err = run_cli(["show"], repo)
+        assert rc == 0
+        traj = json.loads((repo / ".claude" / "status" / "state.json").read_text())["trajectory"]
+        assert len(traj) == 1 and traj[0]["wave"] == "wave-1"
+
+    def test_trajectory_show_read_path(self, temp_git_repo: Path, run_cli) -> None:
+        """``trajectory-show`` is the shared read path (judgment seed + dashboard):
+        emits the trajectory as a JSON array in wave-completion order; ``[]`` when empty."""
+        repo = temp_git_repo
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+
+        # empty before any wave records
+        rc, out, _err = run_cli(["trajectory-show"], repo)
+        assert rc == 0 and json.loads(out) == []
+
+        run_cli(["trajectory-append", "wave-1", "-"], repo, input_text=json.dumps({"gate": "PASS", "promoted": True}))
+        run_cli(["trajectory-append", "wave-2", "-"], repo, input_text=json.dumps({"gate": "HOLD", "promoted": False}))
+        rc, out, _err = run_cli(["trajectory-show"], repo)
+        assert rc == 0
+        traj = json.loads(out)
+        assert [e["wave"] for e in traj] == ["wave-1", "wave-2"]
+        assert traj[0]["gate"] == "PASS" and traj[1]["promoted"] is False
+
+    def test_trajectory_cold_start_no_init(self, temp_git_repo: Path, run_cli) -> None:
+        """A wave can record its entry before any lifecycle ``init`` has created
+        state.json in the target repo (the producer runs where the resume blobs
+        live). Append must create state.json; show must not crash on a missing one."""
+        repo = temp_git_repo  # NOTE: no `init` — state.json does not exist yet
+
+        # read path on a cold repo → [] (not a crash)
+        rc, out, _err = run_cli(["trajectory-show"], repo)
+        assert rc == 0 and json.loads(out) == []
+
+        rc, _o, err = run_cli(["trajectory-append", "wave-1", "-"], repo, input_text=json.dumps({"gate": "PASS"}))
+        assert rc == 0, f"cold-start append failed: {err}"
+        rc, out, _err = run_cli(["trajectory-show"], repo)
+        assert rc == 0 and [e["wave"] for e in json.loads(out)] == ["wave-1"]
+
+    def test_init_preserves_cold_recorded_trajectory(self, temp_git_repo: Path, run_cli) -> None:
+        """A wave recorded before lifecycle ``init`` must survive the init write —
+        init must not blind the judgment seed by clobbering trajectory history (#748)."""
+        repo = temp_git_repo
+        run_cli(["trajectory-append", "wave-0", "-"], repo, input_text=json.dumps({"gate": "PASS", "promoted": True}))
+        # now a normal campaign init lands on top
+        _write_plan(repo)
+        rc, _o, err = run_cli(["init", "plan.json"], repo)
+        assert rc == 0, f"init failed: {err}"
+        rc, out, _err = run_cli(["trajectory-show"], repo)
+        assert rc == 0, err
+        assert [e["wave"] for e in json.loads(out)] == ["wave-0"], "init clobbered the cold-recorded trajectory"

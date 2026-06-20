@@ -115,7 +115,7 @@ function persistIterationPrompt({ waveId, targetRepo, kahunaBranch, newlyMerged,
 // Records the wave's terminal disposition into BOTH (a) wave-status's wave-completion
 // record (so the campaign driver's cold-start rehydrate can prune a promoted wave, §5),
 // and (b) the durable blob's `terminal` field (so a resume sees the same disposition).
-function persistTerminalPrompt({ waveId, targetRepo, disposition, detail, blob, path }) {
+function persistTerminalPrompt({ waveId, targetRepo, targetRepoDir, kahunaBranch, protectedBranch, disposition, detail, blob, path, trajectoryEntry }) {
   return [
     `You are the wave-status PERSISTENCE node for wave ${waveId} of ${targetRepo}. Record the wave's`,
     `TERMINAL disposition durably + idempotently, then return. Do NOT do any other work.`,
@@ -135,8 +135,36 @@ function persistTerminalPrompt({ waveId, targetRepo, disposition, detail, blob, 
     ``,
     JSON.stringify(blob, null, 2),
     ``,
-    `Return: persisted (true if written), disposition ("${disposition}"), path ("${path}"),`,
-    `notes (1-2 sentences; include any tool error — never halt on one).`,
+    `STEP 3 — append this wave's entry to the DURABLE CROSS-WAVE TRAJECTORY (#748 — the #750 wave-`,
+    `  oversight judgment seed). The base entry below is authored by the loop; you ADD two best-effort,`,
+    `  shell-derived fields, then upsert it. The append is idempotent per wave (keyed on the wave id —`,
+    `  re-running OVERWRITES this wave's entry, never duplicates), so it is safe on resume.`,
+    `    a. Compute "files_touched": the changed-file set of this wave, i.e. run`,
+    `         git -C ${targetRepoDir} diff --name-only ${protectedBranch}...${kahunaBranch}`,
+    `       and put the resulting path list (JSON array of strings) on the entry. On any git error,`,
+    `       set files_touched to [] and note it — do NOT fail the step.`,
+    `    b. Compute "engine_fingerprint": the md5 of the running per-wave-workflow bundle if you can`,
+    `       locate it (e.g. md5sum of per-wave-workflow.bundled.js on PATH/cwd); else set it to null.`,
+    `       This is a CONFOUND-CONTROL annotation (engine drift mid-campaign), best-effort only.`,
+    `    c. Merge a + b into this base entry (every other field verbatim), then upsert it. To avoid`,
+    `       ANY shell-quoting hazard — the entry carries free-text concerns/deferrals/detail that`,
+    `       routinely contain apostrophes ("doesn't", "can't"), which would break an inline '...'`,
+    `       command — WRITE the merged JSON to a temp file (e.g. ${path}.traj.json) and pass that`,
+    `       FILE PATH to the CLI (trajectory-append accepts a path OR '-'). Use the deployed`,
+    `       'wave-status' console command run FROM the target clone so it resolves the same`,
+    `       .claude/status/ that holds the blob above (NOT 'python3 -m wave_status', which only`,
+    `       resolves inside the kit repo; the pre-flight 'command -v wave-status' probe guarantees it):`,
+    `         printf '%s' <merged-entry-json> > ${path}.traj.json   # write via your file-write tool, not shell`,
+    `         cd ${targetRepoDir} && wave-status trajectory-append ${waveId} ${path}.traj.json`,
+    `       The upsert is idempotent per wave id (re-running OVERWRITES this wave's entry); the temp`,
+    `       file may be left in place or removed.`,
+    `       Base entry (do NOT change these fields; only ADD files_touched + engine_fingerprint):`,
+    ``,
+    JSON.stringify(trajectoryEntry, null, 2),
+    ``,
+    `Return: persisted (true if the blob was written), disposition ("${disposition}"), path ("${path}"),`,
+    `trajectory_appended (true if STEP 3's CLI upsert succeeded), notes (1-2 sentences; include any tool`,
+    `error — persistence must NEVER halt the wave, so a soft-fail is a note, not a throw).`,
   ].join('\n')
 }
 
@@ -883,6 +911,7 @@ const PERSIST_RESULT = {
     recorded: { type: 'array', items: { type: 'integer' } }, // issues whose MR+close ran this call
     disposition: { type: 'string' }, // terminal only: promoted | held
     path: { type: 'string' }, // the blob path written
+    trajectory_appended: { type: 'boolean' }, // #748 terminal only: the cross-wave trajectory entry was upserted
     notes: { type: 'string' }, // includes any soft tool error (never halts the wave)
   },
 }
@@ -968,8 +997,29 @@ async function persistTerminal(disposition, detail) {
     terminal: { disposition, detail, at: null }, // `at` stamped by the persist agent at write time
   })
   const path = blobPath(TARGET_REPO_DIR, WAVE_ID)
+  // #748 — the wave's terminal entry for the durable cross-wave trajectory (the #745/#750
+  // judgment seed). The SCRIPT authors every field it already knows (reliable, no agent
+  // guesswork); the persist agent adds ONLY the two shell-derived catalog fields
+  // (files_touched, engine_fingerprint) best-effort in STEP 3. `signals` carries all four
+  // trust signals; `commutativity` lifts that signal's verdict out for the intent-drift lens.
+  const trajectoryEntry = {
+    gate: gate?.verdict ?? null,                 // PASS | HOLD | SKIPPED
+    promoted: disposition === 'promoted',
+    detail,
+    signals: (gate?.signals || []).map((s) => ({ signal: s.signal, passed: s.passed, detail: s.detail })),
+    commutativity: (gate?.signals || []).find((s) => s.signal === 'commutativity')?.detail ?? null,
+    concerns: allConcerns,                        // [{issue, concern}] — §3.2 surfaced-and-continued
+    deferrals: allDeferrals,                      // §3.2 decided-and-recorded
+    rework: reworkCount,                          // {issue: count} — re-open events (catalog C)
+    issues: [...merged].map(Number).sort((a, b) => a - b), // issues shipped this wave (catalog A/B)
+    groups: groupsRunBase + groupsRun.length,
+  }
   await agent(
-    persistTerminalPrompt({ waveId: WAVE_ID, targetRepo: TARGET_REPO, disposition, detail, blob, path }),
+    persistTerminalPrompt({
+      waveId: WAVE_ID, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR,
+      kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH,
+      disposition, detail, blob, path, trajectoryEntry,
+    }),
     { label: `persist:terminal`, phase: 'Promote', schema: PERSIST_RESULT, agentType: 'general-purpose' },
   ).catch((e) => { log(`[#688] persistTerminal soft-fail: ${e?.message || e}`); return null })
   log(`[#688] persisted terminal — wave ${WAVE_ID} ${disposition}: ${detail} → ${path}`)

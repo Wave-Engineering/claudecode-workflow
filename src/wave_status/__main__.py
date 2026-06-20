@@ -25,6 +25,7 @@ from wave_status import deferrals
 from wave_status.dashboard.derived_state import compute_derived_state
 from wave_status.dashboard.generator import generate_dashboard
 from wave_status.state import (
+    append_trajectory,
     awaiting_verdict,
     close_issue,
     complete,
@@ -40,6 +41,7 @@ from wave_status.state import (
     planning,
     preflight,
     promoting,
+    read_trajectory,
     record_mr,
     review,
     save_json,
@@ -252,6 +254,22 @@ def _cmd_hold(args: argparse.Namespace) -> None:
     root = get_project_root()
     hold(root, reason=args.reason or "")
     _safe_regenerate_dashboard(root)
+
+
+def _cmd_trajectory_append(args: argparse.Namespace) -> None:
+    """Handle ``trajectory-append <wave> <entry-json|->`` — durable cross-wave
+    campaign trajectory upsert (#748)."""
+    root = get_project_root()
+    entry = json.loads(_read_json_source(args.entry))
+    append_trajectory(root, args.wave, entry)
+    _safe_regenerate_dashboard(root)
+
+
+def _cmd_trajectory_show(args: argparse.Namespace) -> None:
+    """Handle ``trajectory-show`` — emit the durable cross-wave trajectory as a
+    JSON array (the read path the judgment seed + dashboard consume, #748)."""
+    root = get_project_root()
+    print(json.dumps(read_trajectory(root)))
 
 
 def _cmd_close_issue(args: argparse.Namespace) -> None:
@@ -539,6 +557,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_hd = sub.add_parser("hold", help="Coarse state: paused for human attention (HOLD / adjudication)")
     p_hd.add_argument("reason", nargs="?", default="", help="Hold reason")
     p_hd.set_defaults(func=_cmd_hold)
+
+    # durable cross-wave campaign trajectory (#748)
+    p_tr = sub.add_parser("trajectory-append", help="Upsert a wave's terminal entry into the durable cross-wave trajectory (judgment seed)")
+    p_tr.add_argument("wave", help="Wave id")
+    p_tr.add_argument("entry", help="Path to entry JSON, or '-' for stdin")
+    p_tr.set_defaults(func=_cmd_trajectory_append)
+
+    p_ts = sub.add_parser("trajectory-show", help="Print the durable cross-wave trajectory as a JSON array (judgment-seed / dashboard read path)")
+    p_ts.set_defaults(func=_cmd_trajectory_show)
 
     # close-issue
     p_ci = sub.add_parser("close-issue", help="Close an issue by number or qualified ref")
