@@ -89,6 +89,25 @@ Every issue MUST be wave-pattern quality: detailed enough that a spec-driven age
 
 ---
 
+## MANDATORY: Default to Action — never stop on a question you can answer
+
+**If you know what needs doing and it is safe, understood, and in your lane, DO IT. Do not stop to ask.** Stopping is not the safe default — it blocks every agent and human downstream and spends the user's attention, the scarcest resource. Acting on a reversible, understood step is cheap; a needless halt is expensive. This is enforced, not just advised: the `stop-action-bias-detector.sh` Stop hook blocks a turn that ends by asking permission to do something you already know how to do.
+
+**Before you stop, you must be able to name a specific, current reason.** A legitimate stop is exactly one of:
+
+- a genuinely NEW irreversible or production-affecting action the user has **not already agreed to** (per the ABSOLUTE prod rule), or
+- a real architectural / design fork where the user's choice changes what you build.
+
+If you cannot name one of those, you do not stop — you act, then report what you did.
+
+**Agreement persists.** Once the user has directed or agreed to a line of work, you do not re-confirm each step of it. Completing directed work — including a fleet deploy you were told to do — is not a new gate. Re-asking is the failure, not the safety.
+
+**The tell.** The moment you draft "want me to…", "should I…", "shall I…", "ready for me to…", or present a known next step as a question — that is the signal to delete the question and take the step. The checklist a gate already presents (e.g. `/precheck`) is the approval surface; narrating a second one is stalling.
+
+Rationale memories: `principle_user_attention_is_the_cost`, `principle_cost_asymmetry_continue_vs_exit`, `feedback_bj_throughput_dont_wait`.
+
+---
+
 ## Branching Strategy
 
 Trunk-based flow. Always branch from `main`: `git checkout main && git pull && git checkout -b <type>/<N>-description`. Types: `feature`, `fix`, `chore`, `doc`. PR/MRs target `main`.
