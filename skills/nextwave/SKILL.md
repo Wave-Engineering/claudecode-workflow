@@ -74,6 +74,7 @@ Supplied by the caller (`/wavemachine` per wave, or a human launching one wave):
 | `targetRepo` | `owner/repo` for `gh -R` scoping |
 | `targetRepoDir` | the clone the durable worktrees attach to (§4.2) |
 | `kahunaBranch` | the integration target; every flight PR targets this, never the protected branch |
+| `preserveKahuna` | #722: `true` ⇒ persistent per-plan kahuna (shared across a plan's waves) — promote does NOT delete it. Default `false` = per-wave disposable (deleted on promote). See lifecycle below. |
 | `protectedBranch` | the promotion target on the success exit |
 | `mode` | `auto` (verdict drives promotion) \| `interactive` (verdict returned; human routes) |
 | `planId` | wave plan id — the gate's PR-open node needs it to assemble the kahuna→protected MR body (#687/#5) |
@@ -81,6 +82,26 @@ Supplied by the caller (`/wavemachine` per wave, or a human launching one wave):
 
 The closed numeric guards (`maxGroups`, `maxRework`, `maxIdle`, `costFloor`) have
 safe defaults in the script and rarely need overriding.
+
+### Kahuna branch lifecycle — per-wave disposable vs per-plan persistent (#722)
+
+Two models; the campaign driver picks one by the **shape of the `kahunaBranch` it passes** and
+the `preserveKahuna` flag:
+
+- **Per-wave disposable (default, `preserveKahuna` omitted/false).** `kahunaBranch` defaults to
+  `kahuna/<waveId>`; the wave promotes it onto the protected branch and the promote node **deletes
+  it** — the integration branch existed only for this wave. Each wave branches fresh off the
+  protected/release HEAD.
+- **Per-plan persistent (`preserveKahuna: true`).** A campaign that threads ONE kahuna across a
+  plan's waves (e.g. `kahuna/56-quartermaster-docs-labs`, cumulative integration over waves 1..N)
+  passes `preserveKahuna: true` so the promote node **does NOT delete** the branch after each wave.
+  Deleting it after wave 1 (the old unconditional behavior) stranded waves 2..N off a **diverged
+  base** — origin recreated at the post-promotion HEAD while local work still descended from the
+  pre-promotion base, so the next wave's push was rejected non-fast-forward. `preserveKahuna: true`
+  eliminates that. The plan's final wave (or the driver) retires the branch.
+
+**Drivers MUST match the flag to the branch shape:** a shared per-plan `kahunaBranch` with
+`preserveKahuna` left false will delete the branch mid-plan and break the remaining waves.
 
 ## Procedure
 

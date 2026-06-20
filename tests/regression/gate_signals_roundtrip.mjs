@@ -119,6 +119,20 @@ try {
   ok('PROMOTE_RESULT requires a boolean `promoted`')
 } catch (e) { bad('promotion prompt', e) }
 
+// ── 3b. #722: preserveKahuna gates the branch-delete (per-plan persistent vs per-wave disposable) ──
+try {
+  // default (omitted) and explicit false → per-wave disposable: the prompt DELETES the branch.
+  assert.match(promotePrompt({ ...A, prNumber: PR }), /delete/i)
+  assert.match(promotePrompt({ ...A, prNumber: PR, preserveKahuna: false }), /delete/i)
+  // preserveKahuna:true → persistent per-plan kahuna: the prompt must NOT delete it, and must say so.
+  const kept = promotePrompt({ ...A, prNumber: PR, preserveKahuna: true })
+  assert.doesNotMatch(kept, /--delete/) // no git/gh branch-delete instruction
+  assert.doesNotMatch(kept, /disposable/) // not framed as disposable
+  assert.match(kept, /do not delete/i)
+  assert.match(kept, /#722|persistent per-plan/i)
+  ok('promote prompt: preserveKahuna=true keeps the branch; default/false deletes it (#722)')
+} catch (e) { bad('promote preserveKahuna gating (#722)', e) }
+
 console.log('')
 if (failures) { console.log(`  ${failures} assertion group(s) failed`); process.exit(1) }
 console.log('  all gate-signal checks passed')

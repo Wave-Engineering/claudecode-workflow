@@ -112,6 +112,7 @@ const WAVE_ID = params.waveId ?? 'W-?'
 const TARGET_REPO = params.targetRepo ?? 'Wave-Engineering/ccwork-testtarget' // owner/repo for gh -R scoping
 const TARGET_REPO_DIR = params.targetRepoDir ?? '/home/bakerb/sandbox/github/ccwork-testtarget' // clone the worktrees attach to
 const KAHUNA_BRANCH = params.kahunaBranch ?? `kahuna/${WAVE_ID}` // integration target; never the protected branch
+const PRESERVE_KAHUNA = params.preserveKahuna ?? false // #722: true ⇒ persistent per-plan kahuna (shared across a plan's waves) — promote does NOT delete it; default false = per-wave disposable (delete on promote)
 const PROTECTED_BRANCH = params.protectedBranch ?? 'main' // promotion target on the success exit
 const ALL_ISSUES = (params.issues ?? []).map(Number).filter(Number.isFinite) // the wave's issue numbers
 // #4 fail-loud: refuse an empty wave rather than silently defaulting the gate at the protected branch.
@@ -709,7 +710,7 @@ if (gate.verdict === 'PASS') {
     // skip_train safe); the kahuna branch is deleted. It never opens a second PR. The script can't
     // call MCP/CLI directly (§3.3) — the promote agent does it.
     const promo = await agent(
-      promotePrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, prNumber: promotionPrNumber }),
+      promotePrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, prNumber: promotionPrNumber, preserveKahuna: PRESERVE_KAHUNA }),
       { label: 'promote', phase: 'Promote', schema: PROMOTE_RESULT, agentType: 'general-purpose' },
     ).catch((e) => {
       // A promotion error must NOT be reported as a successful promote (conservative): record HELD,
