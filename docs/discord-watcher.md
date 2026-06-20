@@ -7,6 +7,10 @@
 
 If the session was started with `--channels` (or `--dangerously-load-development-channels`), a Discord watcher channel server pushes notifications when new messages arrive in any Oak and Wave text channel.
 
+> This doc covers the **receiving** side. For the **sending** side — turn-taking
+> when several agents are addressed by the same question — see
+> [`discord-mic-convention.md`](discord-mic-convention.md).
+
 ## When you receive a `<channel source="discord_watcher">` notification
 
 1. Call `mcp__disc-server__disc_read` with `channel_id` and `limit: 10` to get the full messages
