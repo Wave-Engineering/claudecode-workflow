@@ -828,6 +828,8 @@ const RECONCILE = {
     conflicts_resolved: { type: 'array', items: { type: 'string' } }, // cross-flight fixes done here (§3.2.3)
     concerns: { type: 'array', items: { type: 'string' } },
     suite_summary: { type: 'string' },
+    blocked: { type: 'boolean' }, // #724: true ⇒ a push to origin was REJECTED (gate/permissions/protected ref) → HOLD; reconcile must NOT local-merge
+    block_reason: { type: 'string' }, // #724: the rejection text, surfaced in the wave HOLD
     notes: { type: 'string' },
   },
 }
@@ -1106,9 +1108,15 @@ function primeReconcilePrompt(built, merged) {
     `   // #688 wave-status persistence is FILLED as a standalone step the LOOP runs right after you return`,
     `   //   (persistIteration → wave_record_mr + wave_close_issue per newly-merged issue, then the durable`,
     `   //   loop blob). Do NOT record MRs / close issues here — just return merged; the loop persists it (§3.3).`,
+    `5. FAIL LOUD on a REJECTED push (#724): if pushing a flight branch or ${KAHUNA_BRANCH} to origin is rejected —`,
+    `   pre-push test gate, permissions, or a protected-ref guard — STOP and return blocked=true + block_reason`,
+    `   (the rejection text). Do NOT substitute LOCAL merge commits / local-only branches to "keep going": that`,
+    `   strands the wave off origin and produces a degenerate ${KAHUNA_BRANCH}→release MR that can never promote.`,
+    `   A blocked push HOLDs the wave with a clear cause — the loop never promotes work that never reached origin.`,
     ``,
     `Return: merged (issues now green in ${KAHUNA_BRANCH} this round), needs_rework (list of {issue, reason} you`,
-    `reset), conflicts_resolved (files + 1-line how), concerns (array), suite_summary (final test line), notes.`,
+    `reset), conflicts_resolved (files + 1-line how), concerns (array), suite_summary (final test line),`,
+    `blocked (true ONLY if a push to origin was rejected — see step 5) + block_reason, notes.`,
   ].join('\n')
 }
 
@@ -1188,6 +1196,12 @@ while (true) {
     agentType: 'general-purpose',
   })
   for (const c of rec.concerns || []) allConcerns.push({ issue: 'reconcile', concern: c })
+
+  // #724: a push rejected by the pre-push gate / permissions / protected-ref guard HOLDs the wave
+  // LOUDLY. Reconcile is instructed never to substitute local merge commits (which strand work off
+  // origin + emit a degenerate kahuna→release MR), so a blocked reconcile means nothing landed this
+  // round. Set halt + break → the gate is skipped and the campaign driver surfaces the block reason.
+  if (rec.blocked) { halt = `reconcile-blocked: ${rec.block_reason || 'push to origin rejected'}`; break }
 
   // ── DETERMINISTIC state update + progress accounting ──
   const newlyMerged = (rec.merged || []).filter((n) => !merged.has(n))
