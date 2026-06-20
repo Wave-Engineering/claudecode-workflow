@@ -142,33 +142,29 @@ Narration: "If a sub-issue is missing its Changes, Tests, or Acceptance Criteria
 
 ## Section 5: `/nextwave` — Single Wave Execution
 
-Narration: "This is where code gets written. `/nextwave` picks up the next pending wave from the plan and executes it — spawning Flight Agents that each implement one Story on an isolated branch."
+Narration: "This is where code gets written. `/nextwave` executes one wave as a deterministic **Dynamic Workflow** (`skills/nextwave/per-wave-workflow.js`). The control flow — the flight loop, the closed legal exits, the dynamic re-plan, the trust-gate fan-out — is JavaScript, not an LLM. Agents are still used, but only for the steps that need judgment."
 
-### Three agent roles
+### The per-wave Workflow spine
 
-| Role | What it does | Where it runs |
-|------|-------------|---------------|
-| **Orchestrator** | Drives the loop, spawns Flights in parallel | Top-level session (has `Agent` tool) |
-| **Prime** | Pre-wave planning, post-flight merge/CI/reconcile | Sub-agent (sequential, one per wave) |
-| **Flight** | Implements one Story, runs precheck, reports PASS/FAIL | Sub-agent (parallel, one per issue) |
+Narration: "One Workflow runs one wave, top to bottom: rehydrate from durable wave-status → the dynamic flight loop → the trust gate → promote."
 
-### Execution modes
+| Stage | What runs | Agent or code? |
+|-------|-----------|----------------|
+| **Plan** | picks the next group of pending Stories from current state | `agent()` (judgment) |
+| **Flights** | each Story implemented in its own pre-created worktree, in parallel | `agent()` per Story |
+| **Reconcile** | the only cross-flight view — merges the group into the kahuna branch, runs `commutativity_verify`, resolves interface breaks, re-opens surfaced deps | `agent()` (judgment) |
+| **Trust gate** | on a clean success exit: opens the kahuna→protected draft PR, then 4 signals in parallel (commutativity, CI, code-reviewer, trivy) → PASS/HOLD | mostly `agent()` |
+| **Promote** | on PASS in auto mode, merges the draft PR (kahuna→protected) | code |
 
-- **Parallel** — multiple Flight Agents on isolated worktrees (conflict detection via `flight_overlap`)
-- **Serial** — single-issue flights, fast-path (no worktree isolation)
-- **Mixed** — some waves parallel, some serial
+Narration: "The Workflow *runtime* owns the parallel fan-out — there is no 'Orchestrator agent' spawning siblings, and no Prime sub-agent. The determinism that used to be an LLM driving a loop is now the JS engine. Closed legal exits: success / runaway / thrash / cost / impasse / per-issue breaker / reconcile-blocked."
 
-### The filesystem bus
+### How state flows
 
-```bash
-ls /tmp/wavemachine/ 2>/dev/null && echo "(active wave data above)" || echo "(no active waves)"
-```
-
-Narration: "Agents communicate via files under `/tmp/wavemachine/<repo>/wave-<N>/`, not through Orchestrator context. This keeps the context window clean and provides a forensic audit trail. Each flight writes `results.md` and a `DONE` file (contents: PASS or FAIL)."
+Narration: "State flows through schema-validated Workflow return values plus durable **wave-status** (`<target>/.claude/status/`) — flights return structured results, the loop persists them. The legacy `/tmp/wavemachine/` filesystem bus is retired; there is no `results.md`/`DONE` file to inspect anymore. To see wave state, read wave-status or run `/wave`."
 
 ### One wave per invocation
 
-Narration: "`/nextwave` executes exactly one wave and returns. The user controls the pace. For automated multi-wave execution, use `/wavemachine`."
+Narration: "`/nextwave` executes exactly one wave and returns its verdict (`{ gate, promoted }`). The user controls the pace. For automated multi-wave execution, use `/wavemachine`, which launches one per-wave Workflow per pending wave and advances on the verdict."
 
 ---
 
@@ -193,14 +189,15 @@ git branch -r --list 'origin/kahuna/*' 2>/dev/null | head -5 || echo "(no kahuna
 
 ```
 while wave_next_pending() is not null:
-    wave_health_check() — break if unhealthy
-    /nextwave auto     — execute one wave
-    check result       — break if FAIL
+    launch the per-wave Workflow (async — the driver ends its turn and is
+        re-invoked when the Workflow completes with a { gate, promoted } verdict)
+    advance ONLY if verdict.gate == "PASS" and verdict.promoted == true
+    else: HOLD for human (a passed gate that did not land on the
+        protected branch is NOT success)
 done
-wave_finalize()        — compute trust score, merge kahuna→main
 ```
 
-Narration: "The human's contract with `/wavemachine` is: approve at the start (by invoking it after `/prepwaves`), approve at the end (the trust-score gate). The middle is autonomous. If something breaks, it stops and reports — it never silently continues past a failure."
+Narration: "`/wavemachine` is a thin campaign loop in the main session: it launches **one per-wave Workflow per pending wave** and routes on each verdict. Each Workflow runs its *own* trust gate and promotes kahuna→protected internally — there is no separate end-of-plan merge step. The human's contract is: approve at the start (invoke it after `/prepwaves`), and the loop surfaces any HOLD for review. The middle is autonomous; it advances only on `PASS AND promoted`, never on a gate pass alone, and never silently continues past a HOLD."
 
 ---
 

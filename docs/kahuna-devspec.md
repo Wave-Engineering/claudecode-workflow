@@ -10,6 +10,8 @@ finalization_score: 7/7
 **Version:** 1.0
 **Date:** 2026-04-24
 **Status:** Draft
+
+> **⚠️ Execution-model supersession (#691 cutover).** The KAHUNA **design invariants** in this spec — the per-Plan `kahuna/<plan_id>-<slug>` integration branch, no-review-into-kahuna, the four-signal trust gate on the kahuna→protected promotion, sandbox auto-approval — remain authoritative. But the **execution model** described herein (an LLM Orchestrator driving the loop with the `Agent` tool, a Prime sub-agent per wave, Flight sub-agents, and the `/tmp/wavemachine` filesystem bus) was **retired** by the dynamic-workflows cutover: a wave now runs as a deterministic per-wave Dynamic Workflow (`skills/nextwave/per-wave-workflow.js`). Read the Orchestrator/Prime/Flight/bus passages as historical. Current execution architecture: `docs/wavemachine-workflows-migration.md` §3/§5.
 **Authors:** bakerb, rules-lawyer 📜 (cc-workflow)
 
 ---
