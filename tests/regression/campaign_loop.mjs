@@ -9,6 +9,7 @@ import {
   parseArgs,
   computePending,
   waveIdOf,
+  resolveIntentTier,
   routeVerdict,
   routeJudgment,
   runCampaign,
@@ -133,9 +134,41 @@ async function main() {
   ok(seenContext && seenContext.completed.length === 1 && seenContext.remaining.length === 0 && seenContext.index === 1,
     'runCampaign: judge receives cross-wave context (completed + remaining + index)')
 
-  // ── prompt + schema sanity ──
-  const prompt = waveOversightPrompt({ justLanded: { wave: 'w2' }, trajectory: [{ wave: 'w1', gate: 'PASS' }], remainingPlan: ['w3'], intentTier: 'devspec' })
-  ok(/ACCUMULATION/.test(prompt) && /INTENT-DRIFT/.test(prompt) && /devspec/.test(prompt), 'waveOversightPrompt encodes the §4 lens + intent tier')
+  // 8b. context MUST surface the JUST-LANDED wave's own id + verdict (not yet in `completed`), so the
+  // seam can include the most-recent wave in the judgment seed (critical-bug regression).
+  let ctxW1 = null
+  let ctxW2 = null
+  const taggedPass = (g) => ({ gate: 'PASS', promoted: true, tag: g })
+  await runCampaign({
+    pending: [{ id: 'w1' }, { id: 'w2' }],
+    runWave: async (w) => taggedPass(waveIdOf(w)),
+    judge: async (w, ctx) => { if (waveIdOf(w) === 'w1') ctxW1 = ctx; else ctxW2 = ctx; return cont },
+  })
+  ok(ctxW1 && ctxW1.wave === 'w1' && ctxW1.verdict?.tag === 'w1' && ctxW1.completed.length === 0,
+    'runCampaign: context surfaces the just-landed wave id+verdict on wave 1 (completed still empty)')
+  ok(ctxW2 && ctxW2.wave === 'w2' && ctxW2.verdict?.tag === 'w2' && ctxW2.completed[0]?.verdict?.tag === 'w1',
+    'runCampaign: just-landed verdict is THIS wave (w2), not the prior wave (w1) — off-by-one guard')
+
+  // ── #750 intent-tier resolver (pure, deterministic tier selection) ──
+  ok(resolveIntentTier({ devspec: 'd.md', domainModel: 'm.md', sketchbook: 's.md' }) === 'devspec', 'resolveIntentTier: devspec wins (richest)')
+  ok(resolveIntentTier({ devspec: null, domainModel: 'm.md' }) === 'plan-ddd-sketchbook', 'resolveIntentTier: domainModel → plan-ddd-sketchbook')
+  ok(resolveIntentTier({ devspec: null, domainModel: null, sketchbook: 's.md' }) === 'plan-ddd-sketchbook', 'resolveIntentTier: sketchbook → plan-ddd-sketchbook')
+  ok(resolveIntentTier({}) === 'issues-only', 'resolveIntentTier: nothing → issues-only')
+  ok(resolveIntentTier() === 'issues-only', 'resolveIntentTier(undefined) → issues-only (no throw)')
+
+  // ── #750 the LENS — waveOversightPrompt encodes the §4 framing + the A–J catalog + tier calibration ──
+  const prompt = waveOversightPrompt({ justLanded: { wave: 'w2' }, trajectory: [{ wave: 'w1', gate: 'PASS' }], remainingPlan: ['w3'], intentTier: 'devspec', intentRefs: { devspec: 'spec.md' }, kahunaBranch: 'kahuna/w2' })
+  ok(/ACCUMULATION/.test(prompt) && /INTENT-DRIFT/.test(prompt), 'lens: §4 accumulation + intent-drift')
+  ok(/ADAPTATION/.test(prompt) && /DRIFT/.test(prompt), 'lens: adaptation-vs-drift discriminator')
+  ok(/TREND/.test(prompt) && /ABSENCE/.test(prompt) && /CONFOUND/.test(prompt), 'lens: the three detection modes')
+  // every catalog cluster A–J present
+  for (const c of ['A.', 'B.', 'C.', 'D.', 'E.', 'F.', 'G.', 'H.', 'I.', 'J.']) {
+    ok(prompt.includes(`\n${c} `), `lens: failure-shape cluster ${c.replace('.', '')} present`)
+  }
+  ok(/PROMOTED ≠ DELIVERED/.test(prompt) && /command-ran ≠ thing-attached/.test(prompt), 'lens: the signature catalog tells (I + E) present')
+  ok(/DEVSPEC tier/.test(prompt) && /dod_check_coverage/.test(prompt), 'lens: devspec tier calibrates to VRTM/dod tooling')
+  ok(waveOversightPrompt({ intentTier: 'issues-only' }).includes('ISSUES-ONLY tier'), 'lens: issues-only tier calibration')
+  ok(/kahuna\/w2/.test(prompt), 'lens: names the kahuna branch for live inspection')
   ok(JUDGMENT_RESULT.required.includes('continue') && JUDGMENT_RESULT.additionalProperties === false, 'JUDGMENT_RESULT schema requires continue, no extra props')
 
   console.log('')

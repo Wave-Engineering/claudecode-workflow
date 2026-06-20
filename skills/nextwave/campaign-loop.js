@@ -115,7 +115,11 @@ export async function runCampaign({ pending, runWave, judge, onEvent }) {
     // trajectory so far, not just this wave, to catch accumulation / intent-drift the per-wave
     // gate structurally cannot (§4).
     const context = {
-      completed: completed.map((c) => ({ wave: c.wave, verdict: c.verdict })),
+      completed: completed.map((c) => ({ wave: c.wave, verdict: c.verdict })), // PRIOR waves (this wave not yet pushed)
+      wave: id,         // the JUST-LANDED wave id
+      verdict,          // the JUST-LANDED wave's verdict — NOT yet in `completed`; the seam must
+                        // surface it (justLanded) + append it to the trajectory, else the judgment
+                        // seed is always missing its most-recent wave (the primary evidence).
       remaining: waves.slice(i + 1).map(waveIdOf),
       index: i,
     }
@@ -145,38 +149,103 @@ function hold(heldAt, heldReason, completed, wavesAdvanced) {
   return { outcome: 'held', heldAt, heldReason, wavesAdvanced, completed }
 }
 
-// ── wave-oversight judgment prompt (PLACEHOLDER until #750/§6.2) ──────────────────────────────
-// #749 step 4: structure the call site + the continue/hold routing NOW; the real seed contract +
-// failure-shape lens land in #750. This builder produces a sound, honest interim prompt: it hands
-// the agent the durable trajectory + remaining plan (no distillation, §3) and asks the §4 question.
-// The output schema is the §3 contract so #750 can swap the prompt body without touching the loop.
-export function waveOversightPrompt({ justLanded, trajectory, remainingPlan, intentTier }) {
+// ── intent-tier resolver (§3 — tiered intent, graceful degradation) ──────────────────────────
+// A rehydrate agent reports what intent artifacts EXIST (it runs devspec_locate / ddd_locate_*);
+// this PURE fn picks the richest available tier so the choice is deterministic + testable. The
+// agent is then TOLD its tier and calibrates (rigorous spec-fidelity with a devspec; "ACs met +
+// trajectory coherent" with only issues) — naming the tier prevents both faking a check it cannot
+// do and hedging when it has solid ground.
+export function resolveIntentTier({ devspec, domainModel, sketchbook } = {}) {
+  if (devspec) return 'devspec'
+  if (domainModel || sketchbook) return 'plan-ddd-sketchbook'
+  return 'issues-only'
+}
+
+// ── wave-oversight judgment prompt — THE LENS (#750/§4 + §7) ──────────────────────────────────
+// The seed is handed RAW (no distillation, §3): tiered intent + the durable cross-wave trajectory
+// (#748) + the just-landed wave + live-inspection tools. The §7 failure-shapes are the crowdsourced
+// cross-wave catalog (A–J, [[project_wave_oversight_failure_catalog]]) — "go with what came in over
+// Discord" (BJ, 2026-06-20). routeJudgment + JUDGMENT_RESULT are the stable contract; this body is
+// the lens. Same record + wrong lens = a checkpoint that rubber-stamps; this is the difference.
+export function waveOversightPrompt({ justLanded, trajectory, remainingPlan, intentTier, intentRefs, kahunaBranch }) {
+  const tier = intentTier ?? 'issues-only'
+  const calibration = {
+    'devspec': `DEVSPEC tier — the un-gameable reference the flights did not write. Hold spec-fidelity: run dod_check_coverage / dod_verify_deliverable for HARD VRTM + Deliverables-Manifest traceability, and devspec_* checks. A wave that passed its own tests but misses a manifest deliverable is DRIFT.`,
+    'plan-ddd-sketchbook': `PLAN/DDD/SKETCHBOOK tier — judge against the recorded decision ledger + domain intent (ddd_locate_domain_model / ddd_locate_sketchbook). No VRTM; "decisions honored + domain model intact + trajectory coherent".`,
+    'issues-only': `ISSUES-ONLY tier — no spec/DDD. Judge "each wave's own ACs met + the trajectory is coherent". Be honest about the ceiling: you cannot check spec-fidelity you do not have — do NOT fake it.`,
+  }[tier] ?? `ISSUES-ONLY tier.`
   return [
-    `You are the WAVE-OVERSIGHT judgment agent (campaign-layer, between-wave checkpoint).`,
-    `A wave just PASSED its per-wave trust gate and promoted. Decide: given the intent and the`,
-    `trajectory SO FAR, is it sound to continue into the rest of the campaign — or is something`,
-    `lurking that every individual per-wave gate structurally could not catch?`,
+    `You are the WAVE-OVERSIGHT judgment agent — the campaign-layer checkpoint BETWEEN waves. A wave`,
+    `just PASSED its per-wave trust gate and promoted to the protected branch. Your question (§4):`,
+    `given the INTENT and the TRAJECTORY so far, is it sound to continue into the rest of the`,
+    `campaign — or is something lurking that every individual per-wave gate structurally could NOT`,
+    `catch? You are the only view with the whole trajectory + the un-gameable intent; the flights`,
+    `wrote both their code AND their tests, so "green per wave" is not "correct to intent".`,
     ``,
-    `Intent tier: ${intentTier ?? 'issues-only'} — calibrate rigor to it (devspec ⇒ spec-fidelity;`,
-    `issues-only ⇒ "ACs met + trajectory coherent"). Do NOT fake a check you lack the inputs for.`,
+    `── INTENT TIER: ${tier} ──`,
+    calibration,
+    intentRefs ? `Intent refs: ${JSON.stringify(intentRefs)}.` : `Intent refs: none discovered.`,
     ``,
-    `Just-landed wave: ${JSON.stringify(justLanded ?? null)}`,
-    ``,
-    `Durable cross-wave trajectory (every completed wave's raw record — gate/promoted, the four`,
-    `trust signals + detail, concerns, deferrals, rework, commutativity, issues; #748):`,
+    `── THE SEED (raw, no distillation — §3) ──`,
+    `Just-landed wave (its diff/signals/reconcile are yours to inspect): ${JSON.stringify(justLanded ?? null)}`,
+    `Durable cross-wave trajectory — every completed wave's RAW record (gate/promoted, the four trust`,
+    `signals + detail, concerns, deferrals, rework, commutativity, files_touched, engine_fingerprint,`,
+    `issues; #748). This is your primary evidence — read it as a TIME SERIES, not a snapshot:`,
     JSON.stringify(trajectory ?? [], null, 2),
+    `Remaining plan (judge "sound to proceed INTO the rest"): ${JSON.stringify(remainingPlan ?? [])}`,
+    `LIVE INSPECTION: you have read tools and the kahuna branch (${kahunaBranch ?? 'n/a'}) checked out.`,
+    `When something smells, GO LOOK at the actual code/tests/manifests — this is a real inspection,`,
+    `not a record read. A claim you can verify, verify.`,
     ``,
-    `Remaining plan (so the judgment is "sound to proceed INTO the rest"): ${JSON.stringify(remainingPlan ?? [])}`,
+    `── THREE DETECTION MODES (apply all three) ──`,
+    `1. TREND — a metric sliding wrong ACROSS waves (not one bad wave). 2. ABSENCE — a datapoint that`,
+    `SHOULD exist and never does (the hardest; you cannot trend your way to "never real"). 3. CONFOUND`,
+    `CONTROL — do NOT blame the code for a substrate/engine step-change: if engine_fingerprint changed`,
+    `between waves, or a host/env event (reboot, reinstall, DNS) sits at a metric's step, attribute the`,
+    `discontinuity to the SUBSTRATE, not the content. Separate environment-caused from content-caused.`,
     ``,
-    `Hunt the two failure classes the per-wave gate cannot (§4): ACCUMULATION (multiple green waves`,
-    `raising concerns/deferrals/rework in the SAME subsystem ⇒ a lurking architectural problem) and`,
-    `INTENT-DRIFT (a wave passes its own self-authored tests yet builds something other than what`,
-    `was specified). Distinguish ADAPTATION (a consciously recorded deferral/concern) from DRIFT (a`,
-    `silent deviation). You have read tools + the kahuna branch — GO LOOK at the actual code when`,
-    `something smells; this is a real inspection, not a record read.`,
+    `── THE FAILURE-SHAPE LENS (crowdsourced cross-wave catalog; hunt every one) ──`,
+    `A. GATE-VOUCHED-BUT-WRONG (intent-drift): fix-forward commits in wave N touching files a PRIOR`,
+    `   promoted wave shipped (latent doc-vs-impl drift); negative/deny tests asserting only exit!=0`,
+    `   not the SPECIFIC error kind (pass spuriously, hide a boundary regression) — esp. in authz/security.`,
+    `B. UNDER-SPECIFICATION: the SAME subsystem in ≥3 non-adjacent waves' diffs it wasn't scoped to`,
+    `   (under-specified, more latent defects coming); COMMUTATIVITY decay on a SHARED HOTSPOT — the`,
+    `   same OVERLAPPING path set tripping ORACLE_REQUIRED across waves (an unfactored shared-infra dep`,
+    `   the decomposition missed ⇒ "parallel" waves serialize). NB: ORACLE volume across DIFFERENT files`,
+    `   is benign — the smell is the repeated overlap, not the count.`,
+    `C. DIVERGENCE RATES: manual-intervention climbing (force-pushes / gate-disables / kahuna-recreates /`,
+    `   non-FF resolutions per wave); local-green → rising "fix CI deps/env" commits ("config exists ≠ works").`,
+    `D. CROSS-TEAM CONTRACT: a wave adds a HARD dependency on another team's surface with NO`,
+    `   graceful-in-absence fallback ⇒ a matched-pair break on a different cadence.`,
+    `E. SPY/MOCK-ONLY UN-EXERCISED SURFACE (absence): a runtime boundary (container bring-up, TLS, a`,
+    `   shelled binary, an external call) accruing code wave-over-wave while tests that run the REAL`,
+    `   artifact stay ~0. The tell is the MISSING real-execution datapoint, not a failing one —`,
+    `   "command-ran ≠ thing-attached"; a real run later detonates a CHAIN of never-attached gaps.`,
+    `F. SUBSTRATE/ENGINE CONFOUNDS: engine_fingerprint/toolkit drift mid-campaign (wave 1 ran different`,
+    `   semantics than wave 7); host/env events. Treat as an ANNOTATION, never a content-trend (mode 3).`,
+    `G. IMPERATIVE-WITHOUT-VERIFY-AFTER: mutate-state steps (enable/load/apply/init/up) accrue while`,
+    `   read-back-and-ASSERT steps don't — ratio drifting to 1:0. "Assert the post-state, not the command."`,
+    `H. STALE EXTERNAL-STATE ASSERTIONS: agent-authored tracker pins / handoffs / reseed text asserting`,
+    `   external state (issue open, file shape, branch ahead) from MEMORY not a re-read — fails a re-read.`,
+    `I. PROMOTED ≠ DELIVERED ≠ RUNNING: a "promoted" wave whose delivery is a silent no-op — no assertion`,
+    `   the RUNNING artifact carries the promoted SHA/digest; deploy-inventory lag (code+tests grow, the`,
+    `   publish/fragment/compose inventory doesn't ⇒ "done" on the board, does-not-exist in reality).`,
+    `J. CERTIFIER/DOC DRIFT: the facade migrates UP a layer when attacked (features → the tests guarding`,
+    `   them → the doc/matrix certifying them); a confidently-wrong authoritative doc contradicting a`,
+    `   higher-authority source (CLAUDE.md/spec), propagating by inheritance. A certifier untouched while`,
+    `   its subject churned = flag.`,
     ``,
-    `Return EXACTLY: { continue (bool), confidence (0..1), concern: { what, which_waves, which_subsystem,`,
-    `severity }, recommendation }. continue:true ONLY if it is genuinely sound to proceed.`,
+    `── ADAPTATION vs DRIFT (the discriminator) ──`,
+    `A deviation CONSCIOUSLY RECORDED (a logged deferral/concern) is ADAPTATION — fine. A SILENT deviation`,
+    `from intent is DRIFT — flag it. The two classes the per-wave gate cannot catch: ACCUMULATION (waves`,
+    `2,4,5 all raising concerns/deferrals/rework in the SAME subsystem ⇒ a lurking architectural problem`,
+    `each individual green gate passed) and INTENT-DRIFT (passes its own tests, builds the wrong thing).`,
+    `Devspec + trajectory together make the discrimination possible.`,
+    ``,
+    `── OUTPUT ── Return EXACTLY: { continue (bool), confidence (0..1), concern: { what, which_waves`,
+    `(array), which_subsystem, severity }, recommendation }. continue:true ONLY if genuinely sound to`,
+    `proceed; a real lurking smell ⇒ continue:false with a PRECISE concern (which waves, which subsystem).`,
+    `Absence of a clear "continue" is not a license to proceed — when uncertain after inspecting, hold.`,
   ].join('\n')
 }
 
