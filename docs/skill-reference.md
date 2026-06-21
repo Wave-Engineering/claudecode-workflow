@@ -77,11 +77,11 @@ No arguments. If an identity file exists for this project, it reports the curren
 
 ### `/reseed` -- Guided Context-Window Reduction
 
-Runs the decision when the context window is filling mid-flight: `/compact`, seed + `/clear`, or seed + `/compact`. It reasons about the current state and **recommends one** rather than just asking; for the seed options it authors the seed and hands you the exact human follow-up.
+The careful, mid-flight context reduction: authors a detailed seed, then you `/clear` and revive from it. There is no decision step — seed-and-clear is the right call whenever work is mid-flight. For a cheap summarize where little is at stake, use `/compact` directly instead.
 
 **When to use it:**
 - When the context window is getting full and you are mid-task
-- Before a deliberate `/clear` or `/compact`, to protect valuable volatile state
+- Before a deliberate `/clear`, to protect valuable volatile state and scoped operating decisions
 - Whenever you would otherwise hand-type a long "here is where we are" revival prompt
 
 **Examples:**
@@ -90,11 +90,9 @@ Runs the decision when the context window is filling mid-flight: `/compact`, see
 /reseed
 ```
 
-No arguments. It assesses window pressure, the depth of the in-flight work, and how much state already lives on disk, then recommends one of three paths:
+No arguments. It authors the seed (pointers to durable state + volatile working-state + the conversation-only operating decisions that have no durable home, each carried with its scope **and** live status), then hands you the exact `/clear`-and-revive follow-up.
 
-- **`/compact`** -- summarizer compresses the transcript (no seed). Cheapest, but cedes the volatile state to the summarizer.
-- **Seed + `/clear`** -- writes a detailed seed, you `/clear`, then revive from the seed. Recommended when heavy state is already on disk (docs/memories/issues): the seed carries only volatile working-state and `/clear` gives the cleanest window.
-- **Seed + `/compact`** -- writes a seed, you `/compact`, then the agent reads the seed back to patch holes. Recommended when little is externalized and the in-conversation reasoning is valuable.
+**Why not just `/compact`?** Measured on the same transcript and oracle, `/compact` scores ~0.72 recall / ~0.45–0.60 fidelity versus tuned `/reseed`'s ~0.95 / ~0.96 — it drops ~a quarter of the must-capture content and roughly half the scope-fidelity, flattening exactly the scoped grants that mislead a revived agent. See [`reseed-prompt-improvement.md`](reseed-prompt-improvement.md) for the methodology behind the reseed authoring rules and the full comparison.
 
 **The kernel:** a good seed **points at durable artifacts and carries only volatile working-state** -- branch, uncommitted files, the immediate next action, open threads, and communication nuance. It never duplicates what is on disk or what auto-reloads at session start (CLAUDE.md, the memory index, hooks).
 
