@@ -170,3 +170,11 @@ Three findings that *reinforce* the quality conclusions:
    a *compression*; a high-fidelity output that barely shrinks the window is a poor reduction.
    Log output-size-vs-input alongside recall/fidelity so solutions are compared on both axes. We
    had to recover it from saved artifacts after the fact — log it up front next time.
+
+## Future work
+
+The result above was measured at one fill level — a near-full window. The open question is whether
+reseed fidelity depends on *how full* the window is, and whether that makes it more efficient to
+reseed *often* at low fill than to wait until the window is near-full. That hypothesis, why the
+naive truncation experiment is invalid, and a valid (needle/haystack) design are written up in
+[`reseed-frequency-whitepaper.md`](reseed-frequency-whitepaper.md).
