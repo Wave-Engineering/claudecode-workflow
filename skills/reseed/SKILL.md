@@ -1,6 +1,6 @@
 ---
 name: reseed
-description: Guided context-window reduction — reason about compact vs seed+clear vs seed+compact, recommend one, then author the seed and give the human the exact follow-up
+description: Context-window reduction via seed-and-clear — author a durable seed (point at state, carry volatile decisions), then clear and revive. For a cheap summarize, use /compact directly.
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
@@ -9,53 +9,21 @@ description: Guided context-window reduction — reason about compact vs seed+cl
      Do NOT delete introduction.md — it lives in a protected directory.
      Do this BEFORE executing any skill logic below. -->
 
-# Reseed: Guided Context-Window Reduction
+# Reseed: Seed-and-Clear Context Reduction
 
-The context window is filling up and work is mid-flight. This skill runs the
-decision — **`/compact`** vs. **seed + `/clear`** vs. **seed + `/compact`** —
-recommends one with reasoning tied to the *current* state, and (for the seed
-options) authors the seed and hands the human the exact follow-up.
+The window is filling up and work is mid-flight, and invoking `/reseed` *is* the
+choice to take the **careful** path: author a detailed seed → `/clear` → revive
+from it. There is no decision step — in ~50 real uses, seed-and-clear won **100%**
+of the time, and deliberating a foregone conclusion would only burn the dying
+window this skill exists to protect. **For a cheap summarize where little is at
+stake, don't run this — just `/compact` directly.**
 
 The load-bearing idea: **a good seed points at durable artifacts and carries
 only volatile working-state.** It mirrors CLAUDE.md's own compact-instructions
 ("if it's on disk, reference the path"). Anything already on disk — or
 auto-reloaded at session start — does not belong in the seed.
 
-## Step 1 — Assess current state (do this before recommending)
-
-Reason about three things; they decide which option wins:
-
-1. **How full is the window?** Higher pressure favors the tighter options
-   (2 over 1; a lean seed over a fat one).
-2. **What is the in-flight work?** Shallow / nearly-done → `/compact` alone is
-   fine. Deep, multi-thread, easy-to-misremember → protect it with a seed.
-3. **How much state is already externalized to disk?** Design docs, memory
-   files, issues, committed code. The more that lives on disk, the *less* the
-   seed has to carry — which makes seed + `/clear` both safest and tightest.
-
-## Step 2 — Present the 3 options and recommend one
-
-Show all three; **recommend one with reasoning** — don't just ask.
-
-> Given the current context window, what we're doing, and what's left, there
-> are 3 ways to shrink the window:
-> 1. **`/compact`** — the summarizer compresses the transcript. No seed.
-> 2. **Seed + `/clear`** — I write an extremely detailed seed to a file that
->    gets me back to full understanding with a much tighter window; you run
->    `/clear`, then revive me from the seed.
-> 3. **Seed + `/compact`** — I write a seed with everything critical and
->    nothing else; you run `/compact`; then I read the seed back to patch any
->    holes the compaction created.
-
-**Recommendation heuristic:**
-
-| Situation | Recommend | Why |
-|---|---|---|
-| Heavy state already on disk (docs / memories / issues / committed code) | **Option 2** (seed + `/clear`) | Safest *and* tightest — the seed only carries volatile working-state; everything durable is pointed at, not duplicated. `/clear` gives the cleanest window. |
-| Little externalized; lots of valuable in-conversation reasoning | **Option 3** (seed + `/compact`) | The seed's redundancy earns its keep — `/compact` keeps a lossy trace, the seed readback patches what it dropped. |
-| Work is shallow / nearly done / window not precious | **Option 1** (`/compact`) | Cheapest. But know the cost: it **cedes control of the volatile state to the summarizer** — only acceptable when little is at stake. |
-
-## Step 3 — (Options 2 & 3) Author the seed
+## Step 1 — Author the seed
 
 Write the seed following the kernel. **Carry:**
 
@@ -68,6 +36,21 @@ Write the seed following the kernel. **Carry:**
   phone, expect typos, confirm side-effectful actions," tone, who decides what.
 - **Gotchas not to relearn the hard way** — sharp edges, things that already
   bit this session.
+- **Conversation-only operating-decisions** — the things said this session that change
+  *how you operate* or *what you prioritize* and have **no durable home**: grants/waivers
+  ("auto-approve prechecks", standing `/scpmmr`, "don't ask", "I'll handle X"), and the
+  priority stack you agreed (focus, ordering, what to do vs defer vs skip). The seed's
+  instinct is "point at durable state" — so it systematically drops these, because the
+  conversation that holds them is the very thing being dropped; there is nothing to point
+  at. Carry each as **decision + why + scope**:
+  - the **decision** outright, so the revived agent never *re-derives* it — re-deriving
+    from a hint is where a fresh agent mis-scopes a grant or re-litigates a priority;
+  - the **why**, so it can *adapt* when the situation deviates instead of blind-following;
+  - the **scope/condition/expiry** as the user framed it, so a "while I'm away" grant
+    isn't applied as permanent (`feedback_approval_requires_intent`).
+
+  Elaborate enough to apply without re-deriving; terse enough to stay signal. (The reader
+  is a *fresh* window, not a starved one — optimize for signal-density, not minimalism.)
 
 **Do NOT carry** (it is noise that re-bloats the window):
 
@@ -78,7 +61,7 @@ Write the seed following the kernel. **Carry:**
 Open the seed with a one-line revival instruction and an ordered "read these
 first" list so the revived agent rehydrates deterministically.
 
-## Step 4 — Write to the right path (durability caveat)
+## Step 2 — Write to the right path (durability caveat)
 
 **`/tmp` is reboot-wiped** (`lesson_tmp_identity_boot_wipe`). That is fine for a
 same-session readback, but a seed lost to a reboot leaves no revival path.
@@ -91,20 +74,22 @@ same-session readback, but a seed lost to a reboot leaves no revival path.
 
 Surface this choice to the human; default to `/tmp` unless a reboot is plausible.
 
-## Step 5 — Give the exact human follow-up
+## Step 3 — Hand off
 
 State the next human action unambiguously — the human is about to drop your
-context, so a missed instruction can't be re-asked.
+context, so a missed instruction can't be re-asked:
 
-- **Option 1** → "Run `/compact`." (No seed.)
-- **Option 2** → "Seed written to `<path>`. Run `/clear`, then paste:
-  `Read <path> and revive`."
-- **Option 3** → "Seed written to `<path>`. Run `/compact`. When you're back,
-  I'll read `<path>` to patch any holes."
+> "Seed written to `<path>`. Run `/clear`, then paste: `Read <path> and revive`."
+
+(Once the `SessionStart{clear}` auto-revive hook ships, this collapses further to
+"armed — just `/clear`," with the seed injected on revival. Until then, the paste
+is the deterministic path.)
 
 ## Important
 
-- **Recommend, don't just ask** — the value is the reasoning, not the menu.
 - **Point at disk; carry only volatile state** — the whole skill in one line.
+- **Carry the conversation-only decisions** — grants, priorities, and rulings that
+  change how you operate and have no durable home; they're the thing a state-focused
+  seed silently drops (see Step 1).
 - A seed that duplicates a design doc or a memory file has failed its purpose:
   it re-creates the bloat the reduction was meant to remove.
