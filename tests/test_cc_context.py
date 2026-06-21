@@ -180,11 +180,9 @@ class TestNerfDisplay:
         finally:
             p.unlink(missing_ok=True)
 
-    def test_cc_context_script_exists(self):
-        """The cc-context script must exist at the expected path."""
-        assert CC_CONTEXT_PATH.exists(), (
-            f"cc-context not found at {CC_CONTEXT_PATH}"
-        )
+    # test_cc_context_script_exists removed: cc-context (context-crystallizer)
+    # was removed in #647; the remaining cc-context tests below skip-guard on
+    # CC_CONTEXT_PATH.exists() so they self-disable rather than hard-fail.
 
     def test_cc_context_is_executable(self):
         """The cc-context script must be executable."""
