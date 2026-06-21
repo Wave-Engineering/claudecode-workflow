@@ -46,11 +46,26 @@ Write the seed following the kernel. **Carry:**
   - the **decision** outright, so the revived agent never *re-derives* it — re-deriving
     from a hint is where a fresh agent mis-scopes a grant or re-litigates a priority;
   - the **why**, so it can *adapt* when the situation deviates instead of blind-following;
-  - the **scope/condition/expiry** as the user framed it, so a "while I'm away" grant
-    isn't applied as permanent (`feedback_approval_requires_intent`).
+  - the **scope/condition/expiry** as the user framed it **AND whether that condition still
+    holds right now** — a "while I'm away" grant when the user is *back* must be carried *with*
+    its scope **and flagged likely-lapsed**, never as a permanent grant
+    (`feedback_approval_requires_intent`). Flattening a scoped grant to an unconditional one is
+    the single most common fidelity failure — for every grant, state its live status, not just
+    its original scope.
 
   Elaborate enough to apply without re-deriving; terse enough to stay signal. (The reader
   is a *fresh* window, not a starved one — optimize for signal-density, not minimalism.)
+
+- **Ownership / role assignments** — who owns, reviews, or is blocked on what; lane splits
+  and review-reversals agreed this session. A fresh agent that loses these re-collides with
+  teammates.
+- **Error→fix pairs and open threads** — what bit and how it was resolved, and what's still
+  in-flight, so the revived agent neither re-hits the wall nor re-opens settled ground.
+
+**Accuracy over completeness:** state issue/MR/PR open-vs-closed status, commit tips, and
+"done/merged" claims **only as the conversation actually established them** — never overclaim
+closure or progress. A confidently-wrong status ("#73 is closed") is worse than an honest
+"open/unsure": it sends the revived agent down a path that no longer exists.
 
 **Do NOT carry** (it is noise that re-bloats the window):
 
@@ -60,6 +75,12 @@ Write the seed following the kernel. **Carry:**
 
 Open the seed with a one-line revival instruction and an ordered "read these
 first" list so the revived agent rehydrates deterministically.
+
+**Final re-scan before you hand off.** Re-read your draft seed against the conversation
+once more and (a) add any operating decision, open thread, or ownership assignment you
+dropped, and (b) verify every grant carries its *live status*, not just its original scope.
+This single pass is where the recall the first draft missed gets recovered — a state-focused
+seed under-captures on the first pass by construction, so the re-scan is not optional polish.
 
 ## Step 2 — Write to the right path (durability caveat)
 
@@ -91,5 +112,10 @@ is the deterministic path.)
 - **Carry the conversation-only decisions** — grants, priorities, and rulings that
   change how you operate and have no durable home; they're the thing a state-focused
   seed silently drops (see Step 1).
+- **Live status, not just scope** — every grant must say whether its condition still
+  holds *now*; a scoped grant flattened to unconditional is the top fidelity failure.
+  State issue/MR status only as the conversation established it, and re-scan once for
+  dropped decisions before handing off. (Bench-validated: these lift recall+fidelity
+  from ~0.87 to ~0.95 — `reference_reseed_improvement_techniques`.)
 - A seed that duplicates a design doc or a memory file has failed its purpose:
   it re-creates the bloat the reduction was meant to remove.
