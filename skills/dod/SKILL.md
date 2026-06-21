@@ -3,6 +3,12 @@ name: dod
 description: Project Definition of Done verification against the Deliverables Manifest — verify every deliverable, run tests, check VRTM, produce pass/fail report
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory AND
+     the marker file /tmp/.skill-intro-dod does NOT exist, read introduction.md,
+     present its contents to the user, then create the marker: touch /tmp/.skill-intro-dod
+     Do NOT delete introduction.md — it lives in a protected directory.
+     Do this BEFORE executing any skill logic below. -->
+
 # Project DoD Verification
 
 Read the Deliverables Manifest from the project's Dev Spec and mechanically verify every deliverable exists at its declared path, every test passes, and VRTM is complete. Generate a pass/fail report and require explicit human sign-off before any campaign state change.

@@ -5,6 +5,12 @@ usage: |
   /disc send #ch "msg"  /disc read #ch  /disc list  /disc create #ch  /disc thread "name" in #ch
 ---
 
+<!-- introduction-gate: If introduction.md exists in this skill's directory AND
+     the marker file /tmp/.skill-intro-disc does NOT exist, read introduction.md,
+     present its contents to the user, then create the marker: touch /tmp/.skill-intro-disc
+     Do NOT delete introduction.md — it lives in a protected directory.
+     Do this BEFORE executing any skill logic below. -->
+
 # Disc — disc-server MCP Router
 
 Route all /disc intents to `disc-server` MCP tool calls.
