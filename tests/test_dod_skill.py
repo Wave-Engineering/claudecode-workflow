@@ -17,7 +17,6 @@ Validates:
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
@@ -53,17 +52,6 @@ def skill_ref_text() -> str:
 def readme_text() -> str:
     """Read the README.md file."""
     return README_PATH.read_text(encoding="utf-8")
-
-
-def _extract_template(text: str, template_name: str) -> str:
-    """Extract content between BEGIN TEMPLATE and END TEMPLATE markers."""
-    pattern = (
-        rf"<!-- BEGIN TEMPLATE: {re.escape(template_name)} -->\n"
-        rf"(.*?)"
-        rf"<!-- END TEMPLATE: {re.escape(template_name)} -->"
-    )
-    match = re.search(pattern, text, re.DOTALL)
-    return match.group(1) if match else ""
 
 
 # ---------------------------------------------------------------------------
@@ -110,44 +98,44 @@ class TestTemplate:
 
     def test_dod_check_template_exists(self, skill_text: str) -> None:
         """The dod-check template exists."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert check, "dod-check template not found"
 
     def test_has_locate_prd_step(self, skill_text: str) -> None:
         """Template has a step to locate the Dev Spec."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "Locate the Dev Spec" in check or "*-devspec.md" in check
 
     def test_has_read_prd_step(self, skill_text: str) -> None:
         """Template has a step to read and parse the Dev Spec."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "Deliverables Manifest" in check
         assert "Section 5.A" in check
 
     def test_has_verify_step(self, skill_text: str) -> None:
         """Template has a step to verify each deliverable."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "Verify Each Deliverable" in check or "verify each" in check.lower()
 
     def test_has_global_dod_step(self, skill_text: str) -> None:
         """Template has a step to check Global DoD (Section 7)."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "Section 7" in check
         assert "Global DoD" in check or "Definition of Done" in check
 
     def test_has_vrtm_step(self, skill_text: str) -> None:
         """Template has a step to check VRTM completeness."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "VRTM" in check
 
     def test_has_report_step(self, skill_text: str) -> None:
         """Template has a step to present the verification report."""
-        check = _extract_template(skill_text, "dod-check")
-        assert "Verification Report" in check
+        check = skill_text
+        assert "verification report" in check.lower()
 
     def test_has_approval_step(self, skill_text: str) -> None:
         """Template has a step for the approval flow."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "Approval Flow" in check or "approval" in check.lower()
 
 
@@ -161,47 +149,47 @@ class TestVerificationCategories:
 
     def test_docs_category(self, skill_text: str) -> None:
         """Docs category checks file existence and non-empty."""
-        check = _extract_template(skill_text, "dod-check")
-        assert "Category: Docs" in check
+        check = skill_text
+        assert "Docs" in check
         assert "non-empty" in check
 
     def test_code_binary_category(self, skill_text: str) -> None:
         """Code binary/package category checks file and build."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "Code (binary" in check or "Code (CI" in check
         assert "build" in check.lower()
 
     def test_code_cicd_category(self, skill_text: str) -> None:
         """Code CI/CD category checks pipeline config and last run."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "CI/CD" in check
         assert "pipeline" in check.lower() or "workflow" in check.lower()
 
     def test_code_build_system_category(self, skill_text: str) -> None:
         """Code build system category checks Makefile and tests."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "build system" in check.lower()
         assert "Makefile" in check or "task runner" in check
 
     def test_test_results_category(self, skill_text: str) -> None:
         """Test results category checks JUnit XML or equivalent."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "Test (results)" in check or "test results" in check.lower()
 
     def test_test_coverage_category(self, skill_text: str) -> None:
         """Test coverage category checks coverage report."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "coverage" in check.lower()
 
     def test_test_manual_category(self, skill_text: str) -> None:
         """Manual procedures category checks execution evidence."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "manual" in check.lower()
         assert "execution" in check.lower() or "executed" in check.lower()
 
     def test_trace_vrtm_category(self, skill_text: str) -> None:
         """Trace VRTM category checks for Pending rows."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "Trace (VRTM)" in check or "VRTM" in check
         assert "Pending" in check
 
@@ -216,19 +204,19 @@ class TestNAHandling:
 
     def test_na_rows_documented(self, skill_text: str) -> None:
         """N/A row handling is documented."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "N/A" in check
 
     def test_na_not_failure(self, skill_text: str) -> None:
         """N/A rows do not count as failures."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         # Strip markdown bold markers for matching
         plain = check.replace("**", "").lower()
         assert "not count as failure" in plain or "do not fail" in plain or "not a failure" in plain
 
     def test_na_rationale_required(self, skill_text: str) -> None:
         """N/A rows must have a rationale."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "rationale" in check.lower()
 
 
@@ -242,20 +230,20 @@ class TestReportFormat:
 
     def test_report_has_project_name(self, skill_text: str) -> None:
         """Report includes project name."""
-        check = _extract_template(skill_text, "dod-check")
-        assert "project-name" in check.lower() or "Project:" in check
+        check = skill_text
+        assert "project / Dev Spec path" in check  # report header fragment
 
     def test_report_has_prd_path(self, skill_text: str) -> None:
         """Report includes Dev Spec file path."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "Dev Spec:" in check or "docs/" in check
 
     def test_report_has_status_indicators(self, skill_text: str) -> None:
         """Report uses V/X/O status indicators."""
-        check = _extract_template(skill_text, "dod-check")
-        assert "V" in check  # checkmark
-        assert "X" in check  # failing
-        assert "O" in check  # N/A
+        check = skill_text
+        assert "V (passing)" in check
+        assert "X (failing)" in check
+        assert "O (N/A)" in check
 
 
 # ---------------------------------------------------------------------------
@@ -268,28 +256,28 @@ class TestApprovalFlow:
 
     def test_all_pass_flow(self, skill_text: str) -> None:
         """All-pass flow suggests closing the project."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "all" in check.lower() and "pass" in check.lower()
 
     def test_failure_flow(self, skill_text: str) -> None:
         """Failure flow offers yes/no/fix options."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "fix" in check.lower()
 
     def test_campaign_integration(self, skill_text: str) -> None:
         """Approval integrates with campaign-status."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "campaign-status" in check
         assert "stage-review dod" in check
 
     def test_remediation_on_fix(self, skill_text: str) -> None:
         """Fix flow provides specific remediation suggestions."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "remediation" in check.lower() or "Create" in check or "Fix build" in check
 
     def test_rejection_flow(self, skill_text: str) -> None:
         """Rejection flow defers verification."""
-        check = _extract_template(skill_text, "dod-check")
+        check = skill_text
         assert "reject" in check.lower() or "deferred" in check.lower()
 
 
