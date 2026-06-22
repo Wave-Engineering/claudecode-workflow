@@ -491,6 +491,37 @@ def current_phase_info(plan_data: dict, state_data: dict) -> dict:
 # State-machine operations
 # ---------------------------------------------------------------------------
 
+def _infer_cross_repo(plan_data: dict) -> None:
+    """Auto-populate per-phase ``cross_repo`` / ``target_repos`` from issue refs (#598).
+
+    For each phase that does NOT already carry a ``cross_repo`` key, resolve every
+    issue's repo (``_issue_repo``) and collect the distinct slugs that differ from
+    the plan's default repo. If any are found, set ``cross_repo: True`` and
+    ``target_repos: [<sorted slugs>]`` so ``/nextwave`` emits the cross-repo recipe
+    without the operator hand-setting the fields (the inference is trivially
+    mechanical — any issue resolving to a non-default ``owner/repo`` is cross-repo).
+
+    An explicit ``cross_repo`` on a phase (either value) is left untouched — operator
+    intent wins. Single-repo phases are left WITHOUT the fields (absent, not False),
+    matching the round-trip contract that single-repo phases carry neither field.
+    """
+    default_repo = _plan_default_repo(plan_data)
+    for phase in plan_data.get("phases", []):
+        if not isinstance(phase, dict) or "cross_repo" in phase:
+            continue
+        targets: set[str] = set()
+        for wave in phase.get("waves", []):
+            for issue in wave.get("issues", []):
+                if not isinstance(issue, dict):
+                    continue
+                repo = _issue_repo(plan_data, issue)
+                if repo and repo != default_repo:
+                    targets.add(repo)
+        if targets:
+            phase["cross_repo"] = True
+            phase["target_repos"] = sorted(targets)
+
+
 def init_state(plan_data: dict, root: Path, *, force: bool = False) -> None:
     """Validate *plan_data*, write ``phases-waves.json``, ``state.json``,
     and ``flights.json`` under ``<root>/.claude/status/`` [R-02].
@@ -522,6 +553,11 @@ def init_state(plan_data: dict, root: Path, *, force: bool = False) -> None:
             "Error: plan already initialized. Use 'init --extend' to add "
             "phases, or 'init --force' to overwrite the existing plan."
         )
+
+    # Auto-infer per-phase cross_repo / target_repos from issue refs (#598) —
+    # mutates plan_data in place before it is persisted verbatim. No-op when the
+    # fields are already set (operator override) or the plan is single-repo.
+    _infer_cross_repo(plan_data)
 
     # --- phases-waves.json (structure, written once) ---
     save_json(phases_path, plan_data)
