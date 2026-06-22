@@ -942,12 +942,19 @@ def wavemachine_stop(root: Path) -> dict:
     Deletes ``wavemachine_active``, ``wavemachine_started_at``, and
     ``wavemachine_launcher``.  Idempotent — succeeds even if no wavemachine
     run is active (worker abort paths need this to be safe on re-entry).
+
+    Also resets ``current_action`` to ``idle`` (cc-workflow#636). This is the
+    campaign-exit "finally" run on EVERY exit path, so resetting the action here
+    guarantees a transient heartbeat (e.g. ``waiting-ci`` left by post-merge CI
+    polling) cannot linger past campaign end and trip the next campaign's
+    pre-flight. Idempotent — idle→idle is a no-op.
     """
     d = status_dir(root)
     state_data = load_state(d / "state.json")
     state_data.pop("wavemachine_active", None)
     state_data.pop("wavemachine_started_at", None)
     state_data.pop("wavemachine_launcher", None)
+    state_data["current_action"] = {"action": "idle", "label": "idle", "detail": ""}
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
     return state_data

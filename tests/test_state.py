@@ -45,6 +45,8 @@ from wave_status.state import (
     store_flight_plan,
     waiting,
     waiting_ci,
+    wavemachine_start,
+    wavemachine_stop,
 )
 
 
@@ -590,6 +592,38 @@ class TestWaitingCi:
         # Timestamp should be refreshed (or at minimum present)
         assert ts_after >= ts_before
         assert len(ts_after) > 0
+
+
+class TestWavemachineStop:
+    """``wavemachine_stop()`` is the campaign-exit finally (#636)."""
+
+    def test_clears_wavemachine_ownership(self, project_root: Path) -> None:
+        wavemachine_start(project_root, launcher="main")
+        result = wavemachine_stop(project_root)
+        assert "wavemachine_active" not in result
+        assert "wavemachine_started_at" not in result
+        assert "wavemachine_launcher" not in result
+
+    def test_resets_stale_waiting_ci_to_idle(self, project_root: Path) -> None:
+        """#636: a waiting-ci heartbeat left by post-merge CI polling must NOT
+        survive campaign exit and trip the next campaign's pre-flight."""
+        wavemachine_start(project_root, launcher="main")
+        waiting_ci(project_root, detail="PR #621 attempt 58: 0/0 passed")
+        # Sanity: the stale action is present before stop.
+        mid = load_json(status_dir(project_root) / "state.json")
+        assert mid["current_action"]["action"] == "waiting-ci"
+        # Exit resets it.
+        result = wavemachine_stop(project_root)
+        assert result["current_action"]["action"] == "idle"
+        persisted = load_json(status_dir(project_root) / "state.json")
+        assert persisted["current_action"]["action"] == "idle"
+
+    def test_idempotent_on_reentry(self, project_root: Path) -> None:
+        """Worker abort paths re-enter; idle->idle is a safe no-op."""
+        wavemachine_stop(project_root)
+        result = wavemachine_stop(project_root)
+        assert result["current_action"]["action"] == "idle"
+        assert "wavemachine_active" not in result
 
 
 # ---------------------------------------------------------------------------
