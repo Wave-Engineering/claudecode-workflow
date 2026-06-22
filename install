@@ -1387,6 +1387,20 @@ if [[ "$INSTALL_CONFIG" == true ]]; then
 		fi
 	fi
 
+	# Kit-canonical docs (cc-workflow#792): globalize WAVE_AXIOMS.md + the docs/
+	# files the canonical CLAUDE.md references, so a /ccfold-merged CLAUDE.md in
+	# ANY repo resolves them from $CLAUDE_DIR — single source, no per-repo vendor,
+	# no drift. Source of truth stays the repo; this copies repo→global each run.
+	for kdoc in WAVE_AXIOMS.md docs/mcp-scoping.md docs/discord-watcher.md \
+		docs/operations/log-rotation.md docs/operations/merge-queue-checklist.md; do
+		if [[ -f "$REPO_DIR/$kdoc" ]]; then
+			if [[ "$DRY_RUN" != true ]]; then
+				mkdir -p "$(dirname "$CLAUDE_DIR/$kdoc")"
+			fi
+			do_copy "$REPO_DIR/$kdoc" "$CLAUDE_DIR/$kdoc"
+		fi
+	done
+
 	if [[ -f "$REPO_DIR/config/settings.template.json" ]]; then
 		if [[ -f "$CLAUDE_DIR/settings.json" ]]; then
 			if [[ "$DRY_RUN" == true ]]; then

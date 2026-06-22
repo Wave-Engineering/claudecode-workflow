@@ -252,6 +252,19 @@ class TestInstallCreatesArtifacts:
                 f"Missing package artifact: {artifact}"
             )
 
+        # --- Kit-canonical docs globalized (cc-workflow#792) ---
+        # The canonical CLAUDE.md references these; globalizing them under
+        # ~/.claude lets a /ccfold-merged CLAUDE.md resolve them in any repo.
+        claude_dir = sandbox_home / ".claude"
+        for rel in (
+            "WAVE_AXIOMS.md",
+            "docs/mcp-scoping.md",
+            "docs/discord-watcher.md",
+            "docs/operations/log-rotation.md",
+            "docs/operations/merge-queue-checklist.md",
+        ):
+            assert (claude_dir / rel).exists(), f"kit doc not globalized: {rel}"
+
 
 @_SKIP_NO_BASH
 @_SKIP_NO_PYTHON3
@@ -732,6 +745,13 @@ class TestLocalScopeInstall:
         # Settings merged/installed into project/.claude/settings.json.
         assert (proj_claude / "settings.json").exists(), (
             "project-local settings.json missing"
+        )
+        # Kit-canonical docs globalized under the project too (cc-workflow#792).
+        assert (proj_claude / "WAVE_AXIOMS.md").exists(), (
+            "project-local WAVE_AXIOMS.md missing"
+        )
+        assert (proj_claude / "docs" / "operations" / "log-rotation.md").exists(), (
+            "project-local kit docs/ not globalized"
         )
 
     def test_local_leaves_global_untouched(self, tmp_path: Path) -> None:

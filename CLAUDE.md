@@ -85,7 +85,7 @@ Every issue MUST be wave-pattern quality: detailed enough that a spec-driven age
 
 ## MANDATORY: WAVE_AXIOMS
 
-**Read `WAVE_AXIOMS.md` before any wave-pattern work.** Nine binding axioms — violation is a bug. Disagreement is a reason to PR the file, never to override in the moment.
+**Read `WAVE_AXIOMS.md` before any wave-pattern work** — resolve it from the repo root, or the kit-installed `~/.claude/WAVE_AXIOMS.md` in repos that don't carry it (the same resolution applies to the `docs/…` pointers elsewhere in this file: repo root, else `~/.claude/docs/…`). The binding axioms — violation is a bug. Disagreement is a reason to PR the file, never to override in the moment.
 
 ---
 
