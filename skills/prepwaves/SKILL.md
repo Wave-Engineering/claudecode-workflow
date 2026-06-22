@@ -19,6 +19,7 @@ Bound by WAVE_AXIOMS 1 and 10 (`WAVE_AXIOMS.md` at the repo root). `/prepwaves` 
 
 ## Tools Used
 
+- `mcp__sdlc-server__wave_campaign_precheck` — residue gate (step 0.5): detect a prior campaign's leftover state (active driver, pending/promoted waves, stale kahuna branches) before planning a new one. Pure read, no mutation (server contract: mcp-server-sdlc#457)
 - `mcp__sdlc-server__epic_sub_issues` — enumerate children of a Plan tracking issue (the tool name is a historical identifier; it enumerates sub-issues of any parent, and `/prepwaves` calls it on the Plan)
 - `mcp__sdlc-server__spec_validate_structure` — pre-flight check each sub-issue's shape (Changes / Tests / Acceptance / Dependencies)
 - `mcp__sdlc-server__spec_dependencies` — extract declared edges
@@ -28,12 +29,23 @@ Bound by WAVE_AXIOMS 1 and 10 (`WAVE_AXIOMS.md` at the repo root). `/prepwaves` 
 
 ## Procedure
 
-0. **Clean-tree gate (FIRST — before anything).** `/prepwaves` MUST refuse to run on a dirty working tree. Another agent's uncommitted work in the same checkout has stranded a prep before (Plan #581: 394 uncommitted lines in a foreign branch required a hand-rolled patch-and-revert to recover). Run `git status --porcelain`; if it returns **any** lines, **STOP** and refuse: report the offending paths (modified + untracked) and tell the user to commit, stash, or clean them first. Do NOT auto-stash or auto-clean — a dirty tree is the user's to resolve, never `/prepwaves`'s. Only a clean tree proceeds to the Multi-Phase guard below.
+0. **Clean-tree gate (FIRST — before anything).** `/prepwaves` MUST refuse to run on a dirty working tree. Another agent's uncommitted work in the same checkout has stranded a prep before (Plan #581: 394 uncommitted lines in a foreign branch required a hand-rolled patch-and-revert to recover). Run `git status --porcelain`; if it returns **any** lines, **STOP** and refuse: report the offending paths (modified + untracked) and tell the user to commit, stash, or clean them first. Do NOT auto-stash or auto-clean — a dirty tree is the user's to resolve, never `/prepwaves`'s. Only a clean tree proceeds to the Campaign residue gate below.
 
-1. **Multi-Phase guard.** Before any work, check if `.claude/status/phases-waves.json` already exists in the project. If it does, read it and inspect `phases.length`:
-   - If `phases.length > 1` (multi-Phase topology already written by `/devspec upshift`): **STOP.** Report to the user: "`phases-waves.json` already contains a multi-Phase topology (N phases, M waves, K stories). This was written by `/devspec upshift` — `/prepwaves` persist is unnecessary. Run `/nextwave` to begin execution, or delete `phases-waves.json` to re-plan from scratch."
-   - If `phases.length === 1` and the plan's `plan_id` matches one of the user's input Plan refs: this is a re-run of a single-Phase prep. Proceed normally (wave_init's extend/idempotent path handles it).
-   - If the file does not exist: proceed normally (fresh prep).
+0.5. **Campaign residue gate (`wave_campaign_precheck`).** Before planning a new campaign, call `mcp__sdlc-server__wave_campaign_precheck(root)` (pure read — never mutates) to detect leftover state from a prior campaign in this checkout. This catches the failure mode where a fresh `/prepwaves` silently stomps an in-flight or half-promoted campaign. Branch on the returned `state`:
+   - `state == "clean"` → proceed to the Multi-Phase guard.
+   - `state == "residue_found"` → **STOP** and surface, do NOT auto-resolve:
+     - `classification` — `"dead"` (a stale/abandoned campaign, safe to replace) vs `"ambiguous"` (possibly-live, needs human judgment).
+     - `residue` — `plan_id`, `wavemachine_active`, `pending_waves`, `promoted_waves`, `kahuna_branches[]`.
+     - `options` (`preserve_wait` / `preserve_extend` / `replace`) and the server's `recommended` option.
+
+     Present these and **wait for the user to choose**. `replace` (the usual `recommended` for `"dead"`) clears the residue and re-plans; `preserve_*` keeps the existing campaign. Never pick for the user — a half-promoted campaign is theirs to resolve.
+
+   Server contract: mcp-server-sdlc#457. Consumer half: cc-workflow#716. Field names are #457's verbatim — read `state`/`classification`/`options`/`recommended`/`residue.kahuna_branches`, not any earlier paraphrase.
+
+1. **Persisted-plan handling — subsumed by the 0.5 residue gate (cc-workflow#716 AC-4).** The former narrow `phases-waves.json` multi-Phase guard is now folded into `wave_campaign_precheck`: an existing persisted plan — including a multi-Phase plan written by `/devspec upshift` — surfaces at step 0.5 as `state == "residue_found"` (its `residue.plan_id` + `pending_waves`/`promoted_waves` reflect the persisted plan), and the operator resolves it there:
+   - `preserve_wait` / `preserve_extend` → keep the existing plan; run `/nextwave` to execute it (this replaces the old "persist is unnecessary, run `/nextwave`" message).
+   - `replace` → clear it and re-plan from scratch.
+   - **Single-Phase re-run** (same `plan_id` re-prepped) needs no stop — `wave_init`'s extend/idempotent path at step 7 handles it; proceed normally.
 
 2. **Inputs.** Plan tracking-issue numbers passed by the user (`/prepwaves #2` or `/prepwaves #2 #3 ...`). Each Plan becomes one Phase in `phases-waves.json`.
 3. **Pre-flight readiness table.** For each Plan:
