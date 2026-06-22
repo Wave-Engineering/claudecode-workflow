@@ -86,3 +86,43 @@ class TestVerdictAggregation:
         assert "'auto'" in src and "'interactive'" in src, (
             "MODE must distinguish auto (promote) vs interactive (return verdict) routing"
         )
+
+
+class TestFlightContract:
+    """Flight kahuna-base directive — relocated from the nextwave skill's
+    flight-stub-base-directive / unconditional / pr_create-base assertions."""
+
+    def test_flight_bases_work_on_origin_kahuna(self) -> None:
+        # Flights base on origin/<kahuna_branch> (the integration branch), not protected.
+        src = _wf_src()
+        assert "origin/" in src and "KAHUNA_BRANCH" in src, (
+            "flights must base their work on origin/<kahuna_branch>"
+        )
+
+    def test_flight_pr_targets_kahuna_never_protected(self) -> None:
+        # Flight PRs target the kahuna integration branch, NEVER the protected branch directly.
+        src = _wf_src()
+        assert "Your PR targets" in src and "NEVER" in src and "PROTECTED_BRANCH" in src, (
+            "flight PRs must target KAHUNA_BRANCH, never the protected branch directly"
+        )
+
+
+class TestPrimePlanningAndReconcile:
+    """Prime planner (non-conflicting parallel grouping) + reconcile (idempotent
+    merge into kahuna) — relocated from the nextwave Prime/reconcile assertions."""
+
+    def test_prime_partitions_non_conflicting_groups(self) -> None:
+        src = _wf_src()
+        assert "PRIME planner" in src, "the Prime planner node must be present"
+        assert "flight_overlap" in src and "flight_partition" in src, (
+            "Prime must use flight_overlap + flight_partition for non-conflicting parallel groups"
+        )
+
+    def test_reconcile_merges_into_kahuna_idempotently(self) -> None:
+        src = _wf_src()
+        assert "Integrate this group" in src and "KAHUNA_BRANCH" in src, (
+            "reconcile must integrate this group's flights into the kahuna branch"
+        )
+        assert "IDEMPOTENT" in src, (
+            "reconcile merge must be idempotent (skip already-merged branches)"
+        )
