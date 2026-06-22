@@ -21,12 +21,9 @@ cd "$ROOT"
 # `from wave_status import ...` resolves in the test process.
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 
-# cc-workflow#795: TestInstallCheckClean::test_install_check_clean asserts a
-# PERFECTLY in-sync install, which needs a deps-complete env (e.g. `bun` for MCP
-# builds). CI's minimal runner leaves 2 settings.template.json hook items out of
-# sync, so that one test is not CI-portable yet. Deselected LOUDLY here pending a
-# proper CI-portability fix tracked in #795 (install deps in CI, or skipif when
-# deps are incomplete) — every other test stays gated.
-echo "==> pytest tests/ (PYTHONPATH=src) — deselecting 1 non-CI-portable test (#795: test_install_check_clean)"
-python3 -m pytest tests/ -q \
-	--deselect "tests/test_install.py::TestInstallCheckClean::test_install_check_clean"
+# The full-env-only test_install_check_clean self-skips unless CC_FULL_ENV_TESTS
+# is set (skipif in tests/test_install.py, cc-workflow#795) — so it's skipped by
+# default here AND on a stock dev box; no runner-level deselect needed, and the
+# skip is visible in the test output with its reason.
+echo "==> pytest tests/ (PYTHONPATH=src)"
+python3 -m pytest tests/ -q
