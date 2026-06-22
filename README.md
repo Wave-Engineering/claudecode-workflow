@@ -181,9 +181,12 @@ This will:
 ./install.sh --config      # Install config files only
 ./install.sh --mcps         # Install MCP servers only (via mcps.json manifest)
 ./install.sh --no-mcps      # Install everything except MCP servers
+./install.sh --local        # Project-scoped install into ./.claude/ (not $HOME)
 ./install.sh --prune        # Remove installed files whose source no longer exists
 ./install.sh --prune --yes  # ...non-interactively
 ```
+
+`--local` installs into `<cwd>/.claude/` instead of global `$HOME/.claude/` + `$HOME/.local/bin` — so a project can dogfood in-flux skills/scripts without touching the global fleet install. It is composable with `--skills`/`--scripts`/`--config` (it changes *where*, not *what*), implies `--no-mcps`, and never touches `$HOME` or `/etc` (logrotate and deprecated-path cleanup are skipped). Kit-owned hook paths in the merged `settings.json` are rewritten to absolute project-local paths. Note: `<cwd>/.claude/bin` is **not** added to `$PATH` — `--local` gives project-local *files*, and hooks resolve via absolute paths. Reverse it with `./uninstall.sh --local`.
 
 `scripts/` is walked recursively: nested files like `scripts/vox-providers/silent.sh` are mirrored to `~/.local/bin/vox-providers/silent.sh` with executable bits preserved. Subtrees named `tests`, `fixtures`, `__pycache__`, or `.pytest_cache` are excluded. `--prune` consults a manifest at `~/.local/bin/.cc-workflow-manifest` (refreshed on every install) plus the current source set; orphans are backed up to `<file>.bak` before removal.
 

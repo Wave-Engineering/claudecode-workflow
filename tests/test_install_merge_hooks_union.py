@@ -113,15 +113,26 @@ def _run_sandbox_install(
     sandbox_install: Path,
     args: list[str],
     home: Path,
+    cwd: Path | None = None,
 ) -> tuple[int, str, str]:
     result = subprocess.run(
         ["bash", str(sandbox_install)] + args,
         capture_output=True,
         text=True,
         env=_make_env(home),
+        cwd=str(cwd) if cwd is not None else None,
         timeout=120,
     )
     return result.returncode, result.stdout, result.stderr
+
+
+def _install_ok(rc: int, out: str, err: str) -> bool:
+    """Accept a non-zero exit caused solely by the late-stage dependency
+    audit (legitimately missing in a sandbox HOME). See #753."""
+    if rc == 0:
+        return True
+    combined = (out or "") + (err or "")
+    return "dependenc" in combined and "missing" in combined
 
 
 # ---------------------------------------------------------------------------
@@ -444,3 +455,124 @@ def test_user_override_of_kit_hook_not_resurrected(sandbox_home: Path) -> None:
     commands = [h["command"] for e in _read_json(settings_path)["hooks"]["Stop"] for h in e["hooks"]]
     assert "user-customized.sh" in commands
     assert "default-bare.sh" not in commands, "a non-kit template hook must not override a user hook on a shared matcher"
+
+
+# ---------------------------------------------------------------------------
+# --local: project-scoped settings merge + kit hook-path relocation
+# ---------------------------------------------------------------------------
+
+@_SKIP_NO_BASH
+@_SKIP_NO_JQ
+def test_local_settings_merge_into_project(sandbox_home: Path) -> None:
+    """``--local --config`` merges into the PROJECT's settings.json (under
+    <cwd>/.claude/), not the global $HOME one, and writes the .bak there."""
+    template = {
+        "hooks": {
+            "SessionStart": [
+                {"matcher": "*", "hooks": [{"type": "command", "command": "default-session-start.sh"}]},
+                {"matcher": "compact", "hooks": [{"type": "command", "command": "session-start-compact.sh"}]},
+            ]
+        }
+    }
+    local = {
+        "hooks": {
+            "SessionStart": [
+                {"matcher": "*", "hooks": [{"type": "command", "command": "user-session-start.sh"}]}
+            ]
+        }
+    }
+    # Pre-seed the PROJECT settings, NOT the global one.
+    project = sandbox_home.parent / "project"
+    project.mkdir(exist_ok=True)
+    proj_settings = project / ".claude" / "settings.json"
+    _write_json(proj_settings, local)
+
+    sandbox_install = _override_template(sandbox_home, template)
+    rc, out, err = _run_sandbox_install(
+        sandbox_install, ["--config", "--local"], sandbox_home, cwd=project
+    )
+    assert _install_ok(rc, out, err), f"--local --config failed: {out}\n{err}"
+
+    # Merge happened in the PROJECT file.
+    merged = _read_json(proj_settings)
+    matchers = [e["matcher"] for e in merged["hooks"]["SessionStart"]]
+    assert "*" in matchers and "compact" in matchers, (
+        "template matcher must merge into the project-local settings"
+    )
+    # .bak written next to the project settings.
+    assert (project / ".claude" / "settings.json.bak").exists(), (
+        "merge .bak should be created in the project, not global"
+    )
+    # Global settings untouched (never created).
+    assert not (sandbox_home / ".claude" / "settings.json").exists(), (
+        "--local merge must not create a global settings.json"
+    )
+
+
+@_SKIP_NO_BASH
+@_SKIP_NO_JQ
+def test_local_hook_path_resolution(sandbox_home: Path) -> None:
+    """--local rewrites KIT-OWNED ~/ hook paths to ABSOLUTE project-local
+    paths, while leaving foreign absolute paths and $CLAUDE_PROJECT_DIR
+    inline hooks untouched. Proves the §4 path-rewriting contract."""
+    template = {
+        "statusLine": {
+            "type": "command",
+            "command": "bash ~/.claude/statusline-command.sh",
+        },
+        "hooks": {
+            "Stop": [
+                {"matcher": "*", "hooks": [{"type": "command", "command": "~/.claude/scripts/hooks/x.sh"}]},
+                {"matcher": "*", "hooks": [{"type": "command", "command": "~/.local/bin/y.sh"}]},
+                {"matcher": "*", "hooks": [{"type": "command", "command": "/opt/foreign/z.sh"}]},
+                {"matcher": "*", "hooks": [{"type": "command", "command": "state=\"${CLAUDE_PROJECT_DIR:-.}/.claude/state.json\"; exit 0"}]},
+            ]
+        },
+    }
+    project = sandbox_home.parent / "project"
+    project.mkdir(exist_ok=True)
+
+    sandbox_install = _override_template(sandbox_home, template)
+    # Fresh install (no pre-existing project settings) exercises the
+    # fresh-copy rewrite path. --config so only the settings work runs.
+    rc, out, err = _run_sandbox_install(
+        sandbox_install, ["--config", "--local"], sandbox_home, cwd=project
+    )
+    assert _install_ok(rc, out, err), f"--local --config failed: {out}\n{err}"
+
+    proj_claude = project / ".claude"
+    merged = _read_json(proj_claude / "settings.json")
+    cmds = {
+        h["command"]
+        for e in merged["hooks"]["Stop"]
+        for h in e["hooks"]
+    }
+    proj = str(project)
+
+    # x.sh: kit Cellar hooks path → absolute <project>/.claude/scripts/hooks/x.sh
+    assert f"{proj}/.claude/scripts/hooks/x.sh" in cmds, (
+        f"kit Cellar hook not relocated to absolute project path; got {cmds}"
+    )
+    # y.sh: kit farm path → absolute <project>/.claude/bin/y.sh
+    assert f"{proj}/.claude/bin/y.sh" in cmds, (
+        f"kit farm hook not relocated to absolute project path; got {cmds}"
+    )
+    # statusLine rewritten to absolute project path.
+    assert merged["statusLine"]["command"] == f"bash {proj}/.claude/statusline-command.sh", (
+        f"statusLine not relocated; got {merged['statusLine']['command']!r}"
+    )
+    # Foreign absolute path UNCHANGED.
+    assert "/opt/foreign/z.sh" in cmds, "foreign absolute hook must be left untouched"
+    # $CLAUDE_PROJECT_DIR inline hook UNCHANGED.
+    assert any("${CLAUDE_PROJECT_DIR:-.}/.claude/state.json" in c for c in cmds), (
+        "CLAUDE_PROJECT_DIR inline hook must be left untouched"
+    )
+    # No surviving ~/ in any KIT-owned command (foreign /opt and the inline
+    # hook never had a ~/ to begin with).
+    for c in cmds:
+        if c.startswith("/opt/") or "CLAUDE_PROJECT_DIR" in c:
+            continue
+        assert "~/" not in c, f"kit command still has unexpanded ~/: {c!r}"
+    assert "~/" not in merged["statusLine"]["command"], (
+        "statusLine still has unexpanded ~/"
+    )

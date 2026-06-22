@@ -674,6 +674,159 @@ class TestInstallSyntheticTree:
         )
 
 
+def run_install_cwd(
+    args: list[str],
+    home: Path,
+    cwd: Path,
+) -> Tuple[int, str, str]:
+    """Run ``install <args>`` with HOME overridden AND a specific cwd.
+
+    ``--local`` keys its install root off ``$(pwd)``, not ``$HOME``, so the
+    subprocess cwd must be set to the project directory under test.
+    """
+    result = subprocess.run(
+        ["bash", _INSTALL_SCRIPT] + args,
+        capture_output=True,
+        text=True,
+        env=_make_env(home),
+        cwd=str(cwd),
+        timeout=120,
+    )
+    return result.returncode, result.stdout, result.stderr
+
+
+@_SKIP_NO_BASH
+@_SKIP_NO_PYTHON3
+class TestLocalScopeInstall:
+    """``./install --local`` installs into ``<cwd>/.claude/`` instead of
+    global ``$HOME``, leaving the global fleet install untouched."""
+
+    def test_local_scope_placement(self, tmp_path: Path) -> None:
+        """--local from cwd=project lands skills, Cellar, farm, and settings
+        all under project/.claude/."""
+        home = tmp_path / "home"
+        (home / ".local" / "bin").mkdir(parents=True)
+        (home / ".claude" / "skills").mkdir(parents=True)
+        project = tmp_path / "project"
+        project.mkdir()
+
+        rc, out, err = run_install_cwd(["--local"], home, project)
+        assert _install_ok(rc, out, err), (
+            f"--local install failed (rc={rc}):\nstdout: {out}\nstderr: {err}"
+        )
+
+        proj_claude = project / ".claude"
+        # Skills land under project/.claude/skills/<name>/SKILL.md.
+        for skill_name in _expected_skill_dirs():
+            assert (proj_claude / "skills" / skill_name / "SKILL.md").exists(), (
+                f"Missing project-local skill: {skill_name}"
+            )
+        # Cellar at project/.claude/scripts (top-level scripts present).
+        assert (proj_claude / "scripts").is_dir(), "project-local Cellar missing"
+        # Symlink farm at project/.claude/bin (NOT .claude/scripts).
+        assert (proj_claude / "bin").is_dir(), "project-local farm (bin/) missing"
+        for script_name in _expected_standalone_scripts():
+            assert (proj_claude / "scripts" / script_name).exists(), (
+                f"Missing standalone script in project Cellar: {script_name}"
+            )
+        # Settings merged/installed into project/.claude/settings.json.
+        assert (proj_claude / "settings.json").exists(), (
+            "project-local settings.json missing"
+        )
+
+    def test_local_leaves_global_untouched(self, tmp_path: Path) -> None:
+        """After --local, the global $HOME/.claude and $HOME/.local/bin stay
+        empty/absent — no fleet contamination."""
+        home = tmp_path / "home"
+        (home / ".local" / "bin").mkdir(parents=True)
+        (home / ".claude" / "skills").mkdir(parents=True)
+        project = tmp_path / "project"
+        project.mkdir()
+
+        rc, out, err = run_install_cwd(["--local"], home, project)
+        assert _install_ok(rc, out, err), f"--local install failed: {err}"
+
+        # Global skills dir empty.
+        global_skills = home / ".claude" / "skills"
+        assert list(global_skills.iterdir()) == [], (
+            f"--local contaminated global skills: {list(global_skills.iterdir())}"
+        )
+        # Global bin empty.
+        global_bin = home / ".local" / "bin"
+        assert list(global_bin.iterdir()) == [], (
+            f"--local contaminated global bin: {list(global_bin.iterdir())}"
+        )
+        # No global settings.json created.
+        assert not (home / ".claude" / "settings.json").exists(), (
+            "--local created a global settings.json"
+        )
+        # No global Cellar.
+        assert not (home / ".claude" / "scripts").exists(), (
+            "--local created a global Cellar"
+        )
+
+    def test_default_install_unchanged(self, sandbox_home: Path) -> None:
+        """No flag → lands in $HOME as today AND a project-local .claude/ is
+        NOT created in cwd (proves --local is strictly opt-in)."""
+        # Run default install from a project dir; nothing should land there.
+        home = sandbox_home
+        project = home.parent / "project"
+        project.mkdir()
+
+        rc, out, err = run_install_cwd([], home, project)
+        assert _install_ok(rc, out, err), f"default install failed: {err}"
+
+        # Global path populated as usual.
+        assert (home / ".claude" / "skills").iterdir(), "global skills not installed"
+        wave_status = home / ".local" / "bin" / "wave-status"
+        assert wave_status.exists(), "wave-status not in global bin"
+        # The cwd project dir must NOT have a .claude/ created by a default run.
+        assert not (project / ".claude").exists(), (
+            "default (no --local) install created a project-local .claude/"
+        )
+
+    def test_local_uninstall(self, tmp_path: Path) -> None:
+        """uninstall.sh --local removes the project-scoped install while the
+        global install is untouched."""
+        home = tmp_path / "home"
+        (home / ".local" / "bin").mkdir(parents=True)
+        (home / ".claude" / "skills").mkdir(parents=True)
+        project = tmp_path / "project"
+        project.mkdir()
+
+        rc, out, err = run_install_cwd(["--local"], home, project)
+        assert _install_ok(rc, out, err), f"--local install failed: {err}"
+        # Sanity: project install present.
+        assert (project / ".claude" / "skills").is_dir()
+
+        # Uninstall --local from the project dir.
+        result = subprocess.run(
+            ["bash", _UNINSTALL_SCRIPT, "--local"],
+            capture_output=True,
+            text=True,
+            env=_make_env(home),
+            cwd=str(project),
+            timeout=120,
+        )
+        assert _install_ok(result.returncode, result.stdout, result.stderr), (
+            f"--local uninstall failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+        # Project skills removed.
+        for skill_name in _expected_skill_dirs():
+            assert not (project / ".claude" / "skills" / skill_name).exists(), (
+                f"project-local skill not removed: {skill_name}"
+            )
+        # Project statusline removed.
+        assert not (project / ".claude" / "statusline-command.sh").exists(), (
+            "project-local statusline not removed"
+        )
+        # Global install never existed → still clean.
+        assert list((home / ".claude" / "skills").iterdir()) == [], (
+            "--local uninstall touched global skills"
+        )
+
+
 @_SKIP_NO_BASH
 @_SKIP_NO_PYTHON3
 class TestReinstallOverwrites:

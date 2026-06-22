@@ -11,6 +11,9 @@
 #   ./uninstall.sh --scripts    Remove scripts and packages only
 #   ./uninstall.sh --config     Remove config files only (statusline-command.sh)
 #   ./uninstall.sh --mcps       Remove MCP server registrations only
+#   ./uninstall.sh --local      Remove a project-scoped install from <cwd>/.claude/
+#                                  (mirror of ./install --local). Never touches
+#                                  $HOME. Composable with --skills/--scripts/--config.
 #
 # What full uninstall removes:
 #   Skills      → ~/.claude/skills/<name>/
@@ -26,9 +29,10 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKILLS_DIR="$HOME/.claude/skills"
-SCRIPTS_DIR="$HOME/.local/bin"
-CLAUDE_DIR="$HOME/.claude"
+# Path roots default to $HOME; --local re-roots them at <cwd>/.claude/ after
+# arg parsing (mirror of ./install --local). Removal walks read through these
+# vars, so they follow automatically.
+LOCAL_MODE=false
 DRY_RUN=false
 REMOVE_SKILLS=true
 REMOVE_SCRIPTS=true
@@ -66,6 +70,10 @@ while [[ $# -gt 0 ]]; do
 		REMOVE_CONFIG=false
 		shift
 		;;
+	--local)
+		LOCAL_MODE=true
+		shift
+		;;
 	--help | -h)
 		grep '^#' "$0" | sed 's/^# \?//' | tail -n +2
 		exit 0
@@ -76,6 +84,18 @@ while [[ $# -gt 0 ]]; do
 		;;
 	esac
 done
+
+# --- Path roots ---------------------------------------------------------------
+if [[ "$LOCAL_MODE" == true ]]; then
+	LOCAL_ROOT="$(pwd)"
+	SKILLS_DIR="$LOCAL_ROOT/.claude/skills"
+	SCRIPTS_DIR="$LOCAL_ROOT/.claude/bin"
+	CLAUDE_DIR="$LOCAL_ROOT/.claude"
+else
+	SKILLS_DIR="$HOME/.claude/skills"
+	SCRIPTS_DIR="$HOME/.local/bin"
+	CLAUDE_DIR="$HOME/.claude"
+fi
 
 # --- Helpers ------------------------------------------------------------------
 info() { echo "  [+] Removed: $*"; }
