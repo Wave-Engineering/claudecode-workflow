@@ -332,15 +332,25 @@ Delegates all 7 Section 7.2 checks to the `devspec_finalize` MCP tool. The skill
 
 Call `devspec_locate` (with the user-provided `path` if given; otherwise it searches `docs/*-devspec.md`). If multiple Dev Specs are found, ask which to finalize. If none, tell the user: "No Dev Spec found. Run `/devspec create` first."
 
-### Step 2: Run the Checks
+### Step 2: Run the Checks (and commit on pass)
 
-Call `devspec_finalize(path)`. The tool runs all 7 checks and returns `{ ok, passed, total, checks: [{ id, name, passed, evidence }, ...] }`.
+Call `devspec_finalize(path)`. The tool runs all 7 checks and, **when they all pass, commits its own doc writes** (the `docs/*-devspec.md` Dev Spec + any decision-ledger / memory-file updates) as a single `docs(devspec): finalize Dev Spec for Plan #N — <slug>` commit on the current branch — **no push**, and it **refuses to commit on a protected branch** (cc-workflow#604; so finalize writes never linger uncommitted and get swept into the next `/precheck`). Returns:
+
+```jsonc
+{ "ok", "passed", "total", "checks": [{ "id", "name", "passed", "evidence" }, ...],
+  "committed": true|false, "commit_sha": "<sha>"|null, "files": ["docs/...md", ...],
+  "refused_reason": null|"protected_branch"|"checks_failed"|"no_changes" }
+```
+
+`devspec_finalize` is **idempotent** on the commit — re-running it when the doc writes are already committed (or unchanged) produces no new commit (`committed:false`, `refused_reason:"no_changes"`).
 
 ### Step 3: Report
 
-Format the `checks` array into a table (columns: #, Check, Result, Evidence). Report `**Result: X/7 checks passed.**` and either:
-- All passing → "Dev Spec is ready for approval. Run `/devspec approve`."
-- Any failing → list each failure with the tool's evidence as the remediation starting point, then "Fix these issues and run `/devspec finalize` again."
+Format the `checks` array into a table (columns: #, Check, Result, Evidence). Report `**Result: X/7 checks passed.**` then:
+- **All passing + `committed`** → report the commit: "✅ Committed the Dev Spec doc updates as `docs(devspec): finalize Dev Spec for Plan #N` (`<commit_sha>`, N files). **Not pushed** — it rides your next `/scp` / `/scpmr`. Dev Spec is ready for approval; run `/devspec approve`."
+- **All passing + `refused_reason:"protected_branch"`** → warn: "Checks pass, but finalize refused to commit on the protected branch. Switch to a feature branch and re-run `/devspec finalize` so the doc updates are committed there."
+- **All passing + `refused_reason:"no_changes"`** → "Dev Spec already committed/unchanged. Ready for approval; run `/devspec approve`."
+- **Any failing** → list each failure with the tool's evidence as the remediation starting point, then "Fix these issues and run `/devspec finalize` again." (No commit is attempted when checks fail.)
 
 <!-- END TEMPLATE: devspec-finalize -->
 
@@ -357,7 +367,7 @@ Call `devspec_locate` (path arg if provided; otherwise searches `docs/*-devspec.
 
 ### Step 2: Run Finalization Checklist
 
-Call `devspec_finalize(path)`. If any checks fail, present the report with the failures highlighted (use the `evidence` field for each failing check), suggest remediation, tell the user "Dev Spec has N failing checks. Fix these issues and run `/devspec approve` again.", and **stop.** Do not proceed to approval.
+Call `devspec_finalize(path)`. If any checks fail, present the report with the failures highlighted (use the `evidence` field for each failing check), suggest remediation, tell the user "Dev Spec has N failing checks. Fix these issues and run `/devspec approve` again.", and **stop.** Do not proceed to approval. (Per #604 `devspec_finalize` also commits its doc writes on pass, but it is **idempotent** — if `/devspec finalize` already committed them, this re-call makes no new commit [`committed:false, refused_reason:"no_changes"`]; so approving never produces a duplicate finalize commit.)
 
 ### Step 3: Present Dev Spec Summary
 
