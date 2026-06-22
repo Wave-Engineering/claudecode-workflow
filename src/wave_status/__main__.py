@@ -163,6 +163,12 @@ def _cmd_flight_plan(args: argparse.Namespace) -> None:
     root = get_project_root()
     raw = _read_json_source(args.file)
     flights_data = json.loads(raw)
+    # #632: tolerate both the bare array (the tool's expected shape) and a
+    # wrapped {"flights": [...]} object — the Prime prompt sometimes emits the
+    # wrapper, which otherwise stores an inconsistent shape that crashes the
+    # wave-status read path. Normalize to the bare list at this boundary.
+    if isinstance(flights_data, dict) and "flights" in flights_data:
+        flights_data = flights_data["flights"]
     store_flight_plan(flights_data, root)
     _safe_regenerate_dashboard(root)
 

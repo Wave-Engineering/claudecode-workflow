@@ -225,6 +225,20 @@ class TestCmdFlightPlan:
         fl = load_json(status_dir(project_root) / "flights.json")
         assert fl["flights"]["wave-1"] == SAMPLE_FLIGHTS
 
+    def test_flight_plan_tolerates_wrapped_object(self, project_root: Path) -> None:
+        """#632: a wrapped ``{"flights": [...]}`` object (the Prime prompt
+        sometimes emits the wrapper) is normalized to the bare array, not stored
+        as-is — otherwise wave-status reads back an inconsistent shape and the
+        CLI crashes. Must store identically to the bare-array form."""
+        import io
+        stdin_data = json.dumps({"flights": SAMPLE_FLIGHTS})
+        with patch("sys.stdin", io.StringIO(stdin_data)):
+            code = _run_cli(["flight-plan", "-"], project_root)
+        assert code == 0
+
+        fl = load_json(status_dir(project_root) / "flights.json")
+        assert fl["flights"]["wave-1"] == SAMPLE_FLIGHTS
+
     def test_flight_plan_regenerates_dashboard(self, project_root: Path, flights_file: Path) -> None:
         """Dashboard is regenerated after storing flights."""
         # Generate initial dashboard so we know it exists.
