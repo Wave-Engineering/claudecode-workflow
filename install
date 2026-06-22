@@ -14,6 +14,13 @@
 #   ./install --mcps             Install MCP servers only (via mcps.json manifest)
 #   ./install --crystallizer     (REMOVED — crystallizer is deprecated)
 #   ./install --no-mcps          Install everything except MCP servers
+#   ./install --local            Project-scoped install into <cwd>/.claude/
+#                                  instead of global $HOME (skills, scripts, config).
+#                                  Composable with --skills/--scripts/--config.
+#                                  Implies --no-mcps and skips logrotate; never
+#                                  touches $HOME or /etc. Files land project-local
+#                                  but <cwd>/.claude/bin is NOT added to $PATH —
+#                                  hooks resolve via absolute paths.
 #   ./install --with-logrotate   Install logrotate policy for ~/.claude/logs/mcp.jsonl
 #                                  (Linux only; no-op elsewhere). Implies non-interactive.
 #   ./install --without-logrotate Skip logrotate install (suppresses the prompt).
@@ -39,14 +46,14 @@
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKILLS_DIR="$HOME/.claude/skills"
-SCRIPTS_DIR="$HOME/.local/bin"
-CLAUDE_DIR="$HOME/.claude"
-# Cellar: kit-owned scripts directory (Homebrew/Nix pattern). Wiped and
-# recreated on every install — this is what eliminates orphan rot. Anything
-# that landed here in a prior install is fair game for deletion. SCRIPTS_DIR
-# becomes a symlink farm pointing into here for entries that need PATH.
-CELLAR_DIR="$HOME/.claude/scripts"
+# Path-root variables (SKILLS_DIR, SCRIPTS_DIR, CLAUDE_DIR, CELLAR_DIR) are
+# defined AFTER the arg-parse loop because --local re-roots them at the
+# current working directory instead of $HOME. Nothing between here and the
+# arg loop references them (first use is the --prune block far below), so
+# deferring the definitions is safe. LOCAL_MODE defaults off → byte-for-byte
+# identical to the historical $HOME-rooted layout.
+LOCAL_MODE=false
+LOCAL_ROOT="$HOME"
 DRY_RUN=false
 CHECK_MODE=false
 PRUNE_MODE=false
@@ -126,6 +133,13 @@ while [[ $# -gt 0 ]]; do
 		INSTALL_MCPS=false
 		shift
 		;;
+	--local)
+		# Project-scoped install: re-root everything under <cwd>/.claude/
+		# instead of $HOME. Composable with --skills/--scripts/--config (it
+		# changes WHERE, not WHAT). Vars are re-rooted after this loop.
+		LOCAL_MODE=true
+		shift
+		;;
 	--with-logrotate)
 		LOGROTATE_MODE=on
 		shift
@@ -152,6 +166,43 @@ while [[ $# -gt 0 ]]; do
 		;;
 	esac
 done
+
+# --- Path roots ---------------------------------------------------------------
+# Defined here (post-arg-parse) so --local can re-root them at the current
+# working directory. DEFAULT (no --local): byte-for-byte identical to the
+# historical $HOME-rooted layout.
+#   SKILLS_DIR  → skills install dir
+#   CLAUDE_DIR  → ~/.claude root (statusline, settings.json, discord.json)
+#   CELLAR_DIR  → kit-owned scripts dir (Homebrew/Nix pattern). Wiped and
+#                 recreated on every install — this is what eliminates orphan
+#                 rot. Anything that landed here in a prior install is fair
+#                 game for deletion.
+#   SCRIPTS_DIR → symlink farm pointing into the Cellar for PATH-needing entries.
+if [[ "$LOCAL_MODE" == true ]]; then
+	# Project-scoped: everything under <cwd>/.claude/. SCRIPTS_DIR is a
+	# DEDICATED ./.claude/bin (NOT ./.claude/scripts — that is the Cellar, and
+	# cellar_deploy does `rm -rf "$CELLAR_DIR"`, so a collision would wipe the
+	# farm catastrophically). --local implies project-local FILES, not a
+	# project-local $PATH (./.claude/bin is not on PATH; hooks use absolute paths).
+	LOCAL_ROOT="$(pwd)"
+	SKILLS_DIR="$LOCAL_ROOT/.claude/skills"
+	CLAUDE_DIR="$LOCAL_ROOT/.claude"
+	CELLAR_DIR="$LOCAL_ROOT/.claude/scripts"
+	SCRIPTS_DIR="$CLAUDE_DIR/bin"
+	# --local must never touch $HOME or /etc: force off the global/prod side
+	# effects. MCP registration is user-scope (global) → treat --local as --no-mcps.
+	INSTALL_MCPS=false
+	# Logrotate writes to /etc via sudo → hard-disable under --local.
+	LOGROTATE_MODE=off
+else
+	SKILLS_DIR="$HOME/.claude/skills"
+	SCRIPTS_DIR="$HOME/.local/bin"
+	CLAUDE_DIR="$HOME/.claude"
+	CELLAR_DIR="$HOME/.claude/scripts"
+fi
+# Mandatory invariant: the symlink farm must NEVER equal the Cellar, or the
+# cellar wipe (`rm -rf "$CELLAR_DIR"`) would obliterate the farm.
+[[ "$SCRIPTS_DIR" != "$CELLAR_DIR" ]] || { echo "fatal: farm == cellar"; exit 1; }
 
 # --- Helpers ------------------------------------------------------------------
 info() { echo "  [+] $*"; }
@@ -572,6 +623,58 @@ rewrite_old_hook_paths_in_settings() {
 	echo "$rewritten" >"$target"
 }
 
+# --local only: rewrite KIT-OWNED hook command paths in a settings.json from
+# their global "~/"-relative form (which ALWAYS expands to $HOME, pointing at
+# the GLOBAL install) to ABSOLUTE project-local paths under <cwd>/.claude/.
+# Absolute (not "~/"-relative, not "./"-relative) because cwd at hook-exec
+# time is not guaranteed. Three kit prefixes are rewritten:
+#   ~/.claude/scripts/hooks/...          → $CELLAR_DIR/hooks/...
+#   ~/.local/bin/<name>                  → $SCRIPTS_DIR/<name>
+#   bash ~/.claude/statusline-command.sh → bash $CLAUDE_DIR/statusline-command.sh
+# Foreign/absolute non-kit paths (e.g. /opt/..., a sibling-repo hook) and any
+# inline hook using $CLAUDE_PROJECT_DIR (already project-relative) are LEFT
+# UNTOUCHED. Must run AFTER the settings merge — the merge's kit-ownership
+# detection keys on the original "~/.claude/" / "~/.local/bin/" template
+# strings; absolute <cwd>/.claude/... still matches its "\.claude/" probe.
+# Walks hooks.<event>[].hooks[].command AND statusLine.command. Modifies $1
+# in place via tmpfile rotation. Idempotent for already-absolute paths.
+rewrite_kit_hook_paths_to_local() {
+	local target="$1"
+	[[ -f "$target" ]] || return 0
+	command -v jq &>/dev/null || return 0
+	local rewritten
+	rewritten=$(jq \
+		--arg cellar_hooks "$CELLAR_DIR/hooks/" \
+		--arg farm "$SCRIPTS_DIR/" \
+		--arg statusline "bash $CLAUDE_DIR/statusline-command.sh" '
+		# Rewrite a single command string from its global kit form to the
+		# absolute project-local equivalent. Non-kit strings pass through.
+		def relocate:
+			if . == null then .
+			elif startswith("~/.claude/scripts/hooks/") then
+				$cellar_hooks + ltrimstr("~/.claude/scripts/hooks/")
+			elif startswith("~/.local/bin/") then
+				$farm + ltrimstr("~/.local/bin/")
+			elif . == "bash ~/.claude/statusline-command.sh" then
+				$statusline
+			else . end;
+		(if .hooks then
+			.hooks |= with_entries(
+				if .key == "_comment" then . else
+					.value |= map(
+						.hooks |= map(
+							if .command then .command |= relocate else . end
+						)
+					)
+				end
+			)
+		else . end)
+		| (if (.statusLine | type) == "object" and (.statusLine.command? != null)
+			then .statusLine.command |= relocate else . end)
+	' "$target")
+	echo "$rewritten" >"$target"
+}
+
 # Detect any settings.json hook command paths of the old form. Prints the
 # offending event names (one per line) for use in --check drift reporting.
 detect_old_hook_paths_in_settings() {
@@ -702,6 +805,13 @@ merge_settings() {
 	' "$template" "$target")
 
 	echo "$merged" >"$target"
+
+	# --local: relocate kit-owned "~/"-relative hook paths to absolute
+	# project-local paths. AFTER the merge so the kit-ownership union above
+	# saw the original template strings (it keys on "~/.claude/" / "~/.local/bin/").
+	if [[ "$LOCAL_MODE" == true ]]; then
+		rewrite_kit_hook_paths_to_local "$target"
+	fi
 
 	# Report what changed
 
@@ -1093,14 +1203,17 @@ if [[ "$CHECK_MODE" == true ]]; then
 		fi
 	fi
 
-	# Deprecated paths: flag if still present
-	for dep_path in "${DEPRECATED_PATHS[@]}"; do
-		if [[ -e "$dep_path" || -L "$dep_path" ]]; then
-			total=$((total + 1))
-			drift "$dep_path — DEPRECATED (run ./install to remove)"
-			drifted=$((drifted + 1))
-		fi
-	done
+	# Deprecated paths: flag if still present (skipped under --local — these are
+	# literal $HOME paths, irrelevant to a project-scoped install).
+	if [[ "$LOCAL_MODE" != true ]]; then
+		for dep_path in "${DEPRECATED_PATHS[@]}"; do
+			if [[ -e "$dep_path" || -L "$dep_path" ]]; then
+				total=$((total + 1))
+				drift "$dep_path — DEPRECATED (run ./install to remove)"
+				drifted=$((drifted + 1))
+			fi
+		done
+	fi
 
 	# MCPs: check each MCP's install-remote.sh --check
 	if [[ -f "$REPO_DIR/mcps.json" ]] && command -v claude &>/dev/null; then
@@ -1169,10 +1282,14 @@ if [[ "$CHECK_MODE" == true ]]; then
 fi
 
 # --- Remove deprecated components ---------------------------------------------
-echo ""
-echo "Deprecated → cleanup"
-echo "──────────────────────────────────────────"
-remove_deprecated
+# DEPRECATED_PATHS are literal $HOME paths; a project-scoped install must not
+# touch $HOME, and no legacy project-local install exists, so --local skips it.
+if [[ "$LOCAL_MODE" != true ]]; then
+	echo ""
+	echo "Deprecated → cleanup"
+	echo "──────────────────────────────────────────"
+	remove_deprecated
+fi
 
 # --- Install scripts ----------------------------------------------------------
 # Cellar + symlink-farm layout (closes #560):
@@ -1286,6 +1403,11 @@ if [[ "$INSTALL_CONFIG" == true ]]; then
 				jq 'del(._comment) | del(.hooks._comment)' \
 					"$REPO_DIR/config/settings.template.json" >"$CLAUDE_DIR/settings.json"
 				info "Installed settings.json (stripped _comment keys)"
+				# --local: relocate kit-owned "~/" hook paths to absolute
+				# project-local paths (no merge happened, so do it on the fresh copy).
+				if [[ "$LOCAL_MODE" == true ]]; then
+					rewrite_kit_hook_paths_to_local "$CLAUDE_DIR/settings.json"
+				fi
 			fi
 		fi
 	fi
@@ -1377,7 +1499,9 @@ fi
 # print a single notice and skip — no error, no prompt. The mode is set by
 # --with-logrotate / --without-logrotate; absent either flag the user is
 # prompted (unless --yes was passed, which is taken as consent).
-if [[ "$INSTALL_CONFIG" == true || "$LOGROTATE_MODE" != "prompt" ]]; then
+# Hard-skipped under --local: logrotate installs to /etc via sudo, which a
+# project-scoped install must never do (LOGROTATE_MODE is forced off above too).
+if [[ "$LOCAL_MODE" != true && ("$INSTALL_CONFIG" == true || "$LOGROTATE_MODE" != "prompt") ]]; then
 	echo ""
 	echo "Logrotate (~/.claude/logs/mcp.jsonl)"
 	echo "──────────────────────────────────────────"
