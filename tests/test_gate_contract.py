@@ -79,3 +79,31 @@ class TestPromotionContract:
         assert "kahunaBranch" in src and "protectedBranch" in src, (
             "promotion must route kahuna_branch -> protected_branch"
         )
+
+
+class TestPromotionLifecycle:
+    """kahuna-branch lifecycle on promotion — relocated from the all-green /
+    any-red kahuna-handling skill assertions (#722 per-plan persistence)."""
+
+    def test_can_preserve_per_plan_kahuna(self) -> None:
+        # #722: a per-plan kahuna shared across waves 1..N must PERSIST, else
+        # deleting it after wave 1 strands the later waves off a diverged base.
+        assert "preserveKahuna" in _gate_src(), (
+            "promotion must support preserveKahuna (#722 per-plan kahuna persistence)"
+        )
+
+    def test_deletes_disposable_per_wave_kahuna(self) -> None:
+        # Default (non-preserve): the per-wave integration branch is disposable.
+        src = _gate_src()
+        assert "--delete" in src and "delete the" in src, (
+            "promotion must delete the disposable per-wave kahuna after landing"
+        )
+
+    def test_promoted_true_only_if_merge_landed(self) -> None:
+        # On a merge-queue-enforced repo skip_train is dropped + the PR is enrolled;
+        # promoted must reflect actually-landed, not enrolled-but-pending.
+        src = _gate_src()
+        assert "promoted" in src, "promote must return a promoted flag"
+        assert "pr_merge_wait" in src, (
+            "promotion must wait for merge-queue-enrolled PRs to actually land (not treat enrolled as done)"
+        )
