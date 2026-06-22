@@ -24,13 +24,15 @@ Analyze one or more Plan tracking issues, validate their sub-issue specs, comput
 
 ## Procedure
 
-0. **Multi-Phase guard.** Before any work, check if `.claude/status/phases-waves.json` already exists in the project. If it does, read it and inspect `phases.length`:
+0. **Clean-tree gate (FIRST — before anything).** `/prepwaves` MUST refuse to run on a dirty working tree. Another agent's uncommitted work in the same checkout has stranded a prep before (Plan #581: 394 uncommitted lines in a foreign branch required a hand-rolled patch-and-revert to recover). Run `git status --porcelain`; if it returns **any** lines, **STOP** and refuse: report the offending paths (modified + untracked) and tell the user to commit, stash, or clean them first. Do NOT auto-stash or auto-clean — a dirty tree is the user's to resolve, never `/prepwaves`'s. Only a clean tree proceeds to the Multi-Phase guard below.
+
+1. **Multi-Phase guard.** Before any work, check if `.claude/status/phases-waves.json` already exists in the project. If it does, read it and inspect `phases.length`:
    - If `phases.length > 1` (multi-Phase topology already written by `/devspec upshift`): **STOP.** Report to the user: "`phases-waves.json` already contains a multi-Phase topology (N phases, M waves, K stories). This was written by `/devspec upshift` — `/prepwaves` persist is unnecessary. Run `/nextwave` to begin execution, or delete `phases-waves.json` to re-plan from scratch."
    - If `phases.length === 1` and the plan's `plan_id` matches one of the user's input Plan refs: this is a re-run of a single-Phase prep. Proceed normally (wave_init's extend/idempotent path handles it).
    - If the file does not exist: proceed normally (fresh prep).
 
-1. **Inputs.** Plan tracking-issue numbers passed by the user (`/prepwaves #2` or `/prepwaves #2 #3 ...`). Each Plan becomes one Phase in `phases-waves.json`.
-2. **Pre-flight readiness table.** For each Plan:
+2. **Inputs.** Plan tracking-issue numbers passed by the user (`/prepwaves #2` or `/prepwaves #2 #3 ...`). Each Plan becomes one Phase in `phases-waves.json`.
+3. **Pre-flight readiness table.** For each Plan:
    a. Call `epic_sub_issues(N)` inline to get the list of sub-issue numbers (must complete before spawning validators — you need the list first).
    b. Launch **one Haiku sub-agent per sub-issue in a single message** (parallel). Each sub-agent runs `spec_validate_structure` for its issue and returns a one-line result: `#N | <title> | <deps> | Changes:✓/✗ | Tests:✓/✗ | AC:✓/✗ | <Ready/NOT READY>`. Sub-agents have no data dependencies on each other — all can run concurrently.
 
@@ -43,11 +45,11 @@ Analyze one or more Plan tracking issues, validate their sub-issue specs, comput
    ```
 
    Assemble the returned lines into the readiness table. If any sub-issue is NOT READY, stop and ask the user how to proceed.
-3. **Compute waves.** Call `wave_compute(epic_ref)` (param name is historical — pass the Plan's issue ref) to get the topologically-sorted wave plan, then `wave_topology(...)` to classify. Present the wave plan (waves, issues, dependency chain, branch naming `feature/<N>-<desc>`).
-4. **Cross-repo detection.** For each Phase about to be persisted, walk every sub-issue's ref. Resolve each ref's `owner/repo` (per-issue `repo` field, else plan-level `repo`, else the orchestrator's current project repo). Collect distinct repo slugs that differ from the orchestrator's project repo. If the set is non-empty, set `cross_repo: true` and `target_repos: [<slug>, ...]` on that Phase in the plan JSON. Single-repo Phases leave both fields unset. Cheap — no extra LLM calls; pure walk over refs already in `wave_compute`'s output.
-5. **Approval gate.** Wait for explicit user approval. Iterate on the plan here — not during `/nextwave`.
-6. **Persist.** Call `wave_init(plan_json)` — the tool auto-detects existing plans and uses extend mode, preserving completed waves. Use Phase-prefixed wave IDs (e.g., `wave-2a`) to avoid collisions when extending. Cross-repo fields (`cross_repo`, `target_repos`) round-trip without modification (the underlying `wave-status init` writes the plan dict verbatim to `phases-waves.json`).
-7. **Conditional recipe injection.** If any prepped Phase has `cross_repo: true`, append the cross-repo recipe to this skill's output by `cat`ing `skills/_shared/recipes/cross-repo-wave-orchestration.md`. Format:
+4. **Compute waves.** Call `wave_compute(epic_ref)` (param name is historical — pass the Plan's issue ref) to get the topologically-sorted wave plan, then `wave_topology(...)` to classify. Present the wave plan (waves, issues, dependency chain, branch naming `feature/<N>-<desc>`).
+5. **Cross-repo detection.** For each Phase about to be persisted, walk every sub-issue's ref. Resolve each ref's `owner/repo` (per-issue `repo` field, else plan-level `repo`, else the orchestrator's current project repo). Collect distinct repo slugs that differ from the orchestrator's project repo. If the set is non-empty, set `cross_repo: true` and `target_repos: [<slug>, ...]` on that Phase in the plan JSON. Single-repo Phases leave both fields unset. Cheap — no extra LLM calls; pure walk over refs already in `wave_compute`'s output.
+6. **Approval gate.** Wait for explicit user approval. Iterate on the plan here — not during `/nextwave`.
+7. **Persist.** Call `wave_init(plan_json)` — the tool auto-detects existing plans and uses extend mode, preserving completed waves. Use Phase-prefixed wave IDs (e.g., `wave-2a`) to avoid collisions when extending. Cross-repo fields (`cross_repo`, `target_repos`) round-trip without modification (the underlying `wave-status init` writes the plan dict verbatim to `phases-waves.json`).
+8. **Conditional recipe injection.** If any prepped Phase has `cross_repo: true`, append the cross-repo recipe to this skill's output by `cat`ing `skills/_shared/recipes/cross-repo-wave-orchestration.md`. Format:
 
    ```
    ## Cross-Repo Recipe (auto-loaded because Phase X spans repos: <target_repos>)
@@ -56,7 +58,7 @@ Analyze one or more Plan tracking issues, validate their sub-issue specs, comput
    ```
 
    Single-repo runs skip this step entirely — no context bloat. The recipe's content lives in one place; both `/prepwaves` (here) and `/nextwave` (preflight) `cat` from the same file.
-8. **Confirm.** Report wave count, issue count, readiness summary, cross-repo status (if any), and "Run `/nextwave` to begin execution."
+9. **Confirm.** Report wave count, issue count, readiness summary, cross-repo status (if any), and "Run `/nextwave` to begin execution."
 
 ## Reasoning Rules (Preserve)
 
