@@ -615,7 +615,6 @@ class TestAC1_NoUnqualifiedEpic:
         )
 
 
-@pytest.mark.xfail(reason="#753/#605: the exit taxonomy was moved into WAVE_AXIOMS (Axiom 3 closed-list + Axiom 4 Concerns Channel); the skill's '## Exhaustive Legal Exits' now CROSS-REFERENCES the axioms instead of restating the ### Mechanical/Plan-reality/Explicit-non-exits subsections (the #605 cross-reference-don't-restate philosophy). These assertions test the pre-#605 restated form — remap them to assert the cross-ref, or retire (the taxonomy is covered by WAVE_AXIOMS + test_wave_axioms).", strict=False)
 class TestAC2_ExhaustiveLegalExits:
     """R-17: the skill body contains a ``## Exhaustive Legal Exits``
     section matching the §5.3.2 structural template — exact heading, with
@@ -629,6 +628,7 @@ class TestAC2_ExhaustiveLegalExits:
             re.MULTILINE,
         ), "Must contain '## Exhaustive Legal Exits' heading (exact)"
 
+    @pytest.mark.xfail(reason="#753/#605: exit taxonomy moved to WAVE_AXIOMS Axiom 3/4; the section cross-references instead of restating this. Remap to the cross-ref form or retire.", strict=False)
     def test_closed_list_framing_present(self, skill_text: str) -> None:
         """The opening sentence must assert the closed-list contract."""
         section = _section(skill_text, "Exhaustive Legal Exits")
@@ -639,6 +639,7 @@ class TestAC2_ExhaustiveLegalExits:
             re.IGNORECASE | re.DOTALL,
         ), "Section must declare the closed-list contract"
 
+    @pytest.mark.xfail(reason="#753/#605: the ### Mechanical exits subsection moved into WAVE_AXIOMS Axiom 3; the section cross-references now. Remap or retire.", strict=False)
     def test_mechanical_exits_subsection(self, skill_text: str) -> None:
         section = _section(skill_text, "Exhaustive Legal Exits")
         # _section stops at the next ## or ### — so grab a wider window.
@@ -666,6 +667,7 @@ class TestAC2_ExhaustiveLegalExits:
             f"(found {len(numbered)})"
         )
 
+    @pytest.mark.xfail(reason="#753/#605: the ### Plan-reality drift exits subsection moved into WAVE_AXIOMS Axiom 3; the section cross-references now. Remap or retire.", strict=False)
     def test_plan_reality_drift_exits_subsection(
         self, skill_text: str
     ) -> None:
@@ -685,6 +687,7 @@ class TestAC2_ExhaustiveLegalExits:
             "Must contain '### Plan-reality drift exits' subsection"
         )
 
+    @pytest.mark.xfail(reason="#753/#605: explicit-non-exits are now inline under the cross-ref (not a ### subsection); the taxonomy lives in WAVE_AXIOMS Axiom 3. Remap or retire.", strict=False)
     def test_explicit_non_exits_subsection(self, skill_text: str) -> None:
         lines = skill_text.splitlines(keepends=True)
         start = next(
@@ -712,6 +715,7 @@ class TestAC2_ExhaustiveLegalExits:
             f"(found {len(bullets)})"
         )
 
+    @pytest.mark.xfail(reason="#753/#605: asserts 'WAVE_AXIOMS.md' in the exit section, but the section cross-references 'Per WAVE_AXIOMS Axiom 3' (no .md suffix). Remap the assertion to the cross-ref wording or retire.", strict=False)
     def test_cross_reference_to_axiom_corpus(
         self, skill_text: str
     ) -> None:
