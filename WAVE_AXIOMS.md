@@ -22,8 +22,9 @@
      "First round" — 2026-05-05 BJ + patchwork. V2 structural rework
      2026-05-06 cc-workflow#605 (added Axiom 9, reshaped 1-8 to the
      three-subsection template, wired the wave-pattern skill bodies
-     to cross-reference instead of restate). Will grow as new failure
-     modes are observed. -->
+     to cross-reference instead of restate). 2026-06-22 cc-workflow#670
+     (added Axiom 10 — single-repo-per-wave — + the plan-time validator).
+     Will grow as new failure modes are observed. -->
 
 ---
 
@@ -267,6 +268,28 @@ The companion principle (`principle_cost_asymmetry_continue_vs_exit.md`, capture
 When the agent feels unease that doesn't match a Legal Exit, the answer is Axiom 4's Concerns Channel — `[concern]` comment, optional Discord ping, continue. The unease is captured durably; the campaign continues; the human's attention is not burned.
 
 **See:** Axiom 2, Axiom 3, Axiom 4, Axiom 5, Axiom 6, `principle_user_attention_is_the_cost.md`, `principle_cost_asymmetry_continue_vs_exit.md`.
+
+---
+
+## Axiom 10 — A wave targets exactly one repo.
+
+### Rule
+
+A single wave's issues all resolve to **one repository**. A wave never straddles two repos. Cross-repo coordination is expressed as **serial phases** (expand in repo A's waves, then contract in repo B's waves), never as a single straddling wave.
+
+### Why
+
+The wave is the **atomic promotion unit**: it assembles into one `kahuna/<wave-id>` branch, the trust gate evaluates that branch, and it fast-forwards into *that repo's* `main`. `kahuna` and its `main` live in one repo. A wave spanning two repos would need two kahuna branches and two ff-into-main promotions — and there is **no two-phase commit across git remotes**, so the two mains can never be promoted atomically. There is always a window where one repo's main has the change and the other's does not — the exact broken intermediate the gate exists to prevent. The coordinated cross-repo contract change is not a counter-example: its correct shape is **expand-contract across serial phases** (repo A ships a backward-compatible expand → repo B consumes it → repo A contracts), each phase's waves single-repo and independently promotable.
+
+### How to apply
+
+**Plan-time validator (prepwaves / assesswaves):** when computing/presenting waves, resolve every issue in each wave to its `owner/repo` (per-issue `repo` field, else plan-level `repo`, else the project repo). If any single wave's issues resolve to **more than one** distinct repo, **refuse** — name the wave and the conflicting repos, and direct the planner to split it into serial single-repo phases. Phase-level `cross_repo: true` remains valid — a *phase* may span repos across its *waves*; the invariant is **per-wave, not per-phase**.
+
+**Forbidden:**
+- Grouping issues from two repos into one wave.
+- "It's just a small cross-repo tweak" — there is still no atomic two-remote promotion; split it into serial phases.
+
+**See:** Axiom 1 (serial is a valid topology), `lesson_cross_repo_wave_orchestration.md`, the prepwaves cross-repo detection step.
 
 ---
 

@@ -13,6 +13,10 @@ description: Quick assessment of whether a piece of work is suitable for wave-pa
 
 Decide whether a set of work items can benefit from wave-pattern execution. Recommends a topology and verdict; does not create issues or flight plans. Use before `/prepwaves`.
 
+## Axioms
+
+Bound by WAVE_AXIOMS 1, 7, and 10 (`WAVE_AXIOMS.md` at the repo root). **Axiom 1** (serial is a valid topology) and **Axiom 7** (the assessment-skill binding) govern the topology verdict; **Axiom 10** (a wave targets exactly one repo) bounds the recommendation — never recommend a single wave that spans repos; cross-repo work is serial single-repo phases (expand-contract).
+
 ## Tools Used
 
 - `mcp__sdlc-server__spec_validate_structure` — check each issue's spec shape

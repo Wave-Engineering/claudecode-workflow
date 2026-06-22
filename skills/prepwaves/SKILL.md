@@ -13,6 +13,10 @@ description: Validate sub-issue specs, compute dependency waves, prepare for wav
 
 Analyze one or more Plan tracking issues, validate their sub-issue specs, compute dependency-ordered waves, and persist the plan so `/nextwave` can execute it. Supports parallel, serial, and mixed topologies.
 
+## Axioms
+
+Bound by WAVE_AXIOMS 1 and 10 (`WAVE_AXIOMS.md` at the repo root). `/prepwaves` is a planning skill, so the campaign-runtime axioms (2–6, 8, 9) bind `/nextwave` and `/wavemachine`, not this skill. **Axiom 1** (serial is a valid topology) governs how it classifies and presents waves; **Axiom 10** (a wave targets exactly one repo) is the plan-time invariant this skill enforces — see the single-repo validator in step 4.
+
 ## Tools Used
 
 - `mcp__sdlc-server__epic_sub_issues` — enumerate children of a Plan tracking issue (the tool name is a historical identifier; it enumerates sub-issues of any parent, and `/prepwaves` calls it on the Plan)
@@ -46,6 +50,8 @@ Analyze one or more Plan tracking issues, validate their sub-issue specs, comput
 
    Assemble the returned lines into the readiness table. If any sub-issue is NOT READY, stop and ask the user how to proceed.
 4. **Compute waves.** Call `wave_compute(epic_ref)` (param name is historical — pass the Plan's issue ref) to get the topologically-sorted wave plan, then `wave_topology(...)` to classify. Present the wave plan (waves, issues, dependency chain, branch naming `feature/<N>-<desc>`).
+
+   **Single-repo-per-wave validator (Axiom 10).** After computing waves, resolve every issue in each wave to its `owner/repo` (per-issue `repo`, else plan-level `repo`, else the project repo). If any single wave's issues span **more than one** distinct repo, **STOP and refuse** — name the offending wave and its conflicting repos, and tell the planner to split it into serial single-repo phases (expand-contract), never one straddling wave (there is no atomic two-remote promotion). A *phase* may still span repos across its waves (`cross_repo: true`, step 5) — the invariant is per-wave, not per-phase.
 5. **Cross-repo detection.** For each Phase about to be persisted, walk every sub-issue's ref. Resolve each ref's `owner/repo` (per-issue `repo` field, else plan-level `repo`, else the orchestrator's current project repo). Collect distinct repo slugs that differ from the orchestrator's project repo. If the set is non-empty, set `cross_repo: true` and `target_repos: [<slug>, ...]` on that Phase in the plan JSON. Single-repo Phases leave both fields unset. Cheap — no extra LLM calls; pure walk over refs already in `wave_compute`'s output.
 6. **Approval gate.** Wait for explicit user approval. Iterate on the plan here — not during `/nextwave`.
 7. **Persist.** Call `wave_init(plan_json)` — the tool auto-detects existing plans and uses extend mode, preserving completed waves. Use Phase-prefixed wave IDs (e.g., `wave-2a`) to avoid collisions when extending. Cross-repo fields (`cross_repo`, `target_repos`) round-trip without modification (the underlying `wave-status init` writes the plan dict verbatim to `phases-waves.json`).
