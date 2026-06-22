@@ -228,6 +228,25 @@ next wave but the turn ended without it. Writing `awaiting-verdict` in the same 
 as the launch is therefore **load-bearing** — omit it and the guard false-fires on the await
 (cc-workflow#736).
 
+## Pending deferral resolution (#634)
+
+`wave_health_check` (and the pre-flight gate) **blocks the loop when a wave has a pending
+deferral** — this is by design: deferrals are human-judgment gates (infra waves HOLD on
+`ORACLE_REQUIRED`; review findings need fix-forward), not stalls. The recovery path is an
+explicit `wave-status` step, run **after** the deferred item has been adjudicated:
+
+1. **Inspect** — the pending deferral and its reason surface in the campaign state / status
+   panel (the same panel the launch sequence opens).
+2. **Accept once adjudicated** — `wave-status defer-accept <index>`. This clears the pending
+   deferral so the next `wave_health_check` / pre-flight passes and the loop advances.
+
+`defer-accept` is the operator's "I have reviewed this and it is safe to proceed" signal —
+**not** an auto-bypass. In `interactive` mode it is the human's call at the HOLD. In `auto`
+mode a pending deferral is a legitimate pause for adjudication: the campaign does **not**
+silently auto-accept a human-judgment gate, so an unattended run halts here until a deferral
+is accepted (consistent with the async-await contract above — the driver is paused, not
+stalled). Following this section alone is sufficient to recover; no source/memory dig needed.
+
 > **Decision (cc-workflow#736 — async-aware INTERIM fix).** The legacy hook reason — "after
 > /nextwave auto returns OK, invoke /nextwave auto again" — encoded the *synchronous* loop and
 > false-fired on every async per-wave Workflow await and on manual promotion adjudication. The
