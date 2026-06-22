@@ -64,7 +64,19 @@ Bound by WAVE_AXIOMS 1 and 10 (`WAVE_AXIOMS.md` at the repo root). `/prepwaves` 
    ```
 
    Single-repo runs skip this step entirely — no context bloat. The recipe's content lives in one place; both `/prepwaves` (here) and `/nextwave` (preflight) `cat` from the same file.
-9. **Confirm.** Report wave count, issue count, readiness summary, cross-repo status (if any), and "Run `/nextwave` to begin execution."
+9. **Confirm + seed a fresh campaign session.** Report wave count, issue count, readiness summary, and cross-repo status (if any). Then emit a final recommendation to start the campaign in a **fresh session** — `/prepwaves` accumulates heavy one-shot planning context (sub-issue bodies, dependency analysis, readiness validation) that adds drift to the execution session, so a `/clear` before `/wavemachine` keeps the campaign's context clean:
+
+   ```
+   ✅ Wave plan persisted for Plan #N.
+
+   👉 Recommended next step: `/clear`, then in the fresh session run:
+
+       /wavemachine
+
+   Starting the campaign in a clean session reduces context drift before execution.
+   ```
+
+   If the current session has ample headroom (`/nerf status` shows the soft dart <30% consumed), downgrade this to a one-line hint rather than a strong nudge — the `/clear` pays off most when the planning context is already heavy.
 
 ## Reasoning Rules (Preserve)
 
