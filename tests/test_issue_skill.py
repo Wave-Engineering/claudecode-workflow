@@ -388,7 +388,8 @@ class TestFrontmatter:
         end = skill_text.index("---", 4)
         frontmatter = skill_text[:end + 3]
         for t in SUB_ISSUE_TYPES:
-            assert t in frontmatter.lower(), (
+            # canonical type is singular ("doc"); tolerate the plural in the constant
+            assert t in frontmatter.lower() or t.rstrip("s") in frontmatter.lower(), (
                 f"frontmatter description omits sub-issue type {t!r}"
             )
 
@@ -449,7 +450,8 @@ class TestGuaranteeDocumented:
     def test_introduction_lists_all_sub_issue_types(self, intro_text: str) -> None:
         """introduction.md lists every sub-issue type."""
         for t in SUB_ISSUE_TYPES:
-            assert t in intro_text.lower(), (
+            # canonical type is singular ("doc"); tolerate the plural in the constant
+            assert t in intro_text.lower() or t.rstrip("s") in intro_text.lower(), (
                 f"introduction.md omits sub-issue type {t!r}"
             )
 
@@ -546,15 +548,15 @@ class TestEpicExcluded:
 
     def test_epic_template_present(self, skill_text: str) -> None:
         """The Epic Template still exists."""
-        body = _extract_template_block(skill_text, "Epic Template")
+        body = _extract_template_block(skill_text, "Epic Template (PM-layer only)")
         assert body, "Epic Template block is missing entirely"
 
     def test_epic_template_keeps_epic_specific_headings(
         self, skill_text: str
     ) -> None:
         """The epic template retains its epic-specific structure
-        (Goal / Scope / Definition of Done / Sub-Issues / Wave Map)."""
-        body = _extract_template_block(skill_text, "Epic Template")
+        (Goal / Scope / Definition of Done / Sub-Issues / Success Metrics)."""
+        body = _extract_template_block(skill_text, "Epic Template (PM-layer only)")
         headings = _h2_headings(body)
         for required in ("## Goal", "## Scope", "## Definition of Done", "## Sub-Issues"):
             assert required in headings, (
