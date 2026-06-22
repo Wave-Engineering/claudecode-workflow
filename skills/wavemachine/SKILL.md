@@ -219,12 +219,29 @@ per-phase lifecycle, which the engine no longer drives), via the `wave-status` C
   before surfacing the diff and stopping.
 - (Optional, for dashboard truthfulness) `wave-status promoting <waveId>` while a PASS wave promotes.
 
-**This is the contract the stall-guard Stop hook depends on (#736).** The guard no-ops when
-`current_action.action` is `awaiting-verdict` (a legitimate async await — NOT a stall) or
-`hold` (a legitimate human pause); it blocks only when `wavemachine_active` is set and the
-action implies the driver should be launching the next wave but the turn ended without it.
-Writing `awaiting-verdict` in the same tool-use block as the launch is therefore
-**load-bearing** — omit it and the guard false-fires on the await (cc-workflow#736).
+**This is the contract the stall-guard Stop hook depends on (#736).** The guard
+(`config/settings.template.json`, the `Stop` hook keyed on `wavemachine_active`) no-ops when
+`current_action.action` is `awaiting-verdict` (a legitimate async await — NOT a stall),
+`hold` (a legitimate human pause), or `promoting` (an in-progress promotion); it blocks only
+when `wavemachine_active` is set and the action implies the driver should be launching the
+next wave but the turn ended without it. Writing `awaiting-verdict` in the same tool-use block
+as the launch is therefore **load-bearing** — omit it and the guard false-fires on the await
+(cc-workflow#736).
+
+> **Decision (cc-workflow#736 — async-aware INTERIM fix).** The legacy hook reason — "after
+> /nextwave auto returns OK, invoke /nextwave auto again" — encoded the *synchronous* loop and
+> false-fired on every async per-wave Workflow await and on manual promotion adjudication. The
+> fix is option 1 of #736: make the existing guard **async-aware** by reading
+> `current_action.action`, NOT retire it. The retire (ripping out the `wavemachine_active`
+> plumbing) is the separate, gated cc-workflow#751.
+>
+> **The #600 inter-wave-stall invariant is PRESERVED, not superseded.** The no-narrator-gap
+> handoff (Per-wave handoff, above) and the Stop hook together still forbid a genuinely-idle
+> turn-end mid-campaign — the guard continues to block when `wavemachine_active` is set and the
+> action is launch/idle-shaped. #736 only *narrows* the block away from the three legitimate
+> non-stall states; it does not weaken the protection against a real stall. Regression:
+> `tests/regression/test_wavemachine_stall_guard_async_aware.sh` (blocks the synchronous gap,
+> no-ops the async await) alongside `test_wavemachine_handoff_no_narrator.sh` (#600).
 
 ## Resumability (mirrors §3.3, one level up)
 

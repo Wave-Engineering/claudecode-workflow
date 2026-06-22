@@ -290,6 +290,8 @@ Why the skill, not a campaign-level Workflow nesting wave-workflows:
 
 **Tradeoff accepted:** in unattended `auto`, the main session spends a thin sliver of turns between waves (launch → await → read → launch). Cheap — the heavy work is all inside the wave-workflows (billed, off the main window), so the peak-window/determinism wins are intact.
 
+**Inter-wave stall-guard (async-aware — #736).** Because the per-wave Workflow is async — the driver launches it, **ends its turn**, and is re-invoked on the verdict — the `wavemachine_active` Stop hook (`config/settings.template.json`) must distinguish a legitimate async await from a real stall. It does so by reading the coarse `current_action.action` the driver writes (#738): it **no-ops** on `awaiting-verdict` (async await), `hold` (human adjudication pause), and `promoting` (in-progress promotion), and **blocks** only when the action is launch/idle-shaped — i.e. the driver should be launching the next wave but the turn ended without it. This is the **interim** fix (option 1 of #736): the legacy hook's synchronous "invoke /nextwave auto again" reason is superseded, but the guard itself is kept. The full retire of the `wavemachine_active` plumbing is the separately-gated #751. The #600 no-narrator inter-wave-stall invariant is preserved: the guard still fires on a genuinely-idle mid-campaign turn-end; #736 only narrows the block away from the three non-stall states. Regression: `tests/regression/test_wavemachine_stall_guard_async_aware.sh`.
+
 ---
 
 ## 6. What stays unchanged
