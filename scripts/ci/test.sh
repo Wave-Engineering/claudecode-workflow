@@ -21,8 +21,9 @@ cd "$ROOT"
 # `from wave_status import ...` resolves in the test process.
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"
 
-# The non-CI-portable test_install_check_clean now self-skips under CI=true
-# (skipif in tests/test_install.py, cc-workflow#795) — no runner-level deselect
-# needed; the skip is visible in the test output with its reason.
+# The full-env-only test_install_check_clean self-skips unless CC_FULL_ENV_TESTS
+# is set (skipif in tests/test_install.py, cc-workflow#795) — so it's skipped by
+# default here AND on a stock dev box; no runner-level deselect needed, and the
+# skip is visible in the test output with its reason.
 echo "==> pytest tests/ (PYTHONPATH=src)"
 python3 -m pytest tests/ -q
