@@ -95,6 +95,24 @@ assert_passes "gate_stated" "This is a prod deploy you haven't agreed to in this
 # Distance / unrelated.
 assert_passes "distant" "I want this done right, so the details matter and I checked them all carefully."
 
+# --- concluded-and-asked (cc-workflow#776) — conclusion + ratify-ask conjunction
+# A team-converged conclusion AND a ratify-ask in the same turn is the over-pause.
+assert_blocks "concluded_asked" "We've converged and the team is aligned — this is the right move. BJ, your call?"
+assert_blocks "concluded_asked_schwifty" "Consensus reached on the approach. @schwifty7759, your go-ahead to ratify?"
+# Conjunction is required: conclusion-only or ratify-only must NOT fire.
+assert_passes "conclusion_only" "The team converged on the approach and we're fully aligned."
+assert_passes "ratify_only" "BJ, your call on this one?"
+# SAFETY: concluded + ratify-ask on a GATED axis (prod/deploy/release/secrets/migration)
+# must NOT fire — the block pushes the agent to ACT, and pushing an unapproved prod
+# action violates the ABSOLUTE prod rule. A false-negative here is the safe direction.
+assert_passes "concluded_asked_prod" "We converged on the rollout approach — BJ, your call on the prod deploy?"
+assert_passes "concluded_asked_release" "Team is aligned on the cut. @schwifty7759, approve the release?"
+assert_passes "concluded_asked_secrets" "We agreed on the secret-rotation plan — BJ, your go-ahead?"
+# Extended gated-axis (code-review #2): ship / go-live / force-push are prod-shaped.
+assert_passes "concluded_asked_ship" "We converged — this is the right move. BJ, your go-ahead to ship it?"
+assert_passes "concluded_asked_golive" "Team is aligned on the cut. @schwifty7759, your call to go live?"
+assert_passes "concluded_asked_forcepush" "We agreed on the rebase plan. BJ, approve the force-push to main?"
+
 # --- Loop guard: stop_hook_active=true → allow the stop even on positive input
 label="loop_guard"
 path=$(make_transcript "$label" "Want me to proceed?")

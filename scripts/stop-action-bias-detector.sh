@@ -91,4 +91,35 @@ JSON
 	exit 0
 fi
 
+# --- concluded ∧ asked (cc-workflow#776 / fleet incident 2026-06-21) ---------
+# A subtler over-pause than the bare permission-ask above: the turn STATES a
+# team-converged conclusion AND asks the user to ratify it in the SAME message
+# ("we converged … BJ, your call?"). For an already-converged decision in the
+# agent's delegated lane, the converging IS the green light; routing it back to
+# the user for ratify is the over-pause. Requires the CONJUNCTION (conclusion
+# marker AND ratify-ask) so a bare prod gate ("BJ — your call on the prod
+# push?"), which has no conclusion marker, does NOT fire and stays surfaced.
+PATTERN_CONCLUSION='(?i)\b(converged|convergence|agreed|aligned|endorsed|locked in|the right move|only logical|consensus|we (all )?agree|team[\- ]converged)\b'
+PATTERN_RATIFY='(?i)\b(BJ|@?schwifty7759)\b[^.?!\n]{0,40}\b(ratify|approve|your (call|nod|go|go-ahead|read|move|sign[\- ]?off|concur))\b[^.?!\n]{0,10}\?'
+# SAFETY negative-guard (cc-workflow#776): never fire when a genuinely-gated axis
+# (prod / deploy / release / ship / go-live / force-push / irreversible / secrets /
+# migration / …) appears ANYWHERE in the turn. NOTE: this matches the whole
+# message, not only the ratify-ask clause — an unrelated mention of a gated term
+# also suppresses. That is deliberately the SAFE direction: this hook's "block"
+# PUSHES the agent to act, so firing on a real prod gate would push an unapproved
+# prod action, violating CLAUDE.md's ABSOLUTE prod rule. A missed nudge
+# (false-negative) is cheap; pushing prod (false-positive) is not — so the axis
+# list is intentionally over-broad. Applied ONLY to this new case — the
+# permission-ask patterns above legitimately catch "should I merge/push?".
+PATTERN_GATED_AXIS='(?i)\b(prod|production|deploy|release|rollout|ship|cut[\- ]?over|go[\- ]?live|force[\- ]?push|publish|promote|rotate|tear[\- ]?down|irreversible|destroy|destructive|drop|wipe|delete|secret|credential|migrat|tag|merge to (main|master|prod)|fleet[\- ]wide)\b'
+
+if printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_CONCLUSION" 2>/dev/null &&
+	printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_RATIFY" 2>/dev/null &&
+	! printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_GATED_AXIS" 2>/dev/null; then
+	cat <<'JSON'
+{"decision":"block","reason":"Per CLAUDE.md MANDATORY: Default to Action + standing authority — you stated a team-converged conclusion AND asked the user to ratify it in the same turn (the concluded-and-asked over-pause). For an already-converged decision in your delegated lane (non-prod, team-aligned, within your standing authority), the converging IS the green light; surfacing it for ratify is the over-pause. Stop ONLY for: (a) a genuinely new irreversible/prod action the user has NOT already agreed to; (b) a real fork where the user's choice changes what gets built; (c) novel risk requiring user-judgment they hold. Otherwise continue by taking the action."}
+JSON
+	exit 0
+fi
+
 exit 0
