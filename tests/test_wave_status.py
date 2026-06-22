@@ -970,6 +970,105 @@ class TestCrossRepoPlanRoundTrip:
             "Wave-Engineering/mcp-server-nerf",
         ]
 
+    _AUTO_INFER_PLAN: dict = {
+        "project": "test-auto-infer",
+        "base_branch": "main",
+        "master_issue": 400,
+        "repo": "Wave-Engineering/claudecode-workflow",
+        "phases": [
+            {
+                # No cross_repo set — must be INFERRED from the qualified-ref issue (#598).
+                "name": "Auto-Infer Phase",
+                "waves": [
+                    {
+                        "id": "wave-1",
+                        "name": "W1",
+                        "issues": [
+                            {"number": 1, "title": "local", "deps": []},
+                            {
+                                "number": 48,
+                                "title": "remote",
+                                "deps": [],
+                                "ref": "Wave-Engineering/mcp-server-discord#48",
+                            },
+                        ],
+                    },
+                ],
+            },
+            {
+                # All-local — must remain WITHOUT the fields (absent, not False).
+                "name": "All-Local Phase",
+                "waves": [
+                    {
+                        "id": "wave-2",
+                        "name": "W2",
+                        "issues": [{"number": 2, "title": "local2", "deps": []}],
+                    },
+                ],
+            },
+        ],
+    }
+
+    def test_init_auto_infers_cross_repo_from_qualified_ref(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """#598: init auto-populates cross_repo + target_repos on a phase whose
+        issues resolve to a non-default repo, and leaves an all-local phase bare."""
+        repo = temp_git_repo
+        _write_plan(repo, self._AUTO_INFER_PLAN)
+
+        rc, _, err = run_cli(["init", "plan.json"], repo)
+        assert rc == 0, f"init failed: {err}"
+
+        persisted = self._read_phases(repo)
+        assert persisted["phases"][0]["cross_repo"] is True
+        assert persisted["phases"][0]["target_repos"] == [
+            "Wave-Engineering/mcp-server-discord",
+        ]
+        # All-local phase must NOT be polluted.
+        assert "cross_repo" not in persisted["phases"][1]
+        assert "target_repos" not in persisted["phases"][1]
+
+    def test_init_does_not_override_explicit_cross_repo(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """#598: an explicit cross_repo (even False) wins — inference must not override."""
+        plan = {
+            "project": "test-explicit-wins",
+            "base_branch": "main",
+            "master_issue": 401,
+            "repo": "Wave-Engineering/claudecode-workflow",
+            "phases": [
+                {
+                    "name": "Explicit False Phase",
+                    "cross_repo": False,  # operator override — must survive
+                    "waves": [
+                        {
+                            "id": "wave-1",
+                            "name": "W1",
+                            "issues": [
+                                {
+                                    "number": 48,
+                                    "title": "remote",
+                                    "deps": [],
+                                    "ref": "Wave-Engineering/mcp-server-discord#48",
+                                },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        }
+        repo = temp_git_repo
+        _write_plan(repo, plan)
+
+        rc, _, err = run_cli(["init", "plan.json"], repo)
+        assert rc == 0, f"init failed: {err}"
+
+        persisted = self._read_phases(repo)
+        assert persisted["phases"][0]["cross_repo"] is False  # not overridden
+        assert "target_repos" not in persisted["phases"][0]
+
     def test_init_extend_round_trips_cross_repo_fields(
         self, temp_git_repo: Path, run_cli
     ) -> None:
