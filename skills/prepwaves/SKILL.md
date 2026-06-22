@@ -42,10 +42,11 @@ Bound by WAVE_AXIOMS 1 and 10 (`WAVE_AXIOMS.md` at the repo root). `/prepwaves` 
 
    Server contract: mcp-server-sdlc#457. Consumer half: cc-workflow#716. Field names are #457's verbatim — read `state`/`classification`/`options`/`recommended`/`residue.kahuna_branches`, not any earlier paraphrase.
 
-1. **Persisted-plan handling — subsumed by the 0.5 residue gate (cc-workflow#716 AC-4).** The former narrow `phases-waves.json` multi-Phase guard is now folded into `wave_campaign_precheck`: an existing persisted plan — including a multi-Phase plan written by `/devspec upshift` — surfaces at step 0.5 as `state == "residue_found"` (its `residue.plan_id` + `pending_waves`/`promoted_waves` reflect the persisted plan), and the operator resolves it there:
+1. **Persisted-plan handling — subsumed by the 0.5 residue gate (cc-workflow#716 AC-4).** The former narrow `phases-waves.json` multi-Phase guard is now folded into `wave_campaign_precheck`: an existing persisted plan — including a multi-Phase plan written by `/devspec upshift` — should surface at step 0.5 as `state == "residue_found"` (its `residue.plan_id` + `pending_waves`/`promoted_waves` reflect the persisted plan), and the operator resolves it there:
    - `preserve_wait` / `preserve_extend` → keep the existing plan; run `/nextwave` to execute it (this replaces the old "persist is unnecessary, run `/nextwave`" message).
    - `replace` → clear it and re-plan from scratch.
    - **Single-Phase re-run** (same `plan_id` re-prepped) needs no stop — `wave_init`'s extend/idempotent path at step 7 handles it; proceed normally.
+   - **On-disk fallback (don't depend on the seam).** If step 0.5 returned `state == "clean"` but `.claude/status/phases-waves.json` exists with `phases.length > 1`, **STOP anyway**: report the persisted multi-Phase plan and tell the user to run `/nextwave` to execute it or delete the file to re-plan. This keeps the multi-Phase guarantee independent of how `wave_campaign_precheck` classifies a persisted-but-unstarted plan (a freshly `/devspec upshift`'d plan with no runtime footprint may read as `clean` if #457 keys residue on runtime signals) — so prepwaves never silently re-plans over an existing multi-Phase topology.
 
 2. **Inputs.** Plan tracking-issue numbers passed by the user (`/prepwaves #2` or `/prepwaves #2 #3 ...`). Each Plan becomes one Phase in `phases-waves.json`.
 3. **Pre-flight readiness table.** For each Plan:
