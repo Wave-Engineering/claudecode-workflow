@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+
+- `/prepwaves` step 0.5 — **campaign residue gate**: calls `wave_campaign_precheck` (server contract mcp-server-sdlc#457) before any sub-agent fan-out or approval and surfaces a prior campaign's residue (`classification` + `residue{plan_id, wavemachine_active, pending_waves, promoted_waves, kahuna_branches}` + `options`/`recommended`) for an operator preserve-wait / preserve-extend / replace choice; nothing is deleted without explicit confirmation. Subsumes the former narrow `phases-waves.json` multi-Phase guard, with an on-disk fallback for defense-in-depth. Closes #716.
+- Kit-canonical docs (`WAVE_AXIOMS.md` + the referenced `docs/*`) are globalized to `~/.claude/` on install, so a `/ccfold`-merged CLAUDE.md resolves them in any repo (single source, no per-repo vendoring). Closes #792.
+
+### Changed
+
+- The **pytest suite now runs in CI** — `scripts/ci/test.sh` on both `pull_request` and `merge_group`. Root-cause fix for the suite rotting unnoticed: it previously ran nowhere in CI. Closes #795 (CI-gating slice; the xfailed-test rewrite remains in #795).
+- Triaged the rotted test suite to green (195 → 0 failed): stale wave-engine skill-tests dispositioned via reasoned `xfail` (logic relocated to `per-wave-workflow.js` by #691 / `WAVE_AXIOMS` by #605; covered by the #785 e2e smoke). Closes #753.
+
 ## [6.0.0] - 2026-06-20
 
 ### Breaking
