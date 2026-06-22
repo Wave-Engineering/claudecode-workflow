@@ -235,4 +235,4 @@ Two layers: **Dev-Team** (persisted here, per-project) and **Dev-Name/Dev-Avatar
 
 Identity files are keyed by md5 hash of the project root directory (`/tmp/claude-agent-<dir_hash>.json`). Any skill or behavior that needs agent identity should resolve this file. The full pick procedure lives in `/name` (`skills/name/SKILL.md`).
 
-Dev-Team: cc-workflow
+Dev-Team: oaw
