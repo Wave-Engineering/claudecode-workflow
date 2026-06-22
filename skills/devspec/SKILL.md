@@ -334,7 +334,7 @@ Call `devspec_locate` (with the user-provided `path` if given; otherwise it sear
 
 ### Step 2: Run the Checks (and commit on pass)
 
-Call `devspec_finalize(path)`. The tool runs all 7 checks and, **when they all pass, commits its own doc writes** (the `docs/*-devspec.md` Dev Spec + any decision-ledger / memory-file updates) as a single `docs(devspec): finalize Dev Spec for Plan #N — <slug>` commit on the current branch — **no push**, and it **refuses to commit on a protected branch** (cc-workflow#604; so finalize writes never linger uncommitted and get swept into the next `/precheck`). Returns:
+Call `devspec_finalize(path)`. The tool runs all 7 checks and, **when they all pass, commits its own doc writes** (the `docs/*-devspec.md` Dev Spec + any decision-ledger / memory-file updates) as a single `docs(devspec): finalize Dev Spec for Plan #N` commit on the current branch — **no push**, and it **refuses to commit on a protected branch** (cc-workflow#604; so finalize writes never linger uncommitted and get swept into the next `/precheck`). Returns:
 
 ```jsonc
 { "ok", "passed", "total", "checks": [{ "id", "name", "passed", "evidence" }, ...],
