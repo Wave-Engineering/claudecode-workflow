@@ -279,7 +279,16 @@ A single wave's issues all resolve to **one repository**. A wave never straddles
 
 ### Why
 
-The wave is the **atomic promotion unit**: it assembles into one `kahuna/<wave-id>` branch, the trust gate evaluates that branch, and it fast-forwards into *that repo's* `main`. `kahuna` and its `main` live in one repo. A wave spanning two repos would need two kahuna branches and two ff-into-main promotions — and there is **no two-phase commit across git remotes**, so the two mains can never be promoted atomically. There is always a window where one repo's main has the change and the other's does not — the exact broken intermediate the gate exists to prevent. The coordinated cross-repo contract change is not a counter-example: its correct shape is **expand-contract across serial phases** (repo A ships a backward-compatible expand → repo B consumes it → repo A contracts), each phase's waves single-repo and independently promotable.
+The wave is the **atomic promotion unit**: it assembles into one `kahuna/<wave-id>` branch, the trust gate evaluates that branch, and it fast-forwards into *that repo's* `main`. `kahuna` and its `main` live in one repo.
+
+**The load-bearing reason is the single commit point.** Atomicity requires one commit point that every participant obeys. Two independent git remotes do not have one — git has no cross-remote two-phase-commit primitive, and you cannot bolt one on without changing what "the repo" is. The workarounds that *look* like a fix do not give git atomicity; they relocate or fake it:
+
+- A **saga** (ff repo A, ff repo B, revert A if B fails) is eventual consistency with a compensating step, **not** atomicity — during the window between the two fast-forwards a consumer can observe A-has-it / B-does-not: the exact broken intermediate the gate exists to prevent.
+- An **external coordinator / release flag** moves the single commit point *out of git* — the flag becomes the atomic thing and the two `main`s become downstream replicas that still diverge. Git is now a follower, not the atomic authority.
+
+The only shapes that actually *have* a single commit point are (a) collapse the two into **one repo** — then it is one repo, not a straddling wave — or (b) appoint an **external authority** — then git is not the thing being promoted atomically. There is no third door. So **single-repo-per-wave is not a limitation the axiom settles for; it is the only shape in which the promotion is atomic at all.**
+
+The coordinated cross-repo contract change is not a counter-example: its correct shape is **expand-contract across serial phases** (repo A ships a backward-compatible expand → repo B consumes it → repo A contracts), each phase's waves single-repo and independently promotable. Expand-contract is the answer *because* cross-remote atomicity genuinely is not available to be had.
 
 ### How to apply
 
@@ -288,6 +297,7 @@ The wave is the **atomic promotion unit**: it assembles into one `kahuna/<wave-i
 **Forbidden:**
 - Grouping issues from two repos into one wave.
 - "It's just a small cross-repo tweak" — there is still no atomic two-remote promotion; split it into serial phases.
+- **Routing around this with a saga (sequential ffs + compensating revert) or an external coordinator/flag and calling the result atomic.** The saga has an observable window; the coordinator relocates the commit point out of git. Neither is git atomicity — do not "saga your way around" the single-repo rule.
 
 **See:** Axiom 1 (serial is a valid topology), `lesson_cross_repo_wave_orchestration.md`, the prepwaves cross-repo detection step.
 
