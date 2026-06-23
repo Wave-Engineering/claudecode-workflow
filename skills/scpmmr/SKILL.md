@@ -19,7 +19,7 @@ Requires `/precheck` first — invoking `/scpmmr` after `/precheck` is approval 
 
 1. Run `/scp` — creates the PR/MR via `pr_create`
 2. Run `/mmr` — targets the just-created PR/MR. Handles merge-queue auto-fallback internally via `pr_merge` (no `--admin` flag needed). Post-merge `ci_wait_run(ref: "main", timeout_sec: 1800)` confirms the main-branch pipeline lands clean.
-3. `vox` announcement (best-effort): identity from `/tmp/claude-agent-<md5>.json`, then name/team/project/issue/PR/"merged into main"
+3. `vox` announcement (best-effort): identity from `<project_root>/.claude/agent-identity.json` (fallback: `/tmp/claude-agent-<md5>.json`), then name/team/project/issue/PR/"merged into main"
 
 ## Important
 

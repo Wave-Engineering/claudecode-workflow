@@ -104,22 +104,21 @@ Common causes:
 
 **Cause:** This is by design, not a bug. Session identity (Dev-Name and Dev-Avatar) is intentionally **ephemeral** -- a new Claude Code window always means a new identity. Only Dev-Team is persisted (in CLAUDE.md).
 
-The identity file at `/tmp/claude-agent-<hash>.json` is keyed by the md5 hash of the project root directory. It persists across context compactions within the same session but does not survive across separate Claude Code sessions. When a new session starts, the agent picks a fresh identity and overwrites the file.
+The identity file lives at `<project_root>/.claude/agent-identity.json` — reboot-durable, gitignored. It persists across sessions and reboots for the same checkout. Re-running `/name` overwrites it with a fresh pick; the file is keyed by project root (not session or PID), so all skills and the statusline find it regardless of process ancestry.
 
-**If identity is not persisting even within a single session:**
+**If identity is not persisting:**
 
-- **Wrong project root.** If `git rev-parse --show-toplevel` returns different paths (e.g., because of symlinks or worktrees), the md5 hash differs and the agent writes to a different file.
-- **`/tmp` cleared.** Some systems clean `/tmp` aggressively. If the file is deleted mid-session, the agent loses its identity.
-- **Permissions.** If the agent cannot write to `/tmp`, the identity file is not created.
+- **Wrong project root.** If `git rev-parse --show-toplevel` returns different paths (e.g., because of symlinks or worktrees), the path differs and the agent writes to a different file.
+- **`.claude/` not writable.** If the agent cannot write to `<project_root>/.claude/`, the identity file is not created. Check directory permissions.
+- **Legacy `/tmp` file stale.** Before the fleet fully cycles to the new writer, some sessions may still only have the old `/tmp/claude-agent-<md5>.json`. Readers fall back to it automatically; run `/name` to write the durable file.
 
 **Fix:**
 
-1. If you want the same Dev-Name across sessions, there is no built-in mechanism for this -- it is intentionally ephemeral. You can ask the agent to pick a specific name at session start.
-2. For within-session persistence issues, check the identity file directly:
+1. To keep the same Dev-Name across sessions, run `/name` once — the durable file persists. Re-running `/name` re-rolls a new name.
+2. Check the identity file directly:
    ```bash
    project_root=$(git rev-parse --show-toplevel)
-   dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
-   cat "/tmp/claude-agent-${dir_hash}.json"
+   cat "${project_root}/.claude/agent-identity.json"
    ```
 3. If the file is missing or has wrong content, run `/name` to re-establish identity.
 4. For worktree issues, verify that `git rev-parse --show-toplevel` returns the expected path from within your working directory.

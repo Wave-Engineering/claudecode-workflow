@@ -71,7 +71,7 @@ Reports the current session identity (Dev-Name, Dev-Avatar, Dev-Team) or picks a
 
 No arguments. If an identity file exists for this project, it reports the current identity. If not, it picks a new Dev-Name and Dev-Avatar, writes them to the identity file, and announces itself.
 
-**Key detail:** Identity is keyed by project root (via md5 hash), not by process ID. All skills and scripts resolve the same file regardless of process ancestry.
+**Key detail:** Identity is stored at `<project_root>/.claude/agent-identity.json` (reboot-durable, gitignored), keyed by project root, not process ID. All skills and scripts resolve the same file regardless of process ancestry. A legacy `/tmp/claude-agent-<md5>.json` fallback is read during the transition window.
 
 ---
 

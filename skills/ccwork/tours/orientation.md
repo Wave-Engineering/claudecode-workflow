@@ -94,12 +94,15 @@ Narration: "Sessions have a rhythm: start, work, compact, resume. Durable state 
 
 ```bash
 project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
-agent_file="/tmp/claude-agent-${dir_hash}.json"
+agent_file="${project_root}/.claude/agent-identity.json"
+if [ ! -f "$agent_file" ]; then
+    dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+    agent_file="/tmp/claude-agent-${dir_hash}.json"
+fi
 cat "$agent_file" 2>/dev/null || echo "(no identity file — run /name to create one)"
 ```
 
-Narration: "Your identity file tracks who you are this session — Dev-Name, Dev-Avatar, and Dev-Team. It's ephemeral (new session, new name) but the Dev-Team is persisted in CLAUDE.md."
+Narration: "Your identity file tracks who you are — Dev-Name, Dev-Avatar, and Dev-Team. It lives at `<project_root>/.claude/agent-identity.json` and survives reboots. Re-running `/name` rolls a fresh name. Dev-Team is also persisted in CLAUDE.md."
 
 For the full explanation of the two-layer identity system, see [Identity System](../../../docs/concepts.md#identity-system) in Concepts.
 

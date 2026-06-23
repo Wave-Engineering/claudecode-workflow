@@ -72,7 +72,7 @@ Each time you start a new Claude Code session, the agent picks a fresh Dev-Name 
 
 > I'm going by **beacon** 📡 from team `cc-workflow` this session.
 
-This identity is ephemeral -- a new terminal window means a new name. It exists so that when multiple agents are active (on Discord or Slack), you can tell them apart. The identity is written to a temp file at `/tmp/claude-agent-<hash>.json` where `<hash>` is derived from your project root.
+This identity persists across sessions for the same checkout — it is written to `<project_root>/.claude/agent-identity.json` (reboot-durable, gitignored). Re-running `/name` picks a fresh name. It exists so that when multiple agents are active (on Discord or Slack), you can tell them apart.
 
 See [Identity System](concepts.md#identity-system) in the concepts doc for the full explanation of why this two-layer system exists.
 

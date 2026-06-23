@@ -179,7 +179,7 @@ If the entry **corrects** a prior entry (new evidence, factual fix), include `**
 
 1. **Compute the next monotonic ID.** Re-read the Plan issue's comments just before posting (to catch concurrent writes); find the max existing `D-NNN`; post as `D-(max+1)`. The Tier 2 lint validator (cc-workflow#501) will flag collisions if two tools race.
 2. **Compose the body** following the §5.2.1 schema above. Source is the canonical `/devspec §X.Y` form; if the decision pins a specific requirement, use `/devspec §X.Y R-NN`.
-3. **Resolve agent identity.** Read the session identity file at `/tmp/claude-agent-<md5(repo-root)>.json` for `Dev-Name`, `Dev-Avatar`, and the project's `Dev-Team` from `CLAUDE.md`. These populate the signature line.
+3. **Resolve agent identity.** Read `<project_root>/.claude/agent-identity.json` for `Dev-Name`, `Dev-Avatar`, and the project's `Dev-Team` from `CLAUDE.md` (fallback: `/tmp/claude-agent-<md5(repo-root)>.json`). These populate the signature line.
 4. **Post the comment** by invoking the `pr_comment` MCP tool (`mcp__sdlc-server__pr_comment`) with `{ number: <plan_id>, body: <rendered ledger entry> }`. On GitHub and GitLab the tool targets the unified issue/PR comment stream, so it works for issue comments too.
 5. **When to write entries** — per Dev Spec §5.2.2, write a `[ledger D-NNN]` comment for each of:
    - Pair approves a §1.5 non-goal

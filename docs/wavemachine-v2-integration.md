@@ -54,7 +54,7 @@ All live scenarios assume:
 - **Clean bus state** before each run: `rm -rf /tmp/wavemachine/<repo-slug>`
   and `wave-status init` (or the campaign equivalent) from scratch.
 - **Clean working tree** on the target repo's base branch.
-- Identity file at `/tmp/claude-agent-<md5>.json` resolved via `/name` so
+- Identity file at `<project_root>/.claude/agent-identity.json` resolved via `/name` so
   Discord announcements include the agent label.
 - Commands are quoted with the wave root in angle brackets — substitute the
   actual path printed by `scripts/wavebus-wave-init`.
