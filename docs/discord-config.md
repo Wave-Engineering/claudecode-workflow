@@ -15,10 +15,12 @@ their agents at their own Discord server without modifying source.
   "guild_id": "1234567890",
   "token_path": "~/secrets/discord-bot-token",
   "scream_hole_url": "http://scream-hole:3000",
+  "default_channel_id": "1487288523638837268",
+  "roll_call_channel_id": "1487382005036617851",
   "channels": {
-    "default":         { "name": "agent-ops",        "id": "1234567890" },
-    "roll-call":       { "name": "roll-call",        "id": "1234567890" },
-    "wave-status":     { "name": "wave-status",      "id": "1234567890" }
+    "agent-ops":   "1487288523638837268",
+    "roll-call":   "1487382005036617851",
+    "wave-status": "1487386934094462986"
   }
 }
 ```
@@ -30,9 +32,9 @@ their agents at their own Discord server without modifying source.
 | `guild_id` | string | Yes | Discord server (guild) ID |
 | `token_path` | string | No | Path to bot token file (default: `~/secrets/discord-bot-token`) |
 | `scream_hole_url` | string | No | Base URL of a [scream-hole](https://github.com/Wave-Engineering/scream-hole) proxy (e.g., `http://scream-hole:3000`). When set, `disc-server` MCP and `discord-watcher` route Discord REST API calls through the proxy instead of hitting Discord directly. Omit to use direct Discord API. |
-| `channels` | object | Yes | Map of channel roles to channel info |
-| `channels.<role>.name` | string | Yes | Human-readable channel name (without `#`) |
-| `channels.<role>.id` | string | Yes | Discord channel snowflake ID |
+| `default_channel_id` | string | Yes | Snowflake ID of the channel playing the **default** role |
+| `roll_call_channel_id` | string | Yes | Snowflake ID of the channel playing the **roll-call** role |
+| `channels` | object | Yes | **Flat** map of channel name → snowflake ID *string* (e.g. `{"agent-ops":"148…","roll-call":"148…"}`). Keyed by real Discord channel names, NOT roles; values are bare id strings, NOT nested objects. |
 
 ### Channel Roles
 
@@ -55,9 +57,9 @@ Every component reads configuration using a three-level fallback:
 | Variable | Overrides | Default |
 |----------|-----------|---------|
 | `DISCORD_GUILD_ID` | `guild_id` | `1486516321385578576` |
-| `DISCORD_DEFAULT_CHANNEL` | `channels.default.id` | `1487288523638837268` |
-| `DISCORD_ROLL_CALL_CHANNEL` | `channels.roll-call.id` | `1487382005036617851` |
-| `DISCORD_WAVE_STATUS_CHANNEL` | `channels.wave-status.id` | `1487386934094462986` |
+| `DISCORD_DEFAULT_CHANNEL` | `default_channel_id` | `1487288523638837268` |
+| `DISCORD_ROLL_CALL_CHANNEL` | `roll_call_channel_id` | `1487382005036617851` |
+| `DISCORD_WAVE_STATUS_CHANNEL` | `channels["wave-status"]` | `1487386934094462986` |
 | `DISCORD_TOKEN_PATH` | `token_path` | `~/secrets/discord-bot-token` |
 | `SCREAM_HOLE_URL` | `scream_hole_url` | *(disabled)* |
 
