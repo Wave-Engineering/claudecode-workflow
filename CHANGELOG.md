@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [6.1.0] - 2026-06-23
+
+### Fixed
+
+- Corrected the `discord.json` channel schema (nested → flat) across the disc reader (`/disc`), the ccwork writer (`/ccwork discord`), and the `docs/discord-config.md` contract doc. The canonical config uses top-level `default_channel_id`/`roll_call_channel_id` + a flat `channels` name→id string map; the skills previously read/wrote the stale nested `channels.<role>.{id,name}` shape, so `/ccwork`-generated configs were unreadable by `/disc` and config edits were silently ignored in favor of baked-in IDs. Closes #806.
+
 ### Added
 
 - `/prepwaves` step 0.5 — **campaign residue gate**: calls `wave_campaign_precheck` (server contract mcp-server-sdlc#457) before any sub-agent fan-out or approval and surfaces a prior campaign's residue (`classification` + `residue{plan_id, wavemachine_active, pending_waves, promoted_waves, kahuna_branches}` + `options`/`recommended`) for an operator preserve-wait / preserve-extend / replace choice; nothing is deleted without explicit confirmation. Subsumes the former narrow `phases-waves.json` multi-Phase guard, with an on-disk fallback for defense-in-depth. Closes #716.
