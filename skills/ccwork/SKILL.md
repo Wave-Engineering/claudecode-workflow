@@ -570,7 +570,7 @@ claude mcp list 2>/dev/null | grep -q discord-watcher
 
 This is informational — the setup is complete regardless. The watcher is needed for agents to receive Discord messages during sessions but isn't required for outbound `/disc` calls.
 
-- **If it works:** Confirm: *"Discord configuration complete. Test message sent to #<CHANNEL_NAME>. You can now use `/disc` to interact with your server."*
+- **If it works:** Confirm: *"Discord configuration complete. Test message sent to the default channel. You can now use `/disc` to interact with your server."*
 - **If it fails:** Help troubleshoot (permissions, channel ID mismatch, token issues). The config file has been written — the user can fix the issue and retry with `/ccwork setup discord`.
 
 See [Discord Configuration](docs/discord-config.md) for the full schema reference and per-team scoping strategies.
