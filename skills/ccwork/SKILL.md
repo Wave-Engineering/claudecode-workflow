@@ -527,24 +527,25 @@ cat > ~/.claude/discord.json << 'EOF'
 {
   "guild_id": "<collected>",
   "token_path": "<collected>",
+  "default_channel_id": "<id of the channel assigned the default role>",
+  "roll_call_channel_id": "<id of the channel assigned the roll-call role>",
   "channels": {
-    "default":         { "name": "<name>", "id": "<id>" },
-    "roll-call":       { "name": "<name>", "id": "<id>" },
-    "wave-status":     { "name": "<name>", "id": "<id>" }
+    "<default channel name>":   "<id>",
+    "<roll-call channel name>": "<id>",
+    "<wave-status channel name>": "<id>"
   }
 }
 EOF
 ```
 
-Only include `wave-status` if the user assigned it. The config must match the schema in `docs/discord-config.md`.
+Schema notes (must match `docs/discord-config.md`): `channels` is a **flat name→id string map** keyed by the real Discord channel names (NOT roles, NOT nested objects). The two mandatory roles are recorded as top-level pointers — `default_channel_id` / `roll_call_channel_id` — into that map. Only include `wave-status` in `channels` if the user assigned it.
 
 ### Step 7: Verify
 
-Send a test message to the default channel to confirm the full pipeline works. Resolve the channel ID and name from the just-written config (the `default` key in `channels` is a *role*, not a channel name — the actual Discord channel name and ID live under `.channels.default.id` / `.channels.default.name`):
+Send a test message to the default channel to confirm the full pipeline works. The default channel id is the top-level `default_channel_id` pointer:
 
 ```bash
-CHANNEL_ID=$(jq -r '.channels.default.id' ~/.claude/discord.json)
-CHANNEL_NAME=$(jq -r '.channels.default.name' ~/.claude/discord.json)
+CHANNEL_ID=$(jq -r '.default_channel_id' ~/.claude/discord.json)
 ```
 
 Then call:
@@ -569,7 +570,7 @@ claude mcp list 2>/dev/null | grep -q discord-watcher
 
 This is informational — the setup is complete regardless. The watcher is needed for agents to receive Discord messages during sessions but isn't required for outbound `/disc` calls.
 
-- **If it works:** Confirm: *"Discord configuration complete. Test message sent to #<CHANNEL_NAME>. You can now use `/disc` to interact with your server."*
+- **If it works:** Confirm: *"Discord configuration complete. Test message sent to the default channel. You can now use `/disc` to interact with your server."*
 - **If it fails:** Help troubleshoot (permissions, channel ID mismatch, token issues). The config file has been written — the user can fix the issue and retry with `/ccwork setup discord`.
 
 See [Discord Configuration](docs/discord-config.md) for the full schema reference and per-team scoping strategies.
