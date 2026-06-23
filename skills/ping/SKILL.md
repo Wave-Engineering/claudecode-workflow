@@ -23,7 +23,7 @@ Follow these steps exactly, in order.
 Identity is managed by the Agent Identity system defined in `CLAUDE.md`. Resolve the identity file (keyed by project root, not PID) and load it:
 
 ```bash
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+project_root=$(pwd)
 agent_file="${project_root}/.claude/agent-identity.json"
 if [ ! -f "$agent_file" ]; then
     dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
@@ -39,7 +39,7 @@ cat "$agent_file" 2>/dev/null
 2. Pick a `dev_name` and `dev_avatar` following the naming rules in the Agent Identity section of `CLAUDE.md`.
 3. Persist to the resolved identity file:
    ```bash
-   project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+   project_root=$(pwd)
    mkdir -p "${project_root}/.claude"
    cat > "${project_root}/.claude/agent-identity.json" << 'EOF'
    {
@@ -81,7 +81,7 @@ To reply in an existing thread, append `--thread <thread_ts>`.
 
 On success, `slackbot-send` outputs the message `ts`. Save it as `last_thread_ts` in the identity file:
 ```bash
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+project_root=$(pwd)
 agent_file="${project_root}/.claude/agent-identity.json"
 if [ ! -f "$agent_file" ]; then
     dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)

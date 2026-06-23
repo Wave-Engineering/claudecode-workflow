@@ -20,7 +20,7 @@ You are reading recent activity from the `#ai-dev` Slack channel.
 Resolve the identity file (keyed by project root, not PID) and load it if it exists — you don't need to pick one just to read, but knowing who you are helps you contextualise messages addressed to your team.
 
 ```bash
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+project_root=$(pwd)
 agent_file="${project_root}/.claude/agent-identity.json"
 if [ ! -f "$agent_file" ]; then
     dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
@@ -64,7 +64,7 @@ Use the Slack API via `curl` or the project's helper scripts to fetch channel hi
 
 Use the Slack API to fetch thread replies for the provided timestamp. Then save it as `last_thread_ts` in the identity file:
 ```bash
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+project_root=$(pwd)
 agent_file="${project_root}/.claude/agent-identity.json"
 if [ ! -f "$agent_file" ]; then
     dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)

@@ -27,7 +27,7 @@ Indicators are joined with spaces. Keep each one short (aim for 8 characters or 
 The identity file lives at `<project_root>/.claude/agent-identity.json` (reboot-durable). Fall back to the legacy `/tmp/claude-agent-<md5>.json` if absent (transition window):
 
 ```bash
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+project_root=$(pwd)
 agent_file="${project_root}/.claude/agent-identity.json"
 if [ ! -f "$agent_file" ]; then
     dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)

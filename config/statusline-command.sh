@@ -70,7 +70,7 @@ dev_name=""
 dev_avatar=""
 project_root=""
 if [ -n "$cwd" ]; then
-	project_root=$(GIT_OPTIONAL_LOCKS=0 git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || echo "$cwd")
+	project_root="${cwd}"
 	agent_file="${project_root}/.claude/agent-identity.json"
 	if [ ! -f "$agent_file" ]; then
 		dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)

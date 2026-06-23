@@ -108,7 +108,7 @@ The identity file lives at `<project_root>/.claude/agent-identity.json` — rebo
 
 **If identity is not persisting:**
 
-- **Wrong project root.** If `git rev-parse --show-toplevel` returns different paths (e.g., because of symlinks or worktrees), the path differs and the agent writes to a different file.
+- **Wrong project root.** Skills resolve root via `pwd` (the session working directory). If the agent has changed directories mid-session, `pwd` may differ from the original project root — the path will differ and the agent writes to a different file.
 - **`.claude/` not writable.** If the agent cannot write to `<project_root>/.claude/`, the identity file is not created. Check directory permissions.
 - **Legacy `/tmp` file stale.** Before the fleet fully cycles to the new writer, some sessions may still only have the old `/tmp/claude-agent-<md5>.json`. Readers fall back to it automatically; run `/name` to write the durable file.
 
@@ -117,11 +117,10 @@ The identity file lives at `<project_root>/.claude/agent-identity.json` — rebo
 1. To keep the same Dev-Name across sessions, run `/name` once — the durable file persists. Re-running `/name` re-rolls a new name.
 2. Check the identity file directly:
    ```bash
-   project_root=$(git rev-parse --show-toplevel)
-   cat "${project_root}/.claude/agent-identity.json"
+   cat ".claude/agent-identity.json"
    ```
 3. If the file is missing or has wrong content, run `/name` to re-establish identity.
-4. For worktree issues, verify that `git rev-parse --show-toplevel` returns the expected path from within your working directory.
+4. For worktree issues, ensure you're operating from the project root (not a subdirectory) so `pwd` matches `CLAUDE_PROJECT_DIR`.
 
 ---
 
