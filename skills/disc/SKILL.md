@@ -15,7 +15,7 @@ usage: |
 
 Route all /disc intents to `disc-server` MCP tool calls.
 
-**Resolve identity** — read `/tmp/claude-agent-<md5(project_root)>.json` for `dev_name`, `dev_avatar`, `dev_team` (defaults: Claude, 🤖, unknown).
+**Resolve identity** — read `<project_root>/.claude/agent-identity.json` for `dev_name`, `dev_avatar`, `dev_team` (defaults: Claude, 🤖, unknown). Fall back to `/tmp/claude-agent-<md5(project_root)>.json` if the durable file is absent (transition window).
 
 **Resolve channel/guild** — read `~/.claude/discord.json`. `.channels` is a flat name→id **string** map (`{"general":"…","roll-call":"…"}`), so read:
 - guild → `.guild_id`

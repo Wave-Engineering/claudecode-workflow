@@ -24,12 +24,16 @@ Indicators are joined with spaces. Keep each one short (aim for 8 characters or 
 
 ## Resolving dev_name
 
-The identity file is keyed by the md5 hash of the project root:
+The identity file lives at `<project_root>/.claude/agent-identity.json` (reboot-durable). Fall back to the legacy `/tmp/claude-agent-<md5>.json` if absent (transition window):
 
 ```bash
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
-dev_name=$(jq -r '.dev_name // empty' "/tmp/claude-agent-${dir_hash}.json" 2>/dev/null)
+project_root=$(pwd)
+agent_file="${project_root}/.claude/agent-identity.json"
+if [ ! -f "$agent_file" ]; then
+    dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+    agent_file="/tmp/claude-agent-${dir_hash}.json"
+fi
+dev_name=$(jq -r '.dev_name // empty' "$agent_file" 2>/dev/null)
 ```
 
 ## Writing Indicators
@@ -37,7 +41,7 @@ dev_name=$(jq -r '.dev_name // empty' "/tmp/claude-agent-${dir_hash}.json" 2>/de
 **Always write atomically** (temp file + rename) to avoid the statusline reading a half-written file:
 
 ```bash
-dev_name=$(jq -r '.dev_name // empty' "/tmp/claude-agent-${dir_hash}.json" 2>/dev/null)
+dev_name=$(jq -r '.dev_name // empty' "$agent_file" 2>/dev/null)
 tmp=$(mktemp)
 echo '{"indicators": ["● REC", "W2 3/5"]}' > "$tmp"
 mv "$tmp" "/tmp/claude-statusline-${dev_name}.json"
@@ -52,8 +56,10 @@ def set_indicators(indicators: list[str]):
     root = subprocess.check_output(
         ["git", "rev-parse", "--show-toplevel"], text=True
     ).strip()
-    dir_hash = hashlib.md5(root.encode()).hexdigest()
-    agent_file = f"/tmp/claude-agent-{dir_hash}.json"
+    agent_file = os.path.join(root, ".claude", "agent-identity.json")
+    if not os.path.exists(agent_file):
+        dir_hash = hashlib.md5(root.encode()).hexdigest()
+        agent_file = f"/tmp/claude-agent-{dir_hash}.json"
     with open(agent_file) as f:
         dev_name = json.load(f).get("dev_name", "")
     if not dev_name:

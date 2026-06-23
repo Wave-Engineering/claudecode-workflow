@@ -64,15 +64,18 @@ shortcode_to_emoji() {
 }
 
 # --- Agent identity ---
-# Identity files are keyed by md5 of the project root so the statusline
-# resolves the correct agent regardless of process ancestry.
+# Resolve from project-local durable path first; fall back to legacy /tmp path
+# (transition window — remove fallback after fleet has cycled to the new writer).
 dev_name=""
 dev_avatar=""
 project_root=""
 if [ -n "$cwd" ]; then
-	project_root=$(GIT_OPTIONAL_LOCKS=0 git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || echo "$cwd")
-	dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
-	agent_file="/tmp/claude-agent-${dir_hash}.json"
+	project_root="${cwd}"
+	agent_file="${project_root}/.claude/agent-identity.json"
+	if [ ! -f "$agent_file" ]; then
+		dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+		agent_file="/tmp/claude-agent-${dir_hash}.json"
+	fi
 	if [ -f "$agent_file" ]; then
 		dev_name=$(jq -r '.dev_name // empty' "$agent_file" 2>/dev/null)
 		dev_avatar=$(shortcode_to_emoji "$(jq -r '.dev_avatar // empty' "$agent_file" 2>/dev/null)")

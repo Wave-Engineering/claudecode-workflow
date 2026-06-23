@@ -66,9 +66,9 @@ The identity system has two layers that mirror the distinction between project-l
 
 **What:** A memorable name (e.g., `beacon`, `null-pointer`, `mother`) and a Unicode emoji (e.g., 📡, 💀, 🔮).
 
-**Where it lives:** Written to a temp file at `/tmp/claude-agent-<hash>.json`, where `<hash>` is the md5 of the project root path.
+**Where it lives:** Written to `<project_root>/.claude/agent-identity.json` — reboot-durable, gitignored, keyed by project root (not session or PID).
 
-**Lifecycle:** Picked fresh every session. A new Claude Code window means a new identity. The temp file is keyed by project root (not process ID), so the statusline and all skills can find it regardless of process ancestry.
+**Lifecycle:** Persists across sessions for the same checkout. Re-running `/name` overwrites with a fresh pick. The statusline and all skills resolve it the same way regardless of process ancestry.
 
 **Why it exists:** Dev-Name provides session-level addressing. When two agents are both working on `cc-workflow`, you need a way to talk to a specific one -- `@beacon` reaches only the agent that picked that name this session. The ephemeral nature is intentional: it prevents stale identity references and makes the channel feel alive rather than static.
 
@@ -83,7 +83,7 @@ CLAUDE.md (Dev-Team: cc-workflow)
 Session start: Claude picks Dev-Name + Dev-Avatar
         |
         v
-/tmp/claude-agent-<hash>.json
+<project_root>/.claude/agent-identity.json
   {
     "dev_team": "cc-workflow",
     "dev_name": "beacon",

@@ -19,7 +19,7 @@ Requires `/precheck` first — invoking `/scpmr` after `/precheck` is approval t
 
 1. Run `/scp` — delegates to the rewritten skill; creates the PR/MR
 2. Stop — report the PR/MR URL. User can run `/mmr` later when ready.
-3. `vox` announcement (best-effort): identity from `/tmp/claude-agent-<md5>.json`, then name/team/project/issue/PR/"pushed and CI is running"
+3. `vox` announcement (best-effort): identity from `<project_root>/.claude/agent-identity.json` (fallback: `/tmp/claude-agent-<md5>.json`), then name/team/project/issue/PR/"pushed and CI is running"
 
 Do NOT merge — that's the distinction from `/scpmmr`. Convenience shortcut; does NOT skip any safety checks.
 

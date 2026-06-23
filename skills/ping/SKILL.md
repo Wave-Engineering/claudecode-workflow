@@ -23,9 +23,12 @@ Follow these steps exactly, in order.
 Identity is managed by the Agent Identity system defined in `CLAUDE.md`. Resolve the identity file (keyed by project root, not PID) and load it:
 
 ```bash
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
-agent_file="/tmp/claude-agent-${dir_hash}.json"
+project_root=$(pwd)
+agent_file="${project_root}/.claude/agent-identity.json"
+if [ ! -f "$agent_file" ]; then
+    dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+    agent_file="/tmp/claude-agent-${dir_hash}.json"
+fi
 cat "$agent_file" 2>/dev/null
 ```
 
@@ -36,9 +39,9 @@ cat "$agent_file" 2>/dev/null
 2. Pick a `dev_name` and `dev_avatar` following the naming rules in the Agent Identity section of `CLAUDE.md`.
 3. Persist to the resolved identity file:
    ```bash
-   project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-   dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
-   cat > "/tmp/claude-agent-${dir_hash}.json" << 'EOF'
+   project_root=$(pwd)
+   mkdir -p "${project_root}/.claude"
+   cat > "${project_root}/.claude/agent-identity.json" << 'EOF'
    {
      "dev_team": "<resolved team>",
      "dev_name": "<your chosen name>",
@@ -78,9 +81,12 @@ To reply in an existing thread, append `--thread <thread_ts>`.
 
 On success, `slackbot-send` outputs the message `ts`. Save it as `last_thread_ts` in the identity file:
 ```bash
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
-agent_file="/tmp/claude-agent-${dir_hash}.json"
+project_root=$(pwd)
+agent_file="${project_root}/.claude/agent-identity.json"
+if [ ! -f "$agent_file" ]; then
+    dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+    agent_file="/tmp/claude-agent-${dir_hash}.json"
+fi
 jq --arg ts "<returned_ts>" '. + {last_thread_ts: $ts}' "$agent_file" > "${agent_file}.tmp" && mv "${agent_file}.tmp" "$agent_file"
 ```
 
@@ -97,5 +103,5 @@ On failure, show the error verbatim. Do not retry automatically.
 
 - The bot token is read automatically from `~/secrets/slack-bot-token`.
 - Identity is managed by the Agent Identity section in `CLAUDE.md`. This skill is a consumer of that system, not the owner.
-- Identity is stable for the life of this session (keyed by md5 of project root). A new CC window = new identity.
+- Identity is stable for the life of a checkout (keyed by project root). A new CC window resolves the same durable file. Re-running `/name` overwrites it with a fresh pick.
 - The `Dev-Team` label appears in brackets after the name so channel readers know what project the agent is from.

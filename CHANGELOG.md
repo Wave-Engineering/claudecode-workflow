@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+
+- Agent identity now stored at `<project_root>/.claude/agent-identity.json` (reboot-durable, gitignored) instead of `/tmp/claude-agent-<md5>.json`. All readers fall back to the legacy `/tmp` path during the transition window. Closes #723.
+
 ## [6.1.0] - 2026-06-23
 
 ### Fixed

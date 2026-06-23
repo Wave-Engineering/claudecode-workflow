@@ -171,12 +171,10 @@ class TestStatuslineSessionIndicator:
 
     def test_statusline_session_indicator(self, tmp_path: Path):
         """Per-session file indicators appear as the first element on line 1."""
-        # Create a mock agent identity file
-        project_root = str(tmp_path)
-        import hashlib
-
-        dir_hash = hashlib.md5(project_root.encode()).hexdigest()
-        agent_file = Path(f"/tmp/claude-agent-{dir_hash}.json")
+        # Create a mock agent identity file at the project-local durable path
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        agent_file = claude_dir / "agent-identity.json"
         agent_file.write_text(
             json.dumps(
                 {
@@ -226,11 +224,9 @@ class TestStatuslineUnicodeAvatar:
 
     def test_statusline_unicode_avatar(self, tmp_path: Path):
         """Unicode emoji from identity file renders on line 1."""
-        import hashlib
-
-        project_root = str(tmp_path)
-        dir_hash = hashlib.md5(project_root.encode()).hexdigest()
-        agent_file = Path(f"/tmp/claude-agent-{dir_hash}.json")
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        agent_file = claude_dir / "agent-identity.json"
         agent_file.write_text(
             json.dumps(
                 {
@@ -267,11 +263,9 @@ class TestStatuslineColors:
 
     def test_dev_name_fuchsia(self, tmp_path: Path):
         """Dev-name renders with fuchsia color (38;5;13)."""
-        import hashlib
-
-        project_root = str(tmp_path)
-        dir_hash = hashlib.md5(project_root.encode()).hexdigest()
-        agent_file = Path(f"/tmp/claude-agent-{dir_hash}.json")
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        agent_file = claude_dir / "agent-identity.json"
         agent_file.write_text(
             json.dumps(
                 {
@@ -294,6 +288,38 @@ class TestStatuslineColors:
             )
         finally:
             agent_file.unlink(missing_ok=True)
+
+    def test_statusline_falls_back_to_tmp_identity(self, tmp_path: Path):
+        """When project-local identity file is absent, legacy /tmp path is used."""
+        import hashlib
+
+        project_root = str(tmp_path)
+        dir_hash = hashlib.md5(project_root.encode()).hexdigest()
+        legacy_file = Path(f"/tmp/claude-agent-{dir_hash}.json")
+        legacy_file.write_text(
+            json.dumps(
+                {
+                    "dev_team": "test-team",
+                    "dev_name": "legacy-beacon",
+                    "dev_avatar": "📡",
+                }
+            )
+        )
+
+        try:
+            subprocess.run(
+                ["git", "init"], cwd=str(tmp_path), capture_output=True, check=True
+            )
+
+            # No .claude/agent-identity.json written — only the legacy /tmp file exists
+            output = _run_statusline({"cwd": str(tmp_path)}, cwd=tmp_path)
+            clean = _strip_ansi(output)
+
+            assert "legacy-beacon" in clean, (
+                f"Expected dev-name from legacy /tmp fallback, got: {clean!r}"
+            )
+        finally:
+            legacy_file.unlink(missing_ok=True)
 
     def test_ctx_remaining_green_when_safe(self, tmp_path: Path):
         """Context remaining >25% renders green (01;32)."""

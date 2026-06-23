@@ -456,9 +456,11 @@ def resolve_dev_team() -> str:
     """Resolve dev-team: agent identity file → CLAUDE.md → 'unknown'."""
     try:
         root = get_project_root()
-        # 1. Agent identity file
-        dir_hash = hashlib.md5(str(root).encode()).hexdigest()
-        agent_file = Path(f"/tmp/claude-agent-{dir_hash}.json")
+        # 1. Agent identity file — durable path first, legacy /tmp fallback
+        agent_file = root / ".claude" / "agent-identity.json"
+        if not agent_file.exists():
+            dir_hash = hashlib.md5(str(root).encode()).hexdigest()
+            agent_file = Path(f"/tmp/claude-agent-{dir_hash}.json")
         if agent_file.exists():
             data = load_json(agent_file)
             team = data.get("dev_team")

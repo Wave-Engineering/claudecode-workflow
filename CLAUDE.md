@@ -233,6 +233,6 @@ Two layers: **Dev-Team** (persisted here, per-project) and **Dev-Name/Dev-Avatar
 
 ### Reading Identity
 
-Identity files are keyed by md5 hash of the project root directory (`/tmp/claude-agent-<dir_hash>.json`). Any skill or behavior that needs agent identity should resolve this file. The full pick procedure lives in `/name` (`skills/name/SKILL.md`).
+The canonical identity file is `<project_root>/.claude/agent-identity.json` — reboot-durable, gitignored, no md5 keying. Any skill or behavior that needs agent identity should resolve this path, with a read fallback to the legacy `/tmp/claude-agent-<md5(project_root)>.json` while the fleet cycles (transition window). The full pick procedure lives in `/name` (`skills/name/SKILL.md`).
 
 Dev-Team: oaw

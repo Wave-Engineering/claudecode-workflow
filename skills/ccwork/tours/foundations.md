@@ -111,9 +111,12 @@ Narration: "`/name` reports or picks your session identity. Every session gets a
 ### Check current identity
 
 ```bash
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
-agent_file="/tmp/claude-agent-${dir_hash}.json"
+project_root=$(pwd)
+agent_file="${project_root}/.claude/agent-identity.json"
+if [ ! -f "$agent_file" ]; then
+    dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+    agent_file="/tmp/claude-agent-${dir_hash}.json"
+fi
 if [[ -f "$agent_file" ]]; then
   echo "Current identity:"
   cat "$agent_file"

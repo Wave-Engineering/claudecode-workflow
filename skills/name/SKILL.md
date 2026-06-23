@@ -17,14 +17,19 @@ Report the current session identity, or pick one if not yet established.
 
 1. **Resolve identity file path** — Identity is keyed by project root, not PID:
    ```bash
-   project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-   dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
-   agent_file="/tmp/claude-agent-${dir_hash}.json"
+   project_root=$(pwd)
+   agent_file="${project_root}/.claude/agent-identity.json"
    ```
 
 2. **Check for existing identity** — Read the resolved `$agent_file`
    - If it exists and has `dev_name`, `dev_avatar`, and `dev_team`: report them
-   - If it does not exist: pick a new identity (see below)
+   - If it does not exist, also check the legacy `/tmp` path as a transition fallback:
+     ```bash
+     dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+     legacy_file="/tmp/claude-agent-${dir_hash}.json"
+     # if legacy_file exists and has dev_name, report and migrate: copy to agent_file
+     ```
+   - If neither exists: pick a new identity (see below)
 
 3. **Read Dev-Team** — Check CLAUDE.md for the `Dev-Team:` field
    - If empty, ask the user what Dev-Team to use
@@ -32,8 +37,9 @@ Report the current session identity, or pick one if not yet established.
 4. **Pick identity (if needed)**
    - `Dev-Name`: A single memorable word or hyphenated phrase in **kebab-case** (e.g., `beacon`, `null-pointer`, `mother`). Draw from nerdcore canon — sci-fi, fantasy, comics, gaming, mythology, tech puns, wordplay. The wittier and more specific the reference, the better. Generic names are boring. Kebab-case is required so the name works as a routing key for `@<dev-name>` addressing.
    - `Dev-Avatar`: A Unicode emoji character (e.g., 🧠, 👾). Should feel like it belongs with the name.
-   - Persist to the resolved identity file:
+   - Persist to the resolved identity file (dual-write during transition window):
      ```bash
+     mkdir -p "${project_root}/.claude"
      cat > "$agent_file" << 'EOF'
      {
        "dev_team": "<Dev-Team>",
@@ -41,8 +47,11 @@ Report the current session identity, or pick one if not yet established.
        "dev_avatar": "<emoji>"
      }
      EOF
+     # Also keep /tmp copy fresh for sessions that haven't re-run /name yet
+     dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+     cp "$agent_file" "/tmp/claude-agent-${dir_hash}.json" 2>/dev/null || true
      ```
-     **Note:** When executing, dedent the heredoc body and closing `EOF` to column 0 so the shell correctly terminates the heredoc.
+     **Note:** When executing, dedent the heredoc body and closing `EOF` to column 0 so the shell correctly terminates the heredoc. `agent_file` is `${project_root}/.claude/agent-identity.json` — no md5 keying needed once the file lives under the project root.
 
 5. **Announce** — Always respond with:
    > I'm **\<Dev-Name\>** \<Dev-Avatar\> from team `<Dev-Team>`.

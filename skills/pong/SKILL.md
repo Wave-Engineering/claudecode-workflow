@@ -20,9 +20,12 @@ You are reading recent activity from the `#ai-dev` Slack channel.
 Resolve the identity file (keyed by project root, not PID) and load it if it exists — you don't need to pick one just to read, but knowing who you are helps you contextualise messages addressed to your team.
 
 ```bash
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
-agent_file="/tmp/claude-agent-${dir_hash}.json"
+project_root=$(pwd)
+agent_file="${project_root}/.claude/agent-identity.json"
+if [ ! -f "$agent_file" ]; then
+    dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+    agent_file="/tmp/claude-agent-${dir_hash}.json"
+fi
 cat "$agent_file" 2>/dev/null || echo "no identity yet"
 ```
 
@@ -61,9 +64,12 @@ Use the Slack API via `curl` or the project's helper scripts to fetch channel hi
 
 Use the Slack API to fetch thread replies for the provided timestamp. Then save it as `last_thread_ts` in the identity file:
 ```bash
-project_root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
-agent_file="/tmp/claude-agent-${dir_hash}.json"
+project_root=$(pwd)
+agent_file="${project_root}/.claude/agent-identity.json"
+if [ ! -f "$agent_file" ]; then
+    dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+    agent_file="/tmp/claude-agent-${dir_hash}.json"
+fi
 jq --arg ts "<ts>" '. + {last_thread_ts: $ts}' "$agent_file" > "${agent_file}.tmp" && mv "${agent_file}.tmp" "$agent_file"
 ```
 
@@ -87,6 +93,7 @@ When no arguments are provided, execute the priority cascade from Step 2. Stop a
 3. Determine if there are NEW replies since the last read. Compare each reply's `ts` against the stored `last_thread_ts` — replies with `ts` > `last_thread_ts` are new. If new replies exist, display them and **update `last_thread_ts`** to the latest reply's `ts`:
    ```bash
    jq --arg ts "<latest_reply_ts>" '. + {last_thread_ts: $ts}' "$agent_file" > "${agent_file}.tmp" && mv "${agent_file}.tmp" "$agent_file"
+   # ($agent_file resolved above: durable path with /tmp fallback)
    ```
    Then **stop**.
 4. If the thread has **no new replies** (no reply `ts` > stored value, or the thread no longer exists), fall through to Priority 2.
