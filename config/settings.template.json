@@ -88,6 +88,15 @@
             "command": "~/.claude/scripts/hooks/nerf/session-start-compact.sh"
           }
         ]
+      },
+      {
+        "matcher": "clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/reseed-revive.sh"
+          }
+        ]
       }
     ],
     "PreCompact": [

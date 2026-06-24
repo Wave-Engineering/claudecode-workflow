@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+
+- **`/reseed` auto-revive hook (#757).** `SessionStart{matcher:"clear"}` hook (`reseed-revive.sh`) injects the seed content into the fresh agent context and fires a tmux keystroke — no user action needed after `/reseed`. Flow: `/reseed` writes the seed, arms `<project_root>/.claude/reseed-armed.json` (seed_path + tmux_pane + mtime), then sends `/clear` to its own tmux pane via `tmux send-keys`. Hook fires on the fresh session: if armed file is fresh (< 5 min, by mtime — cross-project isolation via CWD-scoped path), seed content is injected via stdout (system-reminder) and `tmux send-keys "continue"` kicks the agent off. Stale armed files trigger a confirm-request instead. Armed file consumed on inject; seed file kept for manual recovery. No user action after `/reseed`; BJ never touches it again.
+
 ### Changed
 
 - Agent identity now stored at `<project_root>/.claude/agent-identity.json` (reboot-durable, gitignored) instead of `/tmp/claude-agent-<md5>.json`. All readers fall back to the legacy `/tmp` path during the transition window. Closes #723.

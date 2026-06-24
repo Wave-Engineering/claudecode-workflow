@@ -82,29 +82,45 @@ dropped, and (b) verify every grant carries its *live status*, not just its orig
 This single pass is where the recall the first draft missed gets recovered — a state-focused
 seed under-captures on the first pass by construction, so the re-scan is not optional polish.
 
-## Step 2 — Write to the right path (durability caveat)
+## Step 2 — Write seed and arm the auto-revive hook
 
-**`/tmp` is reboot-wiped** (`lesson_tmp_identity_boot_wipe`). That is fine for a
-same-session readback, but a seed lost to a reboot leaves no revival path.
+Always write to a **durable path** (not `/tmp` — reboot-wiped per `lesson_tmp_identity_boot_wipe`):
 
-- **Same-session reduction** (the normal case) → `/tmp/<topic>-reseed.md` is fine
-  (name it for the work, e.g. `/tmp/workflows-migration-reseed.md`).
-- **Reduction might span a reboot** (long pause, end-of-day, anything where the
-  machine could cycle before revival) → write to a **durable path under
-  `.claude/`**, not `/tmp`.
+```bash
+project_root=$(pwd)
+seed_path="${project_root}/.claude/<topic>-reseed.md"
+```
 
-Surface this choice to the human; default to `/tmp` unless a reboot is plausible.
+After writing the seed, arm the hook so the next `/clear` auto-revives without any user action:
 
-## Step 3 — Hand off
+```bash
+project_root=$(pwd)
+cat > "${project_root}/.claude/reseed-armed.json" << EOF
+{
+  "seed_path": "${project_root}/.claude/<topic>-reseed.md",
+  "armed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "tmux_pane": "${TMUX_PANE:-}"
+}
+EOF
+```
 
-State the next human action unambiguously — the human is about to drop your
-context, so a missed instruction can't be re-asked:
+## Step 3 — Trigger the clear
+
+With the hook armed, trigger `/clear` immediately via tmux — do not ask the user to do it:
+
+```bash
+tmux send-keys -t "${TMUX_PANE}" "/clear" Enter
+```
+
+Then end your turn with a brief note:
+
+> "Seed written and armed. Clearing now — I'll auto-revive and continue."
+
+The `SessionStart{clear}` hook (`reseed-revive.sh`) fires on the fresh session, injects the seed content, and sends a `continue` keystroke. The agent revives and picks up where it left off — no user action needed.
+
+**If tmux is not available** (`$TMUX_PANE` empty): fall back to the manual flow:
 
 > "Seed written to `<path>`. Run `/clear`, then paste: `Read <path> and revive`."
-
-(Once the `SessionStart{clear}` auto-revive hook ships, this collapses further to
-"armed — just `/clear`," with the seed injected on revival. Until then, the paste
-is the deterministic path.)
 
 ## Important
 
