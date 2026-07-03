@@ -853,6 +853,10 @@ class TestLocalScopeInstall:
         assert not (project / ".claude" / "statusline-command.sh").exists(), (
             "project-local statusline not removed"
         )
+        # Project Cellar removed.
+        assert not (project / ".claude" / "scripts").exists(), (
+            "project-local Cellar (.claude/scripts) not removed by --local uninstall"
+        )
         # Global install never existed → still clean.
         assert list((home / ".claude" / "skills").iterdir()) == [], (
             "--local uninstall touched global skills"

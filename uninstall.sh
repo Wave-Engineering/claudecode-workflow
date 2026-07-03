@@ -90,10 +90,12 @@ if [[ "$LOCAL_MODE" == true ]]; then
 	LOCAL_ROOT="$(pwd)"
 	SKILLS_DIR="$LOCAL_ROOT/.claude/skills"
 	SCRIPTS_DIR="$LOCAL_ROOT/.claude/bin"
+	CELLAR_DIR="$LOCAL_ROOT/.claude/scripts"
 	CLAUDE_DIR="$LOCAL_ROOT/.claude"
 else
 	SKILLS_DIR="$HOME/.claude/skills"
 	SCRIPTS_DIR="$HOME/.local/bin"
+	CELLAR_DIR="$HOME/.claude/scripts"
 	CLAUDE_DIR="$HOME/.claude"
 fi
 
@@ -161,6 +163,11 @@ if [[ "$REMOVE_SCRIPTS" == true ]]; then
 			[[ -d "$sub" ]] || continue
 			rmdir "$sub" 2>/dev/null || true
 		done
+	fi
+	# Remove the Cellar (script files; distinct from the symlink farm above).
+	# Global Cellar is shared with other tools; only remove it on --local.
+	if [[ "$LOCAL_MODE" == true ]]; then
+		do_remove "$CELLAR_DIR"
 	fi
 fi
 
