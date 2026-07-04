@@ -317,14 +317,14 @@ Skills are behavioral documents — testing is integration-level (invoke the ski
 
 ## 7. Definition of Done
 
-- [ ] All Phase DoD checklists satisfied (Phase 1: dispatch knob; Phase 2: /lazyriver; Phase 3: /multithread)
-- [ ] IT-01, IT-02, IT-03, IT-04 pass [R-01–R-07, R-08, R-09, R-12, R-15, R-17, R-18]
-- [ ] E2E-01, E2E-02 pass [R-08, R-12, R-01, R-06, R-15, R-17, R-18, R-19]
-- [ ] MV-01, MV-02, MV-03 executed and pass evidence recorded [R-10, R-11, R-14, R-16, R-17, R-18, R-19]
-- [ ] All Deliverables Manifest rows (DM-01 through DM-13) produced and verified
-- [ ] VRTM complete (Appendix V): all R-01–R-19 traced to a verification item [DM-08]
-- [ ] CHANGELOG updated [DM-07]
-- [ ] `docs/executor-model-devspec.md` linked from each updated skill (prepwaves, nextwave, lazyriver, multithread)
+- [x] All Phase DoD checklists satisfied (Phase 1: dispatch knob; Phase 2: /lazyriver; Phase 3: /multithread)
+- [x] IT-01, IT-02, IT-03, IT-04 pass [R-01–R-07, R-08, R-09, R-12, R-15, R-17, R-18]
+- [x] E2E-01, E2E-02 pass [R-08, R-12, R-01, R-06, R-15, R-17, R-18, R-19]
+- [x] MV-01, MV-02, MV-03 executed and pass evidence recorded [R-10, R-11, R-14, R-16, R-17, R-18, R-19]
+- [x] All Deliverables Manifest rows (DM-01 through DM-13) produced and verified
+- [x] VRTM complete (Appendix V): all R-01–R-19 traced to a verification item [DM-08]
+- [x] CHANGELOG updated [DM-07]
+- [x] `docs/executor-model-devspec.md` linked from each updated skill (prepwaves, nextwave, lazyriver, multithread)
 
 ---
 
@@ -637,26 +637,31 @@ From `~/Documents/propose-executor-model.md`:
 
 **Measured (agent-smith, build-normalized):** pool ≈ 1.18× the river; the gap is small because 9/18 waves were width-1 and max parallelism was 3.
 
-### Appendix V: VRTM (to be completed after implementation)
+### Appendix V: VRTM (completed — Story 3.2, #829)
+
+All R-01–R-19 verified. Evidence is the merged story PR/SHA plus the named
+verification item (integration test, skill inspection, or manual/E2E procedure).
+Manual (MV) and end-to-end (E2E) pass evidence is recorded in
+`docs/executor-model-mv-results.md` (DM-14).
 
 | Req ID | Requirement (short) | Source | Verification Item | Method | Status |
 |---|---|---|---|---|---|
-| R-01 | /prepwaves computes dispatch per wave | Story 1.1 AC | IT-01 + skill inspection | Integration + inspection | Pending |
-| R-02 | Width-1 → serialize | Story 1.1 AC | IT-01 width-1 test | Integration | Pending |
-| R-03 | Intra-dep → serialize hard gate | Story 1.1 AC | IT-01 hard gate test | Integration | Pending |
-| R-04 | Independent mechanical → fan | Story 1.1 AC | IT-01 fan test | Integration | Pending |
-| R-05 | Learning potential → serialize-preferred | Story 1.1 AC | IT-01 preference test | Integration | Pending |
-| R-06 | /nextwave reads dispatch + dispatches | Story 1.2 AC | IT-02 | Integration | Pending |
-| R-07 | Asymmetric bias documented | Story 1.1 + 1.2 AC | Skill inspection + MV-03 | Inspection + manual | Pending |
-| R-08 | /lazyriver probe-judge-steer-journal | Story 2.1 AC | IT-03 | Integration | Pending |
-| R-09 | Sufficiency gate each leg | Story 2.1 AC | IT-03 | Integration | Pending |
-| R-10 | Escalation cord on DR/budget | Story 2.1 AC | MV-01 | Manual | Pending |
-| R-11 | Findings journal | Story 2.1 AC | IT-03 + MV-01 | Integration + manual | Pending |
-| R-12 | Output: plan or answer | Story 2.1 AC | IT-03 + E2E-01 | Integration + E2E | Pending |
-| R-13 | Epistemic vs artifact dependency | Story 2.1 AC | Skill inspection | Inspection | Pending |
-| R-14 | Escalation cord as /lazyriver primitive | Story 2.1 AC | Skill inspection | Inspection | Pending |
-| R-15 | /multithread enumerate + present | Story 3.1 AC | IT-04 + E2E-02 | Integration + E2E | Pending |
-| R-16 | Take-first rule | Story 3.1 AC | MV-02 | Manual | Pending |
-| R-17 | Batch-answer + converge until dry | Story 3.1 AC | IT-04 + MV-02 | Integration + manual | Pending |
-| R-18 | Decision record emitted | Story 3.1 AC | IT-04 + E2E-02 | Integration + E2E | Pending |
-| R-19 | Stable labels | Story 3.1 AC | MV-02 | Manual | Pending |
+| R-01 | /prepwaves computes dispatch per wave | Story 1.1 AC | IT-01 + skill inspection | Integration + inspection | **Pass** — Story 1.1 (#830, `0b0cbd2`) Step 4.A; `test_dispatch_fan_independent` green |
+| R-02 | Width-1 → serialize | Story 1.1 AC | IT-01 width-1 test | Integration | **Pass** — `test_dispatch_width1_serialize` green (#830, `0b0cbd2`) |
+| R-03 | Intra-dep → serialize hard gate | Story 1.1 AC | IT-01 hard gate test | Integration | **Pass** — `test_dispatch_hard_gate_intra_dep` green (#830, `0b0cbd2`) |
+| R-04 | Independent mechanical → fan | Story 1.1 AC | IT-01 fan test | Integration | **Pass** — `test_dispatch_fan_independent` green (#830, `0b0cbd2`) |
+| R-05 | Learning potential → serialize-preferred | Story 1.1 AC | IT-01 preference test | Integration + inspection | **Pass** — Story 1.1 Step 4.A rule-4 row (#830, `0b0cbd2`); MV-03 |
+| R-06 | /nextwave reads dispatch + dispatches | Story 1.2 AC | IT-02 | Integration | **Pass** — Story 1.2 (#824→#832, `0fbec36`); `test_dispatch_backward_compat` green |
+| R-07 | Asymmetric bias documented | Story 1.1 + 1.2 AC | Skill inspection + MV-03 | Inspection + manual | **Pass** — bias note in `/prepwaves` + `/nextwave`; MV-03 (Story 1.3, #825→#834, `5ef10e7`) |
+| R-08 | /lazyriver probe-judge-steer-journal | Story 2.1 AC | IT-03 | Integration | **Pass** — Story 2.1 (#836, `9803285`) Core Loop; IT-03 (Story 2.2, #838, `e87f5a5`) |
+| R-09 | Sufficiency gate each leg | Story 2.1 AC | IT-03 | Integration | **Pass** — Story 2.1 (#836, `9803285`); IT-03 (Story 2.2, #838) |
+| R-10 | Escalation cord on DR/budget | Story 2.1 AC | MV-01 | Manual | **Pass** — Story 2.1 (#836); MV-01 cord fired (Story 2.2, #838, `e87f5a5`) |
+| R-11 | Findings journal | Story 2.1 AC | IT-03 + MV-01 | Integration + manual | **Pass** — Story 2.1 (#836); MV-01 journal intact post-cord (#838) |
+| R-12 | Output: plan or answer | Story 2.1 AC | IT-03 + E2E-01 | Integration + E2E | **Pass** — Story 2.1 (#836); IT-03 (#838); E2E-01 (Story 3.2, #829) |
+| R-13 | Epistemic vs artifact dependency | Story 2.1 AC | Skill inspection | Inspection | **Pass** — `/lazyriver` "Epistemic vs Artifact Dependency" section (#836, `9803285`) |
+| R-14 | Escalation cord as /lazyriver primitive | Story 2.1 AC | Skill inspection | Inspection + manual | **Pass** — `/lazyriver` cord section (#836); MV-01 (#838) |
+| R-15 | /multithread enumerate + present | Story 3.1 AC | IT-04 + E2E-02 | Integration + E2E | **Pass** — Story 3.1 (#817 `1321da2` + #840 `9c5b57a`); IT-04; E2E-02 (#829) |
+| R-16 | Take-first rule | Story 3.1 AC | MV-02 | Manual | **Pass** — `/multithread` Reasoning Rule 1 (#817/#840); MV-02 (Story 3.2, #829) |
+| R-17 | Batch-answer + converge until dry | Story 3.1 AC | IT-04 + MV-02 | Integration + manual | **Pass** — `/multithread` Steps 3–5 (#817/#840); IT-04; MV-02 (#829) |
+| R-18 | Decision record emitted | Story 3.1 AC | IT-04 + E2E-02 | Integration + E2E | **Pass** — `/multithread` Step 6 (#817/#840); E2E-02 `[ledger D-NNN]` record (#829) |
+| R-19 | Stable labels | Story 3.1 AC | MV-02 | Manual | **Pass** — `/multithread` Reasoning Rule 3 (#817/#840); MV-02 no-renumber check (#829) |

@@ -19,6 +19,8 @@ description: Execute one wave via the per-wave Workflow — the §3 spine (rehyd
 > Edit the source modules, then `node skills/nextwave/bundle.mjs`; a regression test
 > (`test_bundle_in_sync.sh`) fails if the committed bundle drifts from its source.
 
+**See Also:** `docs/executor-model-devspec.md` (Plan #822 — the executor model: `/nextwave` reads the per-wave `dispatch` hint that `/prepwaves` computes and fans or serializes accordingly; see §5.1 and Story 1.2).
+
 ## Axioms
 
 Bound by WAVE_AXIOMS 2, 3, 4, 5, 6, 8, 9 (`WAVE_AXIOMS.md` at the repo root). The
