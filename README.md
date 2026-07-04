@@ -79,22 +79,26 @@ Key features:
 | ibm | `/ibm` | Issue-Branch-PR/MR workflow reminder |
 | issue | `/issue` | Create structured issues (feature, bug, chore, docs, epic) with templates and labels |
 | jfail | `/jfail` | CI job/workflow failure analysis |
+| lazyriver | `/lazyriver` | Goal-seek loop — probe/judge/steer to a plan, upstream of `/devspec` (placeholder — Plan #822 Phase 2) |
 | man | `/man` | Display usage information for any installed skill |
 | mmr | `/mmr` | Merge a PR/MR with squash |
+| multithread | `/multithread` | Parallelize discussion/work over independent items (placeholder — Plan #822 Phase 3) |
 | name | `/name` | Report or pick agent session identity |
 | nerf | `/nerf` | Context budget system — soft limits, doom modes, scope monitor |
-| nextwave | `/nextwave` | Execute parallel spec-driven sub-agents |
+| nextwave | `/nextwave` | Execute spec-driven sub-agents per wave; reads each wave's `dispatch` hint to fan or serialize |
 | ping | `/ping` | Post to #ai-dev Slack channel |
 | pong | `/pong` | Read #ai-dev Slack channel |
 | devspec | `/devspec` | Interactive Dev Spec creation with Deliverables Manifest and finalization checklist |
 | precheck | `/precheck` | Pre-commit gate — verify compliance, run code review, present checklist |
-| prepwaves | `/prepwaves` | Analyze issues and compute dependency waves |
+| prepwaves | `/prepwaves` | Analyze issues, compute dependency waves, and annotate each wave with a `dispatch` hint |
 | review | `/review` | Code review on staged/branch changes |
 | scp | `/scp` | Stage, commit, and push workflow |
 | scpmr | `/scpmr` | Stage, commit, push, and create PR/MR |
 | scpmmr | `/scpmmr` | Stage, commit, push, create PR/MR, and merge |
 | view | `/view` | Open file/URL in GUI viewer (read-only) |
 | vox | `/vox` | Text-to-speech voice announcements for status updates and alerts |
+
+**Per-wave dispatch model.** `/prepwaves` tags each wave with a `dispatch` hint — `fan` (flights run in parallel), `serialize` (one flight at a time), or `serialize-preferred` — and `/nextwave` reads it to execute the wave accordingly. The bias is asymmetric: a wrong `serialize` only costs wall-clock, while a wrong `fan` can corrupt a wave, so the default (and any absent hint) is `serialize`.
 
 ### Scripts
 
