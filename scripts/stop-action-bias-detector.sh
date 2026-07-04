@@ -1,25 +1,32 @@
 #!/usr/bin/env bash
+# shellcheck source-path=SCRIPTDIR
 # stop-action-bias-detector.sh — CC Stop hook.
 #
-# Detects when the assistant ends a turn by handing a decision back to the
-# user ("want me to proceed?", "should I…?", "shall I…?") instead of acting
-# on something it already knows how to do. Forces the turn to continue with
-# a default-to-action reminder, per CLAUDE.md MANDATORY: Default to Action.
+# Implements the Godspeed decaying-mandate autonomy model (cc-workflow#818),
+# replacing the fuzzy-regex permission-asking detection that false-positived
+# on legitimate gates and questions.
 #
-# This is the GENERAL sibling of precheck-asking-detector.sh (#542), which
-# catches the precheck-specific case. Same Stop-hook contract and budget.
+# Decision model:
+#   1. Gated-axis present (prod/deploy/irreversible) → STOP + notify BJ
+#   2. No mandate (UNARMED/HALTED) → NOOP; hook stands down entirely
+#   3. Mandate active (godspeed in last N user turns):
+#      bar = d/N (d = user turns since godspeed)
+#      supplied = 80% if test sentinel exists, else 40%
+#      supplied >= bar → GO (continue autonomously, no block)
+#      supplied <  bar → ASK (block + checkpoint prompt; model names gap for BJ)
+#
+# Arm:  type `godspeed` in any user turn → mandate active
+# Halt: type `HALT!` (exact) → mandate cancelled until next godspeed
 #
 # Contract (Claude Code Stop hook):
 #   stdin:  JSON with .transcript_path, .session_id, .stop_hook_active
-#   stdout: JSON with {"decision":"block","reason":"..."} to force the
-#           assistant to continue this turn; empty stdout (exit 0) to no-op.
+#   stdout: JSON {"decision":"block","reason":"..."} to block; empty to pass
 #
 # Disable: export STOP_ACTION_BIAS_HOOK_DISABLED=1
 #
-# Performance budget: <50ms. Single jq pass over the tail of the transcript;
-# no MCP calls, no network, no file writes.
+# Performance budget: <100ms. jq scan + optional discord/vox on STOP/ASK.
 #
-# Issue: cc-workflow#732 — paired with the CLAUDE.md prose rule (same issue).
+# Issue: cc-workflow#818. Predecessor: cc-workflow#732/#776.
 
 set -uo pipefail
 
@@ -28,33 +35,27 @@ if [[ "${STOP_ACTION_BIAS_HOOK_DISABLED:-0}" == "1" ]]; then
 	exit 0
 fi
 
+# Source the lookback utility from the same directory as this hook.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/godspeed-lookback.sh"
+
 INPUT=$(cat 2>/dev/null || true)
 TRANSCRIPT_PATH=$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null || true)
-
-# Loop guard: if this Stop hook already fired this turn (the assistant was
-# already nudged and still chose to end on a permission-ask), allow the stop.
-# A genuine gate re-affirmed after one reminder is respected — the hook kills
-# the REFLEXIVE ask, not the deliberate one.
-STOP_HOOK_ACTIVE=$(printf '%s' "$INPUT" | jq -r '.stop_hook_active // false' 2>/dev/null || true)
-if [[ "$STOP_HOOK_ACTIVE" == "true" ]]; then
-	exit 0
-fi
+SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
 
 if [[ -z "$TRANSCRIPT_PATH" || ! -f "$TRANSCRIPT_PATH" ]]; then
 	exit 0
 fi
 
-# Last assistant text (concat text blocks of the most recent assistant turn;
-# skip thinking + tool_use). Last 200 lines is plenty — a permission-ask is
-# always the most recent assistant message.
+# Extract the last assistant turn text (skip thinking and tool_use blocks).
 LAST_ASSISTANT_TEXT=$(
 	tail -n 200 "$TRANSCRIPT_PATH" 2>/dev/null |
 		jq -rs '
-        [.[] | select(.type == "assistant" and (.message.role // "") == "assistant")]
-        | last
-        | (.message.content // [])
-        | map(select(.type == "text") | .text)
-        | join(" ")
+      [.[] | select(.type == "assistant" and (.message.role // "") == "assistant")]
+      | last
+      | (.message.content // [])
+      | map(select(.type == "text") | .text)
+      | join(" ")
     ' 2>/dev/null
 )
 
@@ -62,64 +63,58 @@ if [[ -z "$LAST_ASSISTANT_TEXT" || "$LAST_ASSISTANT_TEXT" == "null" ]]; then
 	exit 0
 fi
 
-# Permission-ask / decision-handback tells — scoped DELIBERATELY to
-# permission-seeking phrasings, NOT to all questions. A genuine information-
-# seeking question or an architectural fork ("Should I use Postgres or MySQL?",
-# "Which schema should I target?") asks the user to CHOOSE or to supply a FACT —
-# those are legitimate stops the rule protects, and must NOT fire. The failure
-# class is asking PERMISSION TO ACT on something already known.
-#   - PATTERN_PROCEED: "want me to … ?" forms — inherently permission-to-act.
-#   - PATTERN_PERMIT:  "should/shall I" ONLY when followed by an action/permission
-#     verb (proceed, merge, deploy, …). This is the load-bearing guard (#732
-#     review C1): bare "should I" introduces just as many forks/clarifications as
-#     permission-asks, so it is excluded — only the verb-gated form matches, so
-#     "should I use X or Y?" / "which X should I target?" correctly pass through.
-# Each requires a "?" within proximity (no sentence terminator [^.?!\n] between)
-# so a mid-sentence mention doesn't fire. Case-insensitive.
-PATTERN_PROCEED='(?i)\b(want me to|do you want me to|would you like me to|ready (for me to|to proceed))\b[^.?!\n]{0,60}\?'
-PATTERN_PERMIT='(?i)\b(should|shall) i\s+(go ahead|proceed|continue|start|begin|merge|deploy|push|run|commit|create|land|ship|kick off|move on|do (it|that|this|so))\b[^.?!\n]{0,40}\?'
-PATTERN_WORD='(?i)\b(just )?say the word\b' # unanchored like the sibling's edge; kill-switch covers quoted-rule prose
-PATTERN_DEFER='(?i)\blet me know\b[^.?!\n]{0,30}\b(if|whether|when)\b[^.?!\n]{0,30}\b(you want|i should|to proceed|go ahead)\b'
+# Get mandate status.
+ARM_STATUS=$(godspeed_status "$TRANSCRIPT_PATH")
 
-if printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_PROCEED" 2>/dev/null ||
-	printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_PERMIT" 2>/dev/null ||
-	printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_WORD" 2>/dev/null ||
-	printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_DEFER" 2>/dev/null; then
-	cat <<'JSON'
-{"decision":"block","reason":"Per CLAUDE.md MANDATORY: Default to Action — you ended by asking permission to do something. If you already know what to do and it is safe, understood, and in your lane, DO IT now instead of asking; stopping blocks everyone downstream and spends the user's attention. Stop ONLY for a genuinely new irreversible/prod action the user has NOT already agreed to, or a real architectural fork. Agreement persists — completing work the user already directed is not a new gate. If this IS a legitimate gate, continue the turn and state it plainly as a gate with the specific reason; otherwise continue by taking the action."}
-JSON
+# Compute the decision.
+DECISION_LINE=$(godspeed_decision "$ARM_STATUS" "$LAST_ASSISTANT_TEXT" "$SESSION_ID")
+DECISION=$(echo "$DECISION_LINE" | awk '{print $1}')
+
+case "$DECISION" in
+
+STOP)
+	# Loop guard: if the hook already blocked this turn, stand down so the
+	# model can answer the prod-gate prompt without triggering another block.
+	STOP_HOOK_ACTIVE=$(printf '%s' "$INPUT" | jq -r '.stop_hook_active // false' 2>/dev/null || true)
+	if [[ "$STOP_HOOK_ACTIVE" == "true" ]]; then
+		exit 0
+	fi
+	_godspeed_notify "STOP"
+	printf '{"decision":"block","reason":"[godspeed-STOP] Gated axis detected (prod/deploy/irreversible keyword). This action requires explicit user approval — surface it to BJ before proceeding. The Godspeed mandate does not override the ABSOLUTE prod rule."}\n'
+	;;
+
+NOOP)
+	# No mandate active; hook stands down. Normal call-and-response.
 	exit 0
-fi
+	;;
 
-# --- concluded ∧ asked (cc-workflow#776 / fleet incident 2026-06-21) ---------
-# A subtler over-pause than the bare permission-ask above: the turn STATES a
-# team-converged conclusion AND asks the user to ratify it in the SAME message
-# ("we converged … BJ, your call?"). For an already-converged decision in the
-# agent's delegated lane, the converging IS the green light; routing it back to
-# the user for ratify is the over-pause. Requires the CONJUNCTION (conclusion
-# marker AND ratify-ask) so a bare prod gate ("BJ — your call on the prod
-# push?"), which has no conclusion marker, does NOT fire and stays surfaced.
-PATTERN_CONCLUSION='(?i)\b(converged|convergence|agreed|aligned|endorsed|locked in|the right move|only logical|consensus|we (all )?agree|team[\- ]converged)\b'
-PATTERN_RATIFY='(?i)\b(BJ|@?schwifty7759)\b[^.?!\n]{0,40}\b(ratify|approve|your (call|nod|go|go-ahead|read|move|sign[\- ]?off|concur))\b[^.?!\n]{0,10}\?'
-# SAFETY negative-guard (cc-workflow#776): never fire when a genuinely-gated axis
-# (prod / deploy / release / ship / go-live / force-push / irreversible / secrets /
-# migration / …) appears ANYWHERE in the turn. NOTE: this matches the whole
-# message, not only the ratify-ask clause — an unrelated mention of a gated term
-# also suppresses. That is deliberately the SAFE direction: this hook's "block"
-# PUSHES the agent to act, so firing on a real prod gate would push an unapproved
-# prod action, violating CLAUDE.md's ABSOLUTE prod rule. A missed nudge
-# (false-negative) is cheap; pushing prod (false-positive) is not — so the axis
-# list is intentionally over-broad. Applied ONLY to this new case — the
-# permission-ask patterns above legitimately catch "should I merge/push?".
-PATTERN_GATED_AXIS='(?i)\b(prod|production|deploy|release|rollout|ship|cut[\- ]?over|go[\- ]?live|force[\- ]?push|publish|promote|rotate|tear[\- ]?down|irreversible|destroy|destructive|drop|wipe|delete|secret|credential|migrat|tag|merge to (main|master|prod)|fleet[\- ]wide)\b'
-
-if printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_CONCLUSION" 2>/dev/null &&
-	printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_RATIFY" 2>/dev/null &&
-	! printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_GATED_AXIS" 2>/dev/null; then
-	cat <<'JSON'
-{"decision":"block","reason":"Per CLAUDE.md MANDATORY: Default to Action + standing authority — you stated a team-converged conclusion AND asked the user to ratify it in the same turn (the concluded-and-asked over-pause). For an already-converged decision in your delegated lane (non-prod, team-aligned, within your standing authority), the converging IS the green light; surfacing it for ratify is the over-pause. Stop ONLY for: (a) a genuinely new irreversible/prod action the user has NOT already agreed to; (b) a real fork where the user's choice changes what gets built; (c) novel risk requiring user-judgment they hold. Otherwise continue by taking the action."}
-JSON
+GO)
+	# Mandate active and confidence meets the bar. Continue autonomously.
 	exit 0
-fi
+	;;
 
-exit 0
+ASK)
+	# Mandate active but confidence is below bar. Block and emit checkpoint.
+	# The model's one-liner names its uncertainty for BJ — not re-evaluated by
+	# the hook. BJ's next turn is the resolution.
+	local_d=$(echo "$DECISION_LINE" | awk '{print $2}')
+	local_bar=$(echo "$DECISION_LINE" | awk '{print $3}')
+	local_supplied=$(echo "$DECISION_LINE" | awk '{print $4}')
+	N_val="${GODSPEED_WINDOW:-200}"
+
+	# Loop guard first: if the hook already blocked once this turn, stand down.
+	# (The model answered the checkpoint; don't notify again or pile on.)
+	STOP_HOOK_ACTIVE=$(printf '%s' "$INPUT" | jq -r '.stop_hook_active // false' 2>/dev/null || true)
+	if [[ "$STOP_HOOK_ACTIVE" == "true" ]]; then
+		exit 0
+	fi
+
+	_godspeed_notify "ASK" "$local_d" "$N_val"
+	printf '{"decision":"block","reason":"[godspeed-checkpoint] Mandate at d=%s/N=%s (bar=%s%%, supplied=%s%%). State in one sentence what you are uncertain about — specifically: is it (a) execution correctness, (b) scope alignment, or (c) side-effects? If genuinely confident, say so and continue."}\n' \
+		"$local_d" "$N_val" "$local_bar" "$local_supplied"
+	;;
+
+*)
+	exit 0
+	;;
+esac

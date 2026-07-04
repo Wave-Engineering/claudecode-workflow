@@ -1,10 +1,25 @@
 #!/usr/bin/env bash
-# test_stop_action_bias_detector.sh — regression tests for the Stop hook that
-# detects permission-ask / decision-handback phrasings ("want me to proceed?",
-# "should I…?") and blocks the stop with a default-to-action reminder.
+# test_stop_action_bias_detector.sh — regression tests for the Godspeed
+# decaying-mandate Stop hook (cc-workflow#818).
 #
 # Hook source: scripts/stop-action-bias-detector.sh
-# Issue: cc-workflow#732 (general sibling of #542 precheck-asking-detector)
+#
+# Behavioral contract (#818, replaces #732/#776 fuzzy-regex model):
+#
+#   UNARMED / HALTED (no active godspeed mandate):
+#     - ALL permission-ask phrasings ("Want me to?", "Should I?", etc.)  → NOOP
+#       (hook stands down; no block).  This is the intentional replacement
+#       for the old fuzzy-regex behavior that over-fired on legitimate gates.
+#     - Gated-axis keywords (prod/deploy/force-push/irreversible/…) → STOP
+#       (ABSOLUTE prod rule fires regardless of mandate state).
+#
+#   ARMED (godspeed typed in a recent user turn):
+#     - d=0 (godspeed is the most-recent user turn), bar=0%  → GO (no block).
+#     - Gated-axis keyword in last assistant turn              → STOP (block).
+#
+#   Loop guard: stop_hook_active=true → always silent (no re-block).
+#   Kill-switch: STOP_ACTION_BIAS_HOOK_DISABLED=1 → always silent.
+#   Missing transcript                             → always silent.
 #
 # Strategy: build minimal CC-transcript JSONL fixtures, pipe the hook input
 # contract (stdin JSON with .transcript_path [, .stop_hook_active]) through
@@ -22,112 +37,162 @@ if [[ ! -x "$HOOK" ]]; then
 	exit 1
 fi
 
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
+TMPDIR_LOCAL=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_LOCAL"' EXIT
 
 PASSES=0
 FAILS=0
-pass() {
-	echo "  [PASS] $*"
-	PASSES=$((PASSES + 1))
-}
-fail() {
-	echo "  [FAIL] $*"
-	FAILS=$((FAILS + 1))
-}
+pass() { echo "  [PASS] $*"; PASSES=$((PASSES + 1)); }
+fail() { echo "  [FAIL] $*"; FAILS=$((FAILS + 1)); }
 
-make_transcript() {
+# ─── transcript builders ────────────────────────────────────────────────────
+
+# Transcript with a single assistant turn (UNARMED state).
+make_unarmed_transcript() {
 	local label="$1" text="$2"
-	local path="$TMPDIR/transcript-$label.jsonl"
-	jq -nc --arg text "$text" '{
+	local path="$TMPDIR_LOCAL/t-unarmed-$label.jsonl"
+	jq -nc --arg t "$text" '{
         type: "assistant",
-        message: { role: "assistant", content: [ { type: "text", text: $text } ] }
+        message: {role: "assistant", content: [{type: "text", text: $t}]}
     }' >"$path"
 	echo "$path"
 }
 
-run_hook() { # $1 transcript_path  [$2 stop_hook_active]
+# Transcript with a user "godspeed" turn followed by an assistant turn
+# (ARMED d=0 state).
+make_armed_transcript() {
+	local label="$1" text="$2"
+	local path="$TMPDIR_LOCAL/t-armed-$label.jsonl"
+	jq -nc '{type: "user", message: {role: "user", content: [{type: "text", text: "godspeed"}]}}' >"$path"
+	jq -nc --arg t "$text" '{
+        type: "assistant",
+        message: {role: "assistant", content: [{type: "text", text: $t}]}
+    }' >>"$path"
+	echo "$path"
+}
+
+run_hook() { # $1 transcript_path  [$2 stop_hook_active=false]
 	jq -nc --arg p "$1" --argjson active "${2:-false}" \
 		'{transcript_path: $p, session_id: "test", stop_hook_active: $active}' | "$HOOK"
 }
 
 assert_blocks() {
 	local label="$1" text="$2" path out
-	path=$(make_transcript "$label" "$text")
+	path=$(make_unarmed_transcript "$label" "$text")
 	out=$(run_hook "$path")
-	if [[ "$out" == *'"decision":"block"'* ]]; then pass "blocks: $label"; else fail "should-block: $label — got: ${out:-<empty>}"; fi
+	if [[ "$out" == *'"decision":"block"'* ]]; then
+		pass "blocks: $label"
+	else
+		fail "should-block: $label — got: ${out:-<empty>}"
+	fi
 }
 
 assert_passes() {
 	local label="$1" text="$2" path out
-	path=$(make_transcript "$label" "$text")
+	path=$(make_unarmed_transcript "$label" "$text")
 	out=$(run_hook "$path")
-	if [[ -z "$out" || "$out" != *'"decision":"block"'* ]]; then pass "passes:  $label"; else fail "should-pass: $label — got: $out"; fi
+	if [[ -z "$out" || "$out" != *'"decision":"block"'* ]]; then
+		pass "passes: $label"
+	else
+		fail "should-pass: $label — got: $out"
+	fi
 }
 
-# --- Positive cases — permission-asks the hook MUST block --------------------
-assert_blocks "want_me_to" "The deploy is ready. Want me to proceed?"
-assert_blocks "should_i" "Both blockers are merged. Should I proceed?"
-assert_blocks "shall_i" "Shall I go ahead and merge it?"
-assert_blocks "do_you_want" "Do you want me to redeploy to the fleet?"
-assert_blocks "ready_for_me" "Ready for me to start #722?"
-assert_blocks "would_you_like" "Would you like me to take the next one?"
-assert_blocks "say_the_word" "It's all staged — just say the word."
-assert_blocks "let_me_know_defer" "Let me know whether you want me to continue."
+assert_armed_blocks() {
+	local label="$1" text="$2" path out
+	path=$(make_armed_transcript "$label" "$text")
+	out=$(run_hook "$path")
+	if [[ "$out" == *'"decision":"block"'* ]]; then
+		pass "blocks-armed: $label"
+	else
+		fail "should-block-armed: $label — got: ${out:-<empty>}"
+	fi
+}
 
-# --- Negative cases — the hook MUST NOT block -------------------------------
-# Information-seeking questions (asking about a FACT, not permission to act).
-assert_passes "info_which_db" "Which database are you using for this service?"
-assert_passes "info_budget" "What token budget should this campaign target?"
-assert_passes "info_fork" "Two viable approaches here — per-wave or per-plan kahuna. Which do you want?"
-# #732 review C1: architectural forks / clarifications phrased with "should I" are
-# LEGITIMATE stops the rule protects — the verb-gating on PATTERN_PERMIT must let
-# them pass (bare "should I <non-action-verb>" never fires).
-assert_passes "should_i_fork" "Should I use Postgres or MySQL for this service?"
-assert_passes "should_i_which_file" "Which file should I edit — the template or the generated copy?"
-assert_passes "should_i_assume" "Should I assume us-east-1 as the region here?"
-assert_passes "should_i_target" "Which schema should I target for the migration?"
-# Statements / no question mark.
-assert_passes "statement_proceeding" "Both blockers are merged; I'm proceeding with the redeploy now."
-assert_passes "no_qmark" "I can start #722 next."
-# A legitimate gate stated AS a gate (no permission phrasing) is allowed.
-assert_passes "gate_stated" "This is a prod deploy you haven't agreed to in this conversation; I'm holding for your explicit go on prod specifically."
-# Distance / unrelated.
-assert_passes "distant" "I want this done right, so the details matter and I checked them all carefully."
+assert_armed_passes() {
+	local label="$1" text="$2" path out
+	path=$(make_armed_transcript "$label" "$text")
+	out=$(run_hook "$path")
+	if [[ -z "$out" || "$out" != *'"decision":"block"'* ]]; then
+		pass "passes-armed: $label"
+	else
+		fail "should-pass-armed: $label — got: $out"
+	fi
+}
 
-# --- concluded-and-asked (cc-workflow#776) — conclusion + ratify-ask conjunction
-# A team-converged conclusion AND a ratify-ask in the same turn is the over-pause.
-assert_blocks "concluded_asked" "We've converged and the team is aligned — this is the right move. BJ, your call?"
-assert_blocks "concluded_asked_schwifty" "Consensus reached on the approach. @schwifty7759, your go-ahead to ratify?"
-# Conjunction is required: conclusion-only or ratify-only must NOT fire.
-assert_passes "conclusion_only" "The team converged on the approach and we're fully aligned."
-assert_passes "ratify_only" "BJ, your call on this one?"
-# SAFETY: concluded + ratify-ask on a GATED axis (prod/deploy/release/secrets/migration)
-# must NOT fire — the block pushes the agent to ACT, and pushing an unapproved prod
-# action violates the ABSOLUTE prod rule. A false-negative here is the safe direction.
-assert_passes "concluded_asked_prod" "We converged on the rollout approach — BJ, your call on the prod deploy?"
-assert_passes "concluded_asked_release" "Team is aligned on the cut. @schwifty7759, approve the release?"
-assert_passes "concluded_asked_secrets" "We agreed on the secret-rotation plan — BJ, your go-ahead?"
-# Extended gated-axis (code-review #2): ship / go-live / force-push are prod-shaped.
-assert_passes "concluded_asked_ship" "We converged — this is the right move. BJ, your go-ahead to ship it?"
-assert_passes "concluded_asked_golive" "Team is aligned on the cut. @schwifty7759, your call to go live?"
-assert_passes "concluded_asked_forcepush" "We agreed on the rebase plan. BJ, approve the force-push to main?"
+# ─── UNARMED: hook stands down on all non-gated phrasings ───────────────────
+# All of the following used to block under the old fuzzy-regex model (#732).
+# #818 intentionally removes this enforcement in UNARMED state to eliminate
+# false positives.  The precheck-asking-detector.sh retains narrow enforcement
+# for the specific "shall I run /precheck?" pattern.
 
-# --- Loop guard: stop_hook_active=true → allow the stop even on positive input
-label="loop_guard"
-path=$(make_transcript "$label" "Want me to proceed?")
+assert_passes "unarmed_permission_ask"    "The work is complete. Want me to proceed?"
+assert_passes "unarmed_should_i"          "Both blockers are merged. Should I proceed?"
+assert_passes "unarmed_shall_i"           "Shall I go ahead and merge it?"
+assert_passes "unarmed_do_you_want"       "Do you want me to redeploy to the fleet?"
+assert_passes "unarmed_concluded_asked"   "We've converged and the team is aligned — BJ, your call?"
+assert_passes "unarmed_info_question"     "Which database are you using for this service?"
+assert_passes "unarmed_statement"         "Both blockers are merged; I'm proceeding with the redeploy now."
+
+# ─── UNARMED: gated-axis keywords → STOP (ABSOLUTE prod rule) ───────────────
+# These must block regardless of mandate state.
+
+assert_blocks "unarmed_gated_production"  "I'm about to push this to production."
+assert_blocks "unarmed_gated_deploy"      "Ready to deploy this to the cluster."
+assert_blocks "unarmed_gated_force_push"  "I'll need to force-push to main to fix this."
+assert_blocks "unarmed_gated_irreversible" "This is an irreversible operation; proceeding."
+assert_blocks "unarmed_gated_credential"  "I'll rotate the credentials now."
+assert_blocks "unarmed_gated_destroy"     "Running terraform destroy on the staging env."
+assert_blocks "unarmed_gated_migrate"     "Starting the database migration now."
+
+# ─── ARMED (d=0): non-gated text → GO (mandate fresh, bar=0%) ───────────────
+
+assert_armed_passes "armed_fresh_normal"         "I'll run the tests now."
+assert_armed_passes "armed_fresh_permission_ask" "Want me to proceed with the next step?"
+assert_armed_passes "armed_fresh_info"           "Looking at the config file."
+
+# ─── ARMED (d=0): gated-axis text → STOP ────────────────────────────────────
+
+assert_armed_blocks "armed_gated_production"  "I'm going to push this to production."
+assert_armed_blocks "armed_gated_deploy"      "Deploying the new image to the cluster."
+assert_armed_blocks "armed_gated_force_push"  "I need to force-push to main here."
+
+# ─── Loop guard: stop_hook_active=true → always silent ───────────────────────
+label="loop_guard_gated"
+path=$(make_unarmed_transcript "$label" "I'm about to push to production.")
 out=$(run_hook "$path" true)
-if [[ -z "$out" ]]; then pass "loop-guard: stop_hook_active=true → silent (no double-block)"; else fail "loop-guard: should be silent, got: $out"; fi
+if [[ -z "$out" ]]; then
+	pass "loop-guard: stop_hook_active=true on gated text → silent"
+else
+	fail "loop-guard: should be silent even on gated text, got: $out"
+fi
 
-# --- Kill-switch env --------------------------------------------------------
-label="disabled_env"
-path=$(make_transcript "$label" "Want me to proceed?")
+label="loop_guard_permission_ask"
+path=$(make_unarmed_transcript "$label" "Want me to proceed?")
+out=$(run_hook "$path" true)
+if [[ -z "$out" ]]; then
+	pass "loop-guard: stop_hook_active=true on permission-ask → silent"
+else
+	fail "loop-guard: should be silent, got: $out"
+fi
+
+# ─── Kill-switch env ─────────────────────────────────────────────────────────
+label="disabled_env_gated"
+path=$(make_unarmed_transcript "$label" "I'm about to push to production.")
 out=$(jq -nc --arg p "$path" '{transcript_path: $p}' | STOP_ACTION_BIAS_HOOK_DISABLED=1 "$HOOK")
-if [[ -z "$out" ]]; then pass "env-disable: positive input but STOP_ACTION_BIAS_HOOK_DISABLED=1 — silent"; else fail "env-disable: should be silent, got: $out"; fi
+if [[ -z "$out" ]]; then
+	pass "env-disable: gated text but STOP_ACTION_BIAS_HOOK_DISABLED=1 → silent"
+else
+	fail "env-disable: should be silent, got: $out"
+fi
 
-# --- Missing transcript -----------------------------------------------------
+# ─── Missing transcript ───────────────────────────────────────────────────────
 out=$(echo '{"transcript_path": "/nonexistent/xyz.jsonl"}' | "$HOOK")
-if [[ -z "$out" ]]; then pass "missing-transcript: silent no-op"; else fail "missing-transcript: should be silent, got: $out"; fi
+if [[ -z "$out" ]]; then
+	pass "missing-transcript: silent no-op"
+else
+	fail "missing-transcript: should be silent, got: $out"
+fi
 
 echo ""
 echo "  Results: $PASSES passed, $FAILS failed"
