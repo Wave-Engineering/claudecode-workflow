@@ -369,6 +369,39 @@ It fetches the job output, launches a sub-agent (Haiku, for cost efficiency) to 
 
 ---
 
+### `/multithread` -- Parallel Discussion Over Independent Items
+
+Converts a serial walk through N independent questions, design holes, or review comments into a concurrent discussion: lay out all threads at once (each with a proposed take), the human batch-answers any subset in one turn, sorted threads drop out, open ones iterate — until dry. Minimizes human round-trips the same way wave-pool minimizes wall-clock.
+
+**When to use it:**
+- Working through an open-questions block in a Dev Spec (e.g. a §5.N section with 5–10 design holes)
+- Triaging a batch of PR review comments or design feedback
+- Any situation with N independent decisions where N serial round-trips would be wasteful
+
+**Examples:**
+
+```
+/multithread docs/agent-smith-devspec.md §5.N   # Walk an open-questions section
+/multithread the open questions                  # Infer from conversation context
+/multithread PR #813 review comments             # Work through PR feedback
+/multithread these: [auth model, rate limiting, error format]  # Ad-hoc list
+/multithread                                     # Infer from most recent list in conversation
+```
+
+**The pattern:**
+1. Enumerate the source into labeled threads `T1…TN` — split items that are two questions, merge items that are one
+2. Annotate dependencies (`T3 depends: T1`) before presenting — the whole edge over a serial walk is declaring couplings on turn one, not discovering them midway
+3. Present all threads at once with a **mandatory take** per thread (reacting is faster than composing)
+4. After the human's batch-answer, report explicitly: `sorted: T1, T3, T7 · still open: T2, T5, T6`
+5. Re-present only open threads with takes updated by resolved ones — loop until dry
+6. Emit a **Decision Record** (`label → decision → rationale`) formatted for the destination (Dev Spec ledger entries, PR reply table, plain list)
+
+**Wave taxonomy:** multithread is wave-pool for dialogue. The unit is a discussion thread; the convergence checkpoint is the inter-wave barrier; loop-until-dry is the same tail-catching discipline wave-pool workflows use.
+
+**When NOT to use it:** Genuinely sequential decisions (each answer reshapes the next question), a single decision (nothing to parallelize), or tightly-coupled items where one choice cascades and rewrites all the others. The independence test: *Would resolving A change what B even asks?* If yes → serial walk. If no → multithread.
+
+---
+
 ## Communication Skills
 
 These handle interaction with external systems: Discord, Slack, voice, and file viewers.
