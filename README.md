@@ -79,7 +79,7 @@ Key features:
 | ibm | `/ibm` | Issue-Branch-PR/MR workflow reminder |
 | issue | `/issue` | Create structured issues (feature, bug, chore, docs, epic) with templates and labels |
 | jfail | `/jfail` | CI job/workflow failure analysis |
-| lazyriver | `/lazyriver` | Goal-seek loop — probe/judge/steer to a plan, upstream of `/devspec` (placeholder — Plan #822 Phase 2) |
+| lazyriver | `/lazyriver` | Goal-seek loop — probe, judge sufficiency, steer, journal until sufficient; escalation-corded; emits a plan (to `/devspec`) or a direct answer |
 | man | `/man` | Display usage information for any installed skill |
 | mmr | `/mmr` | Merge a PR/MR with squash |
 | multithread | `/multithread` | Parallelize discussion/work over independent items (placeholder — Plan #822 Phase 3) |
