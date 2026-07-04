@@ -75,6 +75,7 @@ Supplied by the caller (`/wavemachine` per wave, or a human launching one wave):
 | `targetRepoDir` | the clone the durable worktrees attach to (§4.2) |
 | `kahunaBranch` | the integration target; every flight PR targets this, never the protected branch |
 | `preserveKahuna` | #722: `true` ⇒ persistent per-plan kahuna (shared across a plan's waves) — promote does NOT delete it. Default `false` = per-wave disposable (deleted on promote). See lifecycle below. |
+| `dispatch` | #824: the wave's dispatch hint from `phases-waves.json` (written by `/prepwaves` #823). `fan` ⇒ the planner's conflict-free group runs in parallel; `serialize` / `serialize-preferred` / **absent** ⇒ single-file (one issue per flight-group). Threaded into the engine and **enforced** by the flight loop — see "Dispatch enforcement" below. Absent ⇒ `serialize` (CT-01). |
 | `protectedBranch` | the promotion target on the success exit |
 | `mode` | `auto` (verdict drives promotion) \| `interactive` (verdict returned; human routes) |
 | `planId` | wave plan id — the gate's PR-open node needs it to assemble the kahuna→protected MR body (#687/#5) |
@@ -103,13 +104,42 @@ the `preserveKahuna` flag:
 **Drivers MUST match the flag to the branch shape:** a shared per-plan `kahunaBranch` with
 `preserveKahuna` left false will delete the branch mid-plan and break the remaining waves.
 
+### Dispatch enforcement — the `dispatch` hint governs flight parallelism (#824)
+
+`/prepwaves` (#823) annotates every wave in `phases-waves.json` with a `dispatch` field
+(`fan` / `serialize` / `serialize-preferred`). `/nextwave` — and `/wavemachine`'s per-wave
+launch — **reads that field and threads it into the Workflow `args` (`args.dispatch`)**, and the
+engine **enforces** it. This is not documentation-only: post-#691, the real executor is
+`per-wave-workflow.js`, whose Prime planner partitions the pending issues into a conflict-free
+parallel flight-group by **file conflict** (#705). The dispatch hint is applied on top of that
+partition, as a **ceiling on parallelism** (`skills/nextwave/dispatch.js`, `applyDispatchCeiling`):
+
+- **`dispatch: fan`** → the planner's conflict-free group runs **in parallel** as-is. Fan adds no
+  parallelism of its own; the #705 file-conflict floor still applies underneath, so a `fan` wave is
+  never *less* serialized than the file-conflict analysis demands. *(Asymmetric bias: fanning a wave
+  that should have serialized risks a cross-flight conflict the reconcile loop must unwind;
+  serializing a wave that could have fanned only costs a little wall-clock. The cheap mistake is
+  over-serializing — so an absent or ambiguous hint biases to serialize, never to fan.)*
+- **`dispatch: serialize` / `serialize-preferred` / absent** → **single-file**: the loop builds
+  **one issue per flight-group**, the rest stay pending and schedule in the next iteration.
+  `serialize-preferred` means "serialize unless the operator opts in to fan"; there is no operator
+  opt-in signal at execution time, so the executor treats it as `serialize`.
+- **If `dispatch` is absent, the default is `serialize` (CT-01)** — a backward-compatible default,
+  so an older `phases-waves.json` written before this field existed still executes correctly.
+
+**Ceiling, never a floor.** Dispatch can only make a wave *more* serial (safer) than #705's
+file-conflict partitioning would — it never widens a group or adds an issue. The R-03 intra-dependency
+hard gate is enforced upstream at plan time by `/prepwaves`, so an intra-dep wave already arrives
+annotated `serialize` and never reaches the executor as `fan`.
+
 ## Procedure
 
 1. **Resolve wave inputs.** Read the next pending wave for this Plan (`wave_next_pending`),
    its issue list, the `kahuna_branch` (always populated — `/wavemachine` bootstraps it
-   at Plan launch), the target repo + clone dir, and the protected branch (from
-   `.claude-project.md`). Refuse if `kahuna_branch` is unset — wave state was not
-   bootstrapped through the campaign launch sequence.
+   at Plan launch), the target repo + clone dir, the protected branch (from
+   `.claude-project.md`), and the wave's **`dispatch`** field (from `phases-waves.json`;
+   absent ⇒ `serialize`, CT-01) to thread into `args.dispatch`. Refuse if `kahuna_branch` is
+   unset — wave state was not bootstrapped through the campaign launch sequence.
 2. **Validate specs.** Confirm every wave issue is structurally buildable
    (`spec_validate_structure`). Any INVALID → report and exit (not an error — a Legal Exit).
 3. **Launch the Workflow.** Invoke the single-file artifact `per-wave-workflow.bundled.js`

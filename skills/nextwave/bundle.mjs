@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const DIR = dirname(fileURLToPath(import.meta.url))
-const MODULES = ['wave-status.js', 'resume.js', 'gate.js'] // dependency order: resume imports from wave-status
+const MODULES = ['wave-status.js', 'resume.js', 'gate.js', 'dispatch.js'] // dependency order: resume imports from wave-status; dispatch.js is standalone (#824)
 const MAIN = 'per-wave-workflow.js'
 const OUT = 'per-wave-workflow.bundled.js'
 
