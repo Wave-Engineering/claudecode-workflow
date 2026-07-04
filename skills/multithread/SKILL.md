@@ -18,6 +18,10 @@ Convert a serial walk through N independent questions, design holes, or review
 comments into a concurrent discussion that converges in ≈ log(N) round-trips
 instead of N.
 
+**See Also:** `docs/executor-model-devspec.md` (Plan #822 §8 Story 3.1 — the
+executor model: `/multithread` is the dialogue-facing companion to the
+`/lazyriver` goal-seek loop and the `/wavemachine` plan-execution driver).
+
 **Wave taxonomy position:** multithread is wave-pool for dialogue. The unit is
 a discussion thread; the convergence checkpoint ("sorted / still open") is the
 inter-wave barrier; the loop-until-dry is the same tail-catching discipline
@@ -172,6 +176,105 @@ technique back toward serial.
 
 5. **Don't force it.** Tightly-coupled or genuinely-sequential decisions are
    not independent items. See "When not to use" below.
+
+---
+
+## Canonical Example — agent-smith §5.N (10 threads → 3 rounds)
+
+A worked run against a real shape: the `§5.N Open Questions` block of the
+`agent-smith` Dev Spec — 10 independent design decisions that a serial walk
+would spend 10 round-trips on. Here they close in **3 batched rounds**.
+
+### Round 1 — enumerate, independence pass, present all 10 with takes
+
+Step 0–1 resolve the source to 10 threads and annotate the one coupling found
+(`T2 depends: T1` — the replica naming scheme can't be fixed until we know where
+identity is stored). Step 2 presents everything at once:
+
+```
+| Label | Thread                          | Proposed take                              | Notes        |
+|-------|---------------------------------|--------------------------------------------|--------------|
+| T1    | Identity store: file vs KV      | Project-local file (.claude/…), reboot-durable | keystone |
+| T2    | Replica naming scheme           | pending T1 — best guess: <base>-<n> slug   | depends: T1  |
+| T3    | Max concurrent replicas         | Hard cap (default 8), env-overridable      | —            |
+| T4    | Heartbeat interval              | Adaptive: 5s idle → 1s under load          | —            |
+| T5    | Replica teardown                | pending T4 — graceful drain, timeout TBD   | depends: T4  |
+| T6    | Config source                   | Both: file baseline + env override         | —            |
+| T7    | Log format                      | JSON lines (mcp.jsonl-compatible)          | —            |
+| T8    | Spawn-failure retry             | Exponential backoff, 3 tries, then fail-loud | —          |
+| T9    | Secrets injection               | Mounted file, never env                    | —            |
+| T10   | Health surface                  | HTTP /healthz                              | —            |
+```
+
+Two dependency edges are visible on turn one (`T2→T1`, `T5→T4`), not discovered
+on turn six. Every thread leads with a take, so the user's next single message
+can close many at once.
+
+### Round 1 batch-answer + convergence (Step 3–4)
+
+User replies in one turn: *"T1 file, yes. T3 cap 8 ok. T6 both, yes. T7 JSON
+yes. T9 mounted yes. T10 HTTP yes. Hold T4/T5, and T8 — say more on backoff."*
+
+```
+Sorted:     T1, T3, T6, T7, T9, T10
+Still open: T2 (now unblocked by T1), T4, T5, T8
+```
+
+### Round 2 — re-present only the 4 open threads, takes updated (Step 5)
+
+T1 landed, so T2 is no longer "pending" — its take is now concrete. Sorted
+threads are gone; labels unchanged.
+
+```
+| Label | Thread              | Updated take                                            | Notes       |
+|-------|---------------------|---------------------------------------------------------|-------------|
+| T2    | Replica naming      | T1=file → identity file keys the name: `<host>-<pid>-<n>` | was: depends T1 |
+| T4    | Heartbeat interval  | Adaptive confirmed; 5s/1s — or fixed 2s if simpler?     | —           |
+| T5    | Replica teardown    | pending T4 — drain then SIGTERM; grace = 2× heartbeat   | depends: T4 |
+| T8    | Spawn-failure retry | Backoff 250ms·2^n, cap 4s, 3 tries, then fail-loud      | —           |
+```
+
+User: *"T2 yes. T4 go adaptive. T8 yes. T5 still open — decide the grace number."*
+
+```
+Sorted:     T1, T2, T3, T4, T6, T7, T8, T9, T10
+Still open: T5
+```
+
+### Round 3 — the last thread, unlocked by T4 (Step 5)
+
+T4 resolved to adaptive (1s floor), so T5's "grace = 2× heartbeat" now has a
+concrete number to propose.
+
+```
+| Label | Thread           | Updated take                                          |
+|-------|------------------|-------------------------------------------------------|
+| T5    | Replica teardown | T4=adaptive(1s floor) → drain, then SIGTERM after 2s grace; SIGKILL at 5s |
+```
+
+User: *"T5 yes."* All threads sorted — converge (3 rounds ≤ ⌈log₂10⌉+1 = 5).
+
+### Step 6 — Decision Record (destination: Dev Spec §5.N ledger)
+
+```
+| Label | Thread              | Decision                                      | Ledger    |
+|-------|---------------------|-----------------------------------------------|-----------|
+| T1    | Identity store      | Project-local file, reboot-durable            | D-101     |
+| T2    | Replica naming      | `<host>-<pid>-<n>`, keyed off identity file   | D-102     |
+| T3    | Max concurrent      | Hard cap 8, env-overridable                   | D-103     |
+| T4    | Heartbeat interval  | Adaptive 5s idle → 1s under load              | D-104     |
+| T5    | Replica teardown    | Drain, SIGTERM @ 2s grace, SIGKILL @ 5s       | D-105     |
+| T6    | Config source       | File baseline + env override                  | D-106     |
+| T7    | Log format          | JSON lines                                    | D-107     |
+| T8    | Spawn retry         | 250ms·2^n backoff, cap 4s, 3 tries, fail-loud | D-108     |
+| T9    | Secrets injection   | Mounted file, never env                       | D-109     |
+| T10   | Health surface      | HTTP /healthz                                 | D-110     |
+```
+
+**Result:** 10 independent decisions, 3 round-trips instead of 10. Labels were
+stable across all rounds, dependents (T2, T5) filled in the moment their parents
+landed, and the record is ready to paste into the Dev Spec as `[ledger D-1NN]`
+entries.
 
 ---
 

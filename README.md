@@ -82,7 +82,7 @@ Key features:
 | lazyriver | `/lazyriver` | Goal-seek loop — probe, judge sufficiency, steer, journal until sufficient; escalation-corded; emits a plan (to `/devspec`) or a direct answer |
 | man | `/man` | Display usage information for any installed skill |
 | mmr | `/mmr` | Merge a PR/MR with squash |
-| multithread | `/multithread` | Parallelize discussion/work over independent items (placeholder — Plan #822 Phase 3) |
+| multithread | `/multithread` | Parallel discussion over N independent items — enumerate + label, lead with a take, batch-answer, converge on "sorted / still open", iterate until dry, emit a decision record |
 | name | `/name` | Report or pick agent session identity |
 | nerf | `/nerf` | Context budget system — soft limits, doom modes, scope monitor |
 | nextwave | `/nextwave` | Execute spec-driven sub-agents per wave; reads each wave's `dispatch` hint to fan or serialize |
