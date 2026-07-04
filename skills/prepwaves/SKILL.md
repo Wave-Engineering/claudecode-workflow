@@ -66,8 +66,20 @@ Bound by WAVE_AXIOMS 1 and 10 (`WAVE_AXIOMS.md` at the repo root). `/prepwaves` 
 
    **Single-repo-per-wave validator (Axiom 10).** After computing waves, resolve every issue in each wave to its `owner/repo` (per-issue `repo`, else plan-level `repo`, else the project repo). If any single wave's issues span **more than one** distinct repo, **STOP and refuse** — name the offending wave and its conflicting repos, and tell the planner to split it into serial single-repo phases (expand-contract), never one straddling wave (there is no atomic two-remote promotion). A *phase* may still span repos across its waves (`cross_repo: true`, step 5) — the invariant is per-wave, not per-phase.
 5. **Cross-repo detection.** For each Phase about to be persisted, walk every sub-issue's ref. Resolve each ref's `owner/repo` (per-issue `repo` field, else plan-level `repo`, else the orchestrator's current project repo). Collect distinct repo slugs that differ from the orchestrator's project repo. If the set is non-empty, set `cross_repo: true` and `target_repos: [<slug>, ...]` on that Phase in the plan JSON. Single-repo Phases leave both fields unset. Cheap — no extra LLM calls; pure walk over refs already in `wave_compute`'s output.
-6. **Approval gate.** Wait for explicit user approval. Iterate on the plan here — not during `/nextwave`.
+6. **Approval gate.** Before presenting the plan for approval, verify the current branch:
+   - Resolve the project's protected branch: read `## Branching` from `.claude-project.md` in the repo root; if the file is absent or the field is missing, default to `main`/`master`.
+   - Run `git rev-parse --abbrev-ref HEAD`.
+   - If the result is **not** the protected branch or a branch matching `^release/`, **STOP and refuse approval**: report the current branch and tell the user to check out the project's protected branch first. Feature branches cut from a wrong base target the wrong upstream — this must be correct before the plan is locked in.
+   - Once the branch check passes, present the wave plan and wait for explicit user approval. Iterate on the plan here — not during `/nextwave`.
+
 7. **Persist.** Call `wave_init(plan_json)` — the tool auto-detects existing plans and uses extend mode, preserving completed waves. Use Phase-prefixed wave IDs (e.g., `wave-2a`) to avoid collisions when extending. Cross-repo fields (`cross_repo`, `target_repos`) round-trip without modification (the underlying `wave-status init` writes the plan dict verbatim to `phases-waves.json`).
+
+   **Commit the plan file (required).** After `wave_init` returns, check whether `.claude/status/phases-waves.json` appears in `git status --porcelain` output. If it does (the file is tracked or newly added), commit it:
+   ```
+   git add .claude/status/phases-waves.json
+   git commit -m "chore: persist wave plan for Plan #N"
+   ```
+   If the file does not appear in `git status` (it is gitignored in this repo), the working tree is already clean — no commit needed. Do NOT skip this check. `/wavemachine`'s pre-flight requires a clean base branch (`base branch clean`). Leaving `phases-waves.json` uncommitted in a tracking repo is the #1 cause of "tidy the sandbox" errors when the campaign starts.
 8. **Conditional recipe injection.** If any prepped Phase has `cross_repo: true`, append the cross-repo recipe to this skill's output by `cat`ing `skills/_shared/recipes/cross-repo-wave-orchestration.md`. Format:
 
    ```
