@@ -419,6 +419,7 @@ async function runWave(wave) {
     planId: PLAN_ID,
     mode: 'auto', // the campaign Workflow is auto-mode by definition (§2.4); interactive is the skill driver
     preserveKahuna: wave.preserveKahuna ?? params.preserveKahuna ?? false,
+    dispatch: wave.dispatch ?? 'serialize', // #824 R-06: thread the per-wave dispatch hint (/prepwaves #823) into the spine's args; absent → serialize (CT-01)
   }
   log(`[#749] launching per-wave spine for ${id} (issues ${JSON.stringify(perWaveArgs.issues)})`)
   return workflow({ scriptPath: PER_WAVE_SCRIPT }, perWaveArgs)
