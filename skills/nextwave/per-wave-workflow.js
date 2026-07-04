@@ -64,6 +64,12 @@ import {
   promotePrompt,
   PROMOTE_RESULT,
 } from './gate.js'
+// #824 (Story 1.2, Plan #822) dispatch ceiling seam: the pure, deterministic enforcement of the
+// wave `dispatch` hint /prepwaves (#823) writes into phases-waves.json. normalizeDispatch resolves
+// absent→'serialize' (CT-01); applyDispatchCeiling clamps each planned flight-group toward more
+// serial (fan → parallel group as-is; serialize/serialize-preferred/absent → single-file). Ceiling,
+// never a floor — it only makes a wave MORE serial, never less safe. See dispatch.js.
+import { normalizeDispatch, applyDispatchCeiling } from './dispatch.js'
 
 export const meta = {
   name: 'per-wave-workflow',
@@ -125,6 +131,10 @@ if (ALL_ISSUES.length === 0) {
   )
 }
 const MODE = params.mode ?? 'auto' // 'auto' (gate verdict drives promotion) | 'interactive' (verdict returned, human routes)
+// #824 R-06/CT-01: the wave's dispatch hint (from phases-waves.json via /prepwaves #823, threaded by
+// the launcher into args.dispatch). Governs the flight-group planner as a parallelism CEILING below —
+// 'fan' → parallel group as-is; 'serialize'/'serialize-preferred'/absent → single-file. Absent → 'serialize'.
+const DISPATCH = normalizeDispatch(params.dispatch)
 const PLAN_ID = params.planId ?? null // wave plan id — wave_finalize needs it to assemble the kahuna→protected MR body (#687 promote)
 const budget = params.budget ?? { total: 0, remaining: () => Infinity } // optional cost guard
 const budgetRemaining = typeof budget.remaining === 'function' ? budget.remaining : () => (budget.remaining ?? Infinity) // tolerate `remaining` passed as a number, not a fn
@@ -563,9 +573,14 @@ while (true) {
   })
   if (plan.done || !plan.group || plan.group.length === 0) { halt = 'impasse'; break } // planner can't schedule remaining → human
 
-  const group = plan.group.filter((n) => pending.has(n)) // defensive: only schedule still-pending issues
-  if (group.length === 0) { halt = 'impasse'; break }
-  log(`Group ${groupsRunBase + groupsRun.length + 1}: building [${group.join(', ')}] (merged: [${[...merged].join(', ') || 'none'}])`)
+  const planned = plan.group.filter((n) => pending.has(n)) // defensive: only schedule still-pending issues
+  if (planned.length === 0) { halt = 'impasse'; break }
+  // #824 R-06: apply the wave's dispatch as a CEILING on this group. 'fan' keeps the planner's
+  // conflict-free parallel batch (the #705 file-conflict floor already applied); serialize/
+  // serialize-preferred/absent force ONE issue (single-file) — the rest stay pending and schedule
+  // next iteration. Never widens the group: only ever equal-or-more-serial than the planner (CT-01).
+  const group = applyDispatchCeiling(planned, DISPATCH)
+  log(`Group ${groupsRunBase + groupsRun.length + 1}: building [${group.join(', ')}] (dispatch: ${DISPATCH}; planned: [${planned.join(', ')}]; merged: [${[...merged].join(', ') || 'none'}])`)
 
   // ── SETUP: await a single worktree-creation step BEFORE parallel() (race-safe, §4.2) ──
   const wtMap = await setupWorktrees(group) // SEAM #686 (idempotent)
