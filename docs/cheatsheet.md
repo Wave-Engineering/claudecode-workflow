@@ -39,6 +39,7 @@ Quick reference for all skills and the MCP tools they route to.
 |---------|---------|----------|
 | `/issue` | Create structured issues | `work_item` |
 | `/ibm` | Issue→Branch→PR compliance | `ibm` |
+| `/multithread` | Parallelize discussion over N independent items | — |
 
 ## Ops & Troubleshooting
 
