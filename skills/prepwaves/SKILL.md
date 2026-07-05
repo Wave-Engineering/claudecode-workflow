@@ -13,6 +13,8 @@ description: Validate sub-issue specs, compute dependency waves, prepare for wav
 
 Analyze one or more Plan tracking issues, validate their sub-issue specs, compute dependency-ordered waves, and persist the plan so `/nextwave` can execute it. Supports parallel, serial, and mixed topologies.
 
+**See Also:** `docs/executor-model-devspec.md` (Plan #822 — the executor model: `/prepwaves` computes the per-wave `fan`/`serialize` dispatch hint that `/nextwave` reads; see §5.1 and Story 1.1).
+
 ## Axioms
 
 Bound by WAVE_AXIOMS 1 and 10 (`WAVE_AXIOMS.md` at the repo root). `/prepwaves` is a planning skill, so the campaign-runtime axioms (2–6, 8, 9) bind `/nextwave` and `/wavemachine`, not this skill. **Axiom 1** (serial is a valid topology) governs how it classifies and presents waves; **Axiom 10** (a wave targets exactly one repo) is the plan-time invariant this skill enforces — see the single-repo validator in step 4.
