@@ -39,6 +39,7 @@ from wave_status.state import (
     planning,
     preflight,
     record_mr,
+    resolve_issue_value,
     review,
     save_json,
     show,
@@ -781,6 +782,33 @@ class TestComplete:
         assert state["waves"]["wave-2"]["status"] != "completed"
         # Advance is anchored on the completed wave → next pending is wave-2.
         assert result["current_wave"] == "wave-2"
+
+
+class TestResolveIssueValue:
+    """ENG-7/#849: resolve bare + v3 qualified issue keys for the dashboard read path."""
+
+    def test_bare_key_exact_match(self) -> None:
+        assert resolve_issue_value({"13": {"status": "closed"}}, 13, {}) == {"status": "closed"}
+
+    def test_qualified_key_suffix_match(self) -> None:
+        m = {"owner/repo#13": {"status": "closed"}}
+        assert resolve_issue_value(m, 13, {}).get("status") == "closed"
+        # int or str num both resolve
+        assert resolve_issue_value(m, "13", {}).get("status") == "closed"
+
+    def test_suffix_false_match_guard(self) -> None:
+        # #119 must NOT satisfy a lookup for #19 (the '#' is anchored).
+        m = {"owner/repo#119": {"status": "closed"}}
+        assert resolve_issue_value(m, 19, {}) == {}  # #19 absent → default, NOT the #119 entry
+        assert resolve_issue_value(m, 119, {}).get("status") == "closed"
+
+    def test_bare_preferred_over_scan(self) -> None:
+        m = {"13": {"status": "open"}, "owner/repo#13": {"status": "closed"}}
+        assert resolve_issue_value(m, 13, {}).get("status") == "open"  # exact bare wins
+
+    def test_default_returned_when_absent(self) -> None:
+        assert resolve_issue_value({}, 7, "") == ""  # mr_urls-style string default
+        assert resolve_issue_value({"owner/repo#8": "url"}, 8, "") == "url"  # value type is generic
 
 
 class TestHoldWave:

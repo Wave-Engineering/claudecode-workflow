@@ -22,7 +22,7 @@ No imports outside Python 3.10+ stdlib (except wave_status internals)
 from __future__ import annotations
 
 from wave_status.dashboard.gauge_cards import _deferral_info, _flight_info
-from wave_status.state import current_phase_info
+from wave_status.state import current_phase_info, resolve_issue_value
 
 
 def _compute_gauges(
@@ -98,7 +98,9 @@ def _compute_rail(phases_data: dict, state_data: dict) -> dict:
         phase_closed = sum(
             1
             for num in phase_issues
-            if issues_state.get(str(num), {}).get("status") == "closed"
+            # ENG-7/#849: v3 state.json keys .issues by qualified ref (owner/repo#N);
+            # a bare str(num) misses → issue reads "pending" forever. Resolve both shapes.
+            if resolve_issue_value(issues_state, num, {}).get("status") == "closed"
         )
 
         completed_pct = (phase_closed / phase_total * 100) if phase_total else 0.0

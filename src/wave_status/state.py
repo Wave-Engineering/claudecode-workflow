@@ -409,6 +409,31 @@ def _resolve_issue_key(
     return None
 
 
+def resolve_issue_value(mapping: dict, num: int | str, default=None):
+    """Look up issue *num* in *mapping*, tolerating BOTH bare (``"13"``) and v3
+    qualified (``"owner/repo#13"``) keys [ENG-7 / #849].
+
+    Resolution: exact bare match (``str(num)``) first, else a ``#<num>``-suffix
+    match with the ``#`` ANCHORED so ``#119`` never matches ``#19``. Returns the
+    value at the resolved key, else *default*.
+
+    Non-raising by design — unlike :func:`_resolve_issue_key`, which raises on an
+    ambiguous bare number. This is the DASHBOARD/panel read path (observability);
+    it must degrade gracefully, never crash a whole render on a multi-repo plan
+    where the same bare number exists in two repos (it returns the first qualified
+    match). Generic over the value type: an ``issues`` entry dict OR an ``mr_urls``
+    URL string — the caller supplies the matching *default* (``{}`` or ``""``).
+    """
+    key = str(num)
+    if key in mapping:
+        return mapping[key]
+    suffix = f"#{key}"
+    for k, v in mapping.items():
+        if isinstance(k, str) and k.endswith(suffix):
+            return v
+    return default
+
+
 def _find_next_pending_wave(
     state_data: dict, wave_ids: list[str], anchor: str | None = None
 ) -> str | None:
