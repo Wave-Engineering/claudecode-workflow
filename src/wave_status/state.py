@@ -409,9 +409,17 @@ def _resolve_issue_key(
     return None
 
 
-def _find_next_pending_wave(state_data: dict, wave_ids: list[str]) -> str | None:
-    """Return the ID of the next pending wave after current, or None."""
-    current = state_data.get("current_wave")
+def _find_next_pending_wave(
+    state_data: dict, wave_ids: list[str], anchor: str | None = None
+) -> str | None:
+    """Return the ID of the next pending wave after *anchor*, or None.
+
+    *anchor* defaults to ``current_wave`` (the historical behavior). Callers
+    that completed an explicit wave (``complete(root, wave_id=...)``) pass that
+    wave as the anchor so advancement is relative to the wave the run actually
+    processed, not whatever ``current_wave`` happens to be (ENG-1 / #846).
+    """
+    current = anchor if anchor is not None else state_data.get("current_wave")
     waves_state = state_data.get("waves", {})
 
     # Find the index of the current wave.
@@ -1100,30 +1108,68 @@ def flight_done(n: int, root: Path) -> dict:
     return state_data
 
 
-def complete(root: Path) -> dict:
-    """Set current wave to ``completed`` and advance ``current_wave`` to the
-    next pending wave (or ``None`` if all done) [R-13].
+def hold_wave(wave_id: str, root: Path, detail: str = "") -> dict:
+    """Mark *wave_id* as ``held`` WITHOUT advancing ``current_wave`` [ENG-1 / #846].
+
+    A wave that exits non-promoted (reconcile-blocked / gate SKIPPED /
+    PASS-not-promoted) must NOT be recorded ``completed`` and must NOT advance
+    the campaign pointer — its issue never reached the protected branch, and the
+    ``/wavemachine`` resumability contract prunes a wave only when its terminal
+    disposition is ``promoted`` (design doc §5). Writing ``completed`` on a
+    blocked exit corrupts durable state (marks/skips waves that never ran).
+    ``held`` is the honest "terminal for now" status: the wave stays the current
+    wave so a resume re-attempts it.
+
+    Idempotent — re-holding an already-held wave only refreshes ``hold_detail``
+    and ``last_updated``. NEVER advances ``current_wave``.
+    """
+    d = status_dir(root)
+    state_data = load_state(d / "state.json")
+    waves = state_data.setdefault("waves", {})
+    if wave_id not in waves:
+        raise ValueError(
+            f"Error: wave '{wave_id}' not found in state. "
+            "Run 'init' before holding a wave."
+        )
+    waves[wave_id]["status"] = "held"
+    if detail:
+        waves[wave_id]["hold_detail"] = detail
+    state_data["last_updated"] = _now_iso()
+    save_json(d / "state.json", state_data)
+    return state_data
+
+
+def complete(root: Path, wave_id: str | None = None) -> dict:
+    """Mark a wave ``completed`` and advance ``current_wave`` to the next
+    pending wave (or ``None`` if all done) [R-13, ENG-1 / #846].
+
+    Targets the explicit *wave_id* when given — the waveId the run actually
+    processed — defaulting to ``current_wave`` only when omitted. Keying off the
+    run's waveId (not whatever ``current_wave`` happens to be) prevents pointer
+    drift from marking/recording against the wrong wave (ENG-1). ``complete`` is
+    called ONLY on a genuine (promoted) completion; a non-promoted exit goes
+    through :func:`hold_wave` and never advances the pointer.
 
     Also sets ``current_action`` to ``idle``.
     """
     d = status_dir(root)
     state_data = load_state(d / "state.json")
     plan_data = load_json(d / "phases-waves.json")
-    current_wave = state_data.get("current_wave")
+    target = wave_id if wave_id is not None else state_data.get("current_wave")
 
-    if current_wave is None:
+    if target is None:
         raise ValueError(
             "Error: no current wave is set. "
             "Run 'init' and 'planning' before completing a wave."
         )
 
-    # Mark current wave as completed.
-    if current_wave in state_data.get("waves", {}):
-        state_data["waves"][current_wave]["status"] = "completed"
+    # Mark the target (the run's actual) wave as completed.
+    if target in state_data.get("waves", {}):
+        state_data["waves"][target]["status"] = "completed"
 
-    # Advance to the next pending wave.
+    # Advance to the next pending wave AFTER the one we just completed.
     wave_ids = _all_wave_ids(plan_data)
-    next_wave = _find_next_pending_wave(state_data, wave_ids)
+    next_wave = _find_next_pending_wave(state_data, wave_ids, anchor=target)
     state_data["current_wave"] = next_wave
 
     state_data["current_action"] = {

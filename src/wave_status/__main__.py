@@ -34,6 +34,7 @@ from wave_status.state import (
     flight_done,
     get_project_root,
     hold,
+    hold_wave,
     init_state,
     launching,
     load_json,
@@ -211,9 +212,19 @@ def _cmd_review(args: argparse.Namespace) -> None:
 
 
 def _cmd_complete(args: argparse.Namespace) -> None:
-    """Handle ``complete``."""
+    """Handle ``complete [wave-id]`` — target the run's explicit wave when given
+    (ENG-1 / #846); default to ``current_wave`` when omitted."""
     root = get_project_root()
-    complete(root)
+    complete(root, wave_id=getattr(args, "wave_id", None) or None)
+    _safe_regenerate_dashboard(root)
+
+
+def _cmd_hold_wave(args: argparse.Namespace) -> None:
+    """Handle ``hold-wave <wave-id> [--detail ...]`` — mark a non-promoted wave
+    ``held`` without advancing ``current_wave`` (ENG-1 / #846). Distinct from the
+    coarse-state ``hold`` command (which sets ``current_action``)."""
+    root = get_project_root()
+    hold_wave(args.wave_id, root, detail=args.detail or "")
     _safe_regenerate_dashboard(root)
 
 
@@ -534,7 +545,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_rv.set_defaults(func=_cmd_review)
 
     # complete
-    p_cp = sub.add_parser("complete", help="Complete the current wave")
+    p_cp = sub.add_parser("complete", help="Complete a wave (defaults to the current wave)")
+    p_cp.add_argument(
+        "wave_id",
+        nargs="?",
+        default=None,
+        help="Wave id to complete (ENG-1 / #846); defaults to current_wave when omitted",
+    )
     p_cp.set_defaults(func=_cmd_complete)
 
     # waiting
@@ -563,6 +580,17 @@ def _build_parser() -> argparse.ArgumentParser:
     p_hd = sub.add_parser("hold", help="Coarse state: paused for human attention (HOLD / adjudication)")
     p_hd.add_argument("reason", nargs="?", default="", help="Hold reason")
     p_hd.set_defaults(func=_cmd_hold)
+
+    # hold-wave — durable per-wave 'held' terminal status (ENG-1 / #846).
+    # Distinct from the coarse-state 'hold' above: this sets waves[<id>].status,
+    # NOT current_action, and never advances current_wave.
+    p_hw = sub.add_parser(
+        "hold-wave",
+        help="Mark a non-promoted wave 'held' without advancing current_wave (ENG-1 / #846)",
+    )
+    p_hw.add_argument("wave_id", help="Wave id to hold")
+    p_hw.add_argument("--detail", default="", help="Optional hold detail (why the wave held)")
+    p_hw.set_defaults(func=_cmd_hold_wave)
 
     # durable cross-wave campaign trajectory (#748)
     p_tr = sub.add_parser("trajectory-append", help="Upsert a wave's terminal entry into the durable cross-wave trajectory (judgment seed)")
