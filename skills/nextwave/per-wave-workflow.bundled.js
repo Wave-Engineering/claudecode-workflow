@@ -612,20 +612,74 @@ function ciSignalPrompt({ waveId, kahunaBranch, protectedBranch, targetRepo, prN
   ].join('\n')
 }
 
-// ── 3. review signal (#667: code-reviewer on a worktree of kahuna) ────────────────────
-// agentType feature-dev:code-reviewer with isolation:'worktree' (set at the call site, not
-// here) so the reviewer sees the kahuna branch NATIVELY — no diff-materialization workaround.
-// Scoped to the kahuna-vs-protected diff (CHANGED FILES only, §3.4). pass = no
-// critical/important findings.
-function reviewSignalPrompt({ waveId, kahunaBranch, protectedBranch }) {
+// ── 3. review signal (#847/ENG-5: 2-step stage→review; specialized reviewer PRESERVED) ─
+// The review signal is the ONLY gate signal that reads the code diff. It must NOT provision off
+// `origin/main`: on repos where main is a bare scaffold and real work lives on a release branch,
+// an origin/main worktree reviews an EMPTY tree → passed:false → spurious HOLD on every wave
+// (ENG-5). It is therefore a 2-STEP sub-pipeline (assembled at the call site): a Bash-capable
+// general-purpose STAGE agent fetches + diffs origin/<protected>...origin/<kahuna> and
+// materializes the changed-file set into a durable review workspace; then the SPECIALIZED
+// feature-dev:code-reviewer reviews that workspace. Keeping code-reviewer — NOT the EC-1 swap to
+// general-purpose — is the whole point: code-reviewer has no Bash to fetch/materialize the diff
+// itself, so the stage step feeds it. The diff is ALWAYS origin/<protected>...origin/<kahuna>,
+// NEVER a hard-coded `main`. Scoped to the CHANGED FILES only (§3.4). pass = no critical/important.
+
+// 3a. STAGE — general-purpose (Bash) agent prepares the review workspace + changed-file set.
+function reviewStagePrompt({ waveId, kahunaBranch, protectedBranch, targetRepo, targetRepoDir }) {
   return [
-    `Trust-gate REVIEW signal for wave ${waveId}. You are running on a WORKTREE of ${kahunaBranch}`,
-    `(isolation:'worktree' — the branch is checked out natively; #667). Review the ${kahunaBranch}-vs-`,
-    `${protectedBranch} diff for correctness / architecture / unstated intent — the rung a test cannot`,
+    `Trust-gate REVIEW STAGE for wave ${waveId} of ${targetRepo}. You PREPARE the diff the code`,
+    `reviewer will read — you do NOT review anything. Work in ${targetRepoDir}.`,
+    ``,
+    `1. Fetch BOTH refs from origin (never assume the protected branch is 'main' — it is ${protectedBranch}):`,
+    `     git -C ${targetRepoDir} fetch origin ${protectedBranch} ${kahunaBranch}`,
+    `2. Compute the wave's changed-file set — the ${kahunaBranch}-vs-${protectedBranch} diff:`,
+    `     git -C ${targetRepoDir} diff --name-only origin/${protectedBranch}...origin/${kahunaBranch}`,
+    `   (three-dot: what changed on ${kahunaBranch} since it diverged from ${protectedBranch}.)`,
+    `3. Materialize a durable REVIEW WORKSPACE the (Bash-less) reviewer can read natively — EITHER:`,
+    `     • a git worktree checked out at origin/${kahunaBranch}:`,
+    `         git -C ${targetRepoDir} worktree add --force <workspaceDir> origin/${kahunaBranch}`,
+    `       and return its absolute path as workspaceDir; OR`,
+    `     • if a worktree cannot be created, write the full unified diff to a file in a workspace dir:`,
+    `         git -C ${targetRepoDir} diff origin/${protectedBranch}...origin/${kahunaBranch} > <workspaceDir>/kahuna.diff`,
+    `       and return that dir as workspaceDir.`,
+    `CONSERVATIVE-FAIL: if the fetch errors OR the changed-file set is EMPTY (zero files), return`,
+    `staged=false with the reason in notes — an empty/failed stage must HOLD the gate (the reviewer has`,
+    `nothing sound to read), it must NEVER let the review signal silently pass.`,
+    `Do NOT review, comment on, or modify any code. Return staged (bool), workspaceDir (abs path),`,
+    `changedFiles (JSON array of the changed paths), notes (1-2 sentences; on staged=false, the reason).`,
+  ].join('\n')
+}
+
+// The stage agent's structured return (prepared workspace + changed-file set for the reviewer).
+const REVIEW_STAGE = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['staged'],
+  properties: {
+    staged: { type: 'boolean' }, // true only if a NON-EMPTY diff was materialized
+    workspaceDir: { type: 'string' }, // abs path the reviewer reads (worktree of kahuna, or diff-manifest dir)
+    changedFiles: { type: 'array', items: { type: 'string' } }, // origin/<protected>...origin/<kahuna>
+    notes: { type: 'string' },
+  },
+}
+
+// 3b. REVIEW — the SPECIALIZED feature-dev:code-reviewer reads the STAGED workspace (no Bash needed).
+function reviewSignalPrompt({ waveId, kahunaBranch, protectedBranch, targetRepoDir, workspaceDir, changedFiles }) {
+  const fileList = Array.isArray(changedFiles) && changedFiles.length
+    ? changedFiles.join(', ')
+    : '(the staged changed-file set)'
+  return [
+    `Trust-gate REVIEW signal for wave ${waveId}. The STAGE step already prepared the diff FOR you:`,
+    `the ${kahunaBranch}-vs-${protectedBranch} changed files are materialized in the review workspace`,
+    `${workspaceDir || '<the prepared workspace>'} (a worktree checked out at origin/${kahunaBranch}, or a`,
+    `written diff manifest there). You do NOT need Bash and must NOT fetch anything — read that workspace.`,
+    ``,
+    `Review the ${kahunaBranch}-vs-${protectedBranch} diff (origin/${protectedBranch}...origin/${kahunaBranch},`,
+    `NEVER a hard-coded 'main') for correctness / architecture / unstated intent — the rung a test cannot`,
     `encode (§9 verification ladder).`,
     ``,
-    `SCOPE STRICTLY to the wave's CHANGED FILES (the kahuna-vs-${protectedBranch} diff), NEVER the whole`,
-    `tree (§3.4) — pre-existing baseline debt in untouched files must NOT fail this signal.`,
+    `SCOPE STRICTLY to the wave's CHANGED FILES: ${fileList}. NEVER the whole tree (§3.4) —`,
+    `pre-existing baseline debt in untouched files must NOT fail this signal.`,
     `Pass predicate: passed = NO critical and NO important findings in the changed files. Nits/minor do`,
     `not fail the signal (record them in detail).`,
     `Do NOT modify any code — this is a read-only signal. Return signal="review", passed (bool),`,
@@ -1455,17 +1509,28 @@ if (!halt && pending.size === 0) {
         ciSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, prNumber: promotionPrNumber }),
         { label: 'gate:ci', phase: 'Trust gate', schema: SIG, agentType: 'general-purpose' },
       ).catch((e) => conservativeFail('ci', e)),
-      // 3. review the kahuna-vs-protected diff — code-reviewer on a WORKTREE of kahuna, native checkout (#667)
-      () => agent(
-        reviewSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH }),
-        {
-          label: 'gate:review',
-          phase: 'Trust gate',
-          schema: SIG,
-          agentType: 'feature-dev:code-reviewer',
-          isolation: 'worktree', // worktree of kahuna so the reviewer sees the branch natively (#667)
-        },
-      ).catch((e) => conservativeFail('review', e)),
+      // 3. review the kahuna-vs-protected diff via a 2-STEP stage→review sub-pipeline (#847/ENG-5):
+      //    a Bash-capable general-purpose STAGE agent fetches + diffs origin/<protected>...origin/<kahuna>
+      //    and materializes the changed-file set into a durable workspace; then the SPECIALIZED
+      //    feature-dev:code-reviewer reviews that workspace. code-reviewer is PRESERVED (NOT swapped to
+      //    general-purpose — the EC-1 shortcut): it has no Bash to fetch the diff, so the stage step feeds
+      //    it. The diff is ALWAYS origin/<protected>...origin/<kahuna>, never a hard-coded `main` (the
+      //    empty-tree provisioning bug: an origin/main worktree reviews nothing on release-branch repos).
+      () => (async () => {
+        const staged = await agent(
+          reviewStagePrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR }),
+          { label: 'gate:review:stage', phase: 'Trust gate', schema: REVIEW_STAGE, agentType: 'general-purpose' },
+        )
+        // Conservative-fail on a failed/empty stage (fetch error or zero changed files): the reviewer has
+        // nothing sound to read, so the signal HOLDs — it never PASSes on an unmaterialized diff (ENG-5).
+        if (!staged || !staged.staged || !(Array.isArray(staged.changedFiles) && staged.changedFiles.length)) {
+          return conservativeFail('review', `stage step produced no diff to review: ${staged?.notes || 'staged=false'}`)
+        }
+        return agent(
+          reviewSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepoDir: TARGET_REPO_DIR, workspaceDir: staged.workspaceDir, changedFiles: staged.changedFiles }),
+          { label: 'gate:review', phase: 'Trust gate', schema: SIG, agentType: 'feature-dev:code-reviewer' },
+        )
+      })().catch((e) => conservativeFail('review', e)),
       // 4. trivy HIGH/CRITICAL dependency scan of kahuna
       () => agent(
         trivySignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, targetRepoDir: TARGET_REPO_DIR }),

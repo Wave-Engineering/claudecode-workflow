@@ -59,6 +59,8 @@ import {
   OPEN_PR_RESULT,
   commutativitySignalPrompt,
   ciSignalPrompt,
+  reviewStagePrompt,
+  REVIEW_STAGE,
   reviewSignalPrompt,
   trivySignalPrompt,
   promotePrompt,
@@ -701,17 +703,28 @@ if (!halt && pending.size === 0) {
         ciSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, prNumber: promotionPrNumber }),
         { label: 'gate:ci', phase: 'Trust gate', schema: SIG, agentType: 'general-purpose' },
       ).catch((e) => conservativeFail('ci', e)),
-      // 3. review the kahuna-vs-protected diff — code-reviewer on a WORKTREE of kahuna, native checkout (#667)
-      () => agent(
-        reviewSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH }),
-        {
-          label: 'gate:review',
-          phase: 'Trust gate',
-          schema: SIG,
-          agentType: 'feature-dev:code-reviewer',
-          isolation: 'worktree', // worktree of kahuna so the reviewer sees the branch natively (#667)
-        },
-      ).catch((e) => conservativeFail('review', e)),
+      // 3. review the kahuna-vs-protected diff via a 2-STEP stage→review sub-pipeline (#847/ENG-5):
+      //    a Bash-capable general-purpose STAGE agent fetches + diffs origin/<protected>...origin/<kahuna>
+      //    and materializes the changed-file set into a durable workspace; then the SPECIALIZED
+      //    feature-dev:code-reviewer reviews that workspace. code-reviewer is PRESERVED (NOT swapped to
+      //    general-purpose — the EC-1 shortcut): it has no Bash to fetch the diff, so the stage step feeds
+      //    it. The diff is ALWAYS origin/<protected>...origin/<kahuna>, never a hard-coded `main` (the
+      //    empty-tree provisioning bug: an origin/main worktree reviews nothing on release-branch repos).
+      () => (async () => {
+        const staged = await agent(
+          reviewStagePrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR }),
+          { label: 'gate:review:stage', phase: 'Trust gate', schema: REVIEW_STAGE, agentType: 'general-purpose' },
+        )
+        // Conservative-fail on a failed/empty stage (fetch error or zero changed files): the reviewer has
+        // nothing sound to read, so the signal HOLDs — it never PASSes on an unmaterialized diff (ENG-5).
+        if (!staged || !staged.staged || !(Array.isArray(staged.changedFiles) && staged.changedFiles.length)) {
+          return conservativeFail('review', `stage step produced no diff to review: ${staged?.notes || 'staged=false'}`)
+        }
+        return agent(
+          reviewSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepoDir: TARGET_REPO_DIR, workspaceDir: staged.workspaceDir, changedFiles: staged.changedFiles }),
+          { label: 'gate:review', phase: 'Trust gate', schema: SIG, agentType: 'feature-dev:code-reviewer' },
+        )
+      })().catch((e) => conservativeFail('review', e)),
       // 4. trivy HIGH/CRITICAL dependency scan of kahuna
       () => agent(
         trivySignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, targetRepoDir: TARGET_REPO_DIR }),
