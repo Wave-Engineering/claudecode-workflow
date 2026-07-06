@@ -90,6 +90,51 @@ would just be an *expensive infinite loop* — the characteristic ralph failure 
 
 ---
 
+## Execution Modes — in-session vs. background Workflow
+
+The `probe → journal → judge → steer` loop above runs two ways; the *logic is
+identical*, only *where it runs* differs:
+
+- **In-session (synchronous).** The main agent runs the loop directly in its own
+  context — the original mode. Best for a short goal-seek you want to watch, or
+  when you are already the agent doing the probing.
+- **Background Workflow (detached, #844).** The loop runs as a **background
+  Workflow** — `skills/lazyriver/lazyriver-workflow.bundled.js` — so the
+  operator's session stays interactive while the goal-seek floats. Same
+  architecture the wave engine uses (`per-wave-workflow.js`); it completes the
+  executor model's symmetry — both plan-execution *and* goal-seek run as
+  background Workflows sharing the substrate, keeping their distinct logic.
+
+**Launching the background Workflow** — invoke the Workflow tool with
+`scriptPath: skills/lazyriver/lazyriver-workflow.bundled.js` and `args` (a JSON
+object):
+
+| arg | meaning |
+|-----|---------|
+| `goal` | the goal statement (required) |
+| `journalPath` | durable markdown path the leg agents append to and `resume` reopens (**required** — the Workflow script has no filesystem, so the launcher supplies the path; all journal I/O + timestamps happen inside the leg agents, which have Bash/Write) |
+| `maxLegs` | leg-count cap (default 10) |
+| `resume` | `true` to rehydrate from an existing `journalPath` — the loop never starts cold if a journal exists. Resume is a "keep probing" signal: the diminishing cord counter **resets** (fresh legs, not an instant re-fire); raise `maxLegs` to resume past a leg-cap |
+
+**The verdict** the Workflow returns — the driver *surfaces* it; it is **never a
+silent background stall**:
+
+- `{ outcome: 'sufficient', output: { kind: 'plan' | 'answer', content }, journalPath, legs }`
+  — the goal is met; hand `output` to `/devspec` (plan) or the user (answer), per the Output Contract.
+- `{ outcome: 'escalated', reason, journalPath, legs }` — the **escalation cord**
+  fired (`cord:diminishing` = 2 consecutive zero-finding legs, or `cord:leg-cap`).
+  The driver surfaces the journal + the sufficiency question to the operator,
+  exactly like a wave HOLD. The journal is intact and `resume`-able (CT-04).
+
+**Division of labor** (mirrors the wave engine): the sufficiency *call* is the
+leg agent's judgment; the *cord* is a coded loop-guard in the Workflow script
+(`river.js#cordCheck`) that cannot be forgotten. Source of truth:
+`lazyriver-workflow.js` + `river.js`; regenerate the bundle with
+`node skills/lazyriver/bundle.mjs` (drift-guarded by
+`tests/regression/test_lazyriver_bundle_in_sync.sh`).
+
+---
+
 ## Sufficiency Gate
 
 **Re-evaluated at Step 3 of every leg** — it is the loop's termination condition, not a
