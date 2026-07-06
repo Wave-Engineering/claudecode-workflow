@@ -73,7 +73,7 @@ export function persistIterationPrompt({ waveId, targetRepo, kahunaBranch, newly
     `  Newly-merged issues this iteration: [${newlyMerged.join(', ') || 'none'}].`,
     `  For EACH, in order:`,
     `    a. Resolve the merge reference into ${kahunaBranch}: the PR/MR that merged the issue's`,
-    `       flight branch (wave-${waveId}/issue-<n>) into ${kahunaBranch}. Use the merge-commit or`,
+    `       flight branch (<type>/<n>-${waveId}-<slug>, #848) into ${kahunaBranch}. Use the merge-commit or`,
     `       PR ref if discoverable (gh -R ${targetRepo}); else fall back to the ref "${kahunaBranch}".`,
     `    b. Call wave_record_mr(issue_number=<n>, mr_ref=<resolved ref>). This is keyed on the issue —`,
     `       re-recording an already-recorded issue is an OVERWRITE, not a duplicate. Safe to repeat.`,

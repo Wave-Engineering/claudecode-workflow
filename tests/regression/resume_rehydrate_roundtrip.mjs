@@ -168,12 +168,31 @@ try {
     assert.ok(cm.some((c) => c.includes(wtPathFor(targetRepoDir, waveId, 45))), 'cleanup targets the issue worktree path')
     ok('per-merge cleanup is the 4-point §4.3 sequence with the load-bearing branch -D')
 
-    // terminal cleanup glob shares the wave-<id> stem (single glob cleans dir + branch)
+    // #848/ENG-2: flight branches use a STANDARD prefix — the wave id is an infix, and the terminal
+    // branch glob keys on the -<waveId>- delimiter (`refs/heads/*/*-<waveId>-*`).
     const ct = cleanupTerminalCmds({ targetRepoDir, waveId })
     assert.ok(ct.some((c) => c.includes('worktree prune')), 'terminal prunes the registry')
-    assert.ok(ct.some((c) => c.includes(`wave-${waveId}/`)), 'terminal branch glob shares the wave-<id>/ stem (§4.3 — dir+branch one glob)')
+    assert.ok(ct.some((c) => c.includes(`refs/heads/*/*-${waveId}-*`)), 'terminal branch glob keys on the -<waveId>- infix (#848)')
     assert.ok(ct.some((c) => c.includes('branch -D')), 'terminal deletes wave branches, not just worktrees')
-    ok('terminal cleanup sweeps remaining worktrees + glob-deletes wave-<id>/* branches (both ends, §4.3)')
+    assert.ok(ct.some((c) => c.includes(`rm -rf`) && c.includes(`wave-${waveId}`)), 'the worktree DIR still shares the wave-<id> stem (local path, unaffected by push policy)')
+    ok('terminal cleanup sweeps remaining worktrees + glob-deletes this wave\'s flight branches (both ends, §4.3, #848)')
+
+    // #848: flight-branch naming — allowed standard prefix; wave-scoped, never matches a sibling wave.
+    const ALLOWED = /^(feature|fix|doc|chore)\//
+    const dflt = issueBranchFor(waveId, 8)
+    assert.match(dflt, ALLOWED, 'default flight branch has an allowed standard prefix (feature|fix|doc|chore)/')
+    assert.match(dflt, /^chore\/8-W-7-flight$/, 'default is <chore>/<n>-<waveId>-<slug> with deterministic chore/flight defaults')
+    const typed = issueBranchFor(waveId, 8, { type: 'fix', slug: 'Trust Gate: review!' })
+    assert.equal(typed, 'fix/8-W-7-trust-gate-review', 'type threads through; slug is sanitized (lowercase, non-alnum→-, trimmed)')
+    assert.match(issueBranchFor(waveId, 8, { type: 'bogus' }), /^chore\//, 'an unknown type falls back to chore (deterministic)')
+    // cleanup-glob scoping: the wave's own branches match; a SIBLING wave's + a hand-authored branch do NOT.
+    const globRe = new RegExp('^refs/heads/[^/]+/[^/]*-' + waveId + '-.+$') // mirror git FNM_PATHNAME */*-<waveId>-*
+    const asRef = (b) => `refs/heads/${b}`
+    assert.ok(globRe.test(asRef(issueBranchFor(waveId, 8))), 'this wave\'s flight branch matches the cleanup glob')
+    assert.ok(globRe.test(asRef(issueBranchFor(waveId, 45, { type: 'fix', slug: 'x' }))), 'another issue in this wave matches')
+    assert.ok(!globRe.test(asRef(issueBranchFor('W-71', 8))), 'a sibling wave (W-71) does NOT match W-7\'s glob')
+    assert.ok(!globRe.test('refs/heads/feature/123-foo'), 'a hand-authored feature/123-foo does NOT match')
+    ok('flight-branch naming: allowed prefix, threaded type, sanitized slug; cleanup glob scopes to exactly this wave (#848)')
   } catch (e) { bad('worktree/cleanup command shape', e) }
 } finally {
   rmSync(root, { recursive: true, force: true })

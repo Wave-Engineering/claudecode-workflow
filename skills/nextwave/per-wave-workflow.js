@@ -151,7 +151,7 @@ const COST_FLOOR = params.costFloor ?? 80_000
 // stem shared by dir+branch. The path/branch helpers live in resume.js (the #686 seam owner) so
 // the dir, branch, and the cleanup glob all derive from ONE fs-safe wave-id sanitization (§4.3).
 const WT_ROOT = wtRoot(TARGET_REPO_DIR, WAVE_ID)
-const issueBranch = (n) => issueBranchFor(WAVE_ID, n) // shares the wave-<id>/ stem so `git branch -D wave-<id>/*` cleans both
+const issueBranch = (n) => issueBranchFor(WAVE_ID, n) // #848: <type>/<n>-<waveId>-<slug> (deterministic default type/slug), so the push policy accepts it; the -<waveId>- infix scopes cleanup
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STRUCTURED-RETURN SCHEMAS (real — these are the agent contracts)
@@ -403,7 +403,7 @@ async function setupWorktrees(group) {
 }
 
 // SEAM #686 — per-merge cleanup (FILLED). 4-point sequence per just-merged issue (§4.3):
-// `worktree remove --force` → `worktree prune` → `rm -rf` → `git branch -D wave-<id>/issue-<n>`.
+// `worktree remove --force` → `worktree prune` → `rm -rf` → `git branch -D <type>/<n>-<waveId>-<slug>` (#848).
 // Keeps peak disk ≈ current group. The branch -D is load-bearing (worktree remove leaves the
 // branch behind — pilot 1 accreted dead refs without it). Never halts the wave on a soft error.
 async function cleanupMerged(issues) {
