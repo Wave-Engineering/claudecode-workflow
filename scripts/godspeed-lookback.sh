@@ -164,6 +164,17 @@ _godspeed_notify() {
 	local d="${2:-?}"
 	local N="${GODSPEED_WINDOW:-200}"
 
+	# Operator-facing side-effect kill-switch. When set, the decision logic is
+	# still fully exercised (STOP/ASK still block); only the vox TTS and Discord
+	# post are muted. Auto-suppressed under any CI signal (non-empty $CI) so no
+	# runner needs the explicit export, plus an explicit GODSPEED_NOTIFY_DISABLED
+	# for regression tests that drive the real hook against gated-keyword fixtures
+	# — otherwise every gated test case sprays a real "gated axis detected"
+	# announcement + Discord ping at BJ. (cc-workflow#883, follow-up to #818)
+	if [[ "${GODSPEED_NOTIFY_DISABLED:-0}" == "1" || -n "${CI:-}" ]]; then
+		return 0
+	fi
+
 	# Agent identity (best-effort).
 	local identity_suffix=""
 	local identity_file=""

@@ -29,6 +29,11 @@
 
 set -uo pipefail
 
+# Mute the hook's real vox/Discord side effects — this test drives the real
+# hook against gated-keyword fixtures, which otherwise fire a live "gated axis
+# detected" announcement + Discord ping per case. Decision logic is unaffected.
+export GODSPEED_NOTIFY_DISABLED=1
+
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 HOOK="$REPO_DIR/scripts/stop-action-bias-detector.sh"
 
