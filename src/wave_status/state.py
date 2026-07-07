@@ -1229,6 +1229,23 @@ def hold_wave(wave_id: str, root: Path, detail: str = "") -> dict:
         waves[wave_id]["hold_detail"] = detail
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    # S1.3 / #861 — coded escape hatch (ENG-1 gate-skip-but-hold). A held wave is
+    # a non-promoted terminal: the promotion gate was SKIPPED / HELD / the PASS
+    # did not land (persistTerminal('held', 'gate SKIPPED: …') routes here via the
+    # wave-status CLI). Surface it as a coded gate-override concern so it lands in
+    # FlightDeck's global concern queue (R-05/R-20). ADDITIVE — never changes the
+    # hold decision. The other coded hatches (ENG-2 forced chore-default in
+    # resume.js, ENG-6 self-approved MR in precheck/sdlc, ENG-8 kahuna pre-sync)
+    # live outside state.py and co-deliver with Story 1.5 (sdlc/nextwave).
+    _emit_event(
+        root,
+        "concern",
+        wave=wave_id,
+        concern_kind="gate-override",
+        source="coded",
+        label="wave held (non-promoted)",
+        detail=(detail or None),
+    )
     return state_data
 
 
