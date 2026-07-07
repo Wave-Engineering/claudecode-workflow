@@ -13,6 +13,10 @@
 
 set -uo pipefail
 
+# Mute hook vox/Discord side effects — this hook sources godspeed-lookback.sh
+# and can drive _godspeed_notify; keep the suite silent for the operator.
+export GODSPEED_NOTIFY_DISABLED=1
+
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 HOOK="$REPO_DIR/scripts/precheck-asking-detector.sh"
 

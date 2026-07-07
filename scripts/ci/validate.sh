@@ -19,6 +19,12 @@
 
 set -euo pipefail
 
+# Mute operator-facing hook side effects for the whole suite. Several regression
+# tests drive the real Stop hooks against gated-keyword fixtures; without this
+# every such case would fire a real vox announcement + Discord ping. The hooks'
+# decision logic (block/pass) is unaffected. (cc-workflow#818)
+export GODSPEED_NOTIFY_DISABLED=1
+
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PASS=0
 FAIL=0
