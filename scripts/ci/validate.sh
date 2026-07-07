@@ -25,6 +25,16 @@ set -euo pipefail
 # decision logic (block/pass) is unaffected. (cc-workflow#818)
 export GODSPEED_NOTIFY_DISABLED=1
 
+# Isolate the FlightDeck emit buffer for the whole suite. Several regression tests
+# (e.g. test_wave_engine_e2e_smoke.sh) drive the REAL wave-status CLI, whose
+# mutators now emit a FlightDeck event per mutation (cc-workflow#855). Without this
+# those emits would append to the operator's real ~/.claude/status/events.jsonl.
+# Redirect to a throwaway file and leave the ingest URL unset (buffer-only, no
+# POST). Mirrors tests/conftest.py's autouse isolation for the pytest side.
+FLIGHTDECK_EVENTS_PATH="$(mktemp -u -t flightdeck-validate-events.XXXXXX.jsonl)"
+export FLIGHTDECK_EVENTS_PATH
+unset FLIGHTDECK_INGEST_URL
+
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PASS=0
 FAIL=0
