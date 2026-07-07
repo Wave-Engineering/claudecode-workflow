@@ -357,6 +357,18 @@ def _cmd_wavemachine_stop(args: argparse.Namespace) -> None:
     _print_envelope(result)
 
 
+def _cmd_emit(args: argparse.Namespace) -> None:
+    """Handle ``emit <kind> [opts…]`` — emit one FlightDeck event.
+
+    Delegates verbatim to the events emit CLI (single source of truth for the
+    option surface). Fire-and-forget: it buffers + non-blocking-ships and never
+    regenerates the dashboard.
+    """
+    from wave_status.events.emit import main as emit_main
+
+    emit_main(args.emit_args)
+
+
 def _cmd_show(args: argparse.Namespace) -> None:
     """Handle ``show`` — print summary, NO dashboard regen.
 
@@ -671,6 +683,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Clear wavemachine_active (call from worker on abort or clean exit)",
     )
     p_wst.set_defaults(func=_cmd_wavemachine_stop)
+
+    # emit — FlightDeck event emit (buffer + fire-and-forget ingest, #863).
+    # REMAINDER captures the full emit option surface so the emit CLI stays the
+    # single source of truth (see: python -m wave_status.events.emit -h).
+    p_em = sub.add_parser(
+        "emit",
+        help="Emit one FlightDeck event to the durable buffer + ingest",
+    )
+    p_em.add_argument(
+        "emit_args",
+        nargs=argparse.REMAINDER,
+        help="<kind> [--wave …] [--metric …] … (see the emit CLI -h)",
+    )
+    p_em.set_defaults(func=_cmd_emit)
 
     # show
     p_sh = sub.add_parser("show", help="Print status summary (read-only)")

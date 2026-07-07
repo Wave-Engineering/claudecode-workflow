@@ -18,6 +18,28 @@ from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
+# FlightDeck emit (S1.2 / #855) — ADDITIVE, fire-and-forget instrumentation.
+#
+# Every mutator below emits ONE typed, scope-tagged event AFTER its state has
+# persisted. The emit is a pure side-effect: it never changes a decision, the
+# persisted state, or control flow (if it ever did, that would be a bug in the
+# emit, not the logic). The import is guarded and ``emit_state_event`` itself
+# never raises, so a partial install (events package absent) or an emit bug can
+# never break a state mutation. See src/wave_status/events/emit.py.
+# ---------------------------------------------------------------------------
+
+try:  # pragma: no cover - trivial import guard
+    from wave_status.events import kind_for_action as _kind_for_action
+    from wave_status.events.emit import emit_state_event as _emit_event
+except Exception:  # pragma: no cover
+    def _emit_event(*_a, **_k):
+        return None
+
+    def _kind_for_action(_action):
+        return "step"
+
+
+# ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
 
@@ -633,6 +655,8 @@ def init_state(plan_data: dict, root: Path, *, force: bool = False) -> None:
     # --- flights.json (empty initially) ---
     save_json(d / "flights.json", {"flights": {}})
 
+    _emit_event(root, "activity_start", wave=first_wave, label=plan_data.get("project"))
+
 
 def extend_state(plan_data: dict, root: Path) -> None:
     """Append new phases from *plan_data* to an existing plan.
@@ -784,6 +808,14 @@ def _set_action(root: Path, action: str, label: str, detail: str = "") -> dict:
     }
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    _emit_event(
+        root,
+        _kind_for_action(action),
+        wave=state_data.get("current_wave"),
+        action=action,
+        label=label,
+        detail=(detail or None),
+    )
     return state_data
 
 
@@ -810,6 +842,7 @@ def planning(root: Path) -> dict:
 
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    _emit_event(root, "phase", wave=current_wave, action="planning", label="planning")
     return state_data
 
 
@@ -909,6 +942,9 @@ def append_trajectory(root: Path, wave_id: str, entry: dict) -> dict:
     state_data["trajectory"] = traj
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    _emit_event(
+        root, "step", wave=wave_id, action="trajectory", label="trajectory-recorded"
+    )
     return state_data
 
 
@@ -957,6 +993,7 @@ def set_current_wave(wave_id: str, root: Path) -> dict:
     state_data["current_wave"] = wave_id
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    _emit_event(root, "phase", wave=wave_id, action="set-current-wave", label=wave_id)
     return state_data
 
 
@@ -1002,6 +1039,13 @@ def wavemachine_start(root: Path, launcher: str = "") -> dict:
         state_data["wavemachine_launcher"] = launcher
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    _emit_event(
+        root,
+        "step",
+        wave=state_data.get("current_wave"),
+        action="wavemachine-start",
+        label=(launcher or "wavemachine"),
+    )
     return state_data
 
 
@@ -1026,6 +1070,13 @@ def wavemachine_stop(root: Path) -> dict:
     state_data["current_action"] = {"action": "idle", "label": "idle", "detail": ""}
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    _emit_event(
+        root,
+        "activity_end",
+        wave=state_data.get("current_wave"),
+        action="wavemachine-stop",
+        label="wavemachine-stop",
+    )
     return state_data
 
 
@@ -1082,6 +1133,15 @@ def flight(n: int, root: Path) -> dict:
     }
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    _emit_event(
+        root,
+        "step",
+        wave=current_wave,
+        flight=n,
+        action="in-flight",
+        label=f"flight {n}",
+        detail=detail,
+    )
     return state_data
 
 
@@ -1130,6 +1190,14 @@ def flight_done(n: int, root: Path) -> dict:
     }
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    _emit_event(
+        root,
+        "step",
+        wave=current_wave,
+        flight=n,
+        action="merging",
+        label="merging",
+    )
     return state_data
 
 
@@ -1161,6 +1229,23 @@ def hold_wave(wave_id: str, root: Path, detail: str = "") -> dict:
         waves[wave_id]["hold_detail"] = detail
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    # S1.3 / #861 — coded escape hatch (ENG-1 gate-skip-but-hold). A held wave is
+    # a non-promoted terminal: the promotion gate was SKIPPED / HELD / the PASS
+    # did not land (persistTerminal('held', 'gate SKIPPED: …') routes here via the
+    # wave-status CLI). Surface it as a coded gate-override concern so it lands in
+    # FlightDeck's global concern queue (R-05/R-20). ADDITIVE — never changes the
+    # hold decision. The other coded hatches (ENG-2 forced chore-default in
+    # resume.js, ENG-6 self-approved MR in precheck/sdlc, ENG-8 kahuna pre-sync)
+    # live outside state.py and co-deliver with Story 1.5 (sdlc/nextwave).
+    _emit_event(
+        root,
+        "concern",
+        wave=wave_id,
+        concern_kind="gate-override",
+        source="coded",
+        label="wave held (non-promoted)",
+        detail=(detail or None),
+    )
     return state_data
 
 
@@ -1204,6 +1289,7 @@ def complete(root: Path, wave_id: str | None = None) -> dict:
     }
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    _emit_event(root, "step", wave=target, action="complete", label="promoted")
     return state_data
 
 
@@ -1279,6 +1365,13 @@ def close_issue(n: int | str, root: Path) -> dict:
     state_data["issues"][resolved]["status"] = "closed"
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    _emit_event(
+        root,
+        "step",
+        wave=state_data.get("current_wave"),
+        action="close-issue",
+        label=str(resolved),
+    )
     return state_data
 
 
@@ -1347,6 +1440,14 @@ def record_mr(issue: int | str, mr: str, root: Path) -> dict:
     waves[current_wave].setdefault("mr_urls", {})[resolved] = mr
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    _emit_event(
+        root,
+        "step",
+        wave=current_wave,
+        action="record-mr",
+        label=str(resolved),
+        detail=mr,
+    )
     return state_data
 
 

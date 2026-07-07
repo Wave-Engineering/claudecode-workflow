@@ -131,6 +131,24 @@ def _run_cli_impl(
 # Fixtures
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _isolate_flightdeck_buffer(tmp_path_factory, monkeypatch):
+    """Redirect the FlightDeck emit buffer to a throwaway file for every test.
+
+    state.py mutators emit a FlightDeck event on every mutation (S1.2 / #855).
+    Without this isolation the suite would append to the real
+    ``~/.claude/status/events.jsonl`` and — if the ambient env carried an ingest
+    URL — POST during tests. Points the buffer at a unique tmp file and clears
+    the ingest env so emit is pure-buffer and offline. Tests that exercise the
+    shipper set their own ``FLIGHTDECK_*`` via ``monkeypatch`` (which wins,
+    running after this autouse fixture).
+    """
+    d = tmp_path_factory.mktemp("flightdeck-buf")
+    monkeypatch.setenv("FLIGHTDECK_EVENTS_PATH", str(d / "events.jsonl"))
+    monkeypatch.delenv("FLIGHTDECK_INGEST_URL", raising=False)
+    monkeypatch.delenv("FLIGHTDECK_INGEST_TOKEN", raising=False)
+
+
 @pytest.fixture()
 def temp_git_repo(tmp_path: Path) -> Path:
     """Create a temporary directory with ``git init`` so that
