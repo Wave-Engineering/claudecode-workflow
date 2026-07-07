@@ -502,12 +502,17 @@ Ask the Pair: "Do you want a PM-layer Epic parent tracker to group these Stories
 - **If yes:** Call `work_item(type: "epic", title: "Epic: <theme>", body: <canonical Epic template>, labels: ["type::epic"])`. Then, for each Story issue created in Step 4, apply the `epic::<N>` label (where N is the Epic issue number). This is the sole place the optional Epic PM-layer is wired up; the pipeline itself never reads these labels.
 - **If no:** Skip this step. Stories live directly under the Plan issue via `phases-waves.json`.
 
-### Step 6: Write `phases-waves.json`
+### Step 6: Write `phases-waves.json` (v3 wave-status schema — DIRECTLY)
 
-Assemble a `phases-waves.json` document at `.claude/status/phases-waves.json` (create the directory if needed) with this canonical shape:
+Assemble a `phases-waves.json` document at `.claude/status/phases-waves.json` (create the directory if needed) in the **v3 wave-status schema** — the exact shape `wave-status init` consumes, so a fresh `upshift → wave-status init` bootstraps with ZERO hand-edits (#850/ENG-4). Do NOT emit the legacy `{plan_id, slug, phases:[{name, waves:[{name, stories:[{id, issue}]}]}]}` shape — `wave-status init` (v3) requires top-level `project` and keys every wave by `id` and every issue by `number`; the legacy `waves[].name` + `waves[].stories[].issue` shape fails init (`plan is missing required field 'project'`; `KeyError: 'id'`). The upshift→v3 transform used to live only inside the sdlc `wave_init` handler (`normalizePlanJson`), so the decoupled `wave-status init` CLI path — which `/wavemachine` bootstrap and ENG-3a's own workaround hit — had no normalization. The emitter (this skill) now owns the contract.
+
+Map the `devspec_parse_section_8` output into the v3 shape: each parsed `wave.name` → `wave.id`; each `story.issue` → an `issues[].number`; carry `title`; keep `depends_on` (a harmless extra field v3 ignores):
 
 ```json
 {
+  "project": "Wave-Engineering/claudecode-workflow",
+  "repo": "Wave-Engineering/claudecode-workflow",
+  "base_branch": "main",
   "plan_id": 499,
   "slug": "phase-epic-taxonomy",
   "phases": [
@@ -516,10 +521,10 @@ Assemble a `phases-waves.json` document at `.claude/status/phases-waves.json` (c
       "dod": ["..."],
       "waves": [
         {
-          "name": "P1W1",
-          "stories": [
-            { "id": "1.1", "issue": 501, "title": "...", "depends_on": [] },
-            { "id": "1.2", "issue": 502, "title": "...", "depends_on": ["1.1"] }
+          "id": "P1W1",
+          "issues": [
+            { "number": 501, "title": "...", "depends_on": [] },
+            { "number": 502, "title": "...", "depends_on": ["1.1"] }
           ]
         }
       ]
@@ -528,13 +533,14 @@ Assemble a `phases-waves.json` document at `.claude/status/phases-waves.json` (c
 }
 ```
 
-**Invariants (per R-07, R-18):**
-- `plan_id` is the Plan issue number (never `epic_id` — that field is retired).
-- Every Story has a `depends_on` field, even if empty (`[]`). Absence is an error.
-- Every Story has an `issue` field linking to the Story issue number created in Step 4.
-- `slug` is the kebab-case slug used for kahuna branch naming (`kahuna/<plan_id>-<slug>`).
+**Invariants (v3 wave-status schema; per R-07, R-18):**
+- **`project`** (top-level, REQUIRED) — the `owner/repo` slug of the target repo. `wave-status init` rejects a plan without it. Also emit **`repo`** (same `owner/repo`, so `.issues` keys qualify as `owner/repo#N`) and **`base_branch`** (the protected branch, e.g. `main`).
+- Every wave has an **`id`** (e.g. `P1W1`) — NOT `name`. `wave-status init` keys wave state by `id` (a missing `id` is a KeyError at init).
+- Every wave has an **`issues`** array (NOT `stories`); every issue has a **`number`** (the Story issue created in Step 4) — NOT an `issue`/`id` field. `issues` must be non-empty.
+- Every issue keeps its **`depends_on`** field, even if empty (`[]`) — a harmless extra field v3 ignores (topology still comes from the wave partition). Absence is not an error for v3 init, but keep it for downstream planners.
+- `plan_id` is the Plan issue number (never `epic_id` — retired). `slug` is the kebab-case slug for kahuna branch naming (`kahuna/<plan_id>-<slug>`).
 
-Write the file. This is the authoritative input that `/prepwaves` will consume.
+Write the file. A fresh `wave-status init .claude/status/phases-waves.json` must load it clean (schema_version 3) with no hand-edit — verify with the round-trip test `tests/test_devspec_upshift_roundtrip.py`. This is the authoritative input `/prepwaves` and `/wavemachine` consume.
 
 ### Step 7: Backfill Issue Numbers
 
@@ -567,7 +573,7 @@ phases-waves.json written to .claude/status/phases-waves.json
   plan_id: <plan_id>
   phases: N
   waves: M
-  stories: K  (all with depends_on field)
+  issues: K  (v3: waves[].issues[].number; each keeps depends_on)
 
 Plan issue #<plan_id> updated: Phases checklist backfilled.
 ```

@@ -94,9 +94,37 @@ function clampNonNeg(v) {
 
 // fs-safe wave id (mirror wave-status.js blobPath sanitization so dir/branch/blob agree).
 export const safeWaveId = (waveId) => String(waveId).replace(/[^A-Za-z0-9._-]/g, '_')
+// The worktree DIR keeps the wave-<id>/issue-<n> stem — it is a local filesystem path, NOT a
+// pushed ref, so branch_name_regex push policies never see it (#848: only the BRANCH changes).
 export const wtRoot = (targetRepoDir, waveId) => `${targetRepoDir}/.claude/.worktrees/wave-${safeWaveId(waveId)}`
 export const wtPathFor = (targetRepoDir, waveId, n) => `${wtRoot(targetRepoDir, waveId)}/issue-${n}`
-export const issueBranchFor = (waveId, n) => `wave-${safeWaveId(waveId)}/issue-${n}`
+
+// Allowed flight-branch types — the standard prefixes a conventional branch_name_regex accepts
+// (`(release|feature|fix|doc|chore)/.*`). Anything else falls back to the deterministic default.
+const FLIGHT_BRANCH_TYPES = new Set(['feature', 'fix', 'doc', 'chore'])
+// slug: lowercase, non-alnum → '-', collapsed, trimmed, length-capped. Empty → '' (caller defaults).
+function slugify(s) {
+  return String(s ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/g, '')
+}
+// #848/ENG-2 — flight branches use a STANDARD prefix `<type>/<issueNum>-<waveId>-<slug>` so a
+// conventional branch_name_regex push policy (`(main|(release|feature|fix|doc|chore|kahuna)/.*)`)
+// ACCEPTS the push (the old `wave-<id>/issue-<n>` was rejected → the flight branch never reached
+// origin → reconcile HOLD, feeding ENG-1). `type` comes from the issue's label when threadable;
+// it defaults DETERMINISTICALLY to 'chore' otherwise (issue labels are not yet threaded to this
+// grain — tracked as a follow-up). `slug` comes from the issue title when available and defaults
+// to 'flight' so the branch ALWAYS ends `-<waveId>-<slug>`, which keeps the wave-scoped cleanup
+// glob's `-<waveId>-` delimiter reliable (never a bare `-<waveId>` tail that a sibling wave-id
+// prefix-matches, e.g. W-1 vs W-12).
+export const issueBranchFor = (waveId, n, { type, slug } = {}) => {
+  const t = FLIGHT_BRANCH_TYPES.has(String(type)) ? String(type) : 'chore'
+  const s = slugify(slug) || 'flight'
+  return `${t}/${n}-${safeWaveId(waveId)}-${s}`
+}
 
 // Setup (§4.2 + the §4.3 setup-sweep): for ONE issue, the idempotent create sequence.
 // `branchExists` lets the caller (or test) pick the reuse path vs the create path:
@@ -117,7 +145,7 @@ export function worktreeSetupCmds({ targetRepoDir, waveId, kahunaBranch, issue, 
 }
 
 // Per-merge cleanup (§4.3): the 4-point sequence for ONE just-merged issue.
-// worktree remove --force → worktree prune → rm -rf → git branch -D wave-<id>/issue-<n>.
+// worktree remove --force → worktree prune → rm -rf → git branch -D <type>/<n>-<waveId>-<slug> (#848).
 // `worktree remove` leaves the branch behind, so the explicit branch -D is load-bearing
 // (pilot 1 accreted dead refs without it). Every step tolerates already-absent (idempotent).
 export function cleanupMergedCmds({ targetRepoDir, waveId, issue }) {
@@ -132,19 +160,25 @@ export function cleanupMergedCmds({ targetRepoDir, waveId, issue }) {
   ]
 }
 
-// Wave-terminal cleanup (§4.3): sweep the wave's REMAINING worktrees + prune + glob-delete
-// every wave-<id>/* branch. The dir and branches share the wave-<id> stem so a single glob
-// (`git branch -D wave-<id>/*`, plus rm -rf of the wave dir) cleans both.
+// Wave-terminal cleanup (§4.3): sweep the wave's REMAINING worktrees + prune + glob-delete every
+// flight branch for THIS wave. Flight branches now carry a standard prefix (#848) — the wave id is
+// an INFIX (`<type>/<issueNum>-<waveId>-<slug>`), not a path stem — so the branch glob keys on the
+// `-<waveId>-` delimiter: `refs/heads/*/*-<waveId>-*` with FNM_PATHNAME (git's `*` never crosses `/`)
+// matches exactly this wave's two-segment flight branches and NOTHING else. Verified: W-1's glob
+// matches chore/846-W-1-slug + fix/847-W-1-slug but NOT chore/846-W-12-slug (sibling wave) nor a
+// hand-authored feature/123-foo. The always-present `-<slug>` tail (issueBranchFor never emits a
+// bare `-<waveId>` end) keeps the trailing delimiter reliable. The worktree DIR still shares the
+// wave-<id> stem (local path, unaffected by push policy) so `rm -rf` of the wave root cleans it.
 export function cleanupTerminalCmds({ targetRepoDir, waveId }) {
   const root = wtRoot(targetRepoDir, waveId)
-  const branchGlob = `wave-${safeWaveId(waveId)}/*`
+  const branchGlob = `*/*-${safeWaveId(waveId)}-*` // <type>/<n>-<waveId>-<slug>; -<waveId>- delimiter scopes to this wave
   const g = `git -C ${q(targetRepoDir)}`
   return [
     // remove each remaining registered worktree under the wave root, then prune the registry
     `for wt in ${q(root)}/issue-*; do [ -e "$wt" ] && ${g} worktree remove --force "$wt" 2>/dev/null || true; done`,
     `${g} worktree prune`,
     `rm -rf ${q(root)}`,
-    // delete every branch under the wave stem (worktree remove leaves branches behind).
+    // delete every flight branch for this wave (worktree remove leaves branches behind).
     // SINGLE-QUOTE the refs pattern: it is a git ref-glob, NOT a shell glob — unquoted, a shell with
     // nullglob/failglob set would expand it against the cwd (→ empty/error → for-each-ref lists ALL
     // refs → branch -D nukes every local branch). safeWaveId guarantees [A-Za-z0-9._-], so the quote is safe.

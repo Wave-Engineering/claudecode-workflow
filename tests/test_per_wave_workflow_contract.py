@@ -48,6 +48,41 @@ class TestFourSignalFanout:
         assert "parallel(" in _wf_src(), "the four trust signals must fan out via parallel()"
 
 
+class TestReviewStageThenReview:
+    """ENG-5/#847: the review signal is a 2-step stage→review sub-pipeline that
+    KEEPS the specialized feature-dev:code-reviewer (a stage agent materializes
+    the diff for it); it never provisions off origin/main via isolation:'worktree'."""
+
+    def test_review_is_stage_then_review(self) -> None:
+        src = _wf_src()
+        # A general-purpose STAGE agent runs before the reviewer.
+        assert "reviewStagePrompt" in src, "review must have a stage step (reviewStagePrompt)"
+        assert "gate:review:stage" in src, "the stage step must be labelled gate:review:stage"
+        # ...and the reviewer runs on the staged workspace.
+        assert "reviewSignalPrompt" in src, "review must still run reviewSignalPrompt"
+        # Stage precedes review (staged result is awaited, then fed to reviewSignalPrompt).
+        assert src.index("reviewStagePrompt") < src.index("reviewSignalPrompt"), (
+            "the stage step must precede the review step"
+        )
+
+    def test_review_agent_type_preserved(self) -> None:
+        # Guard against regression to general-purpose: the REVIEW step keeps the
+        # specialized reviewer. (The stage step is the only general-purpose part.)
+        src = _wf_src()
+        assert "feature-dev:code-reviewer" in src, (
+            "the review step must keep agentType feature-dev:code-reviewer (not swap to general-purpose)"
+        )
+
+    def test_no_isolation_worktree_call_site(self) -> None:
+        # The stale EC-1 leftover: isolation:'worktree' provisioned off origin/main
+        # (empty tree on release-branch repos). The stage step replaces it — no call
+        # site may pass isolation:'worktree' anymore.
+        src = _wf_src()
+        assert "isolation: 'worktree'" not in src and 'isolation: "worktree"' not in src, (
+            "no agent call site may use isolation:'worktree' (ENG-5 removed the empty-tree provisioning)"
+        )
+
+
 class TestConservativeFail:
     """A signal that errors — or a null SDK slot — becomes a conservative-fail,
     never silently dropped (absence-of-evidence must not read as safety)."""

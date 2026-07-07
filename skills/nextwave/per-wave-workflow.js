@@ -59,6 +59,8 @@ import {
   OPEN_PR_RESULT,
   commutativitySignalPrompt,
   ciSignalPrompt,
+  reviewStagePrompt,
+  REVIEW_STAGE,
   reviewSignalPrompt,
   trivySignalPrompt,
   promotePrompt,
@@ -149,7 +151,7 @@ const COST_FLOOR = params.costFloor ?? 80_000
 // stem shared by dir+branch. The path/branch helpers live in resume.js (the #686 seam owner) so
 // the dir, branch, and the cleanup glob all derive from ONE fs-safe wave-id sanitization (§4.3).
 const WT_ROOT = wtRoot(TARGET_REPO_DIR, WAVE_ID)
-const issueBranch = (n) => issueBranchFor(WAVE_ID, n) // shares the wave-<id>/ stem so `git branch -D wave-<id>/*` cleans both
+const issueBranch = (n) => issueBranchFor(WAVE_ID, n) // #848: <type>/<n>-<waveId>-<slug> (deterministic default type/slug), so the push policy accepts it; the -<waveId>- infix scopes cleanup
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STRUCTURED-RETURN SCHEMAS (real — these are the agent contracts)
@@ -401,7 +403,7 @@ async function setupWorktrees(group) {
 }
 
 // SEAM #686 — per-merge cleanup (FILLED). 4-point sequence per just-merged issue (§4.3):
-// `worktree remove --force` → `worktree prune` → `rm -rf` → `git branch -D wave-<id>/issue-<n>`.
+// `worktree remove --force` → `worktree prune` → `rm -rf` → `git branch -D <type>/<n>-<waveId>-<slug>` (#848).
 // Keeps peak disk ≈ current group. The branch -D is load-bearing (worktree remove leaves the
 // branch behind — pilot 1 accreted dead refs without it). Never halts the wave on a soft error.
 async function cleanupMerged(issues) {
@@ -701,17 +703,28 @@ if (!halt && pending.size === 0) {
         ciSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, prNumber: promotionPrNumber }),
         { label: 'gate:ci', phase: 'Trust gate', schema: SIG, agentType: 'general-purpose' },
       ).catch((e) => conservativeFail('ci', e)),
-      // 3. review the kahuna-vs-protected diff — code-reviewer on a WORKTREE of kahuna, native checkout (#667)
-      () => agent(
-        reviewSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH }),
-        {
-          label: 'gate:review',
-          phase: 'Trust gate',
-          schema: SIG,
-          agentType: 'feature-dev:code-reviewer',
-          isolation: 'worktree', // worktree of kahuna so the reviewer sees the branch natively (#667)
-        },
-      ).catch((e) => conservativeFail('review', e)),
+      // 3. review the kahuna-vs-protected diff via a 2-STEP stage→review sub-pipeline (#847/ENG-5):
+      //    a Bash-capable general-purpose STAGE agent fetches + diffs origin/<protected>...origin/<kahuna>
+      //    and materializes the changed-file set into a durable workspace; then the SPECIALIZED
+      //    feature-dev:code-reviewer reviews that workspace. code-reviewer is PRESERVED (NOT swapped to
+      //    general-purpose — the EC-1 shortcut): it has no Bash to fetch the diff, so the stage step feeds
+      //    it. The diff is ALWAYS origin/<protected>...origin/<kahuna>, never a hard-coded `main` (the
+      //    empty-tree provisioning bug: an origin/main worktree reviews nothing on release-branch repos).
+      () => (async () => {
+        const staged = await agent(
+          reviewStagePrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR }),
+          { label: 'gate:review:stage', phase: 'Trust gate', schema: REVIEW_STAGE, agentType: 'general-purpose' },
+        )
+        // Conservative-fail on a failed/empty stage (fetch error or zero changed files): the reviewer has
+        // nothing sound to read, so the signal HOLDs — it never PASSes on an unmaterialized diff (ENG-5).
+        if (!staged || !staged.staged || !(Array.isArray(staged.changedFiles) && staged.changedFiles.length)) {
+          return conservativeFail('review', `stage step produced no diff to review: ${staged?.notes || 'staged=false'}`)
+        }
+        return agent(
+          reviewSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepoDir: TARGET_REPO_DIR, workspaceDir: staged.workspaceDir, changedFiles: staged.changedFiles }),
+          { label: 'gate:review', phase: 'Trust gate', schema: SIG, agentType: 'feature-dev:code-reviewer' },
+        )
+      })().catch((e) => conservativeFail('review', e)),
       // 4. trivy HIGH/CRITICAL dependency scan of kahuna
       () => agent(
         trivySignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, targetRepoDir: TARGET_REPO_DIR }),

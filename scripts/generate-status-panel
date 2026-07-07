@@ -46,6 +46,25 @@ def load_json(path: Path) -> dict:
         return json.load(f)
 
 
+def _resolve_issue(mapping: dict, num, default):
+    """Look up issue *num* in *mapping*, tolerating BOTH bare ("13") and v3
+    qualified ("owner/repo#13") keys [ENG-7 / #849].
+
+    Exact bare match (str(num)) first, else a "#<num>"-suffix match with the "#"
+    ANCHORED so "#119" never matches "#19". Returns the value at the resolved key,
+    else *default* (an issues entry dict, or an mr_urls URL string — caller supplies
+    the matching default). Stdlib-only local copy of wave_status.state.resolve_issue_value
+    (this standalone script must stay import-free of the package)."""
+    key = str(num)
+    if key in mapping:
+        return mapping[key]
+    suffix = f"#{key}"
+    for k, v in mapping.items():
+        if isinstance(k, str) and k.endswith(suffix):
+            return v
+    return default
+
+
 def status_icon(status: str) -> str:
     icons = {
         "completed": "&#x2705;",
@@ -112,7 +131,7 @@ def compute_stats(phases: list, state: dict) -> dict:
                 completed_waves += 1
             for issue in wave["issues"]:
                 total_issues += 1
-                issue_state = state.get("issues", {}).get(str(issue["number"]), {})
+                issue_state = _resolve_issue(state.get("issues", {}), issue["number"], {})
                 if issue_state.get("status") == "closed":
                     closed_issues += 1
 
@@ -202,14 +221,14 @@ def render_phase_html(phase: dict, state: dict, flights: dict) -> str:
 
         for issue in wave["issues"]:
             num = issue["number"]
-            issue_state = state.get("issues", {}).get(str(num), {})
+            issue_state = _resolve_issue(state.get("issues", {}), num, {})
             ist = issue_state.get("status", "pending")
             ic = status_class(ist)
             # v3 schema uses `depends_on`; older plans used `deps`. Two-key
             # fallback so the Deps column renders on both (#665).
             issue_deps = issue.get("deps") or issue.get("depends_on", [])
             dep_str = ", ".join(f"#{d}" for d in issue_deps) or "none"
-            mr_str = mr_urls.get(str(num), "")
+            mr_str = _resolve_issue(mr_urls, num, "")
 
             lines.append(
                 f"      <tr>"

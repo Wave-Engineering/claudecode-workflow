@@ -10,6 +10,7 @@ No imports outside Python 3.10+ stdlib  [CT-01].
 from __future__ import annotations
 
 from wave_status.dashboard.theme import PHASE_COLORS
+from wave_status.state import resolve_issue_value
 
 
 def render_progress_rail(phases_data: dict, state_data: dict) -> str:
@@ -44,7 +45,8 @@ def render_progress_rail(phases_data: dict, state_data: dict) -> str:
         for wave in phase.get("waves", []):
             for issue in wave.get("issues", []):
                 total_issues += 1
-                if issues_state.get(str(issue["number"]), {}).get("status") == "closed":
+                # ENG-7/#849: resolve bare AND v3 qualified (owner/repo#N) keys.
+                if resolve_issue_value(issues_state, issue["number"], {}).get("status") == "closed":
                     total_closed += 1
 
     pct = round(100 * total_closed / total_issues) if total_issues else 0
@@ -68,7 +70,7 @@ def render_progress_rail(phases_data: dict, state_data: dict) -> str:
         phase_closed = sum(
             1
             for num in phase_issues
-            if issues_state.get(str(num), {}).get("status") == "closed"
+            if resolve_issue_value(issues_state, num, {}).get("status") == "closed"
         )
 
         # Proportional width as percentage of total issues [R-20]

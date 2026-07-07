@@ -155,6 +155,7 @@ The "fix and re-gate" path is idempotent: calling `wave_finalize` on an epic who
 - **`failed` after a flight validation failure** — Procedure A. Inspect the flight's structured return (recorded in wave-status under `.claude/status/`) and the worktree under `<target>/.claude/.worktrees/wave-<id>/`, fix, re-run `/wavemachine`.
 - **`failed` after a flight rebase conflict** — Procedure B. Resolve the conflict manually in the flight's worktree, push, re-run.
 - **Crash mid-wave (the Workflow or driver exits abnormally)** — Procedure D. Re-run `/wavemachine`; wave-status and the kahuna branch persist on disk and on the platform, and the Workflow rehydrates (SEAM #686) to pick up where the crash hit.
+- **Promotion HOLDs with `no_merge_result_pr` on a persistent per-plan kahuna (`preserveKahuna`)** — every promotion after the first hits an add/add conflict because release advances but nothing merges release back into kahuna (ENG-8). Workaround: pre-sync kahuna with release before each wave (or reactively unblock a stuck MR) — see the [KAHUNA ↔ release pre-sync runbook](operations/kahuna-release-presync.md). The real engine fix is tracked separately.
 
 ---
 
@@ -198,5 +199,6 @@ You can, but you shouldn't. The branch is owned by the wave run. If you want to 
 - **Architecture deep-dive:** [`docs/kahuna-devspec.md`](kahuna-devspec.md) — full Dev Spec including requirements, design, test plan, and VRTM.
 - **Current wave-execution architecture:** [`docs/wavemachine-workflows-migration.md`](wavemachine-workflows-migration.md) §3/§5 — the dynamic-workflows engine (the per-wave Workflow spine, the campaign loop, state via return values + wave-status). This supersedes the legacy `docs/wavemachine-v2-integration.md` (Orchestrator/Prime/Flight protocol + filesystem bus), which is **historical** — retired by the #691 cutover.
 - **Onboarding tour:** run `/ccwork tour workflow` for the standard Issue → Branch → Code → Precheck → Ship loop. The KAHUNA-specific tour section will be added in `tours/sdlc.md` (forthcoming).
+- **kahuna ↔ release pre-sync (ENG-8 workaround):** [`docs/operations/kahuna-release-presync.md`](operations/kahuna-release-presync.md) — keep a persistent per-plan kahuna mergeable into release across a multi-wave campaign (pre-sync before each wave; reactive unblock for a stuck promotion MR). Manual workaround only — the real engine fix is tracked elsewhere.
 - **Concepts:** [`docs/concepts.md`](concepts.md) — how skills, scripts, and settings fit together.
 - **Getting started:** [`docs/getting-started.md`](getting-started.md) — first-session walkthrough; KAHUNA is the next step after that loop is comfortable.

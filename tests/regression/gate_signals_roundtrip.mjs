@@ -18,6 +18,8 @@ import {
   OPEN_PR_RESULT,
   commutativitySignalPrompt,
   ciSignalPrompt,
+  reviewStagePrompt,
+  REVIEW_STAGE,
   reviewSignalPrompt,
   trivySignalPrompt,
   promotePrompt,
@@ -83,11 +85,29 @@ try {
   assert.equal(OPEN_PR_RESULT.properties.pr_number.type, 'integer')
   ok('open-pr prompt: wave_finalize DRAFT, idempotent, never merges; OPEN_PR_RESULT requires boolean opened (#5)')
 
-  const rv = reviewSignalPrompt(A)
-  assert.match(rv, /worktree/i) // #667: runs on a worktree of kahuna
+  // #847/ENG-5: review is a 2-step stage→review sub-pipeline; diff is origin/<protected>...origin/<kahuna>,
+  // NEVER a hard-coded `main`. Use a release-branch fixture so a stray `origin/main` is a real failure.
+  const RVW = {
+    waveId: 'W-7', kahunaBranch: 'kahuna/692-x', protectedBranch: 'release',
+    targetRepo: 'org/repo', targetRepoDir: '/tmp/repo',
+    workspaceDir: '/tmp/rvw-wt', changedFiles: ['src/a.js', 'src/b.py'],
+  }
+  const stage = reviewStagePrompt(RVW)
+  assert.match(stage, /fetch origin release kahuna\/692-x/) // fetches BOTH refs by name (never assumes main)
+  assert.match(stage, /origin\/release\.\.\.origin\/kahuna\/692-x/) // diffs origin/<protected>...origin/<kahuna>
+  assert.match(stage, /CONSERVATIVE-FAIL/i) // empty/failed stage HOLDs, never silent pass
+  assert.ok(!/origin\/main/.test(stage), 'stage must NOT reference origin/main (protected=release)')
+  assert.equal(REVIEW_STAGE.required[0], 'staged')
+  assert.equal(REVIEW_STAGE.properties.staged.type, 'boolean')
+  ok('review STAGE prompt: fetch+diff origin/<protected>...origin/<kahuna>, conservative-fail on empty (ENG-5)')
+
+  const rv = reviewSignalPrompt(RVW)
+  assert.match(rv, /origin\/release\.\.\.origin\/kahuna\/692-x/) // base-ref: origin/<protected>...origin/<kahuna>
+  assert.ok(!/origin\/main/.test(rv), 'review prompt must NEVER reference origin/main (protected=release)')
   assert.match(rv, /CHANGED FILES/) // diff-scoped (§3.4)
+  assert.match(rv, /src\/a\.js/) // scoped to the staged changed-file set
   assert.match(rv, /critical/i); assert.match(rv, /important/i) // pass predicate
-  ok('review prompt: worktree-of-kahuna + diff-scoped + no critical/important (#667, §3.4)')
+  ok('review prompt: reads staged workspace + origin/<protected>...origin/<kahuna> + diff-scoped (ENG-5, §3.4)')
 
   const tv = trivySignalPrompt(A)
   assert.match(tv, /trivy fs --scanners vuln --severity HIGH,CRITICAL/)

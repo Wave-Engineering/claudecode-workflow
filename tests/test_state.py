@@ -30,6 +30,7 @@ from wave_status.state import (
     flight,
     flight_done,
     get_project_root,
+    hold_wave,
     html_path,
     init_state,
     load_json,
@@ -38,6 +39,7 @@ from wave_status.state import (
     planning,
     preflight,
     record_mr,
+    resolve_issue_value,
     review,
     save_json,
     show,
@@ -762,6 +764,83 @@ class TestComplete:
         save_json(d / "phases-waves.json", {"project": "x", "phases": []})
         with pytest.raises(ValueError, match="Error:.*no current wave"):
             complete(tmp_path)
+
+    def test_complete_targets_explicit_wave(self, project_root: Path) -> None:
+        """[ENG-1/#846] complete(root, '<id>') marks the explicit wave completed
+        (keyed off the run's waveId, not a drifted current_wave) and advances."""
+        planning(project_root)
+        # Drift current_wave to a DIFFERENT wave than the one the run processed.
+        d = status_dir(project_root)
+        st = load_json(d / "state.json")
+        st["current_wave"] = "wave-2"  # simulate pointer drift
+        save_json(d / "state.json", st)
+        # The run actually processed wave-1 → complete THAT wave explicitly.
+        result = complete(project_root, wave_id="wave-1")
+        state = load_json(d / "state.json")
+        assert state["waves"]["wave-1"]["status"] == "completed"
+        # wave-2 (the drifted pointer) must NOT have been marked completed.
+        assert state["waves"]["wave-2"]["status"] != "completed"
+        # Advance is anchored on the completed wave → next pending is wave-2.
+        assert result["current_wave"] == "wave-2"
+
+
+class TestResolveIssueValue:
+    """ENG-7/#849: resolve bare + v3 qualified issue keys for the dashboard read path."""
+
+    def test_bare_key_exact_match(self) -> None:
+        assert resolve_issue_value({"13": {"status": "closed"}}, 13, {}) == {"status": "closed"}
+
+    def test_qualified_key_suffix_match(self) -> None:
+        m = {"owner/repo#13": {"status": "closed"}}
+        assert resolve_issue_value(m, 13, {}).get("status") == "closed"
+        # int or str num both resolve
+        assert resolve_issue_value(m, "13", {}).get("status") == "closed"
+
+    def test_suffix_false_match_guard(self) -> None:
+        # #119 must NOT satisfy a lookup for #19 (the '#' is anchored).
+        m = {"owner/repo#119": {"status": "closed"}}
+        assert resolve_issue_value(m, 19, {}) == {}  # #19 absent → default, NOT the #119 entry
+        assert resolve_issue_value(m, 119, {}).get("status") == "closed"
+
+    def test_bare_preferred_over_scan(self) -> None:
+        m = {"13": {"status": "open"}, "owner/repo#13": {"status": "closed"}}
+        assert resolve_issue_value(m, 13, {}).get("status") == "open"  # exact bare wins
+
+    def test_default_returned_when_absent(self) -> None:
+        assert resolve_issue_value({}, 7, "") == ""  # mr_urls-style string default
+        assert resolve_issue_value({"owner/repo#8": "url"}, 8, "") == "url"  # value type is generic
+
+
+class TestHoldWave:
+    """ENG-1/#846: hold_wave() marks a non-promoted wave 'held' without advancing."""
+
+    def test_hold_wave_no_advance(self, project_root: Path) -> None:
+        planning(project_root)
+        before = load_json(status_dir(project_root) / "state.json")["current_wave"]
+        result = hold_wave("wave-1", project_root, detail="gate HOLD: ci")
+        assert result["waves"]["wave-1"]["status"] == "held"
+        assert result["waves"]["wave-1"]["hold_detail"] == "gate HOLD: ci"
+        # current_wave must be UNCHANGED (a held wave is re-attempted, not advanced past).
+        assert result["current_wave"] == before
+
+    def test_skipped_never_completed(self, project_root: Path) -> None:
+        """A SKIPPED/held disposition never yields a 'completed' wave status."""
+        planning(project_root)
+        hold_wave("wave-1", project_root, detail="gate SKIPPED: no changed files")
+        state = load_json(status_dir(project_root) / "state.json")
+        assert state["waves"]["wave-1"]["status"] == "held"
+        assert state["waves"]["wave-1"]["status"] != "completed"
+
+    def test_hold_wave_idempotent(self, project_root: Path) -> None:
+        planning(project_root)
+        hold_wave("wave-1", project_root, detail="first")
+        result = hold_wave("wave-1", project_root, detail="second")
+        assert result["waves"]["wave-1"]["status"] == "held"
+        assert result["waves"]["wave-1"]["hold_detail"] == "second"
+
+    def test_hold_wave_unknown_raises(self, project_root: Path) -> None:
+        with pytest.raises(ValueError, match="Error: wave 'nope' not found"):
+            hold_wave("nope", project_root)
 
 
 # ---------------------------------------------------------------------------

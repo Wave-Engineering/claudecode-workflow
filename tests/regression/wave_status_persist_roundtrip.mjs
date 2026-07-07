@@ -19,7 +19,7 @@ import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
-import { toBlob, blobPath, statusDir } from '../../skills/nextwave/wave-status.js'
+import { toBlob, blobPath, statusDir, persistTerminalPrompt } from '../../skills/nextwave/wave-status.js'
 
 let failures = 0
 const ok = (name) => console.log(`  [PASS] ${name}`)
@@ -98,6 +98,25 @@ try {
     assert.equal(terminalBlob.terminal.disposition, 'promoted')
     assert.deepEqual(terminalBlob.merged, blob.merged) // loop state preserved alongside terminal
     ok('terminal disposition folds into the durable blob without disturbing loop state')
+
+    // 7. ENG-1/#846: persistTerminalPrompt STEP 1 branches on disposition —
+    //    promoted → `wave-status complete <waveId>`; held → `wave-status hold-wave <waveId>`.
+    //    A held wave must NEVER emit `complete` (writing completed on a non-promoted exit
+    //    corrupts durable resume/prune state).
+    const promoteArgs = {
+      waveId: 'W-7', targetRepo: 'o/r', targetRepoDir: '/clone', kahunaBranch: 'kahuna/1-x',
+      protectedBranch: 'release', disposition: 'promoted', detail: 'gate PASS',
+      blob: toBlob(state), path: '/clone/.claude/status/wave-W-7.json', trajectoryEntry: {},
+    }
+    const promotePrompt = persistTerminalPrompt(promoteArgs)
+    assert.ok(promotePrompt.includes('wave-status complete W-7'), 'promoted → wave-status complete <waveId>')
+    assert.ok(!promotePrompt.includes('wave-status hold-wave'), 'promoted must NOT hold-wave')
+    ok('persistTerminalPrompt promoted-branch emits `wave-status complete <waveId>`')
+
+    const heldPrompt = persistTerminalPrompt({ ...promoteArgs, disposition: 'held', detail: 'gate HOLD: ci' })
+    assert.ok(heldPrompt.includes('wave-status hold-wave W-7'), 'held → wave-status hold-wave <waveId>')
+    assert.ok(!/wave-status complete\b/.test(heldPrompt), 'held must NEVER call `complete`')
+    ok('persistTerminalPrompt held-branch emits `hold-wave`, never `complete`')
   } catch (e) {
     bad('round-trip', e)
   }

@@ -91,7 +91,7 @@ function persistIterationPrompt({ waveId, targetRepo, kahunaBranch, newlyMerged,
     `  Newly-merged issues this iteration: [${newlyMerged.join(', ') || 'none'}].`,
     `  For EACH, in order:`,
     `    a. Resolve the merge reference into ${kahunaBranch}: the PR/MR that merged the issue's`,
-    `       flight branch (wave-${waveId}/issue-<n>) into ${kahunaBranch}. Use the merge-commit or`,
+    `       flight branch (<type>/<n>-${waveId}-<slug>, #848) into ${kahunaBranch}. Use the merge-commit or`,
     `       PR ref if discoverable (gh -R ${targetRepo}); else fall back to the ref "${kahunaBranch}".`,
     `    b. Call wave_record_mr(issue_number=<n>, mr_ref=<resolved ref>). This is keyed on the issue —`,
     `       re-recording an already-recorded issue is an OVERWRITE, not a duplicate. Safe to repeat.`,
@@ -128,11 +128,28 @@ function persistTerminalPrompt({ waveId, targetRepo, targetRepoDir, kahunaBranch
     ``,
     `Disposition: "${disposition}" (one of promoted | held). Detail: ${JSON.stringify(detail)}.`,
     ``,
-    `STEP 1 — wave-completion record (idempotent): record this wave's terminal disposition + detail`,
-    `  into the wave-status wave-completion record for ${waveId} (sdlc-server: wave_complete /`,
-    `  wave_finalize as appropriate for the store; if neither applies, the blob in STEP 2 is the`,
-    `  authoritative record). This is a SINGLE keyed entry per wave — overwrite, never append. The`,
-    `  campaign driver's cold-start rehydrate (§5) reads it to prune a 'promoted' wave.`,
+    ...(disposition === 'promoted'
+      ? [
+          `STEP 1 — wave-completion record (idempotent, PROMOTED): the wave reached the protected`,
+          `  branch, so mark it COMPLETED and advance the campaign pointer. Run FROM the target clone`,
+          `  so the CLI resolves the same .claude/status/ that holds the blob (the pre-flight`,
+          `  'command -v wave-status' probe guarantees the deployed console command is on PATH):`,
+          `    cd ${targetRepoDir} && wave-status complete ${waveId}`,
+          `  Pass the waveId EXPLICITLY (never rely on current_wave — ENG-1/#846: keying off a drifted`,
+          `  current_wave marks the wrong wave). 'complete' is idempotent for an already-completed wave.`,
+        ]
+      : [
+          `STEP 1 — wave-completion record (idempotent, HELD): the wave did NOT reach the protected`,
+          `  branch (gate HOLD/SKIPPED, reconcile-blocked, or PASS-not-promoted). Mark it HELD and do`,
+          `  NOT advance the campaign pointer — NEVER call 'complete' on a held wave (ENG-1/#846: a`,
+          `  'completed' write on a non-promoted exit corrupts durable resume/prune state). Run FROM`,
+          `  the target clone so the CLI resolves the same .claude/status/ (the pre-flight`,
+          `  'command -v wave-status' probe guarantees the deployed console command is on PATH):`,
+          `    cd ${targetRepoDir} && wave-status hold-wave ${waveId} --detail <detail>`,
+          `  Pass the waveId EXPLICITLY. Quote <detail> safely for your shell (it may contain colons/`,
+          `  apostrophes); the exact detail is: ${JSON.stringify(detail)}. 'hold-wave' is idempotent`,
+          `  (re-holding only refreshes the detail).`,
+        ]),
     ``,
     `STEP 2 — stamp the durable blob (full overwrite): write EXACTLY this JSON to ${path} (mkdir -p`,
     `  the .claude/status/ dir first; overwrite, do not merge). Its "terminal" field carries the`,
@@ -271,9 +288,37 @@ function clampNonNeg(v) {
 
 // fs-safe wave id (mirror wave-status.js blobPath sanitization so dir/branch/blob agree).
 const safeWaveId = (waveId) => String(waveId).replace(/[^A-Za-z0-9._-]/g, '_')
+// The worktree DIR keeps the wave-<id>/issue-<n> stem — it is a local filesystem path, NOT a
+// pushed ref, so branch_name_regex push policies never see it (#848: only the BRANCH changes).
 const wtRoot = (targetRepoDir, waveId) => `${targetRepoDir}/.claude/.worktrees/wave-${safeWaveId(waveId)}`
 const wtPathFor = (targetRepoDir, waveId, n) => `${wtRoot(targetRepoDir, waveId)}/issue-${n}`
-const issueBranchFor = (waveId, n) => `wave-${safeWaveId(waveId)}/issue-${n}`
+
+// Allowed flight-branch types — the standard prefixes a conventional branch_name_regex accepts
+// (`(release|feature|fix|doc|chore)/.*`). Anything else falls back to the deterministic default.
+const FLIGHT_BRANCH_TYPES = new Set(['feature', 'fix', 'doc', 'chore'])
+// slug: lowercase, non-alnum → '-', collapsed, trimmed, length-capped. Empty → '' (caller defaults).
+function slugify(s) {
+  return String(s ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/g, '')
+}
+// #848/ENG-2 — flight branches use a STANDARD prefix `<type>/<issueNum>-<waveId>-<slug>` so a
+// conventional branch_name_regex push policy (`(main|(release|feature|fix|doc|chore|kahuna)/.*)`)
+// ACCEPTS the push (the old `wave-<id>/issue-<n>` was rejected → the flight branch never reached
+// origin → reconcile HOLD, feeding ENG-1). `type` comes from the issue's label when threadable;
+// it defaults DETERMINISTICALLY to 'chore' otherwise (issue labels are not yet threaded to this
+// grain — tracked as a follow-up). `slug` comes from the issue title when available and defaults
+// to 'flight' so the branch ALWAYS ends `-<waveId>-<slug>`, which keeps the wave-scoped cleanup
+// glob's `-<waveId>-` delimiter reliable (never a bare `-<waveId>` tail that a sibling wave-id
+// prefix-matches, e.g. W-1 vs W-12).
+const issueBranchFor = (waveId, n, { type, slug } = {}) => {
+  const t = FLIGHT_BRANCH_TYPES.has(String(type)) ? String(type) : 'chore'
+  const s = slugify(slug) || 'flight'
+  return `${t}/${n}-${safeWaveId(waveId)}-${s}`
+}
 
 // Setup (§4.2 + the §4.3 setup-sweep): for ONE issue, the idempotent create sequence.
 // `branchExists` lets the caller (or test) pick the reuse path vs the create path:
@@ -294,7 +339,7 @@ function worktreeSetupCmds({ targetRepoDir, waveId, kahunaBranch, issue, branchE
 }
 
 // Per-merge cleanup (§4.3): the 4-point sequence for ONE just-merged issue.
-// worktree remove --force → worktree prune → rm -rf → git branch -D wave-<id>/issue-<n>.
+// worktree remove --force → worktree prune → rm -rf → git branch -D <type>/<n>-<waveId>-<slug> (#848).
 // `worktree remove` leaves the branch behind, so the explicit branch -D is load-bearing
 // (pilot 1 accreted dead refs without it). Every step tolerates already-absent (idempotent).
 function cleanupMergedCmds({ targetRepoDir, waveId, issue }) {
@@ -309,19 +354,25 @@ function cleanupMergedCmds({ targetRepoDir, waveId, issue }) {
   ]
 }
 
-// Wave-terminal cleanup (§4.3): sweep the wave's REMAINING worktrees + prune + glob-delete
-// every wave-<id>/* branch. The dir and branches share the wave-<id> stem so a single glob
-// (`git branch -D wave-<id>/*`, plus rm -rf of the wave dir) cleans both.
+// Wave-terminal cleanup (§4.3): sweep the wave's REMAINING worktrees + prune + glob-delete every
+// flight branch for THIS wave. Flight branches now carry a standard prefix (#848) — the wave id is
+// an INFIX (`<type>/<issueNum>-<waveId>-<slug>`), not a path stem — so the branch glob keys on the
+// `-<waveId>-` delimiter: `refs/heads/*/*-<waveId>-*` with FNM_PATHNAME (git's `*` never crosses `/`)
+// matches exactly this wave's two-segment flight branches and NOTHING else. Verified: W-1's glob
+// matches chore/846-W-1-slug + fix/847-W-1-slug but NOT chore/846-W-12-slug (sibling wave) nor a
+// hand-authored feature/123-foo. The always-present `-<slug>` tail (issueBranchFor never emits a
+// bare `-<waveId>` end) keeps the trailing delimiter reliable. The worktree DIR still shares the
+// wave-<id> stem (local path, unaffected by push policy) so `rm -rf` of the wave root cleans it.
 function cleanupTerminalCmds({ targetRepoDir, waveId }) {
   const root = wtRoot(targetRepoDir, waveId)
-  const branchGlob = `wave-${safeWaveId(waveId)}/*`
+  const branchGlob = `*/*-${safeWaveId(waveId)}-*` // <type>/<n>-<waveId>-<slug>; -<waveId>- delimiter scopes to this wave
   const g = `git -C ${q(targetRepoDir)}`
   return [
     // remove each remaining registered worktree under the wave root, then prune the registry
     `for wt in ${q(root)}/issue-*; do [ -e "$wt" ] && ${g} worktree remove --force "$wt" 2>/dev/null || true; done`,
     `${g} worktree prune`,
     `rm -rf ${q(root)}`,
-    // delete every branch under the wave stem (worktree remove leaves branches behind).
+    // delete every flight branch for this wave (worktree remove leaves branches behind).
     // SINGLE-QUOTE the refs pattern: it is a git ref-glob, NOT a shell glob — unquoted, a shell with
     // nullglob/failglob set would expand it against the cwd (→ empty/error → for-each-ref lists ALL
     // refs → branch -D nukes every local branch). safeWaveId guarantees [A-Za-z0-9._-], so the quote is safe.
@@ -595,20 +646,74 @@ function ciSignalPrompt({ waveId, kahunaBranch, protectedBranch, targetRepo, prN
   ].join('\n')
 }
 
-// ── 3. review signal (#667: code-reviewer on a worktree of kahuna) ────────────────────
-// agentType feature-dev:code-reviewer with isolation:'worktree' (set at the call site, not
-// here) so the reviewer sees the kahuna branch NATIVELY — no diff-materialization workaround.
-// Scoped to the kahuna-vs-protected diff (CHANGED FILES only, §3.4). pass = no
-// critical/important findings.
-function reviewSignalPrompt({ waveId, kahunaBranch, protectedBranch }) {
+// ── 3. review signal (#847/ENG-5: 2-step stage→review; specialized reviewer PRESERVED) ─
+// The review signal is the ONLY gate signal that reads the code diff. It must NOT provision off
+// `origin/main`: on repos where main is a bare scaffold and real work lives on a release branch,
+// an origin/main worktree reviews an EMPTY tree → passed:false → spurious HOLD on every wave
+// (ENG-5). It is therefore a 2-STEP sub-pipeline (assembled at the call site): a Bash-capable
+// general-purpose STAGE agent fetches + diffs origin/<protected>...origin/<kahuna> and
+// materializes the changed-file set into a durable review workspace; then the SPECIALIZED
+// feature-dev:code-reviewer reviews that workspace. Keeping code-reviewer — NOT the EC-1 swap to
+// general-purpose — is the whole point: code-reviewer has no Bash to fetch/materialize the diff
+// itself, so the stage step feeds it. The diff is ALWAYS origin/<protected>...origin/<kahuna>,
+// NEVER a hard-coded `main`. Scoped to the CHANGED FILES only (§3.4). pass = no critical/important.
+
+// 3a. STAGE — general-purpose (Bash) agent prepares the review workspace + changed-file set.
+function reviewStagePrompt({ waveId, kahunaBranch, protectedBranch, targetRepo, targetRepoDir }) {
   return [
-    `Trust-gate REVIEW signal for wave ${waveId}. You are running on a WORKTREE of ${kahunaBranch}`,
-    `(isolation:'worktree' — the branch is checked out natively; #667). Review the ${kahunaBranch}-vs-`,
-    `${protectedBranch} diff for correctness / architecture / unstated intent — the rung a test cannot`,
+    `Trust-gate REVIEW STAGE for wave ${waveId} of ${targetRepo}. You PREPARE the diff the code`,
+    `reviewer will read — you do NOT review anything. Work in ${targetRepoDir}.`,
+    ``,
+    `1. Fetch BOTH refs from origin (never assume the protected branch is 'main' — it is ${protectedBranch}):`,
+    `     git -C ${targetRepoDir} fetch origin ${protectedBranch} ${kahunaBranch}`,
+    `2. Compute the wave's changed-file set — the ${kahunaBranch}-vs-${protectedBranch} diff:`,
+    `     git -C ${targetRepoDir} diff --name-only origin/${protectedBranch}...origin/${kahunaBranch}`,
+    `   (three-dot: what changed on ${kahunaBranch} since it diverged from ${protectedBranch}.)`,
+    `3. Materialize a durable REVIEW WORKSPACE the (Bash-less) reviewer can read natively — EITHER:`,
+    `     • a git worktree checked out at origin/${kahunaBranch}:`,
+    `         git -C ${targetRepoDir} worktree add --force <workspaceDir> origin/${kahunaBranch}`,
+    `       and return its absolute path as workspaceDir; OR`,
+    `     • if a worktree cannot be created, write the full unified diff to a file in a workspace dir:`,
+    `         git -C ${targetRepoDir} diff origin/${protectedBranch}...origin/${kahunaBranch} > <workspaceDir>/kahuna.diff`,
+    `       and return that dir as workspaceDir.`,
+    `CONSERVATIVE-FAIL: if the fetch errors OR the changed-file set is EMPTY (zero files), return`,
+    `staged=false with the reason in notes — an empty/failed stage must HOLD the gate (the reviewer has`,
+    `nothing sound to read), it must NEVER let the review signal silently pass.`,
+    `Do NOT review, comment on, or modify any code. Return staged (bool), workspaceDir (abs path),`,
+    `changedFiles (JSON array of the changed paths), notes (1-2 sentences; on staged=false, the reason).`,
+  ].join('\n')
+}
+
+// The stage agent's structured return (prepared workspace + changed-file set for the reviewer).
+const REVIEW_STAGE = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['staged'],
+  properties: {
+    staged: { type: 'boolean' }, // true only if a NON-EMPTY diff was materialized
+    workspaceDir: { type: 'string' }, // abs path the reviewer reads (worktree of kahuna, or diff-manifest dir)
+    changedFiles: { type: 'array', items: { type: 'string' } }, // origin/<protected>...origin/<kahuna>
+    notes: { type: 'string' },
+  },
+}
+
+// 3b. REVIEW — the SPECIALIZED feature-dev:code-reviewer reads the STAGED workspace (no Bash needed).
+function reviewSignalPrompt({ waveId, kahunaBranch, protectedBranch, targetRepoDir, workspaceDir, changedFiles }) {
+  const fileList = Array.isArray(changedFiles) && changedFiles.length
+    ? changedFiles.join(', ')
+    : '(the staged changed-file set)'
+  return [
+    `Trust-gate REVIEW signal for wave ${waveId}. The STAGE step already prepared the diff FOR you:`,
+    `the ${kahunaBranch}-vs-${protectedBranch} changed files are materialized in the review workspace`,
+    `${workspaceDir || '<the prepared workspace>'} (a worktree checked out at origin/${kahunaBranch}, or a`,
+    `written diff manifest there). You do NOT need Bash and must NOT fetch anything — read that workspace.`,
+    ``,
+    `Review the ${kahunaBranch}-vs-${protectedBranch} diff (origin/${protectedBranch}...origin/${kahunaBranch},`,
+    `NEVER a hard-coded 'main') for correctness / architecture / unstated intent — the rung a test cannot`,
     `encode (§9 verification ladder).`,
     ``,
-    `SCOPE STRICTLY to the wave's CHANGED FILES (the kahuna-vs-${protectedBranch} diff), NEVER the whole`,
-    `tree (§3.4) — pre-existing baseline debt in untouched files must NOT fail this signal.`,
+    `SCOPE STRICTLY to the wave's CHANGED FILES: ${fileList}. NEVER the whole tree (§3.4) —`,
+    `pre-existing baseline debt in untouched files must NOT fail this signal.`,
     `Pass predicate: passed = NO critical and NO important findings in the changed files. Nits/minor do`,
     `not fail the signal (record them in detail).`,
     `Do NOT modify any code — this is a read-only signal. Return signal="review", passed (bool),`,
@@ -886,7 +991,7 @@ const COST_FLOOR = params.costFloor ?? 80_000
 // stem shared by dir+branch. The path/branch helpers live in resume.js (the #686 seam owner) so
 // the dir, branch, and the cleanup glob all derive from ONE fs-safe wave-id sanitization (§4.3).
 const WT_ROOT = wtRoot(TARGET_REPO_DIR, WAVE_ID)
-const issueBranch = (n) => issueBranchFor(WAVE_ID, n) // shares the wave-<id>/ stem so `git branch -D wave-<id>/*` cleans both
+const issueBranch = (n) => issueBranchFor(WAVE_ID, n) // #848: <type>/<n>-<waveId>-<slug> (deterministic default type/slug), so the push policy accepts it; the -<waveId>- infix scopes cleanup
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STRUCTURED-RETURN SCHEMAS (real — these are the agent contracts)
@@ -1138,7 +1243,7 @@ async function setupWorktrees(group) {
 }
 
 // SEAM #686 — per-merge cleanup (FILLED). 4-point sequence per just-merged issue (§4.3):
-// `worktree remove --force` → `worktree prune` → `rm -rf` → `git branch -D wave-<id>/issue-<n>`.
+// `worktree remove --force` → `worktree prune` → `rm -rf` → `git branch -D <type>/<n>-<waveId>-<slug>` (#848).
 // Keeps peak disk ≈ current group. The branch -D is load-bearing (worktree remove leaves the
 // branch behind — pilot 1 accreted dead refs without it). Never halts the wave on a soft error.
 async function cleanupMerged(issues) {
@@ -1438,17 +1543,28 @@ if (!halt && pending.size === 0) {
         ciSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, prNumber: promotionPrNumber }),
         { label: 'gate:ci', phase: 'Trust gate', schema: SIG, agentType: 'general-purpose' },
       ).catch((e) => conservativeFail('ci', e)),
-      // 3. review the kahuna-vs-protected diff — code-reviewer on a WORKTREE of kahuna, native checkout (#667)
-      () => agent(
-        reviewSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH }),
-        {
-          label: 'gate:review',
-          phase: 'Trust gate',
-          schema: SIG,
-          agentType: 'feature-dev:code-reviewer',
-          isolation: 'worktree', // worktree of kahuna so the reviewer sees the branch natively (#667)
-        },
-      ).catch((e) => conservativeFail('review', e)),
+      // 3. review the kahuna-vs-protected diff via a 2-STEP stage→review sub-pipeline (#847/ENG-5):
+      //    a Bash-capable general-purpose STAGE agent fetches + diffs origin/<protected>...origin/<kahuna>
+      //    and materializes the changed-file set into a durable workspace; then the SPECIALIZED
+      //    feature-dev:code-reviewer reviews that workspace. code-reviewer is PRESERVED (NOT swapped to
+      //    general-purpose — the EC-1 shortcut): it has no Bash to fetch the diff, so the stage step feeds
+      //    it. The diff is ALWAYS origin/<protected>...origin/<kahuna>, never a hard-coded `main` (the
+      //    empty-tree provisioning bug: an origin/main worktree reviews nothing on release-branch repos).
+      () => (async () => {
+        const staged = await agent(
+          reviewStagePrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR }),
+          { label: 'gate:review:stage', phase: 'Trust gate', schema: REVIEW_STAGE, agentType: 'general-purpose' },
+        )
+        // Conservative-fail on a failed/empty stage (fetch error or zero changed files): the reviewer has
+        // nothing sound to read, so the signal HOLDs — it never PASSes on an unmaterialized diff (ENG-5).
+        if (!staged || !staged.staged || !(Array.isArray(staged.changedFiles) && staged.changedFiles.length)) {
+          return conservativeFail('review', `stage step produced no diff to review: ${staged?.notes || 'staged=false'}`)
+        }
+        return agent(
+          reviewSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepoDir: TARGET_REPO_DIR, workspaceDir: staged.workspaceDir, changedFiles: staged.changedFiles }),
+          { label: 'gate:review', phase: 'Trust gate', schema: SIG, agentType: 'feature-dev:code-reviewer' },
+        )
+      })().catch((e) => conservativeFail('review', e)),
       // 4. trivy HIGH/CRITICAL dependency scan of kahuna
       () => agent(
         trivySignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, targetRepoDir: TARGET_REPO_DIR }),
