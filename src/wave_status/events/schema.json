@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wave-engineering.dev/flightdeck/events/schema.json",
+  "title": "FlightDeck Event",
+  "description": "The single, versioned event contract for FlightDeck (Dev Spec TC-4 / S0.1). Every state change in the wave-pattern pipeline emits one typed, scope-tagged event against THIS schema. Both the Python emitter (src/wave_status/events/) and the TS ingest service validate against this file (schema, not shared code); it is additively versioned. The event log built from these events is the single source of truth (TC-3).",
+  "schemaVersion": 1,
+  "type": "object",
+  "required": ["kind", "activityId", "ts"],
+  "additionalProperties": true,
+  "properties": {
+    "kind": {
+      "description": "The event kind. One of the eight deterministic emit points.",
+      "$ref": "#/$defs/eventKind"
+    },
+    "activityId": {
+      "description": "Stable identifier for the campaign or float this event belongs to (one card in the UI).",
+      "type": "string",
+      "minLength": 1
+    },
+    "ts": {
+      "description": "ISO-8601 UTC timestamp (e.g. 2026-07-07T12:34:56Z).",
+      "type": "string",
+      "minLength": 1
+    },
+    "schemaVersion": {
+      "description": "The event-contract version this event was emitted against.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "phase": {
+      "description": "Scope tag: phase name/id, when known.",
+      "type": ["string", "null"]
+    },
+    "wave": {
+      "description": "Scope tag: wave id, when known.",
+      "type": ["string", "null"]
+    },
+    "flight": {
+      "description": "Scope tag: flight number/id within a wave, when known.",
+      "type": ["string", "integer", "null"]
+    },
+    "agent": {
+      "description": "Scope tag: the emitting agent identity (Dev-Name), when known.",
+      "type": ["string", "null"]
+    },
+    "logRef": {
+      "description": "Scope tag: a reference resolving to the transcript/log for this scope (the scoped log viewer keys on this).",
+      "type": ["string", "null"]
+    },
+    "action": {
+      "description": "For phase/step/blocked_on_human/ci_wait derived from a state.py current_action, the raw action string (e.g. 'planning', 'in-flight').",
+      "type": ["string", "null"]
+    },
+    "label": {
+      "description": "Human-readable short label for the event.",
+      "type": ["string", "null"]
+    },
+    "detail": {
+      "description": "Free-form detail payload (string or structured)."
+    },
+    "metric": {
+      "description": "For kind=metric, the metric name (e.g. 'latency', 'findings-velocity', 'confidence', 'tokens').",
+      "type": ["string", "null"]
+    },
+    "value": {
+      "description": "For kind=metric, the measured value. May be null for a seamed-absent metric (e.g. the #853-gated token stub — TC-7/R-19: never fabricated)."
+    },
+    "unit": {
+      "description": "For kind=metric, the unit of the value (e.g. 'ms', 'count').",
+      "type": ["string", "null"]
+    },
+    "concernKind": {
+      "description": "For kind=concern, the concern category.",
+      "$ref": "#/$defs/concernKind"
+    },
+    "source": {
+      "description": "For kind=concern, whether the concern was raised by a coded escape hatch or declared by an agent.",
+      "$ref": "#/$defs/concernSource"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "concern" } }, "required": ["kind"] },
+      "then": { "required": ["concernKind", "source"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "metric" } }, "required": ["kind"] },
+      "then": { "required": ["metric"] }
+    }
+  ],
+  "$defs": {
+    "eventKind": {
+      "type": "string",
+      "enum": [
+        "activity_start",
+        "phase",
+        "step",
+        "metric",
+        "concern",
+        "blocked_on_human",
+        "ci_wait",
+        "activity_end"
+      ]
+    },
+    "concernKind": {
+      "type": "string",
+      "enum": [
+        "workaround",
+        "di-seam",
+        "forced-default",
+        "gate-override",
+        "self-approval",
+        "unresolved-todo"
+      ]
+    },
+    "concernSource": {
+      "type": "string",
+      "enum": ["coded", "declared"]
+    },
+    "scopeTags": {
+      "description": "The canonical scope-tag key set carried by every event.",
+      "type": "array",
+      "const": [
+        "activityId",
+        "kind",
+        "phase",
+        "wave",
+        "flight",
+        "agent",
+        "ts",
+        "logRef"
+      ]
+    }
+  }
+}
