@@ -268,6 +268,39 @@ const PERSIST_RESULT = {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// FlightDeck runtime tee (S1.6 / #856). Emit phase/step (+ a token-metric STUB)
+// at each spine agent() node, for the operator's FlightDeck. HARD CONSTRAINT
+// (TC-2): the Workflow SCRIPT does NO file-I/O and NO Date/Math.random — so these
+// helpers are PURE STRING BUILDERS; the actual emit runs INSIDE the agent as a
+// fire-and-forget `wave-status emit` Bash call NAMED IN THE PROMPT, never in the
+// script body. Node latency is derived downstream from consecutive step
+// timestamps (Dev Spec S2.3 — FREE); per-node TOKEN usage is gated on #853 and
+// emitted here ONLY as an explicit null stub (R-19 — never a fabricated number).
+// Applied to the SPINE nodes (rehydrate / plan / reconcile / open-pr / promote);
+// per-node teeing of the parallel workers + the 4 trust signals co-delivers with
+// the #853 token instrumentation (those trust/merge-critical prompts stay
+// untouched here).
+function flightdeckTee(opts) {
+  const ph = (opts && opts.phase) || ''
+  const label = (opts && opts.label) || ''
+  return [
+    ``,
+    `── FlightDeck telemetry (fire-and-forget; do NOT report on it and do NOT let it affect your task) ──`,
+    `As a side action, run these best-effort commands ONCE, ignore any error, then proceed with your real task:`,
+    `  wave-status emit step --activity-id '${WAVE_ID}' --wave '${WAVE_ID}' --phase '${ph}' --label '${label}' || true`,
+    `  # SEAM #853: per-node token usage is not yet available — emit the token metric with NO value (an honest null stub), never a fabricated number.`,
+    `  wave-status emit metric --activity-id '${WAVE_ID}' --wave '${WAVE_ID}' --phase '${ph}' --metric tokens --label '${label}' || true`,
+  ].join('\n')
+}
+
+// teeAgent(prompt, opts): run a real agent() node with the FlightDeck tee appended
+// to its prompt. PURE delegation — string concat + the runtime `agent`; no I/O, no
+// Date. Returns agent()'s promise so any existing `.catch(...)` still chains.
+function teeAgent(prompt, opts) {
+  return agent(prompt + '\n' + flightdeckTee(opts), opts)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SEAM STUBS — return obvious placeholders. The foundational wave-2 issues
 // replace each body with the real sdlc-server-backed implementation. The exact
 // function names + return shapes here ARE the interface contract (see SEAMS.md).
@@ -282,7 +315,7 @@ const PERSIST_RESULT = {
 // (see the `Object.fromEntries(... Number(k) ...)` seed below). The pure read-back logic is
 // resume.js parseRehydrate (unit-tested); the agent is the file read the script can't do itself.
 async function rehydrate() {
-  const seed = await agent(
+  const seed = await teeAgent(
     rehydratePrompt({ waveId: WAVE_ID, allIssues: ALL_ISSUES, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR }),
     { label: 'rehydrate', phase: 'Rehydrate', schema: REHYDRATE, agentType: 'general-purpose' },
   ).catch((e) => {
@@ -567,7 +600,7 @@ while (true) {
   if (budget.total && budgetRemaining() < COST_FLOOR) { halt = 'cost'; break } // stop before the ceiling
 
   // ── PLAN next group from CURRENT state (Prime; judgment) ──
-  const plan = await agent(primePlanPrompt(merged, pending, lastRework), {
+  const plan = await teeAgent(primePlanPrompt(merged, pending, lastRework), {
     label: `plan:${groupsRunBase + groupsRun.length + 1}`,
     phase: 'Flight loop',
     schema: NEXTGROUP,
@@ -608,7 +641,7 @@ while (true) {
   const implemented = built.filter((w) => w.status === 'implemented' || w.status === 'already-present')
 
   // ── MERGE + RECONCILE (Prime(post-flight) — the ONLY cross-flight view) ──
-  const rec = await agent(primeReconcilePrompt(implemented, merged), {
+  const rec = await teeAgent(primeReconcilePrompt(implemented, merged), {
     label: `merge:${groupsRunBase + groupsRun.length + 1}`,
     phase: 'Flight loop',
     schema: RECONCILE,
@@ -666,7 +699,7 @@ if (!halt && pending.size === 0) {
   // PR here gives the CI signal a real pipeline AND prevents a green CI from auto-merging before
   // the gate has weighed all four signals. If the PR can't be opened (kahuna branch/artifacts
   // missing), the gate HOLDs — we cannot prove a wave we cannot even PR (conservative, §3.4).
-  const prOpen = await agent(
+  const prOpen = await teeAgent(
     openPromotionPrPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR, planId: PLAN_ID }),
     { label: 'gate:open-pr', phase: 'Trust gate', schema: OPEN_PR_RESULT, agentType: 'general-purpose' },
   ).catch((e) => {
@@ -759,7 +792,7 @@ if (gate.verdict === 'PASS') {
     // marks THAT SAME PR ready and pr_merge(skip_train:true) lands it (commutativity already proved
     // skip_train safe); the kahuna branch is deleted. It never opens a second PR. The script can't
     // call MCP/CLI directly (§3.3) — the promote agent does it.
-    const promo = await agent(
+    const promo = await teeAgent(
       promotePrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, prNumber: promotionPrNumber, preserveKahuna: PRESERVE_KAHUNA }),
       { label: 'promote', phase: 'Promote', schema: PROMOTE_RESULT, agentType: 'general-purpose' },
     ).catch((e) => {
