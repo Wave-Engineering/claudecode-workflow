@@ -148,10 +148,11 @@ After merging CLAUDE.md, generate or update `.claude-project.md` in the project 
 Run these commands to populate each section:
 
 1. **Platform** — `git remote get-url origin` to determine host (GitHub/GitLab) and CLI (`gh`/`glab`)
-2. **Default branch** — `git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'`
-3. **Existing labels** — `gh label list --limit 50 --json name,description` (GitHub) or `glab label list` (GitLab)
-4. **CI system** — Check for `.github/workflows/` (GitHub Actions) and/or `.gitlab-ci.yml` (GitLab CI)
-5. **Toolchain** — Check for `scripts/ci/validate.sh`, `scripts/ci/build.sh`, `Makefile`, `pytest`, `package.json`, etc.
+2. **Existing labels** — `gh label list --limit 50 --json name,description` (GitHub) or `glab label list` (GitLab)
+3. **CI system** — Check for `.github/workflows/` (GitHub Actions) and/or `.gitlab-ci.yml` (GitLab CI)
+4. **Toolchain** — Check for `scripts/ci/validate.sh`, `scripts/ci/build.sh`, `Makefile`, `pytest`, `package.json`, etc.
+
+> **Do NOT discover or record the default branch.** It is deliberately absent. A cached default silently goes stale when the upstream default is renamed or moved — `git symbolic-ref refs/remotes/origin/HEAD` only reads a local pointer set at clone time and never re-checks. The default branch is resolved **live** at use-time by the `branch_guard` tool; it is never written into `.claude-project.md`. See #888.
 
 ### Writing `.claude-project.md`
 
@@ -168,7 +169,6 @@ Use this template structure:
 - **Remote:** (origin URL)
 
 ## Branching
-- **Default branch:** (discovered)
 - **Merge strategy:** squash
 
 ## Status Mechanism
@@ -194,6 +194,7 @@ Use this template structure:
 
 - **If `.claude-project.md` does not exist:** Create it from scratch using the template above, populated with discovered values.
 - **If `.claude-project.md` already exists:** Preserve any content outside the auto-generated sections. Update the auto-generated sections (those between `<!-- Auto-generated -->` markers) with fresh discovery results. Manual edits in non-templated areas are kept.
+- **Strip any cached default branch (create AND update):** `.claude-project.md` must NEVER carry a `Default branch:` line. If an existing file has one (from an older template), delete it. The default is queried live at use-time via `branch_guard` — never cached — because a frozen value silently goes stale when the upstream default is renamed (see #888).
 
 ### Show the user what was written
 

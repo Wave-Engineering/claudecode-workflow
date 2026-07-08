@@ -14,7 +14,8 @@ description: Merge a PR/MR with squash and source branch deletion
 Squash-merge a pull request (GitHub) or merge request (GitLab) with a detailed commit message and source branch deletion. All platform differences are handled inside the MCP tools — no inline `gh`/`glab` bash.
 
 ## Tools Used
-- `mcp__sdlc-server__pr_status` — state, merge_state, mergeable, checks summary
+- `mcp__sdlc-server__pr_status` — state, merge_state, mergeable, checks summary, target branch
+- `mcp__sdlc-server__branch_guard` — validate the merge target against the live default (protected-gated, `kahuna/*`-exempt)
 - `mcp__sdlc-server__pr_diff` — unified diff for squash message drafting
 - `mcp__sdlc-server__pr_wait_ci` — server-side block on pending checks (default 30s interval, 30min timeout)
 - `mcp__sdlc-server__pr_merge` — squash merge with auto-fallback to merge-queue on GitHub
@@ -24,7 +25,7 @@ Squash-merge a pull request (GitHub) or merge request (GitLab) with a detailed c
 
 Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix); otherwise resolve via `pr_status` on the current branch's PR or fail if none exists.
 
-1. `pr_status(number)` → require `state == "open"`; inspect `checks.summary`
+1. `pr_status(number)` → require `state == "open"`; inspect `checks.summary`. **Then guard the merge target:** call `branch_guard({ role: "target", branch: <PR/MR target from pr_status> })`; on `verdict == "warn"` **STOP** and surface `reason` — you are about to merge into a **protected** branch that is neither the live default nor a `kahuna/*` sandbox integration branch. Silent for the live default and `kahuna/*` targets. *(Transition fallback until `branch_guard` is deployed (#465): resolve the live default inline via `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` / GitLab `glab api "projects/:id" --jq .default_branch` and STOP if the target is neither the live default nor matches `^kahuna/[0-9]+-`. The degraded path can't query host protection, so it errs toward stopping on any non-default, non-sandbox target — safe, and rare in this trunk-based flow.)*
 2. If `checks.summary == "pending"` → `pr_wait_ci(number, poll_interval_sec: 30, timeout_sec: 1800)`. On `timed_out` ask whether to wait longer. On `failed` STOP.
 3. If `checks.summary == "has_failures"` → STOP and report. Do NOT merge with failing checks.
 4. `pr_diff(number)` → use the diff content (plus `git log target..source`) to draft the squash commit message.
@@ -42,6 +43,7 @@ Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix)
 
 - NEVER merge without explicit user approval
 - NEVER merge if `checks.summary == "has_failures"`
+- NEVER merge into a protected, non-default, non-`kahuna/*` branch — `branch_guard` STOPs this (target must be the live default or a `kahuna/*` sandbox)
 - Always squash + delete source branch
 - Squash message replaces the entire commit history — make it comprehensive
 - Merge conflicts → STOP and report, do NOT attempt to resolve

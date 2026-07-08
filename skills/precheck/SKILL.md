@@ -17,6 +17,7 @@ Mandatory verification before any commit. Checks compliance, runs code review, p
 
 ## Tools Used
 - `mcp__sdlc-server__ibm` — branch/issue workflow (no protected branch; branch linked to an open issue)
+- `mcp__sdlc-server__branch_guard` — resolve the live default branch and verify the current branch's base is it (protected-gated, `kahuna/*`-exempt)
 - `mcp__sdlc-server__spec_validate_structure` — linked issue has Changes / Tests / AC
 - `mcp__disc-server__disc_send` — post approval request to `#precheck` (channel `1491195025198157834`)
 
@@ -24,6 +25,18 @@ Mandatory verification before any commit. Checks compliance, runs code review, p
 
 ### Step 1 — IBM gate (serial, hard stop)
 Call `mcp__sdlc-server__ibm` directly (no sub-agent — it's one MCP call). If it fails, stop immediately and do not proceed.
+
+### Step 1.5 — Base-branch gate (serial, hard stop)
+Call `mcp__sdlc-server__branch_guard({ role: "base" })`. It resolves the **live** default branch from the git host (never a cached `.claude-project.md` value or `origin/HEAD` — both go stale silently) and checks the branch your work is based on. Interpret the envelope:
+- `verdict == "pass"` → continue.
+- `verdict == "warn"` → **STOP** and surface `reason` verbatim. Your branch's base is a **protected** branch that is neither the live default nor a `kahuna/*` sandbox — almost always a stale or renamed base (the exact failure this gate exists to catch). Rebase onto the live default, or confirm the base is intentional, before proceeding.
+- `{ ok: false }` or any error envelope → **STOP** and surface the error; do not silently continue past a gate that failed to run.
+
+**Protected-gated:** silent when the base is unprotected (feature→feature, stacked branches) or a `kahuna/*` integration branch. Only a protected, non-default, non-sandbox base trips it.
+
+**Scope (known limit):** reliable once a PR exists (it reads the PR's base). Before a PR exists, git can't distinguish "based on a stale default" from "based on the current default, now a bit behind" without false positives, so the pre-PR case is intentionally not gated here — the PR-create and merge target guards catch the wrong-target case. (#888)
+
+**Transition fallback** — *only* until `branch_guard` is deployed on this host's sdlc-server (#465): resolve the live default inline (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name`, or GitLab `glab api "projects/:id" --jq .default_branch`). If an open PR exists, compare its base (`gh pr view --json baseRefName -q .baseRefName`) and STOP if that base is a protected branch that is neither the live default nor matches `^kahuna/[0-9]+-`. Delete this paragraph once `branch_guard` is universal.
 
 ### Step 2 — Parallel verification batch
 After `ibm()` passes, launch all four jobs **in a single message** as parallel Agent calls. Do NOT wait for one before starting the next — they have no data dependencies on each other.
@@ -85,7 +98,7 @@ Delegated to Job C (Haiku sub-agent) in the parallel batch. Interpret the result
 - **FINDINGS** → report each finding (package, CVE, severity, fixed version if any) as a deferred checklist item. Do NOT auto-upgrade dependencies — the user approves the codebase state at the gate. Do NOT block the gate on vulnerabilities with no available fix.
 
 ## The Checklist (full every time; a checkmark means VERIFIED by reading the codebase)
-**Context:** Project | Issue #N — title | Branch `feature/N-...` → `main`
+**Context:** Project | Issue #N — title | Branch `feature/N-...` → `<live default>`
 - [ ] Implementation (AC verified) — [ ] TODOs (searched+addressed) — [ ] Docs (reviewed+updated) — [ ] Validation (actually ran)
 - [ ] New tests (cover new code) — [ ] All tests pass (entire suite) — [ ] Scripts executed (linting is NOT testing) — [ ] Code review (high+ fixed)
 - [ ] Dependencies (trivy: 0 HIGH/CRITICAL, or exceptions documented, or [SKIPPED])
@@ -103,7 +116,7 @@ Resolve identity from `<project_root>/.claude/agent-identity.json`; fall back to
 
 **Project:** <project-name>
 **Issue:** #<N> — <title>
-**Branch:** `<type>/<N>-<slug>` → `main`
+**Branch:** `<type>/<N>-<slug>` → `<live default>`
 **Checklist:** `[codebase]` `[docs]` `[tests]` `[config]`
 **Findings:** <fixed> / <deferred> / (none)
 
