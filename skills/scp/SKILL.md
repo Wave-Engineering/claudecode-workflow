@@ -16,6 +16,7 @@ Git commit workflow with context awareness. Reasoning layer (commit message draf
 ## Tools Used
 
 - `mcp__sdlc-server__ibm` — branch/issue workflow gate (no protected branch; branch linked to an open issue). Handles platform detection internally.
+- `mcp__sdlc-server__branch_guard` — validate the PR target against the live default before creating (protected-gated, `kahuna/*`-exempt).
 - `mcp__sdlc-server__pr_list` — check whether a PR already exists for the current branch.
 - `mcp__sdlc-server__pr_create` — create the PR with the drafted title/body.
 
@@ -63,7 +64,8 @@ Git plumbing stays as git:
 
 Then route PR handling through MCP tools:
 4. `pr_list({head: "<current-branch>"})` — check whether a PR already exists for this branch.
-5. If the list is empty, call `pr_create({title, body, base, head, draft?})` with the drafted title/body. For `base`, use the repo's default branch (resolve once per session via `gh repo view --json defaultBranchRef -q '.defaultBranchRef.name'` and cache locally); `head` is the current branch.
+5. If the list is empty, **resolve the intended base, then validate it before creating.** The base is the **live** default branch (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name` / GitLab `glab api "projects/:id" --jq .default_branch`) unless you are intentionally targeting a non-default branch (e.g. a `kahuna/*` integration branch on a sandbox flight). Call `branch_guard({ role: "target", branch: <that resolved base> })` — passing the concrete base so the guard actually inspects it — and on `verdict == "warn"` **STOP**, surfacing `reason` (the base is a protected branch that is neither the live default nor a `kahuna/*` sandbox). On `pass`, call `pr_create({title, body, base, head, draft?})` with that validated `base` (never a cached value); `head` is the current branch.
+   - *Transition fallback until `branch_guard` is deployed (#465):* skip the tool call and **STOP** directly if the resolved `base` is neither the live default nor matches `^kahuna/[0-9]+-`. (The degraded path can't query host protection, so it errs toward stopping on any non-default, non-sandbox base — safe, and rare in this trunk-based flow.)
 6. Report the PR URL (either the pre-existing one from `pr_list` or the newly-created one from `pr_create`).
 
 ## Important Rules
