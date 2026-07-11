@@ -95,6 +95,104 @@ resolve_player() {
 	return 0
 }
 
+# --- Resolve speaker identity -------------------------------------------------
+# Who is announcing? Walk up the process tree from vox's parent to the owning
+# `claude --session-id <uuid>` process, take its cwd, and resolve
+# <cwd>/.claude/agent-identity.json -> dev_name. Fallbacks: short session id,
+# then the caller PID. Defensive throughout so a failed lookup never breaks vox.
+resolve_speaker() {
+	local name="" sid="" pid cmd cwd d hop=0
+	local have_jq=0
+	command -v jq >/dev/null 2>&1 && have_jq=1
+
+	# name_from_cwd DIR : echo dev_name from the nearest ancestor dir carrying
+	# .claude/agent-identity.json, walking up from DIR. Empty if none.
+	name_from_cwd() {
+		local d="$1"
+		((have_jq)) || return 0
+		while [[ -n "$d" && "$d" != "/" ]]; do
+			if [[ -f "$d/.claude/agent-identity.json" ]]; then
+				jq -r '.dev_name // empty' "$d/.claude/agent-identity.json" 2>/dev/null || true
+				return 0
+			fi
+			d="$(dirname "$d")"
+		done
+	}
+
+	# 1) Primary: vox's own cwd (agents invoke it from their project root).
+	name="$(name_from_cwd "$PWD")" || name=""
+
+	# 2) Walk the process tree: capture a session id (for the fallback label) and,
+	#    if cwd gave no name, try each ancestor's cwd (catches the session's dir
+	#    even if the agent cd'd elsewhere).
+	pid="${PPID:-0}"
+	while [[ "$pid" =~ ^[0-9]+$ ]] && ((pid > 1)) && ((hop < 14)); do
+		hop=$((hop + 1))
+		cmd="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null)" || cmd=""
+		if [[ -z "$sid" && "$cmd" == *"--session-id"* ]]; then
+			sid="$(printf '%s ' "$cmd" | sed -n 's/.*--session-id[= ]\([0-9a-fA-F-]\{36\}\).*/\1/p')" || sid=""
+		fi
+		if [[ -z "$name" ]]; then
+			cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null)" || cwd=""
+			if [[ -n "$cwd" ]]; then
+				name="$(name_from_cwd "$cwd")"
+			fi
+		fi
+		[[ -n "$name" && -n "$sid" ]] && break
+		pid="$(awk '/^PPid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null)" || pid=""
+		[[ -n "$pid" ]] || break
+	done
+
+	if [[ -n "$name" ]]; then
+		printf '%s' "$name"
+	elif [[ -n "$sid" ]]; then
+		printf 'session %s' "${sid:0:8}"
+	else
+		printf 'pid %s' "${PPID:-unknown}"
+	fi
+}
+
+# --- Provenance log -----------------------------------------------------------
+# Append one JSON line per announcement to ~/.claude/logs/vox.jsonl, capturing
+# the caller's lineage AT CALL TIME (parent cmdline + cwd + a 6-deep ancestor
+# cmdline chain) — so a fire-and-exit caller is still traceable after it's gone.
+# VOX_NO_LOG=1 to skip. Best-effort; never breaks vox.
+vox_log() {
+	if [[ "${VOX_NO_LOG:-0}" == "1" ]]; then return 0; fi
+	command -v jq >/dev/null 2>&1 || return 0
+	local logdir="$HOME/.claude/logs" logf ts ppid pcmd pcwd pid hop cmd chainjson
+	local -a chain=()
+	logf="$logdir/vox.jsonl"
+	mkdir -p "$logdir" 2>/dev/null || return 0
+	ts="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ 2>/dev/null || true)"
+	ppid="${PPID:-0}"
+	[[ "$ppid" =~ ^[0-9]+$ ]] || ppid=0
+	pcmd="$(tr '\0' ' ' <"/proc/$ppid/cmdline" 2>/dev/null || true)"
+	pcmd="${pcmd% }"
+	pcwd="$(readlink "/proc/$ppid/cwd" 2>/dev/null || true)"
+	pid="$ppid"
+	hop=0
+	while [[ "$pid" =~ ^[0-9]+$ ]] && ((pid > 1)) && ((hop < 6)); do
+		hop=$((hop + 1))
+		cmd="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+		cmd="${cmd% }"
+		if [[ -n "$cmd" ]]; then
+			chain+=("$cmd")
+		fi
+		pid="$(awk '/^PPid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null || true)"
+		[[ -n "$pid" ]] || break
+	done
+	chainjson='[]'
+	if ((${#chain[@]})); then
+		chainjson="$(printf '%s\n' "${chain[@]}" | jq -R . | jq -sc . 2>/dev/null || echo '[]')"
+	fi
+	jq -cn --arg ts "$ts" --arg sp "${1:-}" --arg txt "${2:0:240}" \
+		--argjson ppid "$ppid" --arg caller "$pcmd" --arg cwd "$pcwd" --argjson chain "$chainjson" \
+		'{ts:$ts, speaker:$sp, ppid:$ppid, cwd:$cwd, caller:$caller, chain:$chain, text:$txt}' \
+		>>"$logf" 2>/dev/null || true
+	return 0
+}
+
 # --- Usage / help -------------------------------------------------------------
 
 usage() {
@@ -257,6 +355,16 @@ if [[ -z "${TEXT//[$' \t\n\r']/}" ]]; then
 	exit 1
 fi
 
+# --- Identify + log the caller, then sign off ---------------------------------
+# Resolve who is speaking, LOG the call with full caller lineage (captured now so
+# a fire-and-exit caller is still traceable), then append the speaker to the
+# spoken text. VOX_NO_SIGNOFF=1 skips the sign-off; VOX_NO_LOG=1 skips the log.
+SPEAKER="$(resolve_speaker 2>/dev/null)" || SPEAKER=""
+vox_log "$SPEAKER" "$TEXT" || true
+if [[ "${VOX_NO_SIGNOFF:-0}" != "1" && -n "$SPEAKER" ]]; then
+	TEXT="${TEXT}. This is ${SPEAKER}."
+fi
+
 # --- Resolve + invoke provider ------------------------------------------------
 
 PROVIDER="$(resolve_provider)" || exit 1
@@ -310,6 +418,18 @@ prepend_wake_noise "$audio_out"
 
 # --- Resolve + invoke player --------------------------------------------------
 
+# Serialize audio playback so concurrent agents don't talk over each other (#895).
+# flock is util-linux and absent on stock macOS; when it's missing, play directly
+# (no mutex, but no breakage on a supported platform).
+VOX_LOCK="${VOX_LOCK:-${TMPDIR:-/tmp}/vox-speak.lock}"
+vox_play() {
+	if command -v flock >/dev/null 2>&1; then
+		flock "$VOX_LOCK" "$@"
+	else
+		"$@"
+	fi
+}
+
 PLAYER=$(resolve_player)
 if [[ -z "$PLAYER" ]]; then
 	echo "Error: no audio player found. Set \$VOX_PLAYER, symlink ~/.config/vox/player, or install aplay/paplay/afplay/ffplay." >&2
@@ -322,10 +442,10 @@ if $BACKGROUND; then
 	(
 		trap 'rm -f "$bgfile"' EXIT
 		# shellcheck disable=SC2086
-		timeout 60 $PLAYER "$bgfile" || true
+		vox_play timeout -k 5 60 $PLAYER "$bgfile" || true
 	) &>/dev/null &
 	disown
 else
 	# shellcheck disable=SC2086
-	$PLAYER "$audio_out"
+	vox_play $PLAYER "$audio_out"
 fi
