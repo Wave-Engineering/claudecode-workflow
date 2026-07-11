@@ -178,6 +178,7 @@ def test_resolution_falls_back_to_bundled_silent(env, tmp_path):
 
 def test_provider_receives_text_as_argv(env, echo_stdin_provider, tmp_path):
     env["VOX_PROVIDER"] = str(echo_stdin_provider)
+    env["VOX_NO_SIGNOFF"] = "1"
     out = tmp_path / "out.wav"
     r = _run([str(VOX), "--output", str(out), "hello world"], env=env)
     assert r.returncode == 0, r.stderr
@@ -187,10 +188,22 @@ def test_provider_receives_text_as_argv(env, echo_stdin_provider, tmp_path):
 def test_stdin_message_round_trips(env, echo_stdin_provider, tmp_path):
     """Text piped via stdin round-trips through vox → provider."""
     env["VOX_PROVIDER"] = str(echo_stdin_provider)
+    env["VOX_NO_SIGNOFF"] = "1"
     out = tmp_path / "out.wav"
     r = _run([str(VOX), "--output", str(out)], env=env, stdin="piped-message")
     assert r.returncode == 0, r.stderr
     assert out.read_text() == "piped-message"
+
+
+def test_signoff_appended_when_enabled(env, echo_stdin_provider, tmp_path):
+    """Without VOX_NO_SIGNOFF, vox appends '. This is <speaker>.' to the text."""
+    env["VOX_PROVIDER"] = str(echo_stdin_provider)
+    out = tmp_path / "out.wav"
+    r = _run([str(VOX), "--output", str(out), "hello"], env=env)
+    assert r.returncode == 0, r.stderr
+    text = out.read_text()
+    assert text.startswith("hello")
+    assert "This is " in text
 
 
 def test_provider_failure_surfaces_error(env, failing_provider, tmp_path):
