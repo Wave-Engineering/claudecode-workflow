@@ -135,7 +135,7 @@ Flight Agents working inside a KAHUNA sandbox push to a per-wave integration bra
 
 **Platform-specific enforcement prerequisite.** The branch-name regex makes the *decision* to auto-approve, but the *safety* of that decision rests on platform-side configuration that constrains what a Flight Agent can actually push to. The two platforms model this differently — and the asymmetry is load-bearing:
 
-- **GitHub:** branch-protection rules (and rulesets) scope per-branch-pattern. The `kahuna/*` pattern is configured to permit the Flight Agent's auto-merge path while leaving `main`'s required reviews and merge-queue intact. Configured per-repo via `gh api` / repo settings; in Wave-Engineering repos this is part of the standard merge-config policy.
+- **GitHub:** branch-protection rules (and rulesets) scope per-branch-pattern. The `kahuna/*` pattern is configured to permit the Flight Agent's auto-merge path while leaving `main`'s protection — required status checks, no force-push, no deletion — intact. Configured per-repo via `gh api` / repo settings; in Wave-Engineering repos this is part of the standard merge-config policy. (There is no merge queue: the fleet is **queue-less** by policy. See `docs/operations/branch-protection-checklist.md`.)
 - **GitLab:** approval rules use `protected_branch_ids` to scope per-protected-branch. The `kahuna/*` branches are first protected via `PUT /projects/:id/protected_branches`, then a `kahuna-zero-approvals` rule with `approvals_required: 0` is created and scoped via `protected_branch_ids: [<kahuna_pattern_id>]`. **`merge_request_approval_settings` MUST NOT be used** — that endpoint is project-wide and would unprotect main. The standard deployment is `gl-settings kahuna-sandbox <project-url>` (the composite operation from `gl-settings#27`); see `docs/kahuna-devspec.md` §5.3.1 and `docs/kahuna-settings-deployment.md`.
 
 **If the platform-specific prerequisite is not in place, the auto-approval is unsafe.** A Flight Agent that sentinels-and-merges against a GitLab project missing the `protected_branch_ids`-scoped approval rule may bypass review controls the operator believed were in force. Detection guidance is below.
@@ -168,6 +168,15 @@ The detection regex is `^kahuna/[0-9]+-`. Resolve `base_branch` from the most re
 ## Rules
 No diff. No commit. No skipping code-reviewer. Honesty over speed — no checking items you haven't verified. **Linting is not testing** — passing lint/typecheck does not mean code works. **`vox` is ALWAYS called** — it is NOT a fallback for disc_send failure. Both notifications happen every time.
 
-## New-Repo Onboarding (Merge Queue End-to-End Dry-Run)
+## New-Repo Onboarding (Branch-Protection End-to-End Dry-Run)
 
-Out of scope for the per-commit gate, but called out here because this skill is the closest thing to an institutional checklist we have: **when enabling GitHub Merge Queue on a new repo, configuration verification is not enough — you MUST open a throwaway PR (e.g., README typo fix) and watch it merge through the queue end-to-end before any real work is enrolled.** "Configuration exists" is not the same as "configuration works." The full runbook lives in `docs/operations/merge-queue-checklist.md`; the most common silent failure is a workflow file missing `merge_group:` in its `on:` block, which leaves the required check never firing and PRs sitting in the queue forever. Same principle as the runtime smoke test in `mcp-server-sdlc` `validate.sh`: verify behavior, not declarations.
+Out of scope for the per-commit gate, but called out here because this skill is the closest thing to an institutional checklist we have: **when configuring branch protection on a new repo, configuration verification is not enough — you MUST prove the gate end-to-end before any real work lands.** "Configuration exists" is not the same as "configuration works."
+
+Two throwaway PRs, both required:
+
+1. A PR with a **failing** check → assert it is **BLOCKED** from merging (the gate holds).
+2. A PR that is **green** → assert it **merges through** (the gate passes good work).
+
+A gate that blocks everything is as broken as one that blocks nothing; only the pair proves it. The full runbook lives in `docs/operations/branch-protection-checklist.md`. Same principle as the runtime smoke test in `mcp-server-sdlc` `validate.sh`: verify behavior, not declarations.
+
+**Do NOT enable a GitHub merge queue or GitLab merge trains.** The fleet is **queue-less** by policy — flights land on the `kahuna/*` integration branch and the engine serializes the single `kahuna→main` promotion itself, so there is no concurrent-merge point for a queue to guard. The queue only ever cost us: 3 pipelines per MR on GitLab, plus the `skip_train`-silently-dropped divergence bug and the 2026-04-07 `merge_group:`-missing outage (postmortem #299). If you find a repo without a queue, that is correct — do not "restore" one.

@@ -261,9 +261,39 @@ class TestInstallCreatesArtifacts:
             "docs/mcp-scoping.md",
             "docs/discord-watcher.md",
             "docs/operations/log-rotation.md",
-            "docs/operations/merge-queue-checklist.md",
+            "docs/operations/branch-protection-checklist.md",
         ):
             assert (claude_dir / rel).exists(), f"kit doc not globalized: {rel}"
+
+    def test_install_prunes_renamed_merge_queue_doc(self, sandbox_home: Path) -> None:
+        """A RENAMED kit doc must be pruned from ~/.claude, not merely superseded.
+
+        The doc loop only copies repo->global, so a doc that changed filename
+        lingers under ~/.claude forever. That matters here specifically: the old
+        merge-queue-checklist.md *prescribes creating a merge queue* ("Create the
+        merge queue ruleset", "add merge_group: to the on: block"), which is the
+        exact policy #898 removes. Repos that don't carry their own docs resolve
+        kit docs from ~/.claude, so a stale copy would keep serving the dead policy
+        to every agent in the fleet.
+
+        Plant the stale doc first — otherwise this asserts nothing, since a fresh
+        sandbox never had it.
+        """
+        stale = sandbox_home / ".claude" / "docs" / "operations" / "merge-queue-checklist.md"
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text("# Merge Queue Setup Checklist\n\nCreate the merge queue ruleset.\n")
+        assert stale.exists(), "fixture failed to plant the stale doc"
+
+        rc, out, err = run_install([], sandbox_home)
+        assert _install_ok(rc, out, err), f"install.sh failed (rc={rc}):\nstdout: {out}\nstderr: {err}"
+
+        assert not stale.exists(), (
+            "deprecated kit doc survived install: docs/operations/merge-queue-checklist.md "
+            "(renamed to branch-protection-checklist.md in #898; add it to DEPRECATED_PATHS)"
+        )
+        # ...and the replacement is there in its place.
+        assert (sandbox_home / ".claude" / "docs" / "operations" / "branch-protection-checklist.md").exists()
+
 
 
 @_SKIP_NO_BASH

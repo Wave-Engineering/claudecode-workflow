@@ -205,7 +205,7 @@ Your project memory lives at `~/.claude/projects/-home-bakerb-sandbox-github-cla
 - `memory/decision_plan_phase_epic_taxonomy.md` — locked 2026-04-26 taxonomy
 - `memory/lesson_cc_subagent_tools.md` — CC's sub-agent tool distribution (critical for any work that spawns Agents)
 - `memory/lesson_cross_repo_wave_orchestration.md` — seven non-obvious facts
-- `memory/policy_wave_engineering_merge_config.md` — all Wave-Engineering repos require merge-queue + auto-merge
+- `memory/policy_wave_engineering_merge_config.md` — queue-less house rules: NO merge queue / merge trains, auto-merge on green, squash + merge-commit both allowed
 - `memory/lesson_repo_label_taxonomies.md` — label families differ per repo; verify before batch-filing
 
 ---
@@ -224,12 +224,12 @@ These are indexed here so when you hit the failure mode, you know where to look:
 
 ### Git / PR / merge
 
-- `memory/lesson_merge_queue_gh.md` — `gh pr merge` silently fails on merge-queue repos; use `pr_merge` MCP tool
-- `memory/lesson_pr_merge_wait_regression.md` — `pr_merge_wait` queue-detection edge case
+- `memory/lesson_pr_merge_hazards.md` — deleting an unmerged PR's head branch CLOSES it; squashing a base PR breaks the PR stacked on it
+- `memory/lesson_pr_merge_wait_regression.md` — verify the land; don't trust an optimistic `merged:true` (the queue-era bug is moot, the discipline isn't)
 - `memory/lesson_pr_wait_ci_broken.md` — local `gh` CLI quirks; fall back to `ci_wait_run(ref=branch)`
 - `memory/lesson_setup_bun_npmrc_auth.md` — setup-bun action drops GitHub Packages auth
 - `memory/lesson_gh_search_org_wide.md` — fleet-wide issue freshness via `gh search issues --owner`
-- `docs/operations/merge-queue-checklist.md` — end-to-end merge-queue dry-run runbook (config existence ≠ config works)
+- `docs/operations/branch-protection-checklist.md` — end-to-end branch-protection dry-run runbook (config existence ≠ config works; red PR must BLOCK, green PR must merge)
 
 ### Wave-pattern specifics
 

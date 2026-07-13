@@ -18,7 +18,7 @@ Squash-merge a pull request (GitHub) or merge request (GitLab) with a detailed c
 - `mcp__sdlc-server__branch_guard` — validate the merge target against the live default (protected-gated, `kahuna/*`-exempt)
 - `mcp__sdlc-server__pr_diff` — unified diff for squash message drafting
 - `mcp__sdlc-server__pr_wait_ci` — server-side block on pending checks (default 30s interval, 30min timeout)
-- `mcp__sdlc-server__pr_merge` — squash merge with auto-fallback to merge-queue on GitHub
+- `mcp__sdlc-server__pr_merge` — squash merge (direct; the fleet is queue-less)
 - `mcp__sdlc-server__ci_wait_run` — optional post-merge main-branch pipeline wait (default 10s interval)
 
 ## Procedure
@@ -35,9 +35,9 @@ Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix)
    - Footer: `Closes #issue-number` for any linked issues (check the PR/MR description)
    - Comprehensive enough that `git log` alone tells the full story without opening the PR
 6. **Present for approval**: PR/MR number, title, source→target branches, the drafted squash message. Ask "May I merge this PR/MR?" and WAIT. A second `/mmr` invocation counts as approval.
-7. `pr_merge(number, squash_message)` — handles direct squash and merge-queue auto-fallback. Returns `merge_method` (`direct_squash` | `merge_queue`), `merge_commit_sha` (direct only), `url`.
+7. `pr_merge(number, squash_message)` — direct squash merge. Returns `merge_method` (`direct_squash`), `merge_commit_sha`, `url`. (The tool still carries a `merge_queue` fallback path for queue-enforced repos; the fleet is queue-less, so it does not fire.)
 8. **Post-merge**: switch to target branch, pull, delete local source branch if present. Optionally `ci_wait_run(ref: "main", timeout_sec: 1800)` to confirm the main-branch pipeline lands clean — skip if the user wants to move on immediately.
-9. Report success with the merge commit URL (direct) or the queue result (merge queue).
+9. Report success with the merge commit URL.
 
 ## Important Rules
 

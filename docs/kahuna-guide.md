@@ -167,7 +167,7 @@ No, on both counts. KAHUNA is designed to be invisible to non-wave contributors 
 
 **For the non-wave contributor:**
 
-- Their MR/PR lands on main as normal — full review, full merge queue, full protections. KAHUNA settings on `kahuna/*` branches do not affect the main-target workflow.
+- Their MR/PR lands on main as normal — full review, full protections. KAHUNA settings on `kahuna/*` branches do not affect the main-target workflow.
 - They don't see kahuna in their MR-create dropdowns (the UI defaults to main as base).
 - They don't need new permissions, new tooling, new mental model. They keep working as before.
 
