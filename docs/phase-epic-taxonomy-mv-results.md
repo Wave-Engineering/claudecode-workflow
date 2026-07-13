@@ -76,7 +76,7 @@ Reference SHA for this verification run: `b7ece71` (tip of `origin/kahuna/499-ph
   ```
   - Test scans for `epic::[0-9]+`, `['"]epic::`, and `--label[ =]epic::` across the pipeline code surface.
   - Documented exceptions (per commit message): `skills/issue/` (PM-layer write path), `skills/devspec/SKILL.md` (spec language), `scripts/bootstrap-repo-labels*.sh`, `scripts/testing/wave-fixture-gen.py`, docs/ / CHANGELOG.md / tests/.
-  - CI wiring: `scripts/ci/validate.sh` lines 247–* iterate `tests/regression/*.sh`; `.github/workflows/validate.yml` runs `./scripts/ci/validate.sh` on every PR to main and every `merge_group:` — so the regression is gated on all future merges including the closing kahuna→main MR.
+  - CI wiring: `scripts/ci/validate.sh` lines 247–* iterate `tests/regression/*.sh`; `.github/workflows/validate.yml` runs `./scripts/ci/validate.sh` on every PR to main and every `merge_group:` — so the regression is gated on all future merges including the closing kahuna→main MR. *(Superseded by #898: the fleet went queue-less and the dead `merge_group:` trigger was removed. The gate is unchanged in substance — every PR to main still runs `validate.sh` — only the never-firing queue trigger is gone.)*
 - **Result:** PASS.
 - **Requirements verified:** R-19, R-03, CT-05
 

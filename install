@@ -78,6 +78,13 @@ DEPRECATED_PATHS=(
 	"$HOME/.claude/scripts/wavebus-flight-finalize"
 	"$HOME/.claude/scripts/wavebus-wave-cleanup"
 	"$HOME/.claude/scripts/wavebus-changelog-aggregate"
+	# Renamed to docs/operations/branch-protection-checklist.md when the fleet went
+	# queue-less (#898). The old doc PRESCRIBES creating a merge queue ("Create the
+	# merge queue ruleset", "add merge_group: to the on: block"). Repos that don't
+	# carry their own docs resolve kit docs from ~/.claude, so leaving this installed
+	# would keep serving the exact policy #898 removes. Must be pruned, not just
+	# superseded.
+	"$HOME/.claude/docs/operations/merge-queue-checklist.md"
 )
 # Logrotate is a tri-state: "prompt" by default, forced on/off by flag.
 LOGROTATE_MODE=prompt
@@ -1392,7 +1399,7 @@ if [[ "$INSTALL_CONFIG" == true ]]; then
 	# ANY repo resolves them from $CLAUDE_DIR — single source, no per-repo vendor,
 	# no drift. Source of truth stays the repo; this copies repo→global each run.
 	for kdoc in WAVE_AXIOMS.md docs/mcp-scoping.md docs/discord-watcher.md \
-		docs/operations/log-rotation.md docs/operations/merge-queue-checklist.md; do
+		docs/operations/log-rotation.md docs/operations/branch-protection-checklist.md; do
 		if [[ -f "$REPO_DIR/$kdoc" ]]; then
 			if [[ "$DRY_RUN" != true ]]; then
 				mkdir -p "$(dirname "$CLAUDE_DIR/$kdoc")"
