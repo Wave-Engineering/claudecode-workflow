@@ -5,7 +5,7 @@ Validates Dev Spec §5.2.2:
   ``kahuna: { plan_id, slug }``, is idempotent on resume.
 - Trust-score gate step group exists, lists the four signals, runs them
   CONCURRENTLY in a single tool-use block (R-23).
-- All-green path documents ``pr_merge`` with ``skip_train: true``,
+- All-green path documents ``pr_merge``,
   ``kahuna_branches`` history record, kahuna branch deletion, notification
   + vox.
 - Any-red path documents ``gate_blocked`` transition, notification, kahuna
@@ -274,18 +274,11 @@ class TestAC3_AllGreenPath:
     kahuna→main, records disposition in ``kahuna_branches`` history,
     deletes the kahuna branch, and emits notifications + vox."""
 
-    def test_all_green_invokes_pr_merge_skip_train(
-        self, skill_text: str
-    ) -> None:
+    def test_all_green_invokes_pr_merge(self, skill_text: str) -> None:
+        # #898: no skip_train — the fleet is queue-less, so there is no merge
+        # queue or train for the flag to skip.
         gate = _gate(skill_text)
         assert "pr_merge" in gate
-        # skip_train: true is the load-bearing flag — without it the
-        # auto-merge falls into the project's standard merge train and
-        # the autonomous gate is moot.
-        assert re.search(
-            r"skip_train\s*:\s*true",
-            gate,
-        ), "All-green path must call pr_merge with skip_train: true"
 
     def test_all_green_records_kahuna_branches_history(
         self, skill_text: str

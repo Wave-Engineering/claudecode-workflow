@@ -547,7 +547,7 @@ function primeReconcilePrompt(built, merged) {
     `2. Resolve conflicts coherently — combine, do not drop. A shared interface two issues touch is a CROSS-FLIGHT`,
     `   fix you make HERE (you have the multi-branch view); record it in conflicts_resolved (§3.2.3).`,
     `3. Run the REAL sdlc-server tools: commutativity_verify (PAIRWISE mode across this group's branches —`,
-    `   base_ref=${KAHUNA_BRANCH} — to decide whether a merge train is needed) BEFORE merging, then`,
+    `   base_ref=${KAHUNA_BRANCH} — to prove the composed diff is safe to land) BEFORE merging, then`,
     `   pr_create + pr_merge to land each flight branch into ${KAHUNA_BRANCH}, plus the FULL suite.`,
     `4. If a flight's code BREAKS another's interface (signature mismatch surfaced at integration): UNDO just that`,
     `   flight's merge (keep integration green) and report it in needs_rework with the precise reason — the loop`,
@@ -789,9 +789,9 @@ if (gate.verdict === 'PASS') {
     // #687/#5 promotion (CODE, runs ONLY here — a live wave's auto+PASS success exit, itself gated
     // by the human cutover #691). The kahuna→protected DRAFT PR (#${promotionPrNumber}) was already
     // opened by the gate's PR-OPEN node and its merge-result CI already validated — so promotion
-    // marks THAT SAME PR ready and pr_merge(skip_train:true) lands it (commutativity already proved
-    // skip_train safe); the kahuna branch is deleted. It never opens a second PR. The script can't
-    // call MCP/CLI directly (§3.3) — the promote agent does it.
+    // marks THAT SAME PR ready and pr_merge lands it (commutativity already proved the composed diff
+    // safe); the kahuna branch is deleted. It never opens a second PR. The script can't call MCP/CLI
+    // directly (§3.3) — the promote agent does it.
     const promo = await teeAgent(
       promotePrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, prNumber: promotionPrNumber, preserveKahuna: PRESERVE_KAHUNA }),
       { label: 'promote', phase: 'Promote', schema: PROMOTE_RESULT, agentType: 'general-purpose' },

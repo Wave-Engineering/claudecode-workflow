@@ -35,7 +35,7 @@ Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix)
    - Footer: `Closes #issue-number` for any linked issues (check the PR/MR description)
    - Comprehensive enough that `git log` alone tells the full story without opening the PR
 6. **Present for approval**: PR/MR number, title, source→target branches, the drafted squash message. Ask "May I merge this PR/MR?" and WAIT. A second `/mmr` invocation counts as approval.
-7. `pr_merge(number, squash_message)` — direct squash merge. Returns `merge_method` (`direct_squash`), `merge_commit_sha`, `url`. (The tool still carries a `merge_queue` fallback path for queue-enforced repos; the fleet is queue-less, so it does not fire.)
+7. `pr_merge(number, squash_message)` — squash merge. Returns `merge_method`, `merge_commit_sha`, `url`.
 8. **Post-merge**: switch to target branch, pull, delete local source branch if present. Optionally `ci_wait_run(ref: "main", timeout_sec: 1800)` to confirm the main-branch pipeline lands clean — skip if the user wants to move on immediately.
 9. Report success with the merge commit URL.
 

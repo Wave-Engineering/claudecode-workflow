@@ -7,9 +7,9 @@
 //      a signal that ERRORS returns passed:false (HOLD), NEVER passed:true (SEAMS invariant 6).
 //   2. each signal prompt names its REAL sdlc-server tool + the EXACT pass predicate, and is
 //      diff-scoped (the §3.4 refinement: changed-files, never the whole tree).
-//   3. the CI prompt accepts the GitHub merge-queue "merge_group_validated" shape (#452) so a
-//      clean merge-queue wave doesn't spuriously HOLD.
-//   4. the promote prompt is wave_finalize → pr_merge(skip_train) → delete-branch (CODE ONLY).
+//   3. the CI prompt's pass predicate is final_status == "success" and nothing else (#898).
+//   4. the promote prompt is wave_finalize → pr_merge → delete-branch (CODE ONLY), and reports
+//      promoted ONLY once the merge is observable on the protected branch.
 
 import assert from 'node:assert/strict'
 import {
@@ -65,11 +65,11 @@ try {
   assert.match(ci, /ci_wait_run/)
   assert.match(ci, /MERGE-RESULT/) // #452: merge-result pipeline, not branch HEAD
   assert.match(ci, /NOT the merge-commit branch HEAD/)
-  assert.match(ci, /merge_group_validated/) // #452 GitHub merge-queue shape accepted
+  assert.match(ci, /final_status == "success"/) // the ONLY pass shape
   assert.match(ci, /changed files/) // diff-scoped (§3.4)
   assert.match(ci, new RegExp(`PR #${PR}`)) // #5: waits on the gate-opened draft PR by number
   assert.match(ci, /do NOT search for it/i) // #5: deterministic, no race to "find" the PR
-  ok('ci prompt: ci_wait_run on the gate-opened PR (#5) + MERGE-RESULT + merge_group_validated + diff-scoped (#452, §3.4)')
+  ok('ci prompt: ci_wait_run on the gate-opened PR (#5) + MERGE-RESULT + success-only + diff-scoped (#452, §3.4)')
 
   // #5 — the gate opens the kahuna→protected DRAFT PR FIRST (before the signals)
   const op = openPromotionPrPrompt({ ...A, planId: 692 })
@@ -116,7 +116,7 @@ try {
   ok('trivy prompt: HIGH,CRITICAL + available-fix predicate + conservative-fail if uninstalled')
 } catch (e) { bad('signal prompts', e) }
 
-// ── 3. promotion is CODE: mark-ready → pr_merge(skip_train) → delete-branch (#5) ───────
+// ── 3. promotion is CODE: mark-ready → pr_merge → delete-branch (#5) ──────────────────
 // #5: promotion no longer OPENS a PR (the gate's PR-OPEN node already did) — it marks the
 // existing draft PR ready and merges it. It must reference the PR number, never wave_finalize.
 try {
@@ -126,12 +126,12 @@ try {
   assert.match(p, /already open/i) // the PR is already open (the gate opened it)
   assert.match(p, /pr ready|mark it ready/i) // un-draft the existing PR before merging
   assert.match(p, /pr_merge/)
-  assert.match(p, /skip_train/)
-  assert.match(p, /pr_merge_wait/) // merge-queue-enforced fallback: wait for the land
+  assert.doesNotMatch(p, /skip_train/) // #898: queue-less — no train to skip
+  assert.match(p, /pr_merge_wait/) // confirm the merge is observable on the protected branch
   assert.match(p, /delete/i) // kahuna branch deleted after promotion
   // promoted:true ONLY if the merge actually landed (no fabricated success)
   assert.match(p, /promoted \(true ONLY if the merge actually landed/)
-  ok('promote prompt: mark-ready → pr_merge(skip_train) → delete-branch, merges the gate-opened PR, promoted-only-if-landed (#5)')
+  ok('promote prompt: mark-ready → pr_merge → delete-branch, merges the gate-opened PR, promoted-only-if-landed (#5)')
 
   // PROMOTE_RESULT schema shape
   assert.equal(PROMOTE_RESULT.required[0], 'promoted')

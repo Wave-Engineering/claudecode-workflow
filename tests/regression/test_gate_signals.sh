@@ -6,8 +6,8 @@
 #   1. node --check on the gate helper + the workflow that imports it (syntax must hold).
 #   2. the gate-signal invariants: conservativeFail HOLDs (never silent PASS), each signal
 #      prompt names its real sdlc-server tool + pass predicate (diff-scoped), the CI signal
-#      accepts the GitHub merge-queue shape (#452), and promotion is wave_finalize →
-#      pr_merge(skip_train) → delete-branch. Logic lives in the sibling .mjs.
+#      passes ONLY on final_status == "success", and promotion is wave_finalize →
+#      pr_merge → delete-branch. Logic lives in the sibling .mjs.
 #
 # Implementation of (2): tests/regression/gate_signals_roundtrip.mjs
 
