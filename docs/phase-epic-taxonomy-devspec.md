@@ -100,7 +100,7 @@ This is a pure-terminology / pure-rename project. The implementation already beh
 | CT-01 | The kahuna branch lifecycle (create on Plan start, accumulate across Phases, merge once at Plan end, delete on success) MUST remain behaviorally identical. No changes to `wave_init` branch-creation logic, `wave_finalize` MR-assembly logic, or the trust-score gate's 4-signal evaluation. | This is a pure-rename project; behavior changes here would expand scope into a full pipeline redesign. KAHUNA just shipped; it works; we're touching words not wiring. |
 | CT-02 | No perpetual read-compat shim for legacy `epic_id`. Phase 2 (schema rename) ships cleanly; a one-time `sed` migration note lives in §5.B for any surprise case. | The fleet is two installations (malory + Anoushka's laptop). Both are a `./install` away from new-taxonomy-ready; neither warrants accommodation in code. See `principle_cost_asymmetry_continue_vs_exit.md` — we don't build insurance for failures that happen once. |
 | CT-03 | Platform-adapter retrofit **structural** compatibility. The sdlc-server handler signature changes (`wave_init({kahuna: {plan_id, slug}})`, `wave_finalize({plan_id, ...})`) MUST match the shape of the typed PlatformAdapter — flat-hyphenated per-method-per-platform files, no new abstraction levels, no parallel adapter tree. This is a *shape* constraint, not a *timing* constraint: if tachikoma's retrofit has not landed when Phase 2 is ready to ship, we ship on pre-retrofit handlers using the adapter shape; her retrofit absorbs them on its next pass with no structural conflict. | The platform adapter retrofit (sdlc#227) defines the adapter contract; this Plan's schema changes conform to its *shape* regardless of whether her retrofit has shipped. Conflating "must match her shape" with "must wait for her retrofit" is goldplating of coordination we don't need. |
-| CT-04 | The `type::plan` label MUST be created on every Wave-Engineering repo that participates in Plan-level tracking. Label taxonomy is `group::value` (existing convention from `lesson_repo_label_taxonomies.md`). Color matches the existing `type::epic` purple (`#5319E7`) so the two are visually grouped. | A Plan can't be filed on a repo that doesn't know the label; per-repo label drift has already burned us (see `lesson_repo_label_taxonomies.md`). Mechanical rollout, not a per-repo judgment. |
+| CT-04 | The `type::plan` label MUST be created on every Wave-Engineering repo that participates in Plan-level tracking. Label taxonomy is `group::value` (existing convention from `lesson_repo_label_taxonomies.md`). Color matches the existing `type::epic` purple (`5319E7`) so the two are visually grouped. | A Plan can't be filed on a repo that doesn't know the label; per-repo label drift has already burned us (see `lesson_repo_label_taxonomies.md`). Mechanical rollout, not a per-repo judgment. |
 | CT-05 | The optional `epic::N` label family is **purely advisory**. No pipeline tool MAY read, filter, branch on, or group by `epic::N` labels. Tests MUST assert the absence of `epic::N` reads in pipeline code paths. | The entire point of demoting "epic" to a PM-layer concept is that the pipeline stops caring. Any pipeline code that reads `epic::N` is a taxonomy leak — enforced mechanically, not by convention. |
 
 ### 2.2 Product Constraints
@@ -158,7 +158,7 @@ Requirements are grouped by theme. Every requirement must appear in at least one
 
 | ID | Type | Requirement |
 |----|------|-------------|
-| R-14 | Event-driven | When `/issue` or any Plan-creating pipeline tool needs to apply the `type::plan` label on a repo that does not yet carry that label in its taxonomy, the tool shall create the label on demand via `label_create` (sdlc-server) using the canonical color (`#5319E7`, matching `type::epic`) and description. No user-facing error unless `label_create` itself fails. |
+| R-14 | Event-driven | When `/issue` or any Plan-creating pipeline tool needs to apply the `type::plan` label on a repo that does not yet carry that label in its taxonomy, the tool shall create the label on demand via `label_create` (sdlc-server) using the canonical color (`5319E7` — bare hex, matching `type::epic`; `label_create` validates `^[0-9a-fA-F]{6}$` and rejects the `#` form) and description. No user-facing error unless `label_create` itself fails. |
 | R-15 | Event-driven | When `/issue type=plan` creates a Plan tracking issue, it shall apply the `type::plan` label and populate the issue body with the canonical Plan template (see §5 Detailed Design). |
 
 ### 3.5 Orchestrator Contract & Plan Ledger
@@ -743,7 +743,7 @@ When invoked, the skill:
    - A one-sentence Goal
    - A suggested slug (kebab-case, from the Goal)
    - An initial Scope block (in / out of scope bullets) populated as placeholders the Pair fills during `/devspec create`
-2. **Checks target repo for `type::plan` label.** If absent, calls `label_create` (sdlc-server) with canonical color `#5319E7` and description `"Plan tracking issue — top-level pipeline container"`. Label creation is idempotent. (R-14 satisfied.)
+2. **Checks target repo for `type::plan` label.** If absent, calls `label_create` (sdlc-server) with canonical color `5319E7` (bare hex — `label_create` rejects the `#` form) and description `"Plan tracking issue — top-level pipeline container"`. Label creation is idempotent. (R-14 satisfied.)
 3. **Renders the canonical Plan body** per §5.1.2's frozen-content template:
    - `<!-- PLAN-ISSUE v1 -->` marker
    - `## Goal` — populated from the prompt
@@ -762,7 +762,7 @@ When a Story is created with the `--epic N` flag:
 
 1. **Validates `N` is an open issue with `type::epic` label** on the target repo via `work_item` pre-check. If `N` doesn't exist or doesn't carry `type::epic`, fail with a clear error message directing the Pair to first create the Epic via `/issue epic <prompt>`.
 2. **Creates the Story** with both `type::feature` (or bug/chore/docs) AND `epic::N` labels. Body is the standard Story template.
-3. **Checks target repo for `epic::N` label** (the label family). If absent, calls `label_create` with color `#5319E7` (same family as `type::epic`) and description `"Story belongs to Epic #N (PM-layer thematic grouping)"`.
+3. **Checks target repo for `epic::N` label** (the label family). If absent, calls `label_create` with color `5319E7` (bare hex — `label_create` rejects the `#` form; same family as `type::epic`) and description `"Story belongs to Epic #N (PM-layer thematic grouping)"`.
 4. **Posts NO comment on the Epic issue.** The parent-child relationship is represented by the `epic::N` label alone; no explicit link comment. Pipeline doesn't read it; PMs who care can filter the Epic's board by its label.
 
 #### 5.5.5 Epic template (for reference — no change)
