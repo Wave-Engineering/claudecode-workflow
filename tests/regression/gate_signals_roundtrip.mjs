@@ -66,6 +66,16 @@ try {
   assert.match(ci, /MERGE-RESULT/) // #452: merge-result pipeline, not branch HEAD
   assert.match(ci, /NOT the merge-commit branch HEAD/)
   assert.match(ci, /final_status == "success"/) // the ONLY pass shape
+  // #476: the gate must REQUIRE a merge-result pipeline. Without this flag the tool
+  // will happily grade a branch pipeline — or a SKIPPED one, which GitLab normalizes
+  // to "success" — as though it validated the merge. That is a silent false PASS on
+  // the only thing standing between an autonomous wave and the protected branch.
+  assert.match(ci, /require_merge_result=true/)
+  // #476: the freshness anchor. Without pr_number the tool cannot prove the run it
+  // grades belongs to the CURRENT head — a green merge-result run for a PREVIOUS
+  // commit would satisfy the gate and merge code CI never saw.
+  assert.match(ci, /pr_number=/)
+  assert.match(ci, /not_merge_result/) // and must FAIL on it, never fall back
   assert.match(ci, /changed files/) // diff-scoped (§3.4)
   assert.match(ci, new RegExp(`PR #${PR}`)) // #5: waits on the gate-opened draft PR by number
   assert.match(ci, /do NOT search for it/i) // #5: deterministic, no race to "find" the PR
