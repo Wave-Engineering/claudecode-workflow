@@ -8,16 +8,14 @@ works, not just that the configuration exists.
 **Configuration existence is not configuration correctness.** Verification must include behavior
 testing — open a real PR and watch what happens to it.
 
-That lesson was bought with an outage. On 2026-04-07, all 6 Wave-Engineering GitHub repos had merge
-queue rulesets created without the corresponding workflow event trigger update. The configuration
-looked correct (`gh api ... rulesets` returned IDs, `max_entries_to_build: 1`, branch protection
-wired up) but **no PR could ever merge** because the workflow producing the required check was never
-invoked when GitHub added the PR to the queue. PRs sat forever waiting for checks that never fired.
-The bug was caught only when the first PR (`mcp-server-sdlc#40`) actually exercised the path
+That lesson was bought with an outage. On 2026-04-07, all 6 Wave-Engineering GitHub repos had branch
+rulesets that *looked* correct — `gh api ... rulesets` returned IDs, enforcement was active, branch
+protection was wired up — but **no PR could merge**, for hours. A workflow producing a required check
+was never invoked, so the check never reported, and every PR sat waiting on a status that would never
+arrive. The bug surfaced only when the first PR (`mcp-server-sdlc#40`) actually exercised the path
 end-to-end. Postmortem: `claudecode-workflow#299`.
 
-The merge queue is gone now (see "No Merge Queue" below) — but the meta-lesson outlives it, and is
-the reason this checklist exists at all.
+Nothing about the API responses would have told you. Only a real PR did.
 
 ## The Standard Config
 
@@ -35,43 +33,27 @@ Every repo is born with this and keeps it for its whole life — no lifecycle to
 | `allow_rebase_merge` | `false` | One less way to rewrite history |
 | `delete_branch_on_merge` | `false` | Otherwise a persistent kahuna is deleted on promotion and the next wave strands |
 
-Merge method is chosen **per merge** (`gh pr merge --squash` vs `--merge`), not per repo. That is the
-whole reason one config serves both wave campaigns and normal maintenance — and it only works because
-there is no merge queue forcing a single method for everything.
+**Merge method is chosen per merge** (`gh pr merge --squash` vs `--merge`), never pinned per repo.
+That is what lets one config serve both wave campaigns (merge-commit promote) and normal maintenance
+(squash) for the whole life of the repo, with nothing to toggle.
 
-## No Merge Queue (and no GitLab merge trains)
-
-**Do not enable a GitHub merge queue or GitLab merge trains.** If you find a repo without one, that is
-correct — do not "restore" it.
-
-Wave work never needed a queue. Flights target the `kahuna/*` integration branch, never the protected
-branch. The engine reconciles them with `flight_partition` / `flight_overlap` and `commutativity_verify`,
-merging in dependency order; `kahuna→main` is then a single serialized, trust-gated promotion. There is
-no concurrent-merge-to-protected-branch point for a queue to guard.
-
-What the queue actually cost:
-
-- **3 pipelines per MR on GitLab** (push + merged-results + train). The claim that trains "batch
-  flight-MRs into one pipeline run" is **false** — GitLab runs a pipeline *per MR in the train* and
-  re-runs successors when a predecessor fails.
-- **The `skip_train` divergence bug** — on a queue-enforced repo the flag was silently dropped and the
-  queue's configured merge method governed instead, which is how a persistent kahuna diverged from main.
-- **The 2026-04-07 outage** above, whose entire failure mode (`merge_group:` missing from an `on:` block)
-  only exists because there is a queue.
-
-Escalation: if a specific repo ever hits a genuine semantic merge race (two PRs green alone, broken
-together, merged concurrently), raise it — a per-repo queue is a last resort, never a fleet default.
+Wave campaigns need no special repo configuration. Flights land on the `kahuna/*` integration branch,
+never on the protected branch; the engine reconciles them with `flight_partition` / `flight_overlap`
+and `commutativity_verify`, merging in dependency order. `kahuna→main` is then a single serialized,
+trust-gated promotion. **Nothing ever merges to the protected branch concurrently**, so the protected
+branch needs no serialization machinery beyond required checks.
 
 ## Two Traps
 
-**1. `required_linear_history: true` forbids merge commits.** It blocks the merge-commit promote path
-*independently of any queue*, and the failure does not announce itself as a linear-history problem. If
-the wave engine needs to land `kahuna→main` as a merge commit — it does, whenever the kahuna branch is
-preserved across waves — this must be `false`.
+**1. `required_linear_history: true` forbids merge commits.** It blocks the merge-commit promote path,
+and the failure does not announce itself as a linear-history problem. If the wave engine needs to land
+`kahuna→main` as a merge commit — it does, whenever the kahuna branch is preserved across waves — this
+must be `false`.
 
-**2. A merge-queue ruleset can be the only ruleset.** Before deleting one, confirm that classic branch
-protection (`gh api repos/:owner/:repo/branches/main/protection`) independently carries the required
-checks. Delete the ruleset without checking and you may leave the branch naked.
+**2. Rulesets and classic branch protection are separate systems.** A repo can carry required checks in
+one, the other, or both. Before deleting *any* ruleset, confirm what classic branch protection
+(`gh api repos/:owner/:repo/branches/main/protection`) independently enforces — delete without checking
+and you can leave the branch naked while the API still reports everything as fine.
 
 ## Rollout Steps
 
@@ -104,19 +86,6 @@ If either stalls, **the protection is misconfigured** regardless of what the API
 ## Related
 
 - Postmortem: `claudecode-workflow#299` (the 2026-04-07 outage that motivated behavior-testing)
-- Policy: `policy_wave_engineering_merge_config.md` — the queue-less house rules
+- Policy: `policy_wave_engineering_merge_config.md` — the house rules this config implements
 - The meta-lesson — verification looks at behavior, not declarations — also drove the runtime smoke
   test in `mcp-server-sdlc` `validate.sh` (story #39).
-
-## Historical Record — the 2026-04-07 Merge-Queue Bootstrap
-
-Kept for institutional memory. These 6 repos each carried a merge-queue ruleset from 2026-04-07 until
-2026-07-13, when the fleet went queue-less and all six rulesets were deleted (classic branch protection,
-which independently carried the required checks, was left intact):
-
-- `Wave-Engineering/claudecode-workflow` (queue bootstrap PR #298)
-- `Wave-Engineering/mcp-server-discord` (PR #36)
-- `Wave-Engineering/mcp-server-discord-watcher` (PR #2)
-- `Wave-Engineering/mcp-server-nerf` (PR #12)
-- `Wave-Engineering/mcp-server-sdlc` (PR #40)
-- `Wave-Engineering/mcp-server-wtf` (PR #12)

@@ -65,12 +65,16 @@ class TestPromotionContract:
         assert "openPromotionPrPrompt" in src, "promotion PR-open prompt missing"
         assert "wave_finalize" in src, "promotion PR-open must call wave_finalize"
 
-    def test_promotion_merges_with_skip_train(self) -> None:
+    def test_promotion_merges_without_skip_train(self) -> None:
+        # #898: the fleet is queue-less — there is no merge queue or merge train, so there is
+        # nothing for skip_train to skip. Asserted NEGATIVELY so re-introducing the flag (and
+        # with it the assumption that a queue exists) fails the build.
         src = _gate_src()
         assert "promotePrompt" in src, "promotion prompt missing"
         assert "pr_merge" in src, "promotion must call pr_merge"
-        assert "skip_train" in src, (
-            "promotion must pass skip_train (commutativity already proved the composed diff safe)"
+        assert "skip_train" not in src, (
+            "promotion must NOT pass skip_train — the fleet is queue-less (#898); "
+            "the flag presumes a merge queue/train that no longer exists"
         )
 
     def test_promotion_targets_kahuna_to_protected(self) -> None:
@@ -100,10 +104,11 @@ class TestPromotionLifecycle:
         )
 
     def test_promoted_true_only_if_merge_landed(self) -> None:
-        # On a merge-queue-enforced repo skip_train is dropped + the PR is enrolled;
-        # promoted must reflect actually-landed, not enrolled-but-pending.
+        # promoted must reflect actually-landed, never merge-requested-but-pending.
+        # Promoted = delivered: confirm the merge is observable on the protected branch.
         src = _gate_src()
         assert "promoted" in src, "promote must return a promoted flag"
         assert "pr_merge_wait" in src, (
-            "promotion must wait for merge-queue-enrolled PRs to actually land (not treat enrolled as done)"
+            "promotion must confirm the merge actually landed on the protected branch "
+            "(not treat a pending merge as done)"
         )

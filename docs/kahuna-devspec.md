@@ -58,14 +58,14 @@ The Claude Code Workflow Kit ships a wave-pattern execution system — `/assessw
 
 The system was conceptually designed for three progressively autonomous operating modes (Tier 1: agent executes, human merges; Tier 2: agent merges individual changes, human gates the Plan; Tier 3: fully autonomous end-to-end with trust-score-based auto-merge at main). Today the kit operates at Tier 1 only. **Tier 3 is the destination for this Plan.** Tier 2 is referenced in the Phased Implementation Plan (§8) as an intermediate checkpoint during development — it is not a shipping configuration. Once Tier 3 is built, it is the only mode the kit runs in.
 
-The sdlc-server has most of the trust-signal infrastructure required for Tier 3 (`commutativity_verify` returning STRONG/MEDIUM/WEAK/ORACLE_REQUIRED verdicts, `wave_ci_trust_level`, `skip_train` bypass flag on `pr_merge`), but no mechanism exists to route flights away from main or to act on the trust signals without human intervention.
+The sdlc-server has most of the trust-signal infrastructure required for Tier 3 (`commutativity_verify` returning STRONG/MEDIUM/WEAK/ORACLE_REQUIRED verdicts, `wave_ci_trust_level`), but no mechanism exists to route flights away from main or to act on the trust signals without human intervention.
 
 ### 1.2 Problem Statement
 
 `/wavemachine` cannot deliver on its core promise today because every Flight's MR requires human approval to merge. Three distinct gates stack against autonomy:
 
 1. **CLAUDE.md mandatory rule** — `/precheck` STOPs before any commit and refuses autonomous approval. Sub-agents cannot approve themselves.
-2. **Platform enforcement** — GitHub repos in the Wave-Engineering org had `enablePullRequestAutoMerge: false` and merge-queue strategies; GitLab repos in `analogicdev/*` have branch-name regexes, `commit_committer_check`, and varying review-approval requirements. Any single one blocks autonomous merge. (The GitHub side is since resolved: auto-merge is on fleet-wide and the merge queues were removed — see `docs/operations/branch-protection-checklist.md`.)
+2. **Platform enforcement** — GitHub repos in the Wave-Engineering org had `enablePullRequestAutoMerge: false`; GitLab repos in `analogicdev/*` have branch-name regexes, `commit_committer_check`, and varying review-approval requirements. Any single one blocks autonomous merge. (The GitHub side is since resolved — auto-merge is on fleet-wide; see `docs/operations/branch-protection-checklist.md`.)
 3. **Branch protection** — if "require pull request reviews" is enabled on the target branch, the agent cannot merge even if it wanted to.
 
 As a result, an overnight `/wavemachine` run stalls at the first Flight that completes, waits for human input, and the autonomous-execution premise collapses. The user ends up batching N reviews at the first morning session anyway, so wavemachine bought nothing except asynchrony of *execution* — not of *integration*.
@@ -114,7 +114,7 @@ The critical invariant: **MRs into kahuna are relaxed; MRs from kahuna to main r
 
 | ID | Constraint | Rationale |
 |----|-----------|-----------|
-| **CT-01** | Main branch safety properties are inviolable. Existing branch protection, required status checks, and push restrictions on main must persist unchanged. KAHUNA may only relax rules on `kahuna/*` branches, never on main. (As of 2026-07-13 the fleet is queue-less — there is no merge-queue configuration to preserve; the required-checks + no-force-push protection *is* main's guarantee.) | Main is the shipped, production-visible state. Teams outside the wave-pattern workflow depend on its current safety guarantees. The whole point of the integration-branch pattern is to move autonomy below main, not to weaken main itself. |
+| **CT-01** | Main branch safety properties are inviolable. Existing branch protection, required status checks, and push restrictions on main must persist unchanged. KAHUNA may only relax rules on `kahuna/*` branches, never on main. The required-checks + no-force-push + no-deletion protection *is* main's guarantee. | Main is the shipped, production-visible state. Teams outside the wave-pattern workflow depend on its current safety guarantees. The whole point of the integration-branch pattern is to move autonomy below main, not to weaken main itself. |
 | **CT-02** | Platform-neutral design. The sdlc-server tool surface (`wave_finalize`, modified `commutativity_verify`, existing `pr_create`/`pr_merge`) must work identically against GitHub and GitLab. Platform-specific differences live in settings automation, not in the core spec. | The wave-pattern kit is already dual-platform. Introducing tool-level platform drift would bifurcate the whole pipeline and destroy the "one spec, two ecosystems" property that makes it maintainable. |
 | **CT-03** | No regressions to Wavemachine v2 infrastructure. The filesystem bus (`/tmp/wavemachine/`), the Orchestrator/Prime/Flight protocol, the canonical `PASS`/`FAIL` status-line contract, and `wave_health_check` circuit-breakers must continue to function unchanged when KAHUNA is not in use, and must interoperate with KAHUNA cleanly when it is. | Wavemachine v2 (Plan #384, tracked under the legacy `type::epic` label pre-taxonomy) shipped 2026-04-23 and is in use today. Regressing it to ship KAHUNA would leave the kit worse off on the way to a theoretically better end state. |
 | **CT-04** | Existing sdlc-server tool surface must be preserved where it already suffices. `pr_create` and `pr_merge` have the behavior KAHUNA needs — do not modify them. New capability goes in new tools (`wave_finalize`) or narrow schema extensions (`commutativity_verify` min-changeset relaxation). | Per tachikoma's §1 review: touching working tools introduces risk without benefit. The principle is additive, not transformative. Consumer skills that already call these tools in Tier-1 contexts must see no behavioral change. |
@@ -281,7 +281,7 @@ Narrative: BJ approves a Dev Spec, runs `/devspec upshift` to populate the backl
    - `ci_wait_run(ref=kahuna-branch)` → success expected
    - `feature-dev:code-reviewer` via Agent tool over the full composed diff → zero high+ findings expected
    - `trivy fs` on the kahuna branch → zero HIGH/CRITICAL expected
-9. **Auto-merge.** All four green → Orchestrator invokes `pr_merge(kahuna-main-mr-number)` with `skip_train=true` (trust-cleared). The merge lands on main directly. (`skip_train` is now a no-op — the fleet is queue-less, so there is no train to skip; the flag is retained for platform compatibility.)
+9. **Auto-merge.** All four green → Orchestrator invokes `pr_merge(kahuna-main-mr-number)` (trust-cleared). The merge lands on main directly.
 10. **Cleanup.** `wave_finalize` deletes the kahuna branch (per R-03), updates wave state to record the disposition in `kahuna_branches` history, emits Discord notification to `#wave-status` + vox announcement (per R-19).
 11. **BJ wakes up.** Status panel shows Plan complete, kahuna branch gone, main contains the new commit. The notification thread on Discord has the summary.
 
@@ -588,7 +588,7 @@ The top-level loop gains three new step groups.
    - `Agent(subagent_type=feature-dev:code-reviewer, prompt=<composed diff>)` — scoped review over the full kahuna-vs-main diff
    - `Bash("trivy fs --scanners vuln --severity HIGH,CRITICAL --format json --quiet <repo_path>")`
 5. Collect all four results. Do not short-circuit (per Procedure C).
-6. If all four pass: invoke `pr_merge({number: <kahuna_mr_number>, skip_train: true, squash_message: <assembled>})`. Record disposition in wave state's `kahuna_branches` history. Delete kahuna branch. Emit `#wave-status` notification (R-19) and vox announcement.
+6. If all four pass: invoke `pr_merge({number: <kahuna_mr_number>, squash_message: <assembled>})`. Record disposition in wave state's `kahuna_branches` history. Delete kahuna branch. Emit `#wave-status` notification (R-19) and vox announcement.
 7. If any fail: transition wave state `action` → `gate_blocked` with per-signal detail. Emit `#wave-status` notification + vox alert per Procedure C. Preserve kahuna branch. Exit loop.
 
 #### 5.2.3 `/nextwave` — Flight base-ref plumbing
@@ -631,7 +631,7 @@ Today `gl-settings` manages branch protection, tag protection, MR approval rules
 - For a given project, applies the settings that establish the kahuna sandbox property:
   - `PUT /projects/:id/protected_branches` — protect the `kahuna/*` pattern (developer push + developer merge). Required as a prerequisite for the per-branch approval rule below: GitLab approval rules can only be scoped to *protected* branches.
   - `POST /projects/:id/approval_rules` — create a `kahuna-zero-approvals` rule with `approvals_required: 0`, scoped via `protected_branch_ids: [<kahuna_pattern_id>]` to the protected branch above. **Must NOT use `merge_request_approval_settings`** — that endpoint is project-wide and would unprotect main.
-  - `PUT /projects/:id/settings` — `only_allow_merge_if_pipeline_succeeds=true` (so kahuna merges still gate on CI), `squash_option=default_on` (per CT-02), `merge_pipelines_enabled=false`, `merge_trains_enabled=false`. **Merge trains DISABLED.** An earlier revision of this spec asserted the opposite — that trains "batch flight-MRs into one pipeline run per train, which is the throughput story autonomous execution needs" — and called the original "disabled" wording an error. **That correction was itself the error.** GitLab runs a pipeline *per MR in the train* and re-runs successors when a predecessor fails; trains do not batch. Stacked on merged-results pipelines, this cost **3 pipelines per MR** (push + merged-results + train) for a benefit that does not exist. The CI gate is retained; only the train machinery is removed. See `docs/operations/branch-protection-checklist.md`.
+  - `PUT /projects/:id/settings` — `only_allow_merge_if_pipeline_succeeds=true` (so kahuna merges still gate on CI) and `squash_option=default_on` (per CT-02). The authoritative payload is `SANDBOX_PROJECT_SETTINGS` in `gl-settings` (`gl_settings/operations/kahuna_sandbox.py`) — that is the single source of truth; do not restate it here, or the two drift.
 - Provides a single-command bootstrap: `gl-settings kahuna-sandbox <project-url>`
 - Includes drift-check mode (via `--dry-run` and `action="would_apply"` per gl-settings convention) for auditing which projects have KAHUNA sandbox settings applied
 - As-shipped: `bakeb7j0/gitlab-settings-automation` PR #29 (commit `b2af3d7`)
@@ -890,7 +890,7 @@ Three phases, each containing 1–2 waves. Cross-repo: stories tagged with scope
 
 - **Story 3.1:** `/precheck` sandbox detection and auto-approval logic. Update SKILL.md. Test via IT-09.
 - **Story 3.2:** `/nextwave` Prime/Flight kahuna base-ref plumbing. Flights branch off kahuna per R-05, MR target per R-06. Test via IT-01 (partial).
-- **Story 3.3:** `/wavemachine` gate-evaluation step group. Parallel trust-signal invocation per R-23. Auto-merge via `pr_merge(skip_train=true)`. Notification via `#wave-status`. Test via IT-01.
+- **Story 3.3:** `/wavemachine` gate-evaluation step group. Parallel trust-signal invocation per R-23. Auto-merge via `pr_merge`. Notification via `#wave-status`. Test via IT-01.
 - **Story 3.4:** CLAUDE.md update — sandbox-exception note on mandatory rule. Update `/precheck`, `/scp*` skill prose.
 
 **AC for Wave 3:** IT-01 passes end-to-end on proving-ground. `/wavemachine` on a 1-Story Plan completes autonomously.

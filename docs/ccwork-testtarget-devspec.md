@@ -126,7 +126,7 @@ Tiers 0 (static) and 6 (observability) are folded into Tier 1's runner. Tiers 2 
 ### 3.6 Tier 4 End-to-End
 
 - **R-13** — When Tier 4 Test 4.1 (GitHub single-flight) runs, the harness shall: create a single-issue fixture Plan in a Wave-Engineering GitHub fixture repo; drive `/wavemachine` to terminal state; assert (a) kahuna branch created via `wave_init`, (b) kahuna→main MR opened by `wave_finalize`, (c) gate ran all 4 trust signals concurrently in a single tool-use block, (d) `pr_merge` landed the MR, (e) observability events landed in `~/.claude/logs/mcp.jsonl`, (f) status panel reflects terminal state, (g) teardown clean.
-- **R-14** — When Tier 4 Test 4.8 (GitLab single-flight) runs, the harness shall execute R-13's assertions parametrized for GitLab plus: `glab` adapter parity for `pr_create`/`pr_merge`/`pr_status`/`pr_diff`/`pr_files`/`pr_wait_ci`/`pr_merge_wait`; merge-train-warning emitted to Discord before `pr_merge`; approval rule scoped via `protected_branch_ids` permits the auto-merge; `skip_train: true` interpreted per platform.
+- **R-14** — When Tier 4 Test 4.8 (GitLab single-flight) runs, the harness shall execute R-13's assertions parametrized for GitLab plus: `glab` adapter parity for `pr_create`/`pr_merge`/`pr_status`/`pr_diff`/`pr_files`/`pr_wait_ci`/`pr_merge_wait`; approval rule scoped via `protected_branch_ids` permits the auto-merge;
 - **R-15** — When Tier 4 Test 4.6 (cross-repo) runs, the harness shall execute a wave with the Plan in repo A and Stories in repo B, and assert: pre-created worktrees in repo B, `gh -R` scoping on every command, no `isolation: "worktree"` flag misuse, kahuna branches in BOTH repos, both kahuna→main MRs land, `wave-status` state in master plan repo, worktree teardown unlocks before force-removal.
 - **R-16** — If any Tier 4 test fails, the harness shall produce a single forensic doc reconstructing the failure timeline from `~/.claude/logs/mcp.jsonl` and bus state, persist it to a documented filesystem path, and include the path in the Discord nightly report.
 
@@ -1317,7 +1317,7 @@ Implement Test 4.8: parametrized 4.1 against `gitlab.com/testtarget/harness-fixt
 
 1. Create `tests/test_tier4_e2e.py::TestTier4_GitLabSingleFlight`.
 2. Use `FixtureLifecycle.create_gitlab_branch_set(run_id)` to seed branch + issue + MR in the long-lived project.
-3. Drive `/wavemachine` against the GitLab fixture; assert all R-13 conditions plus R-14: `glab` adapter parity for the seven PR/MR methods; merge-train-warning emitted to Discord before `pr_merge`; approval rule scoped via `protected_branch_ids` permits the auto-merge; `skip_train: true` interpreted per platform.
+3. Drive `/wavemachine` against the GitLab fixture; assert all R-13 conditions plus R-14: `glab` adapter parity for the seven PR/MR methods; approval rule scoped via `protected_branch_ids` permits the auto-merge;
 4. Test reuses Story 2.5's structure with `@pytest.mark.parametrize("platform", ["github", "gitlab"])` where feasible; GitLab-specific assertions live in a separate test method.
 5. Document Test 4.8 in `docs/RUNBOOK.md`.
 

@@ -124,8 +124,8 @@ fixtures underneath. Mitigated by:
   needs (fixture-repo lifecycle, MCP server start/stop, bus state setup,
   snapshot diffing).
 - **GitLab parity from day one** — most platform-divergence bugs
-  (`skip_train` semantics, approval-rule `protected_branch_ids` scoping,
-  GraphQL auto-merge race shape) only surface against real GitLab. A
+  (approval-rule `protected_branch_ids` scoping, GraphQL auto-merge race
+  shape) only surface against real GitLab. A
   GitHub-only Tier 4 would produce a false-confidence nightly: green
   every morning while GitLab campaigns silently break in the field.
   Cost is small if the runner is platform-parameterized from the start
@@ -176,8 +176,7 @@ installed cc-workflow setup.
   GitHub fixture. The smoke test; if this fails, the whole pipeline is
   broken.
 - **Test 4.8** — single-flight, single-issue wave end-to-end against
-  GitLab fixture. Parametrized 4.1; covers `skip_train` semantics,
-  GitLab merge-train warning, approval-rule scoping.
+  GitLab fixture. Parametrized 4.1; covers approval-rule scoping.
 - **Test 4.6** — cross-repo wave end-to-end (GitHub → GitHub). Covers
   worktree pre-creation, `gh -R` scoping, dual kahuna branches.
 - Telemetry replay tooling — given a failed Tier 4 run, reconstruct the
@@ -297,11 +296,8 @@ Asserts everything 4.1 asserts, plus:
 
 - `glab` adapter parity for `pr_create`, `pr_merge`, `pr_status`,
   `pr_diff`, `pr_files`, `pr_wait_ci`, `pr_merge_wait`.
-- Merge-train-warning emitted to Discord before `pr_merge`.
 - Approval rule scoped via `protected_branch_ids` correctly permits
   the auto-merge.
-- `skip_train: true` interpreted per platform — silent passthrough on
-  GitLab (cannot bypass merge train), bypass-queue on GitHub.
 
 ### Test 4.6 — Cross-repo wave (GitHub → GitHub)
 

@@ -205,7 +205,7 @@ Your project memory lives at `~/.claude/projects/-home-bakerb-sandbox-github-cla
 - `memory/decision_plan_phase_epic_taxonomy.md` — locked 2026-04-26 taxonomy
 - `memory/lesson_cc_subagent_tools.md` — CC's sub-agent tool distribution (critical for any work that spawns Agents)
 - `memory/lesson_cross_repo_wave_orchestration.md` — seven non-obvious facts
-- `memory/policy_wave_engineering_merge_config.md` — queue-less house rules: NO merge queue / merge trains, auto-merge on green, squash + merge-commit both allowed
+- `memory/policy_wave_engineering_merge_config.md` — repo config house rules: auto-merge on green, squash + merge-commit both allowed, no required reviews
 - `memory/lesson_repo_label_taxonomies.md` — label families differ per repo; verify before batch-filing
 
 ---

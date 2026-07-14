@@ -47,7 +47,7 @@ Three coordinated changes:
 
 ### 1.5 Non-Goals
 
-- **Not a wave infrastructure rewrite.** Worktrees, kahuna branches, merge queue, and the campaign runtime are unchanged. The dispatch knob is a parameter on the existing executor, not new infrastructure.
+- **Not a wave infrastructure rewrite.** Worktrees, kahuna branches, and the campaign runtime are unchanged. The dispatch knob is a parameter on the existing executor, not new infrastructure.
 - **Not a `/devspec` or `/ddd` change.** Those skills are unchanged. `/lazyriver` is *upstream* of them and does not modify them.
 - **Not fixing mcp-server-sdlc tooling bugs.** F-2, F-6, and F-7 are filed against mcp-server-sdlc scope and are tracked separately.
 - **Not a new campaign-mode "pool vs serial" choice UI.** That framing is retired. Per-wave dispatch replaces it.
