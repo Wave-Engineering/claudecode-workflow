@@ -55,7 +55,7 @@ template and label family (authoritative source: `docs/phase-epic-taxonomy-devsp
 artifact the Orchestrator reads; an Epic is a PM-layer grouping the pipeline
 never reads. If you find pipeline code inspecting `type::epic` or `epic::N`,
 it's a taxonomy leak (Dev Spec R-19). The two types share label colour
-`#5319E7` because they sit in the same visual family on the project board,
+`5319E7` because they sit in the same visual family on the project board,
 not because they share any pipeline semantics.
 
 ## Wave-Pattern-Ready Output Guarantee
@@ -498,10 +498,10 @@ Two label families are created on-demand when absent from the target repo:
 
 | Label | Colour | Description | Created by |
 |-------|--------|-------------|------------|
-| `type::plan` | `#5319E7` | `"Plan tracking issue — top-level pipeline container"` | `/issue plan` invocations |
-| `epic::<N>` | `#5319E7` | `"Story belongs to Epic #N (PM-layer thematic grouping)"` (substitute `<N>`) | `/issue <story> --epic N` invocations |
+| `type::plan` | `5319E7` | `"Plan tracking issue — top-level pipeline container"` | `/issue plan` invocations |
+| `epic::<N>` | `5319E7` | `"Story belongs to Epic #N (PM-layer thematic grouping)"` (substitute `<N>`) | `/issue <story> --epic N` invocations |
 
-Both share colour `#5319E7` with `type::epic` — they sit in the same visual
+Both share colour `5319E7` with `type::epic` — they sit in the same visual
 family on the project board. This does NOT mean the pipeline treats them
 alike; the colour is cosmetic, the semantics are different.
 
@@ -566,6 +566,24 @@ Create immediately — do not ask for approval. Issues are cheap to edit and clo
 
 If `work_item` reports a missing label at create-time (race or pre-existing
 `epic::X` for a different `X`), surface the error; do not silently retry.
+
+> ### ⚠️ `work_item` does not accept `type: plan` yet
+>
+> The tool's `type` enum is `epic | story | feature | bug | chore | docs | fix | pr | mr` — **there
+> is no `plan`.** `/issue plan` therefore cannot pass `type: "plan"` today. Tracked as
+> **`mcp-server-sdlc#477`**; when it lands, pass `type: "plan"` and the correct `type::plan` label
+> is applied automatically — no workaround needed.
+>
+> **Until then, do NOT reach for `type: "epic"` as a substitute on GitHub.** `work_item` *prepends*
+> an automatic `type::<type>` label to the caller's label list, unconditionally. On **GitLab** that
+> is invisible: `type::epic` and `type::plan` share the `type::` scope key, and GitLab's scoped
+> labels are mutually exclusive, so the later `type::plan` **evicts** `type::epic`. On **GitHub**
+> there are no scoped labels — the Plan ends up carrying **both** `type::epic` *and* `type::plan`,
+> which is precisely the taxonomy leak this skill's Taxonomy Overview forbids (Dev Spec R-19).
+>
+> The workaround is safe by *accident* on GitLab and broken on GitHub. If you must create a Plan
+> before #477 lands, create it and then **verify the resulting label set** — strip any stray
+> `type::epic`.
 
 ## Batch Creation (N > 1 issues in one pass)
 
@@ -652,16 +670,20 @@ time:
 
 ## Label Colour Reference
 
-When creating labels, use these colours for consistency. **Note:** `gh` expects hex without `#` prefix; `glab` expects it with `#`. The `mcp__sdlc-server__label_create` tool handles platform translation; pass the `#`-prefixed form.
+When creating labels, use these colours for consistency.
 
-| Group | Colour (glab / label_create) | Colour (gh) |
-|-------|------------------------------|-------------|
-| `type::plan` | `#5319E7` | `5319E7` |
-| `type::epic` | `#5319E7` | `5319E7` |
-| `type::<story-subtype>` | `#0E8A16` | `0E8A16` |
-| `priority::` | `#D93F0B` | `D93F0B` |
-| `urgency::` | `#FBCA04` | `FBCA04` |
-| `size::` | `#1D76DB` | `1D76DB` |
-| `severity::` | `#B60205` | `B60205` |
-| `wave::` | `#5319E7` | `5319E7` |
-| `epic::<N>` | `#5319E7` | `5319E7` |
+> **Pass a bare 6-char hex. No `#`.** `mcp__sdlc-server__label_create` validates `color` against
+> `^[0-9a-fA-F]{6}$` and **rejects the `#`-prefixed form outright**. The tool handles any
+> platform-specific translation internally — callers never pass `#`.
+
+| Group | Colour |
+|-------|--------|
+| `type::plan` | `5319E7` |
+| `type::epic` | `5319E7` |
+| `type::<story-subtype>` | `0E8A16` |
+| `priority::` | `D93F0B` |
+| `urgency::` | `FBCA04` |
+| `size::` | `1D76DB` |
+| `severity::` | `B60205` |
+| `wave::` | `5319E7` |
+| `epic::<N>` | `5319E7` |

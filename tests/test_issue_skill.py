@@ -686,3 +686,108 @@ Body.
         result = _spec_validate_structure(body)
         assert not result["valid"]
         assert "changes" in result["missing"]
+
+
+class TestLabelColourFormat:
+    """The skill's label colours must match `label_create`'s actual contract.
+
+    cc-workflow#902. The skill previously *instructed* agents to pass the
+    `#`-prefixed form ("gh expects hex without #; glab expects it with #; the
+    tool handles platform translation; pass the #-prefixed form"). That is
+    backwards: `mcp__sdlc-server__label_create` validates `color` against
+    ``^[0-9a-fA-F]{6}$`` and rejects `#RRGGBB` outright. An agent following the
+    skill as written hit the failure (deep-thought, #agent-ops 2026-07-13).
+
+    This is a doc-drifting-from-a-tool-contract bug, so the only test that can
+    catch it is one that reads the doc.
+    """
+
+    # The exact pattern label_create enforces.
+    _LABEL_CREATE_COLOR_RE = re.compile(r"^[0-9a-fA-F]{6}$")
+
+    def test_no_hash_prefixed_colours_anywhere(self, skill_text: str) -> None:
+        # A `#`-prefixed 6-hex inside backticks reads as a value to pass.
+        offenders = re.findall(r"`#[0-9A-Fa-f]{6}`", skill_text)
+        assert not offenders, (
+            f"skill presents #-prefixed colour(s) as values to pass: {sorted(set(offenders))}. "
+            "label_create rejects them (^[0-9a-fA-F]{6}$) — use bare hex."
+        )
+
+    def test_documented_colours_satisfy_label_create(self, skill_text: str) -> None:
+        """Every colour the skill OFFERS must be one label_create would accept.
+
+        Harvest the raw token from the Colour column — do NOT pre-filter to
+        well-formed hex. Matching `([0-9A-Fa-f]{6})` first and then asserting it
+        is 6 hex chars is a tautology: a bad value like `#5319E7` or `ZZZZZZ`
+        would simply not be collected, and the test would pass while the skill
+        shipped a colour the tool rejects.
+        """
+        table = re.search(
+            r"^\| Group \| Colour \|.*?(?=\n\s*\n|\Z)",
+            skill_text,
+            re.M | re.S,
+        )
+        assert table, "Label Colour Reference table not found — did its shape change?"
+
+        rows = re.findall(r"^\|\s*`?[^|]+?`?\s*\|\s*([^|]+?)\s*\|\s*$", table.group(0), re.M)
+        colours = [c.strip().strip("`") for c in rows if c.strip().strip("`").lower() != "colour"]
+        colours = [c for c in colours if not set(c) <= {"-", ":"}]  # drop the |---| separator
+        assert colours, "no colours harvested from the table — the parse is broken, not the doc"
+
+        for colour in colours:
+            assert self._LABEL_CREATE_COLOR_RE.match(colour), (
+                f"colour {colour!r} in the Label Colour Reference would be REJECTED by "
+                f"label_create (it validates ^[0-9a-fA-F]{{6}}$ — bare hex, no '#')"
+            )
+
+    def test_states_the_no_hash_rule(self, skill_text: str) -> None:
+        assert re.search(r"[Nn]o `?#`?\.|bare 6-char hex|without.*`#`", skill_text), (
+            "skill must state that label_create takes a bare hex with no '#'"
+        )
+
+    def test_does_not_claim_platform_translation_of_the_hash(self, skill_text: str) -> None:
+        # The specific false claim that caused the bug.
+        assert "pass the `#`-prefixed form" not in skill_text, (
+            "the skill must not instruct agents to pass the #-prefixed form — label_create rejects it"
+        )
+
+
+class TestPlanTypeGapDocumented:
+    """`work_item` has no `plan` in its type enum (mcp-server-sdlc#477).
+
+    The skill must not silently imply `type: "plan"` works, and must warn that
+    the obvious `type: "epic"` workaround leaks `type::epic` on GitHub (GitLab
+    hides it via scoped-label eviction; GitHub has no scoped labels).
+    """
+
+    @staticmethod
+    def _warning_box(skill_text: str) -> str:
+        """The `work_item does not accept type: plan` blockquote, extracted.
+
+        Anchor the assertions to THIS region rather than the whole 700-line file —
+        a bare `"477" in skill_text` would be satisfied by any future issue number
+        or even a hex colour like `477ACB`, and `"scoped label"` anywhere would do.
+        """
+        m = re.search(
+            r"^> ### .*?`type: plan`.*?(?=\n(?!>)|\Z)",
+            skill_text,
+            re.M | re.S,
+        )
+        assert m, "the `work_item does not accept type: plan` warning box is missing"
+        return m.group(0)
+
+    def test_plan_enum_gap_is_flagged(self, skill_text: str) -> None:
+        box = self._warning_box(skill_text)
+        assert re.search(r"mcp-server-sdlc#477|sdlc#477", box), (
+            "the warning box must cite the tracking issue (sdlc#477) for the missing `plan` enum"
+        )
+
+    def test_epic_workaround_github_leak_is_warned(self, skill_text: str) -> None:
+        box = self._warning_box(skill_text)
+        assert re.search(r"scoped label", box, re.I), (
+            "the box must explain GitLab scoped-label eviction..."
+        )
+        assert re.search(r"GitHub", box), (
+            "...and that GitHub has NO scoped labels, so the type::epic leak is REAL there. "
+            "Without both halves the workaround reads as safe."
+        )
