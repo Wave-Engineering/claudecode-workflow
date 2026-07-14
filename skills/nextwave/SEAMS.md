@@ -108,7 +108,7 @@ Each signal is an `agent()` whose prompt names the real sdlc-server call:
 | Signal | `agentType` | Real sdlc-server call | pass = |
 |---|---|---|---|
 | commutativity | `general-purpose` | `commutativity_verify(base_ref=<protected>, changesets=[{id:"kahuna", head_ref:<kahuna>}])` | verdict ∈ {STRONG, MEDIUM}; `PROBE_UNAVAILABLE` **and** `ORACLE_REQUIRED` = **conservative-fail** (#6 — the gate HOLDs on what the probe can't prove safe; reconcile may adjudicate ORACLE_REQUIRED during integration, the gate does not) |
-| ci | `general-purpose` | `ci_wait_run` on the **gate-opened draft PR's merge-result pipeline** (passed in by number — NOT merge-commit branch HEAD) [sdlc #452, #5] | `final_status == "success"` |
+| ci | `general-purpose` | `ci_wait_run(require_merge_result=true)` on the **gate-opened draft PR's merge-result pipeline** (passed in by number — NOT merge-commit branch HEAD) [sdlc #452, #476, #5] | `final_status == "success"`; `not_merge_result` HOLDs |
 | review | `feature-dev:code-reviewer` (`isolation:'worktree'` on kahuna [#667]) | code-reviewer over the **kahuna-vs-protected diff**, diff-scoped (§3.4) | no critical/important findings |
 | trivy | `general-purpose` | `trivy fs --scanners vuln --severity HIGH,CRITICAL` on kahuna | no HIGH/CRITICAL with available fixes |
 
