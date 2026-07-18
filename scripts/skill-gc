@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+"""skill-gc — losslessly evict skill bodies from a Claude Code transcript (.jsonl).
+
+When an agent invokes a skill, the full SKILL.md body is injected into the
+transcript as an `isMeta` user message and then reloads from disk verbatim on
+the *next* invocation. So the body is the one part of the context that is fully
+reconstructible — evicting it reclaims context (and neutralises stale-skill
+"time bombs" on resume) without losing anything the work-state depends on.
+
+This is the reorient / skill-GC core (epic #906, story D4 #907). A model cannot
+drop skills from its own live context; this is an external, offline operation on
+a NOT-running session's transcript. See memory
+`reference_skill_body_transcript_surgery` for the proven mechanic.
+
+Guarantees (asserted by verify(), on by default):
+  * byte-preserving for valid UTF-8 transcripts — non-target lines are written
+    back unchanged (a UTF-8 round-trip is identity), and on target lines only
+    the JSON-encoded body string is replaced. It never re-serialises the whole
+    file (default json spacing would grow it and rewrite untouched lines).
+  * structural integrity — line count preserved, every line valid JSON, every
+    tool_use still paired with its tool_result.
+  * recoverable — a gzip+sha backup is written before any change.
+  * fail-closed — refuses a session that looks live OR whose liveness cannot be
+    proven (no /proc to scan), unless --force.
+
+Line indices are RAW-LINE indices throughout: the transcript is parsed into a
+list aligned 1:1 with the raw lines (blank lines -> None placeholders), so the
+parsed view and the raw/output views never diverge.
+"""
+from __future__ import annotations
+
+import argparse
+import glob
+import gzip
+import hashlib
+import json
+import os
+import sys
+import time
+
+LIVE_WINDOW_SECS = 60  # a transcript touched this recently is treated as possibly-live
+
+
+# --------------------------------------------------------------------------- #
+# parsing (raw-aligned)
+# --------------------------------------------------------------------------- #
+def load_events(path: str) -> list[dict]:
+    """Non-blank events (for callers that don't need raw-line alignment)."""
+    return [json.loads(l) for l in open(path, encoding="utf-8") if l.strip()]
+
+
+def parse_aligned(raw_lines: list[str]) -> list[dict | None]:
+    """Parse into a list aligned 1:1 with raw_lines; blank lines -> None."""
+    return [json.loads(l) if l.strip() else None for l in raw_lines]
+
+
+def _content(ev: dict | None) -> list:
+    if not isinstance(ev, dict):
+        return []
+    c = ev.get("message", {}).get("content") if isinstance(ev.get("message"), dict) else None
+    return c if isinstance(c, list) else []
+
+
+# --------------------------------------------------------------------------- #
+# identification
+# --------------------------------------------------------------------------- #
+def find_skill_body_indices(events: list[dict | None]) -> dict[int, str]:
+    """Return {index: skill_name} for every skill-body message, via the
+    deterministic chain: Skill tool_use -> tool_result(uuid) -> isMeta user-text
+    whose parentUuid == that tool_result's uuid. Indices are into `events` (pass
+    a raw-aligned list to get raw-line indices). None entries are skipped, and
+    None uuids/skill names are never used as keys (guards a false-eviction hole)."""
+    skill_use = {
+        b["id"]: b.get("input", {}).get("skill")
+        for ev in events
+        for b in _content(ev)
+        if b.get("type") == "tool_use" and b.get("name") == "Skill" and b.get("id")
+    }
+    result_uuid = {
+        ev.get("uuid"): skill_use[b["tool_use_id"]]
+        for ev in events
+        for b in _content(ev)
+        if b.get("type") == "tool_result"
+        and b.get("tool_use_id") in skill_use
+        and ev.get("uuid") is not None
+    }
+    bodies: dict[int, str] = {}
+    for i, ev in enumerate(events):
+        if (
+            isinstance(ev, dict)
+            and ev.get("type") == "user"
+            and ev.get("isMeta") is True
+            and ev.get("parentUuid") is not None
+            and ev.get("parentUuid") in result_uuid
+        ):
+            c = ev.get("message", {}).get("content")
+            if isinstance(c, list) and len(c) == 1 and c[0].get("type") == "text":
+                bodies[i] = result_uuid[ev["parentUuid"]]
+    return bodies
+
+
+def stub_text(skill: str, n: int) -> str:
+    return (
+        f"[skill body evicted for context GC — skill={skill}, was {n} chars. "
+        f"The current version reloads automatically the next time /{skill} is invoked.]"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# safety
+# --------------------------------------------------------------------------- #
+def session_liveness(path: str) -> str:
+    """Return 'live' | 'idle' | 'unknown'. Fail-closed: callers must treat both
+    'live' and 'unknown' as do-not-touch (unless forced).
+
+    Strong signal: a process holds the transcript fd open (Linux /proc scan).
+    Recency signal: modified within LIVE_WINDOW_SECS. When /proc is unavailable
+    (non-Linux), the strong signal is absent and an old-but-idle live session is
+    indistinguishable from a stopped one, so we return 'unknown' rather than
+    pretending mtime alone proves safety."""
+    ap = os.path.realpath(path)
+    proc = os.path.isdir("/proc")
+    if proc:
+        for fd in glob.glob("/proc/[0-9]*/fd/*"):
+            try:
+                if os.path.realpath(fd) == ap:
+                    return "live"
+            except OSError:
+                continue
+    try:
+        if time.time() - os.path.getmtime(path) < LIVE_WINDOW_SECS:
+            return "live"
+    except OSError:
+        return "unknown"
+    return "idle" if proc else "unknown"
+
+
+def backup(path: str, backup_dir: str | None) -> str:
+    data = open(path, "rb").read()
+    sha8 = hashlib.sha256(data).hexdigest()[:8]
+    bdir = backup_dir or os.path.join(os.path.dirname(os.path.abspath(path)), "transcript-backups")
+    os.makedirs(bdir, exist_ok=True)
+    base = os.path.basename(path)
+    base = base[:-6] if base.endswith(".jsonl") else base
+    bak = os.path.join(bdir, f"{base}.{sha8}.jsonl.gz")
+    with gzip.open(bak, "wb") as f:
+        f.write(data)
+    if gzip.open(bak, "rb").read() != data:
+        raise RuntimeError(f"backup verification failed: {bak}")
+    return bak
+
+
+# --------------------------------------------------------------------------- #
+# surgery (byte-preserving, raw-aligned)
+# --------------------------------------------------------------------------- #
+def evict(path: str, only_skills: set[str] | None = None) -> tuple[list[str], dict[int, str], int]:
+    """Return (new_raw_lines, targets, reclaimed_chars) WITHOUT writing. Non-target
+    lines are the original raw lines; target lines have only the body string swapped.
+    All indices are raw-line indices (parse is aligned 1:1 with raw)."""
+    raw = open(path, encoding="utf-8").read().splitlines(keepends=True)
+    events = parse_aligned(raw)  # aligned 1:1 with raw
+    targets = find_skill_body_indices(events)
+    if only_skills is not None:
+        targets = {i: s for i, s in targets.items() if s in only_skills}
+
+    out = list(raw)
+    reclaimed = 0
+    failed = []
+    for i, skill in targets.items():
+        body = events[i]["message"]["content"][0]["text"]
+        new = stub_text(skill, len(body))
+        for ensure_ascii in (False, True):
+            enc = json.dumps(body, ensure_ascii=ensure_ascii)
+            if enc in raw[i]:
+                out[i] = raw[i].replace(enc, json.dumps(new, ensure_ascii=ensure_ascii), 1)
+                reclaimed += len(body) - len(new)
+                break
+        else:
+            failed.append((i, skill))
+    if failed:
+        raise RuntimeError(f"could not locate body string on lines {failed} — aborting (no write)")
+    return out, targets, reclaimed
+
+
+def _pairs(events: list[dict | None]) -> tuple[set, set]:
+    uses, results = set(), set()
+    for ev in events:
+        for b in _content(ev):
+            if b.get("type") == "tool_use":
+                uses.add(b.get("id"))
+            if b.get("type") == "tool_result":
+                results.add(b.get("tool_use_id"))
+    return uses, results
+
+
+def verify(orig_path: str, out_lines: list[str], targets: dict[int, str]) -> list[str]:
+    """Return a list of failures ([] == clean). Compares raw-aligned lines."""
+    o_raw = open(orig_path, encoding="utf-8").read().splitlines(keepends=True)
+    fails = []
+    if len(o_raw) != len(out_lines):
+        fails.append(f"line count changed {len(o_raw)} -> {len(out_lines)}")
+    drift = [
+        i for i in range(min(len(o_raw), len(out_lines)))
+        if i not in targets and o_raw[i] != out_lines[i]
+    ]
+    if drift:
+        fails.append(f"non-target lines changed: {drift[:10]}")
+    try:
+        n_events = parse_aligned(out_lines)
+    except Exception as e:  # noqa: BLE001
+        return fails + [f"output has malformed JSON: {e}"]
+    if _pairs(parse_aligned(o_raw)) != _pairs(n_events):
+        fails.append("tool_use/tool_result pairing changed")
+    return fails
+
+
+def write_atomic(path: str, lines: list[str]) -> None:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("".join(lines))
+        f.flush()
+        os.fsync(f.fileno())  # durable before the atomic rename
+    os.replace(tmp, path)
+
+
+# --------------------------------------------------------------------------- #
+# CLI
+# --------------------------------------------------------------------------- #
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="Evict skill bodies from a Claude Code transcript.")
+    ap.add_argument("transcript", help="path to the session .jsonl")
+    ap.add_argument("--apply", action="store_true", help="write changes (default: dry-run)")
+    ap.add_argument("--skills", help="comma-separated subset of skills to evict (default: all)")
+    ap.add_argument("--backup-dir", help="where to write the gz backup (default: <dir>/transcript-backups)")
+    ap.add_argument("--force", action="store_true", help="override the live-session refusal (DANGEROUS)")
+    ap.add_argument("--json", action="store_true", help="machine-readable report on stdout")
+    args = ap.parse_args(argv)
+
+    path = args.transcript
+    if not os.path.isfile(path):
+        print(f"skill-gc: no such transcript: {path}", file=sys.stderr)
+        return 2
+
+    only = set(s.strip() for s in args.skills.split(",")) if args.skills else None
+
+    if args.apply and not args.force:
+        state = session_liveness(path)
+        if state == "live":
+            print(f"skill-gc: REFUSING — {path} looks live (a process holds it open, or it was "
+                  f"modified <{LIVE_WINDOW_SECS}s ago). Stop the session, or pass --force if certain.",
+                  file=sys.stderr)
+            return 3
+        if state == "unknown":
+            print(f"skill-gc: REFUSING — cannot prove {path} is not live (no /proc fd scan on this "
+                  f"platform, or mtime unreadable). Stop the session and retry, or pass --force.",
+                  file=sys.stderr)
+            return 3
+
+    out_lines, targets, reclaimed = evict(path, only)
+    fails = verify(path, out_lines, targets)
+    if fails:
+        print("skill-gc: verification FAILED — no write:\n  " + "\n  ".join(fails), file=sys.stderr)
+        return 4
+
+    report = {
+        "transcript": path,
+        "targets": {int(i): s for i, s in targets.items()},
+        "skills": sorted(set(targets.values())),
+        "reclaimed_chars": reclaimed,
+        "reclaimed_tokens_est": reclaimed // 4,
+        "applied": False,
+        "backup": None,
+    }
+
+    if args.apply and targets:
+        # backup reads the file again; under --force on a live session the file could
+        # have changed since evict() read it — acceptable only because --force is opt-in.
+        report["backup"] = backup(path, args.backup_dir)
+        write_atomic(path, out_lines)
+        report["applied"] = True
+
+    if args.json:
+        print(json.dumps(report))
+    else:
+        verb = "evicted" if report["applied"] else "would evict"
+        print(f"skill-gc: {verb} {len(targets)} skill body(ies) {report['skills']} from {path}")
+        print(f"  reclaimed ~{reclaimed} chars (~{reclaimed // 4} tokens); verification clean")
+        if report["backup"]:
+            print(f"  backup: {report['backup']}")
+        elif not args.apply and targets:
+            print("  (dry-run — pass --apply to write; a gz backup is made first)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
