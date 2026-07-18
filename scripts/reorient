@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""reorient — proactively re-orient a STOPPED agent ahead of resume (epic #906, D2 #909).
+
+A resumed session carries stale skill bodies frozen in its transcript even though
+on-disk skills and MCP binaries have refreshed. The SessionStart warn hook (D1)
+flags that at resume time — but that pays the reorientation cost at the exact
+moment you want the agent. `reorient` does it *ahead* of need, in the background:
+it evicts the stale skill bodies now (via skill-gc — byte-preserving, backed up,
+fail-closed on a live session) so the next resume is already clean, and it emits a
+delta-brief of what changed while the session slept.
+
+Objective INVERTS reseed: preserve work-state fidelity, size is only a guardrail.
+It never re-authors the work-state — it refreshes the (reconstructible) skill layer
+and reports the delta. See memory `reference_skill_body_transcript_surgery`.
+
+Usage:
+  reorient <target> [--dry-run] [--json]
+    <target>: a session .jsonl, OR a ~/.claude/projects/<encoded> directory
+              (the latest session in it is chosen).
+"""
+from __future__ import annotations
+
+import argparse
+import datetime
+import glob
+import json
+import os
+import subprocess
+import sys
+from shutil import which
+
+
+def find_skill_gc() -> str | None:
+    """The co-located sibling FIRST, then PATH. reorient and skill-gc are
+    co-developed and share a JSON-report contract, so reorient must pair with its
+    OWN version — sibling-first guarantees that both from-repo (scripts/reorient +
+    scripts/skill-gc) and installed (both symlinked into the same bin dir). PATH-first
+    would let a repo-copy reorient silently drive a stale installed skill-gc
+    (see memory `lesson_live_binary_not_repo_source`)."""
+    cand = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skill-gc")
+    if os.path.isfile(cand):
+        return cand
+    return which("skill-gc")
+
+
+def pick_transcript(target: str) -> str | None:
+    """The transcript itself, or the newest .jsonl in a projects directory."""
+    if os.path.isfile(target) and target.endswith(".jsonl"):
+        return target
+    if os.path.isdir(target):
+        js = glob.glob(os.path.join(target, "*.jsonl"))
+        return max(js, key=os.path.getmtime) if js else None
+    return None
+
+
+def first_timestamp_epoch(transcript: str) -> int | None:
+    """Epoch of the first record carrying a top-level timestamp (session start).
+    Skips unparseable/partial lines rather than aborting the scan on the first one —
+    otherwise a single bad line before the first timestamp would mislabel a predating
+    session as 'current' in the delta-brief."""
+    try:
+        fh = open(transcript, encoding="utf-8")
+    except OSError:
+        return None
+    with fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            try:
+                ev = json.loads(line)
+                ts = ev.get("timestamp")
+                if ts:
+                    return int(datetime.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
+            except ValueError:
+                continue
+    return None
+
+
+def load_stamp(claude_dir: str) -> dict | None:
+    try:
+        return json.load(open(os.path.join(claude_dir, ".last-kit-install")))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def delta_brief(transcript: str, claude_dir: str) -> dict:
+    """What changed under this session while it slept (from the install stamp)."""
+    stamp = load_stamp(claude_dir)
+    if not stamp:
+        return {"stamp": False}
+    sess = first_timestamp_epoch(transcript)
+    installed = stamp.get("installed_at_epoch")
+    predates = bool(sess and installed and sess < installed)
+    return {
+        "stamp": True,
+        "predates_install": predates,
+        "installed_at": stamp.get("installed_at"),
+        "repo_sha": (stamp.get("repo_sha") or "")[:9],
+        "changed_skills": stamp.get("changed_skills", []) if predates else [],
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="Re-orient a stopped agent by evicting stale skill bodies.")
+    ap.add_argument("target", help="a session .jsonl, or a ~/.claude/projects/<encoded> directory")
+    ap.add_argument("--apply", action="store_true", help="write changes (default: dry-run report)")
+    ap.add_argument("--json", action="store_true", help="machine-readable report")
+    args = ap.parse_args(argv)
+
+    sgc = find_skill_gc()
+    if not sgc:
+        print("reorient: skill-gc not found on PATH or alongside this script", file=sys.stderr)
+        return 2
+    transcript = pick_transcript(args.target)
+    if not transcript:
+        print(f"reorient: no session transcript found at {args.target}", file=sys.stderr)
+        return 2
+
+    # skill-gc does the byte-preserving eviction, the backup, and the fail-closed
+    # live-session refusal — reorient inherits all of that. Note: skill-gc only checks
+    # liveness under --apply, so a dry-run reads the transcript without the liveness gate;
+    # it never writes, but a mid-write live tail can raise on partial JSON (surfaced as a
+    # non-zero rc + stderr, contained per-target by the D3 fan-out's isolation).
+    cmd = [sys.executable, sgc, transcript, "--json"] + (["--apply"] if args.apply else [])
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        # e.g. skill-gc refused because the session looks live (rc 3) — surface it.
+        sys.stderr.write(r.stderr or f"reorient: skill-gc exited {r.returncode}\n")
+        return r.returncode
+    gc_report = json.loads(r.stdout) if r.stdout.strip() else {}
+
+    brief = delta_brief(transcript, os.path.expanduser("~/.claude"))
+    report = {"transcript": transcript, "eviction": gc_report, "delta": brief, "applied": gc_report.get("applied", False)}
+
+    if args.json:
+        print(json.dumps(report))
+    else:
+        verb = "reoriented" if report["applied"] else "would reorient"
+        skills = gc_report.get("skills", [])
+        print(f"reorient: {verb} {transcript}")
+        print(f"  evicted {len(skills)} skill body(ies) {skills}, "
+              f"~{gc_report.get('reclaimed_tokens_est', 0)} tokens reclaimed")
+        if gc_report.get("backup"):
+            print(f"  backup: {gc_report['backup']}")
+        if brief.get("predates_install"):
+            print(f"  ⚠ this session predates the last install ({brief['installed_at']}, "
+                  f"cc-workflow {brief['repo_sha']})")
+            if brief["changed_skills"]:
+                print(f"    skills changed then: {', '.join(brief['changed_skills'])}")
+        elif brief.get("stamp"):
+            print("  session is current with the last install")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
