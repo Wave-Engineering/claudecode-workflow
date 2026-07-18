@@ -25,18 +25,22 @@ INPUT=$(cat 2>/dev/null || true)
 jqget() { printf '%s' "$INPUT" | jq -r "$1 // empty" 2>/dev/null || true; }
 
 SOURCE=$(jqget '.source')
-CWD=$(jqget '.cwd'); CWD="${CWD:-$(pwd)}"
+CWD=$(jqget '.cwd')
+CWD="${CWD:-$(pwd)}"
 TRANS=$(jqget '.transcript_path')
 
 # clear/compact are explicitly-fresh contexts (handled by other hooks); skip them.
 case "$SOURCE" in
-	clear | compact) exit 0 ;;
+clear | compact) exit 0 ;;
 esac
 
 # Prefer a project-local stamp (from a --local install), else the global one.
 STAMP=""
 for cand in "$CWD/.claude/.last-kit-install" "$HOME/.claude/.last-kit-install"; do
-	if [[ -f "$cand" ]]; then STAMP="$cand"; break; fi
+	if [[ -f "$cand" ]]; then
+		STAMP="$cand"
+		break
+	fi
 done
 [[ -n "$STAMP" ]] || exit 0
 INSTALLED_EPOCH=$(jq -r '.installed_at_epoch // empty' "$STAMP" 2>/dev/null || true)
