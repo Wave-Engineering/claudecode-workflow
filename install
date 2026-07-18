@@ -1570,6 +1570,13 @@ if [[ "$DRY_RUN" == true ]]; then
 	echo "Dry run complete. No files were modified."
 else
 	echo "Installation complete."
+	# Record what this install laid down, for the context-freshness warn hook (#908):
+	# install time + repo sha + which skills changed, so a resumed session whose
+	# context predates this stamp can be told it is stale (and which skills went stale).
+	if [[ -x "$REPO_DIR/scripts/write-install-stamp" ]]; then
+		"$REPO_DIR/scripts/write-install-stamp" --repo "$REPO_DIR" --claude-dir "$CLAUDE_DIR" \
+			|| warn "context-freshness install stamp reported issues (non-fatal)"
+	fi
 fi
 
 # --- Dependency check (via check-deps.sh) ------------------------------------

@@ -107,6 +107,26 @@
             "command": "~/.local/bin/flightdeck-session-emit.sh open"
           }
         ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "_comment": "Context-freshness warn (cc-workflow#908) — its OWN startup group, not merged into FlightDeck's, so merge_settings' group-signature union can't append-and-duplicate the FlightDeck hook on already-provisioned hosts. Self-filters fresh startups via the first-event timestamp. Fire-and-forget, exit 0.",
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/context-freshness-warn.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "resume",
+        "hooks": [
+          {
+            "_comment": "Context-freshness warn (cc-workflow#908) — see the startup matcher.",
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/context-freshness-warn.sh"
+          }
+        ]
       }
     ],
     "PreCompact": [
