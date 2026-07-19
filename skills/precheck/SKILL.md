@@ -163,7 +163,15 @@ The detection regex is `^kahuna/[0-9]+-`. Resolve `base_branch` from the most re
 - `sandbox_context == false` (default — feature branch targeting `main`): existing behavior preserved — present checklist, notify, **STOP** and wait for `/scp` / `/scpmr` / `/scpmmr` / affirmative. This is the IT-09 negative case.
 - `sandbox_context == true` (Flight Agent on a kahuna sandbox): full checklist runs, full notifications fire, then emit the sentinel line **`[AUTO-APPROVED: kahuna sandbox]`** on stdout, then invoke `/scpmmr` with no wait. The sentinel makes the auto-approval grep-able in transcripts and Discord scrollback.
 
-**Non-bypassable items:** validation, code-reviewer (high+ findings still block), trivy scan, Discord `#precheck` post, `vox` announcement. These run in full regardless of `sandbox_context`. Only the human-approval STOP is replaced by the sentinel + auto-`/scpmmr`.
+**Non-bypassable items:** validation, code-reviewer (high+ findings still block), trivy scan, Discord `#precheck` post, `vox` announcement, **and `/mmr`'s CI gate**. These run in full regardless of `sandbox_context`. Only the human-approval STOP is replaced by the sentinel + auto-`/scpmmr`.
+
+The CI gate is listed explicitly because **the kahuna sandbox is not the only path that merges without a human.** Autonomous merging also occurs under **`/wavemachine` in `auto` mode** — its promote node performs the kahuna→protected merge with no human halt (interactive mode routes that same merge *to* a human, so the exposure is mode-specific, not skill-wide) — and under an **armed `godspeed` mandate**, whose gated-action list covers force-push, push-to-protected, terraform/kubectl/helm/docker/systemctl and prod-shaped writes but **not merges**, so an armed agent carries straight through one. In both, once the human approval is gone, the CI gate is the *last* thing between a red build and the protected branch.
+
+*(`/lazyriver` is deliberately **not** in that list. It is a `probe → journal → judge → steer` goal-seek loop that terminates by emitting a plan or an answer — it has no merge path at all. It was named here in an earlier draft and the claim was wrong; naming a skill that cannot merge costs the paragraph its credibility with exactly the reader careful enough to check.)*
+
+That gate was **inert on GitHub** until cc-workflow#925: it blocked only on `has_failures` and merged on any unrecognised summary, and `gh pr checks --json` does not exist on the fleet's `gh 2.45.0`, so the summary was always `none`. **Autonomous merge paths and a non-functioning CI gate were composing into an unguarded merge** — and the more autonomy a mode has, the more completely it was unguarded.
+
+`/mmr` step 3 is now default-deny. Do not weaken it back to a blocklist without re-reading that issue, and treat any *new* autonomous merge path as inheriting this dependency: **removing the human raises the CI gate from a second opinion to the only opinion.**
 
 ## Rules
 No diff. No commit. No skipping code-reviewer. Honesty over speed — no checking items you haven't verified. **Linting is not testing** — passing lint/typecheck does not mean code works. **`vox` is ALWAYS called** — it is NOT a fallback for disc_send failure. Both notifications happen every time.
