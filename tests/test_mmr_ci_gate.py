@@ -220,7 +220,7 @@ class TestDefaultDenyDoesNotBecomeATotalBlock:
         The first version of #925 converted the outer gate (`checks.summary`)
         from a blocklist to an allowlist and then wrote the escalation as a
         blocklist: it enumerated the `pr_wait_ci` statuses that STOP and let
-        everything else through. `no_checks_required` was already live (#416)
+        everything else through. `no_checks_required` was already live (mcp-server-sdlc#416)
         and unlisted, so the escalation would have merged on it.
 
         Every assertion in this file passed against that hole. That is the
@@ -264,7 +264,7 @@ class TestDefaultDenyDoesNotBecomeATotalBlock:
 
         `mcp-server-sdlc#491` (PR #495) makes GitHub's `pr_status` report real
         results, which makes the escalation branch *look* like dead code. It is
-        not: #494 records the identical silent-permissive shape on GitLab —
+        not: mcp-server-sdlc#494 records the identical silent-permissive shape on GitLab —
         `no_pipeline_data` returned with `ok: true` — and it is still open.
 
         This is the instance-vs-class distinction the whole file is about, one
@@ -277,7 +277,7 @@ class TestDefaultDenyDoesNotBecomeATotalBlock:
             "the skill must warn against removing the escalation once the "
             "upstream reporter is fixed — it reads as dead code and is not"
         )
-        assert "#494" in mmr_text, (
+        assert "mcp-server-sdlc#494" in mmr_text, (
             "the skill must cite the still-open GitLab variant; without a live "
             "counter-example the warning is an assertion a future editor can "
             "reasonably dismiss"
