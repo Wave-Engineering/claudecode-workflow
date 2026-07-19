@@ -220,9 +220,8 @@ def test_refuses_live_session_by_mtime(transcript):
     assert sg.main([transcript, "--apply", "--force"]) == 0  # --force overrides
 
 
-@pytest.mark.skipif(not os.path.isdir("/proc"), reason="fd-open liveness needs /proc")
-def test_detects_open_fd_as_live(transcript):
-    os.utime(transcript, (time.time() - 3600, time.time() - 3600))  # old mtime
-    assert sg.session_liveness(transcript) == "idle"  # old + not held
-    with open(transcript):  # hold an fd open
-        assert sg.session_liveness(transcript) == "live"
+# NOTE: `test_detects_open_fd_as_live` lived here and passed for every release —
+# by opening the fd itself. Claude Code never holds a transcript fd open (0 of 277
+# held across 10,613 fds on the live fleet), so it asserted a branch production
+# never reached while the real detector was blind. Liveness now lives in
+# tests/test_liveness.py, driven by /proc trees built from observed cmdlines. (#919)
