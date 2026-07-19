@@ -94,32 +94,165 @@ godspeed_status() {
 }
 
 # ---------------------------------------------------------------------------
-# godspeed_decision <arm_status> <last_assistant_text> <session_id>
+# Gated-action matching (cc-workflow#917).
+#
+# The gate keys on what the turn DID (tool_use blocks), never on what it SAID.
+# Text matching was wrong in both directions at once: it fired on "the live
+# deployed tool schema" (innocent prose) while missing `deploy_freshness` (a
+# real token, blocked by \b at the underscore). A word list cannot separate
+# those, because the discriminator is not the word — it is whether the turn
+# acted. See #917.
+#
+# Two rules keep the matcher honest:
+#   1. VERBS, not nouns. We match invoked commands (`terraform apply`), not
+#      scary words (`production`).
+#   2. COMMAND POSITION only. Each Bash command is split on shell separators
+#      and only the HEAD of a segment is tested, so a gated verb appearing as
+#      DATA — `grep 'git push --force' f` — does not match. This is the failure
+#      mode a naive scan of tool_use.input would reproduce one layer down.
+#
+# Known limits (deliberate, documented rather than papered over):
+#   - Splitting is textual: a `;`, `|` or `&` INSIDE a quoted string starts a
+#     new segment, so `git commit -m "wip; terraform apply later"` can match on
+#     the quoted text. That direction fails CLOSED (a spurious salience signal
+#     the agent can dismiss in one line), which is the acceptable direction.
+#   - Coverage is direct `Bash`/`Write`/`Edit`/`NotebookEdit` only. A sub-agent
+#     (`Task`) runs its tools in a separate transcript, and other shell-capable
+#     MCP tools are not inspected — neither is visible here.
+# ---------------------------------------------------------------------------
+
+# grep -P is required (the patterns use \b, \s and lazy quantifiers, so -E is
+# not a drop-in). On a grep without PCRE the match would silently return false —
+# i.e. fail OPEN. Probe once and warn loudly rather than gate on nothing.
+_godspeed_require_pcre() {
+	if ! printf 'x' | grep -Pq 'x' 2>/dev/null; then
+		echo "[godspeed] WARNING: grep -P unavailable — gated-action matching is INACTIVE" >&2
+		return 1
+	fi
+	return 0
+}
+
+# Gated commands, anchored at segment head (after prefix normalization).
+#
+# `git` accepts global flags before the subcommand (`git -C <dir> push …`), which
+# this repo's worktree/fleet work uses routinely — so the git rules tolerate them
+# explicitly rather than anchoring straight to `git push`.
+_GODSPEED_GIT_GLOBALS='((-C\s+\S+|--git-dir=\S+|--work-tree=\S+|-c\s+\S+)\s+)*'
+_GODSPEED_GATED_CMD_RE="^(git\s+${_GODSPEED_GIT_GLOBALS}push\b[^\n]*?(--force\b|--force-with-lease\b|-f\b)|git\s+${_GODSPEED_GIT_GLOBALS}push\b[^\n]*?\b(main|master|release/)|git\s+${_GODSPEED_GIT_GLOBALS}push\s+--delete\b|terraform\s+(apply|destroy)\b|kubectl\s+(apply|delete|rollout)\b|helm\s+(upgrade|install|uninstall)\b|docker\s+push\b|systemctl\s+(stop|restart|disable)\b|gh\s+release\s+(create|delete)\b)"
+
+# ---------------------------------------------------------------------------
+# _godspeed_strip_prefixes <segment>
+#
+# Normalizes a shell segment down to its invoked command so `^`-anchoring is
+# meaningful. Without this, anchoring is trivially defeated by things that
+# legally precede a command — most importantly `sudo`, which defeated the entire
+# systemctl rule (stopping a unit essentially always needs root). (#917)
+#
+# Applied repeatedly until stable so wrappers compose (`sudo timeout 30 env …`).
+# ---------------------------------------------------------------------------
+_godspeed_strip_prefixes() {
+	local s="$1" prev="" i=0
+	while [[ "$s" != "$prev" ]] && ((i < 6)); do
+		prev="$s"
+		i=$((i + 1))
+		s=$(printf '%s' "$s" | sed -E '
+			s/^[[:space:]]+//
+			s/^[({`]+[[:space:]]*//
+			s/^\$\([[:space:]]*//
+			s/^([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)+//
+			s/^(sudo|command|nohup|exec|nice|stdbuf|xargs)([[:space:]]+-[^[:space:]]+)*[[:space:]]+//
+			s/^env([[:space:]]+-[^[:space:]]+)*[[:space:]]+//
+			s/^time([[:space:]]+-[^[:space:]]+)*[[:space:]]+//
+			s/^timeout([[:space:]]+-[^[:space:]]+)*[[:space:]]+[0-9]+[smhd]?[[:space:]]+//
+			s/^(ba|z|da|k)?sh[[:space:]]+-c[[:space:]]+['"'"'"]?//
+			s/^ssh[[:space:]]+([^[:space:]]+[[:space:]]+)+?['"'"'"]//
+		')
+	done
+	printf '%s' "$s"
+}
+
+# Gated write targets — the declared/desired-state clause of the ABSOLUTE prod
+# rule. Editing these primes a prod change even when nothing deploys today.
+_GODSPEED_GATED_PATH_RE='(sites/[^/]*prod[^/]*/|/production/|\.prod\.(ya?ml|json|tf)$|(^|/)prod/[^ ]*\.(ya?ml|json|tf)$)'
+
+# ---------------------------------------------------------------------------
+# godspeed_gated_actions <tools_json>
+#
+# Echoes one line per gated action found (empty output = nothing gated).
+# <tools_json> is a JSON array of {name, input} from the last assistant turn.
+# ---------------------------------------------------------------------------
+godspeed_gated_actions() {
+	local tools_json="${1:-}"
+	[[ -z "$tools_json" || "$tools_json" == "null" || "$tools_json" == "[]" ]] && return 0
+	command -v jq &>/dev/null || return 0
+	_godspeed_require_pcre || return 0
+
+	# --- Bash: gated verb at command position ---
+	local cmds seg stripped
+	cmds=$(printf '%s' "$tools_json" |
+		jq -r '.[]? | select(.name == "Bash") | (.input.command // "")' 2>/dev/null || true)
+
+	if [[ -n "$cmds" ]]; then
+		# `|| [[ -n "$seg" ]]` is load-bearing: the final segment has no trailing
+		# newline, so a bare `read` would return non-zero and silently drop it —
+		# failing OPEN (no STOP on a real force-push).
+		while IFS= read -r seg || [[ -n "$seg" ]]; do
+			[[ -z "${seg// /}" ]] && continue
+			stripped=$(_godspeed_strip_prefixes "$seg")
+			if printf '%s' "$stripped" | grep -Pq "$_GODSPEED_GATED_CMD_RE" 2>/dev/null; then
+				printf 'command: %s\n' "$(printf '%s' "$stripped" | cut -c1-90)"
+			fi
+		done < <(printf '%s' "$cmds" | tr ';|&' '\n\n\n')
+	fi
+
+	# --- Write/Edit: prod-shaped desired-state paths ---
+	local paths p
+	paths=$(printf '%s' "$tools_json" |
+		jq -r '.[]? | select(.name == "Write" or .name == "Edit" or .name == "NotebookEdit")
+		       | (.input.file_path // "")' 2>/dev/null || true)
+
+	if [[ -n "$paths" ]]; then
+		while IFS= read -r p; do
+			[[ -z "$p" ]] && continue
+			if printf '%s' "$p" | grep -Pq "$_GODSPEED_GATED_PATH_RE" 2>/dev/null; then
+				printf 'write: %s\n' "$p"
+			fi
+		done <<<"$paths"
+	fi
+}
+
+# ---------------------------------------------------------------------------
+# godspeed_decision <arm_status> <last_assistant_text> <session_id> [tools_json]
 #
 # Returns the decision given the arm status and context:
 #   GO     continue autonomously
 #   ASK <d> <bar_pct> <supplied_pct>    checkpoint — surface uncertainty
-#   STOP   gated axis hit — always surface regardless of mandate
+#   STOP   gated ACTION taken — surface for assessment (agent may continue)
 #   NOOP   hook stands down
+#
+# STOP is a salience signal, NOT an enforcement gate. This hook runs after the
+# turn's tools have already executed, so it can never prevent a first action;
+# what it can do is stop the agent chaining onward without an explicit
+# assessment. The agent retains the right to proceed — see the reason string in
+# stop-action-bias-detector.sh. (#917)
 # ---------------------------------------------------------------------------
 godspeed_decision() {
 	local arm_status="$1"
+	# shellcheck disable=SC2034  # kept for signature stability; no longer gates
 	local last_text="$2"
 	local session_id="${3:-}"
+	local tools_json="${4:-}"
 	local N="${GODSPEED_WINDOW:-200}"
 	local verified_pct="${GODSPEED_VERIFIED_CONFIDENCE:-80}"
 	local unverified_pct="${GODSPEED_UNVERIFIED_CONFIDENCE:-40}"
 
-	# Hard gate — always fires regardless of mandate or loop state.
-	#
-	# Narrowed from the original pattern: removed `delete`, `drop`, `tag`,
-	# `wipe`, standalone `ship`/`publish`/`release` — all fire on benign
-	# narration (e.g. "I'll delete the temp file", "publish the docs"). The
-	# remaining words are specific enough to be unambiguous infra/ops indicators.
-	# `migrat[a-z]*` (was `migrat`) fixes the word-boundary false-negative on
-	# "migrate"/"migration".
-	local PATTERN_GATED_AXIS='(?i)\b(prod(?:uction)?|deploy[a-z]*|rollout|force[\- ]?push|go[\- ]?live|cut[\- ]?over|promote|rotate|tear[\- ]?down|irreversible|destroy[a-z]*|destructive|credential[a-z]*|secret[a-z]*|migrat[a-z]*|fleet[\- ]wide)\b|(merge|push)\s+(to\s+)?(main|master|prod)\b'
-	if printf '%s' "$last_text" | grep -Pq "$PATTERN_GATED_AXIS" 2>/dev/null; then
+	# Gate on ACTIONS taken this turn, never on turn text. Fires regardless of
+	# mandate — a godspeed mandate speeds up autonomous work, it does not make
+	# a prod-shaped action invisible. But STOP no longer commands a halt; the
+	# agent is handed the judgment. (#917)
+	local gated
+	gated=$(godspeed_gated_actions "$tools_json")
+	if [[ -n "$gated" ]]; then
 		echo "STOP"
 		return 0
 	fi
@@ -165,12 +298,16 @@ _godspeed_notify() {
 	local N="${GODSPEED_WINDOW:-200}"
 
 	# Operator-facing side-effect kill-switch. When set, the decision logic is
-	# still fully exercised (STOP/ASK still block); only the vox TTS and Discord
-	# post are muted. Auto-suppressed under any CI signal (non-empty $CI) so no
-	# runner needs the explicit export, plus an explicit GODSPEED_NOTIFY_DISABLED
-	# for regression tests that drive the real hook against gated-keyword fixtures
-	# — otherwise every gated test case sprays a real "gated axis detected"
-	# announcement + Discord ping at BJ. (cc-workflow#883, follow-up to #818)
+	# still fully exercised (ASK still blocks); only the vox TTS and Discord post
+	# are muted. Auto-suppressed under any CI signal (non-empty $CI) so no runner
+	# needs the explicit export, plus an explicit GODSPEED_NOTIFY_DISABLED for
+	# regression tests that drive the real hook — otherwise each notifying case
+	# sprays a real announcement + Discord ping at BJ. (cc-workflow#883)
+	#
+	# NOTE: only ASK reaches here now. The gated-action path deliberately does
+	# NOT notify — notifying on trigger makes the hook the escalator and spends
+	# BJ's attention on every false positive, before the agent has assessed
+	# anything. The agent escalates with its own tools. (#917)
 	if [[ "${GODSPEED_NOTIFY_DISABLED:-0}" == "1" || -n "${CI:-}" ]]; then
 		return 0
 	fi
@@ -189,14 +326,10 @@ _godspeed_notify() {
 		[[ -n "$dev_name" ]] && identity_suffix=" — **${dev_name}** ${dev_avatar} (${dev_team})"
 	fi
 
+	# Only ASK notifies (see note above); the STOP branch was removed with #917.
 	local vox_msg discord_msg
-	if [[ "$kind" == "STOP" ]]; then
-		vox_msg="Hey BJ, a Stop hook fired — gated axis detected. Check the terminal."
-		discord_msg="🛑 **Godspeed STOP** — gated axis detected in last assistant turn. Session paused.${identity_suffix}"
-	else
-		vox_msg="Hey BJ, godspeed mandate checkpoint — the agent has a question. Check the terminal."
-		discord_msg="⚠️ **Godspeed checkpoint** — mandate at d=${d}/N=${N}. Agent naming its uncertainty.${identity_suffix}"
-	fi
+	vox_msg="Hey BJ, godspeed mandate checkpoint — the agent has a question. Check the terminal."
+	discord_msg="⚠️ **Godspeed checkpoint** — mandate at d=${d}/N=${N}. Agent naming its uncertainty.${identity_suffix}"
 
 	# vox (best-effort).
 	if command -v vox &>/dev/null; then
@@ -274,8 +407,24 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
 					(.message.content // []) | map(select(.type == "text") | .text) | join(" ")
 				' 2>/dev/null || echo ""
 		)
+		# Turn-scoped union — must match the hook's extraction exactly. (#917)
+		TOOLS_JSON=$(
+			[[ -f "$TRANSCRIPT_PATH" ]] && tail -n 600 "$TRANSCRIPT_PATH" 2>/dev/null |
+				jq -cs '
+					. as $all
+					| ([ $all | to_entries[]
+						 | select(.value.type == "user"
+							 and (((.value.message.content // []) | map(select(.type == "text") | .text) | join("")) | length > 0))
+						 | .key ] | last // -1) as $boundary
+					| [ $all[($boundary + 1):][]
+						| select(.type == "assistant")
+						| (.message.content // [])[]
+						| select(.type == "tool_use")
+						| {name, input} ]
+				' 2>/dev/null || echo "[]"
+		)
 		ARM=$(godspeed_status "$TRANSCRIPT_PATH")
-		godspeed_decision "$ARM" "$LAST_TEXT" "$SESSION_ID"
+		godspeed_decision "$ARM" "$LAST_TEXT" "$SESSION_ID" "$TOOLS_JSON"
 		;;
 
 	*)

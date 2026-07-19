@@ -32,6 +32,20 @@ def _asst(text):
     })
 
 
+def _asst_tools(text, tools):
+    """Assistant turn carrying tool_use blocks — the gate's substrate (#917).
+
+    `tools` is a list of {"name": ..., "input": {...}} dicts.
+    """
+    content = [{"type": "text", "text": text}]
+    content += [{"type": "tool_use", "name": t["name"], "input": t["input"]}
+                for t in tools]
+    return json.dumps({
+        "type": "assistant",
+        "message": {"role": "assistant", "content": content}
+    })
+
+
 def _tool_use():
     """Assistant-role tool_use entry — type=='assistant', does NOT count as user turn."""
     return json.dumps({
@@ -65,12 +79,16 @@ def run_eval(transcript, env=None):
 
 
 def run_decide(transcript, last_asst_text, session_id='gs-test-session',
-               env=None, sentinel=False):
+               env=None, sentinel=False, tools=None):
     """
     Invoke --decide with CC hook JSON.
 
     Appends an assistant turn (last_asst_text) to the transcript before passing
     to --decide, since that mode extracts last-assistant-text from the file.
+
+    tools: optional list of {"name","input"} dicts attached to that final
+    assistant turn as tool_use blocks. The gated-action check keys on these and
+    never on text (#917).
 
     sentinel=True creates /tmp/claude-tests-ran-<session_id> (verified state).
     """
@@ -85,7 +103,9 @@ def run_decide(transcript, last_asst_text, session_id='gs-test-session',
     elif os.path.exists(sentinel_path):
         os.unlink(sentinel_path)
 
-    full_transcript = transcript + _asst(last_asst_text) + '\n'
+    last_turn = (_asst_tools(last_asst_text, tools) if tools
+                 else _asst(last_asst_text))
+    full_transcript = transcript + last_turn + '\n'
     with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False) as f:
         f.write(full_transcript)
         path = f.name
@@ -259,21 +279,152 @@ class TestGodspeedDecision(unittest.TestCase):
         self.assertEqual(bar, 60)   # 6*100//10
         self.assertEqual(supplied, 40)   # GODSPEED_UNVERIFIED_CONFIDENCE default
 
-    def test_gated_axis_stop_with_mandate(self):
+    def test_gated_action_stop_with_mandate(self):
         """
-        Prod-axis keyword in last assistant turn → STOP even under an active mandate.
+        Gated ACTION in last assistant turn → STOP even under an active mandate.
 
-        The gated-axis check fires before the mandate math — mandate does NOT
-        override the ABSOLUTE prod rule.
+        A godspeed mandate speeds up autonomous work; it does not make a
+        prod-shaped action invisible. (#917)
         """
         t = _make(_user("godspeed"))
-        result = run_decide(t, "I'm about to deploy to production.")
+        result = run_decide(t, "Pushing.", tools=[
+            {"name": "Bash", "input": {"command": "git push --force origin main"}}])
         self.assertEqual(result, "STOP")
 
-    def test_gated_axis_stop_no_mandate(self):
-        """Prod-axis fires even without any mandate (UNARMED state)."""
+    def test_gated_action_stop_no_mandate(self):
+        """Gated action fires without any mandate (UNARMED state)."""
         t = _make(_user("please fix the login page"))
-        result = run_decide(t, "Let me push this to production.")
+        result = run_decide(t, "Applying.", tools=[
+            {"name": "Bash", "input": {"command": "terraform apply -auto-approve"}}])
+        self.assertEqual(result, "STOP")
+
+    def test_gated_words_in_prose_do_not_stop(self):
+        """
+        The #917 bug: gated keywords in TURN TEXT must never produce a STOP.
+
+        Text matching was wrong in both directions — it fired on "the live
+        deployed tool schema" while missing `deploy_freshness` (blocked by \\b
+        at the underscore). The discriminator is not the word; it is whether
+        the turn acted.
+        """
+        t = _make(_user("please fix the login page"))
+        for prose in [
+            "I'm about to push this to production.",
+            "Let me deploy this to the cluster.",
+            "Verified against the live deployed tool schema.",
+            "I'll rotate the credentials now.",
+            "This is an irreversible operation.",
+        ]:
+            with self.subTest(prose=prose):
+                self.assertEqual(run_decide(t, prose), "NOOP")
+
+    def test_self_referential_prose_does_not_stop(self):
+        """Documenting this hook's own keyword list used to trip this hook."""
+        t = _make(_user("write the docs"))
+        prose = ("Gated-axis language (prod/deploy/force-push/rotate/teardown/"
+                 "credentials/secrets) always STOPs regardless of mandate state.")
+        self.assertEqual(run_decide(t, prose), "NOOP")
+
+    def test_gated_keywords_as_tool_data_do_not_stop(self):
+        """
+        Keywords appearing as DATA inside a tool input must not fire.
+
+        A naive scan of tool_use.input would reproduce the text bug one layer
+        down. Only the HEAD of a shell segment counts as an invoked command.
+        """
+        t = _make(_user("search the repo"))
+        for cmd in [
+            'grep -P "prod|deploy|rotate" file',
+            'echo "git push --force is risky"',
+            'kubectl logs -n production my-pod',
+            'git push -u origin fix/917-foo',
+        ]:
+            with self.subTest(cmd=cmd):
+                result = run_decide(t, "Searching.", tools=[
+                    {"name": "Bash", "input": {"command": cmd}}])
+                self.assertEqual(result, "NOOP")
+
+    def test_gated_action_survives_shell_composition(self):
+        """A gated verb after a separator or env prefix is still command position."""
+        t = _make(_user("go"))
+        for cmd in [
+            "cd /tmp && terraform destroy",
+            "TF_VAR_x=1 terraform apply",
+            "cat f | kubectl apply -f -",
+        ]:
+            with self.subTest(cmd=cmd):
+                result = run_decide(t, "Running.", tools=[
+                    {"name": "Bash", "input": {"command": cmd}}])
+                self.assertEqual(result, "STOP")
+
+    def test_gated_action_in_earlier_message_of_same_turn_stops(self):
+        """
+        A Claude Code turn is MANY assistant messages, one per tool round-trip.
+
+        Scoping the gate to a single message and taking `last` fails OPEN on the
+        normal pattern — agents almost always run a verification command after
+        acting, which masks the gated one:
+
+            msg 1: Bash git push --force origin main   <- gated
+            msg 2: Bash git log --oneline -3           <- `last` picked this
+
+        The gate must union tool_use across the whole turn. (#917)
+        """
+        t = _make(
+            _user("do it"),
+            _asst_tools("Pushing.", [
+                {"name": "Bash", "input": {"command": "git push --force origin main"}}]),
+        )
+        result = run_decide(t, "Verified.", tools=[
+            {"name": "Bash", "input": {"command": "git log --oneline -3"}}])
+        self.assertEqual(result, "STOP")
+
+    def test_all_benign_multi_message_turn_is_noop(self):
+        """Turn-scoping must not make benign multi-message turns block."""
+        t = _make(
+            _user("check things"),
+            _asst_tools("Checking.", [
+                {"name": "Bash", "input": {"command": "git status"}}]),
+        )
+        result = run_decide(t, "Done.", tools=[
+            {"name": "Bash", "input": {"command": "git log --oneline -3"}}])
+        self.assertEqual(result, "NOOP")
+
+    def test_prefix_wrappers_do_not_defeat_anchoring(self):
+        """
+        `^`-anchoring is trivially defeated by things that legally precede a
+        command. `sudo` is the sharpest: stopping a unit essentially always
+        needs root, so `sudo systemctl stop` would have ungated the whole
+        systemctl rule. (#917)
+        """
+        t = _make(_user("go"))
+        for cmd in [
+            "sudo systemctl restart nginx",
+            "git -C /tmp/wt push --force origin main",
+            "timeout 300 terraform apply",
+            "time terraform destroy",
+            'sh -c "terraform apply"',
+            "(git push --force origin main)",
+            "xargs kubectl delete pod",
+            "sudo timeout 30 kubectl delete ns x",
+        ]:
+            with self.subTest(cmd=cmd):
+                result = run_decide(t, "Running.", tools=[
+                    {"name": "Bash", "input": {"command": cmd}}])
+                self.assertEqual(result, "STOP")
+
+    def test_git_global_flags_do_not_create_false_positives(self):
+        """`git -C <dir> push` to a feature branch is still not gated."""
+        t = _make(_user("go"))
+        result = run_decide(t, "Pushing.", tools=[
+            {"name": "Bash", "input": {"command": "git -C /tmp/wt push -u origin feature/x"}}])
+        self.assertEqual(result, "NOOP")
+
+    def test_prod_desired_state_write_stops(self):
+        """Editing declared/desired-state prod config is gated (ABSOLUTE prod rule)."""
+        t = _make(_user("go"))
+        result = run_decide(t, "Writing.", tools=[
+            {"name": "Write", "input": {"file_path": "sites/aws-prod/site.yaml"}}])
         self.assertEqual(result, "STOP")
 
     def test_assistant_echo_no_arm(self):
