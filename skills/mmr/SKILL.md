@@ -45,7 +45,7 @@ Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix)
    - `passed` → proceed. *(the only value that proceeds)*
    - `failed` → STOP.
    - `timed_out` → STOP.
-   - `no_checks_required` → **STOP.** This one is a trap: it is a *definite, successful* verdict (`pr_wait_ci` probes once at t=0 and returns it on an empty rollup — #416), and its plain-English name reads as "nothing is wrong." **A repo with no required checks is not a repo whose checks passed.** Route it to the no-checks-configured branch below.
+   - `no_checks_required` → **STOP.** This one is a trap: it is a *definite, successful* verdict (`pr_wait_ci` probes once at t=0 and returns it on an empty rollup — `mcp-server-sdlc#416`), and its plain-English name reads as "nothing is wrong." **A repo with no required checks is not a repo whose checks passed.** Route it to the no-checks-configured branch below.
    - `{ok: false}` or any error envelope → **STOP** and surface the error; do not silently continue past a gate that failed to run.
    - anything else → **STOP.** Two independent sources unable to confirm a pass is a stop, not a shrug.
 
@@ -53,7 +53,7 @@ Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix)
 
    Stopping outright would have been *correct but useless* at the time this was written: `pr_status` returned `none` for **every** GitHub PR on `gh 2.45.0`, so a bare default-deny converts a silent-permit into a total merge block. Default-deny means **never proceed without an explicit pass**; it does not mean refuse to go and get one.
 
-   **Do not delete the escalation once `pr_status` is truthful.** `mcp-server-sdlc#491` fixes the GitHub instance, not the class — `#494` records the same silent-permissive shape on GitLab (`no_pipeline_data` returned with `ok: true`), still open. The escalation is written against **any** unrecognised summary precisely so it keeps working for variants nobody has named yet; narrowing it to the one value we happened to measure would rebuild the defect this section exists to close.
+   **Do not delete the escalation once `pr_status` is truthful.** `mcp-server-sdlc#491` fixes the GitHub instance, not the class — `mcp-server-sdlc#494` records the same silent-permissive shape on GitLab (`no_pipeline_data` returned with `ok: true`), still open. The escalation is written against **any** unrecognised summary precisely so it keeps working for variants nobody has named yet; narrowing it to the one value we happened to measure would rebuild the defect this section exists to close.
 
    Once `pr_wait_ci` has stopped you — whether by `no_checks_required` or by failing to produce a verdict — distinguish the causes by hand, because they need different responses:
    - **no checks configured on this repo** (incl. `no_checks_required`) → a human decides whether merging without CI is acceptable here;
