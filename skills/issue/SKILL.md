@@ -562,28 +562,26 @@ Create immediately — do not ask for approval. Issues are cheap to edit and clo
    invocation is `doc`, pass `docs` to `work_item` (the tool's `type` enum
    uses `docs` plural to match the canonical `type::docs` label; the `/issue`
    skill exposes singular `doc` to align with the singular branch prefix per
-   CLAUDE.md). Same pattern as `story` ↔ `feature`.
+   CLAUDE.md). Same pattern as `story` ↔ `feature`. `plan` needs no aliasing —
+   pass it through unchanged (see the callout below).
 
 If `work_item` reports a missing label at create-time (race or pre-existing
 `epic::X` for a different `X`), surface the error; do not silently retry.
 
-> ### ⚠️ `work_item` does not accept `type: plan` yet
+> ### Plans: pass `type: "plan"` directly
 >
-> The tool's `type` enum is `epic | story | feature | bug | chore | docs | fix | pr | mr` — **there
-> is no `plan`.** `/issue plan` therefore cannot pass `type: "plan"` today. Tracked as
-> **`mcp-server-sdlc#477`**; when it lands, pass `type: "plan"` and the correct `type::plan` label
-> is applied automatically — no workaround needed.
+> `/issue plan` passes `type: "plan"` to `work_item`, which applies the `type::plan` label itself.
+> Requires **sdlc-server ≥ v2.1.0** (`plan` added to the `type` enum in `mcp-server-sdlc#479`).
 >
-> **Until then, do NOT reach for `type: "epic"` as a substitute on GitHub.** `work_item` *prepends*
-> an automatic `type::<type>` label to the caller's label list, unconditionally. On **GitLab** that
-> is invisible: `type::epic` and `type::plan` share the `type::` scope key, and GitLab's scoped
-> labels are mutually exclusive, so the later `type::plan` **evicts** `type::epic`. On **GitHub**
-> there are no scoped labels — the Plan ends up carrying **both** `type::epic` *and* `type::plan`,
-> which is precisely the taxonomy leak this skill's Taxonomy Overview forbids (Dev Spec R-19).
+> **Never** substitute `type: "epic"` for a Plan. `work_item` applies an automatic `type::<type>`
+> label, so an `epic` call produces a Plan carrying `type::epic`. On **GitLab** that is invisible —
+> `type::epic` and `type::plan` share the `type::` scope key and GitLab's scoped labels are mutually
+> exclusive, so a later `type::plan` evicts it. On **GitHub** there are no scoped labels, and the
+> Plan ends up carrying **both**, which is precisely the taxonomy leak the Taxonomy Overview forbids
+> (Dev Spec R-19). The substitution was only ever safe by accident on one platform.
 >
-> The workaround is safe by *accident* on GitLab and broken on GitHub. If you must create a Plan
-> before #477 lands, create it and then **verify the resulting label set** — strip any stray
-> `type::epic`.
+> Step 4's `label_create` precondition still stands: `work_item` *applies* `type::plan` but does not
+> create it, and GitHub fails a `--label` for a label that doesn't exist yet.
 
 ## Batch Creation (N > 1 issues in one pass)
 

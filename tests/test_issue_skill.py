@@ -752,42 +752,70 @@ class TestLabelColourFormat:
         )
 
 
-class TestPlanTypeGapDocumented:
-    """`work_item` has no `plan` in its type enum (mcp-server-sdlc#477).
+class TestPlanTypeCallout:
+    """`work_item` accepts `type: "plan"` as of mcp-server-sdlc v2.1.0 (#479).
 
-    The skill must not silently imply `type: "plan"` works, and must warn that
-    the obvious `type: "epic"` workaround leaks `type::epic` on GitHub (GitLab
-    hides it via scoped-label eviction; GitHub has no scoped labels).
+    The enum gap this class originally pinned (sdlc#477) is CLOSED. The skill must
+    now instruct passing `type: "plan"` directly and state the server version floor.
+
+    The `type: "epic"` prohibition is the half that survives the fix and still
+    carries its weight: an `epic` call leaks `type::epic` onto a Plan on GitHub
+    (GitLab hides it via scoped-label eviction; GitHub has no scoped labels), so
+    the substitution must stay explicitly forbidden even now that it is unnecessary.
     """
 
     @staticmethod
-    def _warning_box(skill_text: str) -> str:
-        """The `work_item does not accept type: plan` blockquote, extracted.
+    def _callout(skill_text: str) -> str:
+        """The `Plans: pass type: "plan" directly` blockquote, extracted.
 
         Anchor the assertions to THIS region rather than the whole 700-line file —
-        a bare `"477" in skill_text` would be satisfied by any future issue number
-        or even a hex colour like `477ACB`, and `"scoped label"` anywhere would do.
+        a bare `"479" in skill_text` would be satisfied by any future issue number
+        or even a hex colour, and `"scoped label"` anywhere would do.
         """
         m = re.search(
-            r"^> ### .*?`type: plan`.*?(?=\n(?!>)|\Z)",
+            r"^> ### Plans: pass .*?(?=\n(?!>)|\Z)",
             skill_text,
             re.M | re.S,
         )
-        assert m, "the `work_item does not accept type: plan` warning box is missing"
+        assert m, 'the `Plans: pass type: "plan" directly` callout is missing'
         return m.group(0)
 
-    def test_plan_enum_gap_is_flagged(self, skill_text: str) -> None:
-        box = self._warning_box(skill_text)
-        assert re.search(r"mcp-server-sdlc#477|sdlc#477", box), (
-            "the warning box must cite the tracking issue (sdlc#477) for the missing `plan` enum"
+    def test_plan_type_is_instructed(self, skill_text: str) -> None:
+        box = self._callout(skill_text)
+        assert re.search(r'`type: "plan"`', box), (
+            'the callout must instruct passing `type: "plan"` to work_item'
+        )
+
+    def test_server_version_floor_is_stated(self, skill_text: str) -> None:
+        box = self._callout(skill_text)
+        assert re.search(r"v2\.1\.0", box), (
+            "the callout must state the sdlc-server version floor — an agent on an "
+            "older server gets an enum-validation error and needs to know why"
+        )
+        assert re.search(r"mcp-server-sdlc#479|sdlc#479", box), (
+            "the callout must cite the PR that added `plan` to the enum"
         )
 
     def test_epic_workaround_github_leak_is_warned(self, skill_text: str) -> None:
-        box = self._warning_box(skill_text)
+        box = self._callout(skill_text)
         assert re.search(r"scoped label", box, re.I), (
             "the box must explain GitLab scoped-label eviction..."
         )
         assert re.search(r"GitHub", box), (
             "...and that GitHub has NO scoped labels, so the type::epic leak is REAL there. "
-            "Without both halves the workaround reads as safe."
+            "Without both halves the substitution reads as safe."
+        )
+
+    def test_stale_enum_gap_claim_is_gone(self, skill_text: str) -> None:
+        """Negative regression: the pre-#479 claim must not creep back.
+
+        It is worse than stale — it steers agents toward the `type: "epic"`
+        substitution that produces the GitHub taxonomy leak Dev Spec R-19 forbids.
+        """
+        assert not re.search(r"does not accept `?type: ?\"?plan", skill_text, re.I), (
+            "the skill must not claim work_item rejects `type: plan` — it accepts it "
+            "as of sdlc v2.1.0 (#479)"
+        )
+        assert not re.search(r"mcp-server-sdlc#477|sdlc#477", skill_text), (
+            "sdlc#477 is CLOSED — it must not be cited as an open blocker"
         )
