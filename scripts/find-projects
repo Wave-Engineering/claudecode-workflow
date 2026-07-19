@@ -1,0 +1,307 @@
+#!/usr/bin/env python3
+"""find-projects — POSIX-`find`-like selection over agent session stores, with an
+optional -exec/-ok action (epic #906, D3 #910).
+
+Enumerates the per-project session stores under ~/.claude/projects/*, filters them
+by AND-composed predicates, and (with no action) prints the matches or (with
+-exec/-ok) runs a command per match. The canonical use is fleet-wide reorientation:
+
+    find-projects --stopped --context-predates-install -exec reorient {} \\;
+
+Each store's real code cwd is read from its transcript (events carry a `cwd` field),
+so no lossy reverse-encoding of the projects-dir name is needed.
+
+SAFETY (matches `find`): with no -exec it only LISTS and runs no action (read-only
+git queries may run for --dirty/--platform). -exec runs silently per match; -ok
+prompts per match (bypass with --yes). A -exec/-ok REQUIRES a ';' terminator and at
+least one predicate (or --force) — so a forgotten '\\;' or a dropped filter can't
+silently widen a fan-out to the whole fleet. Each action is isolated — one failure
+does not abort the rest; a non-zero overall exit reports that some failed. --dry-run
+prints the action plan without running it.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime
+import fnmatch
+import glob
+import importlib.machinery
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+from shutil import which
+
+PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
+STAMP = os.path.expanduser("~/.claude/.last-kit-install")
+
+
+def _load_skill_gc():
+    """skill-gc module (sibling-first, then PATH) for session_liveness — same
+    version-pairing rationale as reorient."""
+    cand = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skill-gc")
+    path = cand if os.path.isfile(cand) else which("skill-gc")
+    if not path:
+        return None
+    loader = importlib.machinery.SourceFileLoader("skill_gc", path)
+    spec = importlib.util.spec_from_file_location("skill_gc", path, loader=loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+_SG = _load_skill_gc()
+
+
+# --------------------------------------------------------------------------- #
+# per-store facts
+# --------------------------------------------------------------------------- #
+def _scan_first(transcript, key):
+    """First value of top-level `key` across the transcript's records (skips bad lines)."""
+    try:
+        with open(transcript, encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    v = json.loads(line).get(key)
+                except ValueError:
+                    continue
+                if v:
+                    return v
+    except OSError:
+        return None
+    return None
+
+
+def _first_ts_epoch(transcript):
+    ts = _scan_first(transcript, "timestamp")
+    if not ts:
+        return None
+    try:
+        return int(datetime.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return None
+
+
+def gather(store):
+    sessions = sorted(glob.glob(os.path.join(store, "*.jsonl")), key=os.path.getmtime, reverse=True)
+    if not sessions:
+        return None
+    latest = sessions[0]
+    return {
+        "store": store,
+        "sessions": sessions,
+        "latest": latest,
+        "cwd": _scan_first(latest, "cwd"),
+        "first_ts": _first_ts_epoch(latest),
+        "mtime": os.path.getmtime(latest),
+    }
+
+
+def _install_epoch():
+    try:
+        return json.load(open(STAMP)).get("installed_at_epoch")
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _iso_epoch(s):
+    try:
+        return int(datetime.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return None
+
+
+def _liveness(session):
+    return _SG.session_liveness(session) if _SG else "unknown"
+
+
+def _is_stopped(info):
+    # Stopped only if EVERY session is provably idle. 'live' or 'unknown' → not stopped
+    # (fail-closed: we don't reorient what we can't prove is stopped).
+    return all(_liveness(s) == "idle" for s in info["sessions"])
+
+
+def _is_running(info):
+    return any(_liveness(s) == "live" for s in info["sessions"])
+
+
+def _git(cwd, *args):
+    if not cwd or not os.path.isdir(cwd):
+        return None
+    try:
+        r = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else None
+    except OSError:
+        return None
+
+
+def _git_dirty(cwd):
+    # --no-optional-locks keeps this genuinely read-only (plain `git status` refreshes
+    # and rewrites .git/index). find-projects listing must not mutate candidate repos.
+    out = _git(cwd, "--no-optional-locks", "status", "--porcelain")
+    return bool(out)
+
+
+def _git_platform(cwd):
+    url = _git(cwd, "remote", "get-url", "origin") or ""
+    if "github.com" in url:
+        return "github"
+    if "gitlab" in url:
+        return "gitlab"
+    return None
+
+
+# --------------------------------------------------------------------------- #
+def passes(info, args) -> bool:
+    if args.context_predates_install:
+        ie = _install_epoch()
+        if not (info["first_ts"] and ie and info["first_ts"] < ie):
+            return False
+    if args.stopped and not _is_stopped(info):
+        return False
+    if args.running and not _is_running(info):
+        return False
+    if args.path and not fnmatch.fnmatch(info["cwd"] or "", args.path):
+        return False
+    if args.last_active_before:
+        if info["mtime"] >= args._last_active_cutoff:
+            return False
+    if args.has_armed_reseed:
+        cwd = info["cwd"]
+        if not (cwd and os.path.isfile(os.path.join(cwd, ".claude", "reseed-armed.json"))):
+            return False
+    if args.dirty and not _git_dirty(info["cwd"]):
+        return False
+    if args.platform and _git_platform(info["cwd"]) != args.platform:
+        return False
+    return True
+
+
+def _split_action(argv):
+    """Split argv at -exec/-ok; the action command runs until a ';' terminator.
+    Returns (pre_argv, action, cmd, terminated). pre_argv is everything BEFORE the
+    action PLUS everything AFTER the terminator — so predicates on either side reach
+    argparse (which rejects unknowns) instead of being silently dropped. `terminated`
+    is False when -exec/-ok had no ';'/'\\;' (a fleet-safety error, not a silent sweep)."""
+    for i, a in enumerate(argv):
+        if a in ("-exec", "-ok"):
+            cmd = []
+            j = i + 1
+            terminated = False
+            while j < len(argv):
+                if argv[j] in (";", "\\;"):
+                    terminated = True
+                    j += 1
+                    break
+                cmd.append(argv[j])
+                j += 1
+            return argv[:i] + argv[j:], a, cmd, terminated
+    return argv, None, [], True
+
+
+def _token(info, which_token):
+    return {"store": info["store"], "cwd": info["cwd"] or "", "latest": info["latest"]}[which_token]
+
+
+PREDICATE_ATTRS = ("context_predates_install", "stopped", "running", "path", "dirty",
+                   "platform", "has_armed_reseed", "last_active_before")
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    pre, action, action_cmd, terminated = _split_action(argv)
+
+    ap = argparse.ArgumentParser(description="Find agent session stores by predicate; optionally -exec a command.")
+    ap.add_argument("--context-predates-install", action="store_true",
+                    help="latest session began before the last kit install (stale skill bodies)")
+    ap.add_argument("--stopped", action="store_true", help="no session is live (fail-closed: excludes unprovable)")
+    ap.add_argument("--running", action="store_true", help="at least one session is live")
+    ap.add_argument("--path", metavar="GLOB", help="project cwd matches this fnmatch glob")
+    ap.add_argument("--dirty", action="store_true", help="project git worktree is dirty")
+    ap.add_argument("--platform", choices=["github", "gitlab"], help="project origin platform")
+    ap.add_argument("--has-armed-reseed", action="store_true", help="project has an armed reseed")
+    ap.add_argument("--last-active-before", metavar="ISO", help="latest session older than this ISO datetime")
+    ap.add_argument("--print", dest="print_token", choices=["store", "cwd", "latest"], default="store",
+                    help="what to print / substitute for {} (default: store dir — what reorient accepts)")
+    ap.add_argument("--projects-dir", default=PROJECTS_DIR, help="override ~/.claude/projects")
+    ap.add_argument("--yes", action="store_true", help="assume yes for -ok prompts")
+    ap.add_argument("--force", action="store_true", help="allow an -exec with no predicate (whole-fleet)")
+    ap.add_argument("--dry-run", action="store_true", help="print the action plan; run nothing")
+    args = ap.parse_args(pre)
+
+    # A -exec/-ok with no ';' terminator is almost always a mistake that would sweep
+    # far wider than intended (GNU find errors the same way) — fail, don't guess.
+    if action and not terminated:
+        print(f"find-projects: {action} requires a ';' terminator (e.g. {action} reorient {{}} \\;)",
+              file=sys.stderr)
+        return 2
+
+    # Pre-parse --last-active-before once so a bad date is a hard error (not a silent
+    # match-nothing). args._last_active_cutoff is consumed by passes().
+    args._last_active_cutoff = None
+    if args.last_active_before:
+        args._last_active_cutoff = _iso_epoch(args.last_active_before)
+        if args._last_active_cutoff is None:
+            print(f"find-projects: --last-active-before: unparseable datetime {args.last_active_before!r}",
+                  file=sys.stderr)
+            return 2
+
+    # Refuse an unfiltered -exec (defense-in-depth: an action across EVERY store,
+    # including live/unknown sessions, must be deliberate). --force to override.
+    has_predicate = any(getattr(args, a) for a in PREDICATE_ATTRS)
+    if action and not has_predicate and not args.force:
+        print("find-projects: refusing an -exec/-ok with no predicate (would touch EVERY store). "
+              "Add a predicate (e.g. --stopped) or pass --force.", file=sys.stderr)
+        return 2
+
+    matches = []
+    for store in sorted(glob.glob(os.path.join(args.projects_dir, "*"))):
+        if not os.path.isdir(store):
+            continue
+        info = gather(store)
+        if info and passes(info, args):
+            matches.append(info)
+
+    # No action → list only (runs no command), like `find` with no -exec.
+    if not action:
+        for m in matches:
+            print(_token(m, args.print_token))
+        return 0
+
+    if not any("{}" in x for x in action_cmd):
+        print("find-projects: -exec/-ok command must contain '{}'", file=sys.stderr)
+        return 2
+
+    fails = 0
+    ran = 0
+    for m in matches:
+        tok = _token(m, args.print_token)
+        cmd = [x.replace("{}", tok) for x in action_cmd]  # GNU-find-style: {} anywhere in an arg
+        if args.dry_run:
+            print("would exec:", " ".join(cmd))
+            continue
+        if action == "-ok" and not args.yes:
+            sys.stderr.write(f"run: {' '.join(cmd)} ? [y/N] ")
+            sys.stderr.flush()
+            if (sys.stdin.readline() or "").strip().lower() != "y":
+                continue
+        ran += 1
+        try:
+            r = subprocess.run(cmd)  # per-project isolation below via the loop + try
+            if r.returncode != 0:
+                fails += 1
+                print(f"[exec failed rc={r.returncode}] {tok}", file=sys.stderr)
+        except (OSError, ValueError) as e:  # ValueError: embedded NUL in a crafted path
+            fails += 1
+            print(f"[exec error] {tok}: {e}", file=sys.stderr)
+
+    if not args.dry_run:
+        print(f"find-projects: {len(matches)} matched, {ran} ran, {fails} failed", file=sys.stderr)
+    return 1 if fails else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
