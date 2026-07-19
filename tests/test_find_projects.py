@@ -80,7 +80,7 @@ def test_stopped_vs_running(tmp_path, capsys, monkeypatch):
     # deterministic + portable: don't depend on /proc or wall-clock mtime.
     # match on the STORE dir name (the tmp path itself contains "stopped").
     monkeypatch.setattr(fp, "_liveness",
-                        lambda s: "idle" if os.path.basename(os.path.dirname(s)) == "stopped" else "live")
+                        lambda s, scan=None: "idle" if os.path.basename(os.path.dirname(s)) == "stopped" else "live")
     assert fp.main(["--stopped", "--projects-dir", str(pdir)]) == 0
     assert capsys.readouterr().out.strip().splitlines() == [stopped]
 

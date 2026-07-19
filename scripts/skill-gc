@@ -21,7 +21,8 @@ Guarantees (asserted by verify(), on by default):
     tool_use still paired with its tool_result.
   * recoverable — a gzip+sha backup is written before any change.
   * fail-closed — refuses a session that looks live OR whose liveness cannot be
-    proven (no /proc to scan), unless --force.
+    proven (no readable /proc, or an unattributable `claude` in the session's
+    own cwd), unless --force. See session_liveness() for the signal precedence.
 
 Line indices are RAW-LINE indices throughout: the transcript is parsed into a
 list aligned 1:1 with the raw lines (blank lines -> None placeholders), so the
@@ -35,10 +36,23 @@ import gzip
 import hashlib
 import json
 import os
+import re
 import sys
 import time
+from typing import NamedTuple
 
 LIVE_WINDOW_SECS = 60  # a transcript touched this recently is treated as possibly-live
+PROC_ROOT = "/proc"  # overridable so the /proc scan is testable without a live fleet
+
+# Flags that name a session on a `claude` cmdline. Measured across the live fleet;
+# each is carried by a real process (see tests/test_liveness.py for the pid map).
+SESSION_FLAGS = ("--resume", "--session-id")
+# `-r` is --resume's short form. Honoured ONLY on a cmdline whose argv[0] mentions
+# claude: the sweep reads every process, and `-r` is far too common elsewhere
+# (`grep -r <uuid>.jsonl` would otherwise register as a live session).
+SESSION_FLAGS_SHORT = ("-r",)
+_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+_UNSET = object()
 
 
 # --------------------------------------------------------------------------- #
@@ -109,30 +123,167 @@ def stub_text(skill: str, n: int) -> str:
 # --------------------------------------------------------------------------- #
 # safety
 # --------------------------------------------------------------------------- #
-def session_liveness(path: str) -> str:
+class ProcScan(NamedTuple):
+    """One /proc sweep. `session_uuids` are sessions provably owned by a running
+    process; `unattributable_cwds` are the cwds of `claude` processes that name no
+    session on their cmdline (a bare `claude`, or `claude --continue`)."""
+
+    session_uuids: frozenset
+    unattributable_cwds: frozenset
+
+
+def _uuid_of(value: str) -> str | None:
+    """The session uuid a flag value names: a bare uuid, or a transcript path
+    whose basename is one (`--resume /…/projects/<enc>/<uuid>.jsonl` is a real
+    fleet form). Anything else -> None."""
+    base = os.path.basename(value)
+    if base.endswith(".jsonl"):
+        base = base[:-6]
+    return base.lower() if _UUID_RE.fullmatch(base) else None
+
+
+def scan_processes(proc_root: str | None = None) -> ProcScan | None:
+    """Sweep /proc once. Returns None when liveness cannot be established at all
+    (no /proc, or pid dirs exist but not one cmdline is readable) — the caller
+    must treat None as 'unknown', never as 'nothing is running'.
+
+    Every cmdline is scanned, not just those whose argv[0] basename is `claude`:
+    the fleet runs sessions under a two-word argv[0] (`claude bg-pty-host`) and
+    under the bare version binary (`…/claude/versions/2.1.215`), and a basename
+    filter drops those. Over-matching here is the safe direction — it can only
+    make us refuse a session we could have collected."""
+    root = PROC_ROOT if proc_root is None else proc_root
+    if not os.path.isdir(root):
+        return None
+    pid_dirs = glob.glob(os.path.join(root, "[0-9]*"))
+    uuids, cwds = set(), set()
+    readable = 0
+    for d in pid_dirs:
+        try:
+            with open(os.path.join(d, "cmdline"), "rb") as fh:
+                argv = [a for a in fh.read().decode("utf-8", "replace").split("\0") if a]
+        except OSError:
+            continue  # the process exited mid-scan, or hidepid
+        readable += 1
+        if not argv:
+            continue
+        is_claude = "claude" in argv[0].lower()
+        flags = SESSION_FLAGS + (SESSION_FLAGS_SHORT if is_claude else ())
+        found = set()
+        names_new_session = False
+        for i, a in enumerate(argv):
+            values = [argv[i + 1]] if a in flags and i + 1 < len(argv) else []
+            values += [a[len(f) + 1:] for f in flags if a.startswith(f + "=")]
+            hits = {u for u in map(_uuid_of, values) if u}
+            found |= hits
+            # --session-id names the session actually being WRITTEN; --resume names
+            # a source, which under --fork-session is a different file entirely.
+            if hits and (a == "--session-id" or a.startswith("--session-id=")):
+                names_new_session = True
+        uuids |= found
+        # A process whose written transcript we could not name. Two ways in:
+        #   * a bare `claude`, or `--continue` — no uuid anywhere on the cmdline;
+        #   * `--resume A --fork-session` — the fork mints a NEW id, so naming A
+        #     accounts for the source, never the file this process actually writes.
+        # Both must fall to cwd-scoped doubt, or their real transcript is protected
+        # by nothing but the recency window — the hole #919 exists to close. Scope
+        # by cwd rather than poisoning the whole fleet.
+        forked = any(a == "--fork-session" or a.startswith("--fork-session=") for a in argv)
+        if is_claude and (not found or (forked and not names_new_session)):
+            # readlink, not realpath: realpath defaults to strict=False and cannot
+            # raise, so an unreadable cwd would silently add the literal
+            # "/proc/<pid>/cwd" instead of being skipped. An unreadable cwd means a
+            # different mount/pid namespace or another user — either way its
+            # sessions are not in the ~/.claude/projects we collect.
+            # (/proc cwd targets are always absolute, so realpath needs no basedir.)
+            try:
+                target = os.readlink(os.path.join(d, "cwd"))
+            except OSError:
+                continue
+            # The kernel suffixes an unlinked cwd with " (deleted)". Unstripped, the
+            # doubt is recorded under a path no transcript can ever match and
+            # silently evaporates — `git worktree remove` under a running agent is
+            # enough to reach it. Stripping is the fail-closed direction: a directory
+            # genuinely named that way is simply doubted under both spellings.
+            deleted = " (deleted)"
+            if target.endswith(deleted):
+                target = target[: -len(deleted)]
+            cwds.add(os.path.realpath(target))
+    if not readable:
+        # A crashed/blinded scan must not look like an all-clear. NOTE (#923): this
+        # only catches TOTAL blindness. A partially readable /proc returns a
+        # populated-but-partial scan and can still classify an unreadable live agent
+        # as idle — tracked, not fixed here.
+        return None
+    return ProcScan(frozenset(uuids), frozenset(cwds))
+
+
+def session_cwd(path: str) -> str | None:
+    """The code cwd this session runs in, from the first record carrying one.
+    Measured: `cwd` is never on the first record (that is a summary carrying
+    sessionId/leafUuid), so this must scan on rather than sample line 1."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                if not line.strip():
+                    continue
+                try:
+                    v = json.loads(line).get("cwd")
+                except ValueError:
+                    continue
+                if v:
+                    return os.path.realpath(v)
+    except OSError:
+        return None
+    return None
+
+
+def session_liveness(path: str, scan: object = _UNSET) -> str:
     """Return 'live' | 'idle' | 'unknown'. Fail-closed: callers must treat both
     'live' and 'unknown' as do-not-touch (unless forced).
 
-    Strong signal: a process holds the transcript fd open (Linux /proc scan).
-    Recency signal: modified within LIVE_WINDOW_SECS. When /proc is unavailable
-    (non-Linux), the strong signal is absent and an old-but-idle live session is
-    indistinguishable from a stopped one, so we return 'unknown' rather than
-    pretending mtime alone proves safety."""
-    ap = os.path.realpath(path)
-    proc = os.path.isdir("/proc")
-    if proc:
-        for fd in glob.glob("/proc/[0-9]*/fd/*"):
-            try:
-                if os.path.realpath(fd) == ap:
-                    return "live"
-            except OSError:
-                continue
+    Signals, in precedence order:
+      1. no usable /proc scan                      -> 'unknown'
+      2. a running process names this session uuid -> 'live'   (the strong signal)
+      3. modified within LIVE_WINDOW_SECS          -> 'live'   (secondary only)
+      4. an unattributable `claude` shares this session's cwd -> 'unknown'
+      5. otherwise                                 -> 'idle'
+
+    (2) replaces a former "a process holds the transcript fd open" test, which was
+    dead code: Claude Code appends to its transcript and closes the descriptor.
+    Swept on one workstation, 0 of 277 transcripts were held open across 10,613
+    fds, so every session fell through to (3) and 10 of 14 running agents there
+    classified as stopped — the #919 defect. (Single-host figures; the dead-branch
+    conclusion follows from the append-and-close behaviour, not from the counts.)
+
+    Known residual, #923: (1) only fires when NO cmdline is readable, so a
+    partially readable /proc (hidepid, PID namespace, another user's claude) can
+    still yield 'idle' for a live agent whose cmdline we cannot read.
+
+    `scan` may be a ProcScan from scan_processes() to amortise the sweep across
+    many sessions (find-projects does this). Selection may use a cached sweep;
+    mutation must not — skill-gc always re-scans at --apply time."""
+    if scan is _UNSET:
+        scan = scan_processes()
+    if scan is None:
+        return "unknown"
+    uuid = _uuid_of(os.path.basename(path))
+    if uuid and uuid in scan.session_uuids:
+        return "live"
     try:
         if time.time() - os.path.getmtime(path) < LIVE_WINDOW_SECS:
             return "live"
     except OSError:
         return "unknown"
-    return "idle" if proc else "unknown"
+    # A session with NO readable cwd is deliberately NOT poisoned here. `cwd` only
+    # goes missing on a transcript too young to have recorded one, and such a
+    # transcript is fresh enough that (3) already returned 'live'. Treating it as
+    # unknown instead costs every cwd-less transcript its collectability for as
+    # long as any helper `claude` runs (there are normally several) and buys no
+    # reachable safety. Verified by tracing, not assumed.
+    if scan.unattributable_cwds and session_cwd(path) in scan.unattributable_cwds:
+        return "unknown"
+    return "idle"
 
 
 def backup(path: str, backup_dir: str | None) -> str:
@@ -246,14 +397,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.apply and not args.force:
         state = session_liveness(path)
         if state == "live":
-            print(f"skill-gc: REFUSING — {path} looks live (a process holds it open, or it was "
-                  f"modified <{LIVE_WINDOW_SECS}s ago). Stop the session, or pass --force if certain.",
-                  file=sys.stderr)
+            print(f"skill-gc: REFUSING — {path} is live (a running claude process names this "
+                  f"session, or it was modified <{LIVE_WINDOW_SECS}s ago). Stop the session, or "
+                  f"pass --force if certain.", file=sys.stderr)
             return 3
         if state == "unknown":
-            print(f"skill-gc: REFUSING — cannot prove {path} is not live (no /proc fd scan on this "
-                  f"platform, or mtime unreadable). Stop the session and retry, or pass --force.",
-                  file=sys.stderr)
+            print(f"skill-gc: REFUSING — cannot prove {path} is not live (no readable /proc on "
+                  f"this platform, an unattributable claude process shares its cwd, or mtime is "
+                  f"unreadable). Stop the session and retry, or pass --force.", file=sys.stderr)
             return 3
 
     out_lines, targets, reclaimed = evict(path, only)

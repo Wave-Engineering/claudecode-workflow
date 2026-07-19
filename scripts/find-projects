@@ -114,18 +114,23 @@ def _iso_epoch(s):
         return None
 
 
-def _liveness(session):
-    return _SG.session_liveness(session) if _SG else "unknown"
+def _liveness(session, scan=None):
+    """One implementation, shared with skill-gc — selection and mutation must not
+    disagree about what is live. `scan` is a skill-gc ProcScan reused across every
+    session in a run; without one each call re-sweeps /proc."""
+    if not _SG:
+        return "unknown"
+    return _SG.session_liveness(session) if scan is None else _SG.session_liveness(session, scan)
 
 
-def _is_stopped(info):
+def _is_stopped(info, scan=None):
     # Stopped only if EVERY session is provably idle. 'live' or 'unknown' → not stopped
     # (fail-closed: we don't reorient what we can't prove is stopped).
-    return all(_liveness(s) == "idle" for s in info["sessions"])
+    return all(_liveness(s, scan) == "idle" for s in info["sessions"])
 
 
-def _is_running(info):
-    return any(_liveness(s) == "live" for s in info["sessions"])
+def _is_running(info, scan=None):
+    return any(_liveness(s, scan) == "live" for s in info["sessions"])
 
 
 def _git(cwd, *args):
@@ -160,9 +165,9 @@ def passes(info, args) -> bool:
         ie = _install_epoch()
         if not (info["first_ts"] and ie and info["first_ts"] < ie):
             return False
-    if args.stopped and not _is_stopped(info):
+    if args.stopped and not _is_stopped(info, args._scan):
         return False
-    if args.running and not _is_running(info):
+    if args.running and not _is_running(info, args._scan):
         return False
     if args.path and not fnmatch.fnmatch(info["cwd"] or "", args.path):
         return False
@@ -238,6 +243,30 @@ def main(argv=None):
         print(f"find-projects: {action} requires a ';' terminator (e.g. {action} reorient {{}} \\;)",
               file=sys.stderr)
         return 2
+
+    # A liveness predicate with no liveness engine must be a hard error, not a quiet
+    # "0 running". Answering "the fleet is drained" from a detector that failed to load
+    # is what made ./install look safe under ten live agents (#919).
+    args._scan = None
+    if (args.stopped or args.running) and not _SG:
+        print("find-projects: cannot evaluate --stopped/--running: skill-gc not found "
+              "alongside this script or on PATH (it owns the liveness implementation).",
+              file=sys.stderr)
+        return 2
+    if args.stopped or args.running:
+        # Sweep /proc ONCE for the whole run instead of per session (277 sessions x
+        # 10.6k fds was the old cost). Selection may use a cached sweep; skill-gc
+        # re-scans at --apply time so a session that starts mid-fan-out is still caught.
+        args._scan = _SG.scan_processes()
+        # A blinded sweep is the same hazard as a missing engine, one layer down:
+        # every session would resolve to 'unknown', so --running would print nothing
+        # and exit 0 — indistinguishable from a genuinely drained fleet. Refuse to
+        # answer rather than answer "all clear" from a detector that saw nothing.
+        if args._scan is None:
+            print("find-projects: cannot evaluate --stopped/--running: /proc is not "
+                  "readable on this host, so liveness is undeterminable — that is NOT "
+                  "the same as nothing running.", file=sys.stderr)
+            return 2
 
     # Pre-parse --last-active-before once so a bad date is a hard error (not a silent
     # match-nothing). args._last_active_cutoff is consumed by passes().
