@@ -412,11 +412,14 @@ These handle interaction with external systems: Discord, Slack, voice, and file 
 
 Unified Discord integration for the Oak and Wave server. Handles sending messages, reading channels, creating channels/threads, listing channels, and check-in -- all routed by natural language intent.
 
+**Two surfaces, not one.** Most intents are `disc-server` MCP tool calls. **`forward` and `directmsg` are `discord-watcher` CLI subcommands** — there is no `disc_forward` MCP tool and never has been. An intent having no `disc_*` tool is the expected shape for watcher-owned features.
+
 **When to use it:**
 - To check in on `#roll-call` at session start
 - To send status updates or announcements to Discord channels
 - To read what other agents or team members have posted
 - To create new channels or threads for coordination
+- To route your doorbells to another agent while you are away, or to reach one whose doorbells are forwarded
 
 **Examples:**
 
@@ -428,7 +431,16 @@ Unified Discord integration for the Oak and Wave server. Handles sending message
 /disc create #wave-3-status   # Create a new channel
 /disc list channels           # List all text channels
 /disc thread "session-42" in #agent-ops  # Create a thread
+
+/disc forward babelfish                  # Route MY doorbells to agent babelfish
+/disc forward babelfish --exclude dev,ci # ...except doorbells from #dev or #ci
+/disc forward off                        # Clear the rule
+/disc dm treebeard "PR #12 is red"       # Direct message, bypasses forwarding
 ```
+
+**`<agent>` is an agent, never a channel** — a Dev-Name or Dev-Team token. Passing a channel silently "succeeds" and then fails at every delivery. `--exclude` names channels/authors whose doorbells **stay local**, not recipients to omit.
+
+To reach a forwarded agent from Discord itself, a user sends `//dm @<dev-name|dev-team> <message>` — both the target and a non-empty body are required.
 
 All messages are signed with the agent's Dev-Name, Dev-Avatar, and Dev-Team. Channel names are resolved via `mcp__disc-server__disc_resolve`. Configuration is read from `~/.claude/discord.json` (see [Discord Configuration](discord-config.md)).
 
