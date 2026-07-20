@@ -84,6 +84,43 @@ prompt: "Run: trivy fs --scanners vuln --severity HIGH,CRITICAL --format json --
 - Job C returned `PASS — zero HIGH or CRITICAL` for a repo where trivy parsed **zero manifests**. A pass over an empty denominator is *no scan*, and it is indistinguishable from a clean one. Same shape as the `/mmr` gate in #925: reported fine, did nothing. It had also been masking a real defect for months — a repo whose lockfile was gitignored had therefore *never* been scanned, and the gate's silence and the defect were the same event.
 - Two agents both reported `Results=1`, honestly, and disagreed — because they were scanning **different commits**. Denominator-first is necessary and not sufficient: *"how many manifests?"* and *"which commit?"* are two questions, and a local checkout is not the tree that ships. (@strangler)
 
+### A trivy PASS is NOT a dependency clearance for lockfile-based JS/TS projects
+
+**`trivy` parses `bun.lock`, not the installed tree.** It is therefore *structurally* blind to a vulnerable copy nested under a parent — not unlucky, blind by construction. Reproduced independently on four separate trees: **0 HIGH/CRITICAL reported on a tree carrying a known-vulnerable nested `ajv/fast-uri@3.1.0`** that a filesystem probe found immediately.
+
+This matters because it is exactly how a dependency bump becomes cosmetic. **A version outside a parent's declared range does not upgrade that parent — it makes the parent keep a private nested copy.** The top-level lockfile entry reads fixed, trivy agrees, and the CVE is live. A real bump nearly shipped this way; it was caught by reading the nested entry, not by scanning.
+
+**So for any change touching dependencies, trivy is necessary and not sufficient.** Also run:
+
+```bash
+cd "$REPO"                      # RELATIVE — an absolute path breaks path-based probes
+find node_modules -name package.json | while IFS= read -r f; do
+  python3 -c "
+import json
+try: d=json.load(open('$f'))
+except Exception: raise SystemExit
+if d.get('name')=='<pkg>': print(d.get('version'), '$f')"
+done
+# PASS = exactly one line per target, at the pinned version
+```
+
+**Read `name` from the file. Never infer identity from the path.** Four path-based variants were tried on 2026-07-19 and every one failed, in both directions:
+
+| variant | failure |
+|---|---|
+| absolute path | `*/node_modules/` matches the absolute prefix → healthy top-level copy reads as nested (**false positive**) |
+| "denominator must be > 0" | bun hoists to a flat tree; zero nested entries is the *correct* answer (**false alarm**) |
+| `-path "*pkg*"` | matches `package.json` files *inside* a package — `fast-uri/benchmark/package.json` declares `version 1.0.0` (**false positive**) |
+| `-maxdepth 3` | a nested copy's file sits at **depth 5**; the cap **cannot reach the class being searched for** (**FALSE NEGATIVE**) |
+
+Reading `name` is immune to all four **because it never asks the path a question about identity.**
+
+**Validate the probe before trusting a zero.** Plant a copy at depth 5 (`node_modules/<pkg>/node_modules/<target>/package.json` with `name` + `version`), confirm the probe finds it, remove it, confirm the clean tree reads one line. **A probe that has only run on a clean tree has not been tested** — and a probe run on a *flat* tree cannot detect a nested-copy bug at all, which is how the `-maxdepth` variant was reported "verified".
+
+**Durability, with a caveat that produced a false pass.** Deleting the lockfile and reinstalling from the manifest is the right instinct, but a zero afterward can mean the **dependency chain disappeared** rather than the pin held — a parent bumping to a version that drops the vulnerable package entirely. *That zero is chain-absence wearing a pass's clothes.* Force the chain present and A/B the override instead: without → vulnerable version, with → pinned version.
+
+**Why this is written out rather than summarised:** five verification instruments were wrong on 2026-07-19 and **not one was caught by review** — every one by someone running it against a case that could fail. The instrument is a claim, and claims get tested.
+
 **Job D — Code review** `model: opus`
 ```
 subagent_type: feature-dev:code-reviewer
