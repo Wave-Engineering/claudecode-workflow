@@ -65,12 +65,24 @@ prompt: "Run the project's validation and test tooling in <repo_root>.
 subagent_type: general-purpose
 model: haiku
 prompt: "Run: trivy fs --scanners vuln --severity HIGH,CRITICAL --format json --quiet <repo_root>
-         Parse the JSON. Return one of:
-           PASS — zero findings
+         Also run: git -C <repo_root> rev-parse HEAD
+
+         Parse the JSON. FIRST report the denominator and the commit, ALWAYS, on one line:
+           scanned: <N> manifest(s) at <short-sha>   [list each Target and Type]
+
+         THEN return one of:
+           PASS — one or more manifests parsed, zero findings
+           NO MANIFESTS — trivy ran and parsed ZERO manifests. This is NOT a pass.
+                          Nothing was scanned. Say so; do not report PASS.
            SKIP — trivy not installed
            FINDINGS — list each as: package | CVE | severity | fixed_version (or 'no fix available')
          Do not auto-upgrade anything. Just report."
 ```
+
+**Report the denominator and the commit before the verdict — never the verdict alone.** Two failures on 2026-07-19 make this non-optional:
+
+- Job C returned `PASS — zero HIGH or CRITICAL` for a repo where trivy parsed **zero manifests**. A pass over an empty denominator is *no scan*, and it is indistinguishable from a clean one. Same shape as the `/mmr` gate in #925: reported fine, did nothing. It had also been masking a real defect for months — a repo whose lockfile was gitignored had therefore *never* been scanned, and the gate's silence and the defect were the same event.
+- Two agents both reported `Results=1`, honestly, and disagreed — because they were scanning **different commits**. Denominator-first is necessary and not sufficient: *"how many manifests?"* and *"which commit?"* are two questions, and a local checkout is not the tree that ships. (@strangler)
 
 **Job D — Code review** `model: opus`
 ```
