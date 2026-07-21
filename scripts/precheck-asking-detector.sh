@@ -40,16 +40,10 @@ if [[ -z "$TRANSCRIPT_PATH" || ! -f "$TRANSCRIPT_PATH" ]]; then
 	exit 0
 fi
 
-LAST_ASSISTANT_TEXT=$(
-	tail -n 200 "$TRANSCRIPT_PATH" 2>/dev/null |
-		jq -rs '
-      [.[] | select(.type == "assistant" and (.message.role // "") == "assistant")]
-      | last
-      | (.message.content // [])
-      | map(select(.type == "text") | .text)
-      | join(" ")
-    ' 2>/dev/null
-)
+# ONE implementation, shared with the other two entrypoints. It warns on stderr
+# instead of swallowing — this hook exits 0 on empty text, so a swallowed
+# extraction failure made it inert with nothing reported anywhere. (#920)
+LAST_ASSISTANT_TEXT=$(godspeed_last_assistant_text "$TRANSCRIPT_PATH")
 
 if [[ -z "$LAST_ASSISTANT_TEXT" || "$LAST_ASSISTANT_TEXT" == "null" ]]; then
 	exit 0
@@ -59,16 +53,23 @@ ARM_STATUS=$(godspeed_status "$TRANSCRIPT_PATH")
 
 case "$ARM_STATUS" in
 
-ARMED*)
+"ARMED "[0-9]*)
 	# Mandate active: stop-action-bias-detector.sh owns the full mandate
 	# decision model and all notifications. Stand down here to avoid duplicate
 	# blocks and double Discord/vox pings. When the mandate is in effect the
 	# action-bias hook already covers "don't ask permission" broadly.
+	#
+	# WHITELIST, matching godspeed_decision exactly — deliberately not `ARMED*`.
+	# Standing down is the permissive branch here, so an unrecognised status must
+	# not reach it. The bare prefix glob also accepted `ARMEDGARBAGE` and, more
+	# realistically, any diagnostic text that happens to begin with ARMED. There
+	# must be ONE definition of a well-formed armed status across both hooks;
+	# two spellings of it is how the fix reaches half the call sites. (#920)
 	exit 0
 	;;
 
 *)
-	# UNARMED / HALTED: original narrow-regex behavior.
+	# UNARMED / HALTED / UNKNOWN / anything unrecognised: narrow-regex behavior.
 	# Three patterns for "asking whether to run /precheck":
 	#   1. Interrogative  — trigger word within ~40 chars of "precheck", ending "?"
 	#   2. Deferral       — "let me know" idiom near "precheck"
