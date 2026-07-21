@@ -11,11 +11,13 @@
 #   Shell scripts are identified by .sh extension or #!/…sh shebang.
 #   Python files are identified by .py extension or #!/…python shebang.
 #
-#   Note: the shellcheck pass scans executable files in scripts/ (excluding
-#   ci/) plus *.sh files in ci/, while shfmt scans all executable-or-*.sh
-#   files in scripts/ (including ci/). Both scan skill helpers and config/.
-#   The slight asymmetry means a non-.sh executable in ci/ is checked by
-#   shfmt but not by the shellcheck pass.
+#   Note: the shellcheck pass scans executable-or-*.sh files in scripts/
+#   (excluding ci/) plus *.sh files in ci/, while shfmt scans all
+#   executable-or-*.sh files in scripts/ (including ci/). Both scan skill
+#   helpers and config/. The two selectors match for scripts/ — coverage does
+#   NOT depend on the exec bit (#948). The one remaining asymmetry: a non-.sh
+#   executable in ci/ is checked by shfmt but not by the shellcheck pass, since
+#   the shellcheck ci/ pass is *.sh-only.
 
 set -euo pipefail
 
@@ -64,10 +66,15 @@ else
 	while IFS= read -r f; do
 		SCRIPTS+=("$f")
 	done < <(find "$REPO_DIR" -maxdepth 1 -name "*.sh" -type f 2>/dev/null)
-	# Scripts directory (excluding ci/)
+	# Scripts directory (excluding ci/). Executable OR *.sh — coverage must
+	# NOT depend on the exec bit: godspeed-lookback.sh is mode 644 (it is
+	# sourced, not executed), so an executable-only selector silently skipped
+	# the shared library both Stop hooks source while reporting all-green.
+	# The shfmt selector below already used this predicate; shellcheck's was
+	# never updated to match. (#948)
 	while IFS= read -r f; do
 		SCRIPTS+=("$f")
-	done < <(find "$REPO_DIR/scripts" -type f -executable ! -path "*/ci/*" 2>/dev/null)
+	done < <(find "$REPO_DIR/scripts" -type f \( -executable -o -name "*.sh" \) ! -path "*/ci/*" 2>/dev/null)
 	# CI scripts
 	while IFS= read -r f; do
 		SCRIPTS+=("$f")

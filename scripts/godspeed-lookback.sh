@@ -58,6 +58,7 @@
 # An unrecognised shape raises rather than defaulting. A detector that cannot
 # read its input must not be able to report "nothing found". (#920)
 # ---------------------------------------------------------------------------
+# shellcheck disable=SC2016  # jq program — `$`-refs are jq vars, must NOT expand in bash
 _GODSPEED_JQ_PRELUDE='
   def txt:
     (.message.content // [])
@@ -180,7 +181,7 @@ _GODSPEED_JQ_PRELUDE='
     # SINGLE-QUOTED shell string: one literal apostrophe — even inside a comment
     # — closes it, and the jq body then reaches bash as commands. It fails
     # loudly, but it fails at source time in a file both Stop hooks source.
-    and ((txt | test("[`\"\u0027‘’“”]/?godspeed")) | not)
+    and ((txt | test("[`\"\u0027\u2018\u2019\u201c\u201d]/?godspeed")) | not)
     and ((txt | test("[^.!?\\n]*\\bgodspeed\\b[^.!?\\n]*\\?")) | not)
     and (txt | test("(^|[.!?]\\s+)godspeed\\b|(^|\\s)/godspeed\\b"));
 
@@ -333,6 +334,7 @@ godspeed_status() {
 	local scan_lines=$((N * 20 + 500))
 
 	local out rc
+	# shellcheck disable=SC2016  # jq program — `$N`/`$rev` are jq vars, must not expand in bash
 	out=$(_godspeed_jq_scan "$scan_lines" "$transcript_path" '
       # Collect user turns that carry actual human text — exclude tool-result
       # wrapper entries (type=="user" but content is tool_result blocks with no
@@ -443,6 +445,7 @@ godspeed_turn_tools() {
 	}
 
 	local out rc
+	# shellcheck disable=SC2016  # jq program — `$all`/`$boundary` are jq vars, must not expand in bash
 	out=$(_godspeed_jq_scan 600 "$transcript_path" '
         . as $all
         | ([ $all | to_entries[]
@@ -652,7 +655,7 @@ godspeed_gated_actions() {
 			if printf '%s' "$stripped" | grep -Pq "$_GODSPEED_GATED_CMD_RE" 2>/dev/null; then
 				printf 'command: %s\n' "$(printf '%s' "$stripped" | cut -c1-90)"
 			fi
-		done < <(printf '%s' "$cmds" | tr ';|&' '\n\n\n')
+		done < <(printf '%s' "$cmds" | tr ';|&' '\n')
 	fi
 
 	# --- Write/Edit: prod-shaped desired-state paths ---
@@ -764,11 +767,15 @@ godspeed_decision() {
 # ---------------------------------------------------------------------------
 # _godspeed_notify <kind> [d] [N]
 #
-# Notifies BJ via vox + Discord on STOP or ASK. Best-effort; never fails.
-# kind: "STOP" | "ASK"
+# Notifies BJ via vox + Discord. Best-effort; never fails.
+#
+# $1 (kind) is accepted for call-site signature stability but no longer read:
+# only ASK reaches here now, since the gated-action path deliberately does NOT
+# notify (#917). Binding it to a local would be a dead assignment — see the
+# NOTE in the body — so the positional is documented and left unread rather than
+# stored. (#948)
 # ---------------------------------------------------------------------------
 _godspeed_notify() {
-	local kind="$1"
 	local d="${2:-?}"
 	local N="${GODSPEED_WINDOW:-200}"
 
