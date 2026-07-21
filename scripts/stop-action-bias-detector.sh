@@ -16,7 +16,14 @@
 #      supplied >= bar → GO (continue autonomously, no block)
 #      supplied <  bar → ASK (block + checkpoint prompt; model names gap for BJ)
 #
-# Arm:  type `godspeed` in any user turn → mandate active
+# Arm:  in a user turn, either `godspeed` starting a sentence, or `/godspeed`
+#       preceded by a space (or opening the message) → mandate active.
+#       Do NOT arm: questions ("are you in godspeed mode?"), quoted mentions
+#       (`/godspeed`, "/godspeed"), machine-generated turns (the hook's own
+#       block text, task notifications, skill bodies, compaction summaries),
+#       and — importantly — file paths. `scripts/godspeed-lookback.sh` contains
+#       the substring `/godspeed`, so the space before the slash is what stops
+#       merely naming the detector from arming it. (#921)
 # Halt: type `HALT!` (exact) → mandate cancelled until next godspeed
 #
 # Contract (Claude Code Stop hook):
@@ -49,16 +56,9 @@ if [[ -z "$TRANSCRIPT_PATH" || ! -f "$TRANSCRIPT_PATH" ]]; then
 fi
 
 # Extract the last assistant turn text (skip thinking and tool_use blocks).
-LAST_ASSISTANT_TEXT=$(
-	tail -n 200 "$TRANSCRIPT_PATH" 2>/dev/null |
-		jq -rs '
-      [.[] | select(.type == "assistant" and (.message.role // "") == "assistant")]
-      | last
-      | (.message.content // [])
-      | map(select(.type == "text") | .text)
-      | join(" ")
-    ' 2>/dev/null
-)
+# ONE implementation, shared with --decide and precheck-asking-detector.sh; it
+# warns on stderr rather than swallowing an extraction failure. (#920)
+LAST_ASSISTANT_TEXT=$(godspeed_last_assistant_text "$TRANSCRIPT_PATH")
 
 # Extract every tool_use block in the CURRENT TURN — what the turn actually
 # DID. This is the gate's substrate; text is used only by the mandate model.
@@ -75,23 +75,11 @@ LAST_ASSISTANT_TEXT=$(
 # user entry carrying real human text (the same predicate godspeed_status uses
 # to avoid counting tool_result wrappers as user turns); everything after it is
 # this turn. Union, never `last`. (#917)
-LAST_TOOL_USES=$(
-	tail -n 600 "$TRANSCRIPT_PATH" 2>/dev/null |
-		jq -cs '
-      . as $all
-      | ([ $all
-           | to_entries[]
-           | select(.value.type == "user"
-               and (((.value.message.content // []) | map(select(.type == "text") | .text) | join("")) | length > 0))
-           | .key ] | last // -1) as $boundary
-      | [ $all[($boundary + 1):][]
-          | select(.type == "assistant" and (.message.role // "") == "assistant")
-          | (.message.content // [])[]
-          | select(.type == "tool_use")
-          | {name, input} ]
-    ' 2>/dev/null || echo "[]"
-)
-[[ -z "$LAST_TOOL_USES" || "$LAST_TOOL_USES" == "null" ]] && LAST_TOOL_USES="[]"
+#
+# ONE implementation, shared with --decide via godspeed_turn_tools. It returns
+# EXTRACTION_FAILED (never "[]") when the scan cannot run, and godspeed_decision
+# fails CLOSED on that. (#920)
+LAST_TOOL_USES=$(godspeed_turn_tools "$TRANSCRIPT_PATH")
 
 # Bail only when the turn has NEITHER text NOR actions. The old text-only guard
 # was a leftover of the text substrate: a tool_use-only final message (no text
