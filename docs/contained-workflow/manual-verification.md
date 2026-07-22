@@ -15,7 +15,7 @@ own them and are all executed and recorded in the closing story (4.3, #976).
 | MV-04 | `aoe send` reaches into a running container (control-plane ingress) | R-15 | later |
 | MV-05 | A broken container quarantines and recreates on `:stable`, zero loss | R-02, R-17 | Story 3.2+ |
 | MV-06 | A wedged/OOM-killed `claude` still flushed its transcript | R-15 | later |
-| MV-07 | A secret added mid-session is usable with no container restart | R-13 | Story 1.5+ |
+| MV-07 | A secret added mid-session is usable with no container restart | R-13 | Story 1.5 (#965) |
 
 ---
 
@@ -133,3 +133,112 @@ If writes land uid-`0`/root-owned:
 | Date | Operator | Image digest / ID | `id -u` | `stat` result | PASS/FAIL | Notes |
 |------|----------|-------------------|---------|---------------|-----------|-------|
 | _pending_ | _pending_ | _pending_ | | | | Executed and recorded in closing story 4.3 (#976) |
+
+---
+
+## MV-07 — A secret added mid-session is usable with no container restart `[R-13]`
+
+**Goal.** Prove that a secret the host adds to `~/.secrets` **after** a session
+started is usable by a **newly-spawned command inside the running container**,
+with **no container restart** — the mid-session liveness of the read-only secrets
+mount (Dev Spec §5.5; architecture §3.5).
+
+**Why manual.** The docker-gated integration oracle
+(`tests/contained-workflow/test_secrets.py::test_secrets_readonly`, IT-02) proves
+the bind-mount is ro and that a host-added file is visible via `docker exec` in a
+bare container. This procedure proves the same liveness through the **real aoe
+sandbox session** an agent runs in, and through a **path-modality consumer** the
+way the kit actually reads a secret — the end-user-visible outcome. It needs a
+live aoe session, so it cannot run in the pytest lane.
+
+### Preconditions
+
+- **aoe 1.13.0**, **rootful docker** — as MV-01.
+- Image built locally:
+  `make -C containers/oakandwave-workflow build` → `oakandwave-workflow:edge`.
+- A host `~/.secrets` dir that will be bind-mounted ro (the me-ful profile /
+  `20-secrets.toml` wires `~/.secrets` → `/home/ubuntu/.secrets`). For an
+  isolated run, point `OAW_SECRETS_DIR` (or the profile's `extra_volumes`) at a
+  throwaway dir so you never touch real secrets.
+
+### Procedure
+
+1. **Seed one secret present at launch** in the host secrets dir:
+
+   ```bash
+   mkdir -p /tmp/meful-secrets
+   printf 'boot-value\n' > /tmp/meful-secrets/AT_BOOT
+   ```
+
+2. **Launch a sandbox session** with that dir bind-mounted ro at the secrets
+   target (isolated profile, as MV-01; add the volume to the profile's
+   `extra_volumes` or pass it through):
+
+   ```bash
+   aoe -p meful-test add --sandbox --sandbox-image oakandwave-workflow:edge \
+     --launch /tmp/meful-ws
+   # ensure -v /tmp/meful-secrets:/home/ubuntu/.secrets:ro is in effect
+   ```
+
+3. **Confirm the at-boot secret is readable** inside the running container
+   (attach the session):
+
+   ```bash
+   cat /home/ubuntu/.secrets/AT_BOOT      # expect: boot-value
+   ```
+
+4. **Confirm the mount is read-only** (R-12) — an in-container write must FAIL:
+
+   ```bash
+   echo x > /home/ubuntu/.secrets/should_fail   # expect: Read-only file system
+   ```
+
+5. **Add a NEW secret ON THE HOST**, mid-session, with the container still
+   running (a separate host shell):
+
+   ```bash
+   printf 'live-add\n' > /tmp/meful-secrets/MID_SESSION
+   ```
+
+6. **Spawn a NEW command inside the SAME running container** (do NOT restart it)
+   and read the just-added secret — this is the liveness assertion:
+
+   ```bash
+   cat /home/ubuntu/.secrets/MID_SESSION   # expect: live-add
+   ```
+
+   **EXPECT:** `live-add` — the host-added file is live with no restart. A
+   "No such file or directory" is a **FAIL** (R-13 liveness violated).
+
+7. **(Optional) confirm the env-modality caveat.** If the mount carries a `.env`,
+   note that a value *added to `.env` after boot* is **not** seen by env-var
+   consumers until a re-source (architecture §3.5 consumer split) — this is
+   expected, not a failure. The R-13 liveness guarantee is for **path-modality**
+   (loose-file) consumers, which is what step 6 exercises.
+
+8. **Record** the result in the log below: date, operator, image digest/ID, the
+   step-3 read, the step-4 write-rejection, the step-6 read, and PASS/FAIL.
+
+### Cleanup
+
+```bash
+aoe -p meful-test remove <session-id>
+rm -rf /tmp/meful-secrets
+```
+
+### Failure handling
+
+- **Step 6 shows the file missing.** The bind-mount is not the live host dir —
+  inspect the mount: `docker inspect --format '{{json .Mounts}}' <container-id>`.
+  A `volume`/copy source instead of a host `bind` breaks liveness; a stale image
+  path or an over-eager copy in the bootstrap would too. Open a bug against
+  Story 1.5 (#965) with the `docker inspect` evidence.
+- **Step 4 write SUCCEEDS.** The mount is not ro — R-12 violated. Check the
+  fragment (`20-secrets.toml` must be `mode = "ro"`; the resolver rejects rw) and
+  the effective `-v …:ro` flag.
+
+### Result log
+
+| Date | Operator | Image digest / ID | step-3 read | step-4 write | step-6 read | PASS/FAIL | Notes |
+|------|----------|-------------------|-------------|--------------|-------------|-----------|-------|
+| _pending_ | _pending_ | _pending_ | | | | | Executed and recorded in closing story 4.3 (#976) |
