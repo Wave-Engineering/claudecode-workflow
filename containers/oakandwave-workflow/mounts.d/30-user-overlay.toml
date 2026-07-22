@@ -1,0 +1,51 @@
+# 30-user-overlay.toml — the user-environment overlay (Dev Spec §5.3, D4a).
+#
+# The fourth state axis: the user's OWN environment — their MCP servers, their
+# non-kit scripts, their discretionary dev tools. The kit ships an *extensible
+# base* (PC-4), so adopters compose here without touching a kit release. Three
+# mechanisms, by artifact type — enforced by mount_resolver.check_overlay_install:
+#
+#   compiled-binary -> in-container   (never symlinked across the libc boundary, R-10)
+#   script / config -> symlink        (portable across the boundary)
+#   mcp-fragment    -> additive       (composed with baked kit MCPs, never whole-file, R-09)
+#   toolbox         -> in-container   (durable, materialized by a declarative manifest, R-11)
+
+# --- Third-party / user MCP servers (R-09) -----------------------------------
+# Composes ADDITIVELY with the kit's own MCP registrations (disc-server,
+# sdlc-server, wtf-server, nerf-server, discord-watcher) which are BAKED at
+# stable image paths — baking kills the dangling-registration bug (a stale path
+# to a moved binary). We mount only an MCP *fragment*, never the whole
+# ~/.claude.json (which carries far more than MCP config). See docs/mcp-scoping.md.
+[[mount]]
+name = "mcp-fragment"
+layer = "user-overlay"
+artifact = "mcp-fragment"
+compose = "additive"
+mode = "ro"
+source = "~/.oaw/overlay/<major>/mcp.json"
+target = "/home/ubuntu/.oaw/overlay/mcp.json"
+
+# --- Discretionary dev-tool toolbox (R-11) -----------------------------------
+# A declarative manifest (mise / apt-list) an in-container installer materializes
+# into this durable dir. Decoupled from kit releases (updating ripgrep is not a
+# kit release), reproducible on a fresh box, user-owned.
+[[mount]]
+name = "toolbox"
+layer = "user-overlay"
+artifact = "toolbox"
+mode = "rw"
+source = "~/.oaw/toolbox/<major>"
+target = "/home/ubuntu/.oaw/toolbox"
+
+# --- User's non-kit shebang scripts (symlink-safe config) --------------------
+# ~/.local/bin is ~154 shebang scripts (symlink-safe) + ~26 ELF (hazard). This
+# mount carries the SCRIPT half; the bootstrap (Story 1.4) routes each entry with
+# mount_resolver.is_compiled_binary — ELF go in-container, shebangs symlink.
+[[mount]]
+name = "user-scripts"
+layer = "user-overlay"
+artifact = "script"
+install = "symlink"
+mode = "rw"
+source = "~/.oaw/overlay/<major>/local-bin"
+target = "/home/ubuntu/.oaw/overlay/local-bin"
