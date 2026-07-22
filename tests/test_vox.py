@@ -56,6 +56,23 @@ def _run(argv: list[str], env: dict[str, str], stdin: str | None = None) -> subp
     )
 
 
+def _poll(pred, timeout: float = 5.0, interval: float = 0.05):
+    """Return the first truthy value of pred() within `timeout`, else its last.
+
+    Playback is detached by default since #952, so vox returns before the player
+    runs; assertions that observe the player's side effects must poll rather than
+    read immediately.
+    """
+    import time
+
+    deadline = time.monotonic() + timeout
+    val = pred()
+    while not val and time.monotonic() < deadline:
+        time.sleep(interval)
+        val = pred()
+    return val
+
+
 @pytest.fixture()
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     """A minimal env that isolates ~/.config/vox to tmp and suppresses any real player.
@@ -229,7 +246,14 @@ def test_empty_message_errors(env, magic_provider, tmp_path):
 
 
 def test_tmpfile_is_cleaned_up_after_playback(env, magic_provider, tmp_path):
-    """When --output is NOT set, vox creates a tmp wav, plays it, then deletes it."""
+    """When --output is NOT set, vox synthesizes a tmp wav, plays it, then deletes
+    it — no leak.
+
+    Playback is DETACHED by default since #952, so vox returns before the player
+    finishes. This poll-based version verifies the same property (played, then
+    cleaned up) without assuming synchronous completion; the previous form read
+    the sentinel the instant vox returned, which now races the detached player.
+    """
     # Fixture player that records the audio path it received to a sentinel file.
     sentinel = tmp_path / "played-path"
     player = _write_executable(
@@ -244,10 +268,31 @@ printf '%s' "$1" > "{sentinel}"
     r = _run([str(VOX), "hello"], env=env)
     assert r.returncode == 0, r.stderr
 
-    played_path = sentinel.read_text()
+    # Wait for the detached player to record the path it was handed...
+    played_path = _poll(lambda: sentinel.read_text() if sentinel.exists() else "")
     assert played_path, "player sentinel empty — player did not run"
-    # After vox exits, the tmpfile trap should have removed the audio file.
-    assert not Path(played_path).exists(), f"tmpfile {played_path} was not cleaned up"
+    # ...then for the tmpfile to be removed (main + detached-subshell EXIT traps).
+    assert _poll(lambda: not Path(played_path).exists()), \
+        f"tmpfile {played_path} was not cleaned up"
+
+
+def test_fg_plays_synchronously(env, magic_provider, tmp_path):
+    """--fg blocks until playback finishes, so the player's side effects are
+    observable the instant vox returns (the pre-#952 default, now opt-in)."""
+    sentinel = tmp_path / "fg-played-path"
+    player = _write_executable(
+        tmp_path / "fg-recording-player.sh",
+        f"""#!/usr/bin/env bash
+printf '%s' "$1" > "{sentinel}"
+""",
+    )
+    env["VOX_PLAYER"] = str(player)
+    env["VOX_PROVIDER"] = str(magic_provider)
+
+    r = _run([str(VOX), "--fg", "hello"], env=env)
+    assert r.returncode == 0, r.stderr
+    # No poll: --fg is synchronous, so the sentinel is written before vox returns.
+    assert sentinel.read_text(), "player sentinel empty — --fg did not play synchronously"
 
 
 # ---------------------------------------------------------------------------

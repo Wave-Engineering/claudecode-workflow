@@ -201,7 +201,8 @@ usage() {
 
 		Options:
 		  --voice NAME       Voice name (exported as VOX_VOICE to the provider)
-		  --bg               Background playback (don't wait for audio to finish)
+		  --bg               Detached playback (the default; kept for compatibility)
+		  --fg               Block until playback finishes (VOX_FOREGROUND=1)
 		  --output, -o FILE  Write audio to FILE instead of playing
 		  --setup [FLAGS]    Interactive first-run setup; picks a provider
 		  -h, --help         Show this help
@@ -282,7 +283,13 @@ do_setup() {
 # --- Parse args ---------------------------------------------------------------
 
 VOICE="${VOX_VOICE:-}"
-BACKGROUND=false
+# Playback defaults to DETACHED so a caller's `timeout` around vox bounds
+# SYNTHESIS, not playback. Foreground (blocking) playback is opt-in via --fg or
+# VOX_FOREGROUND=1. --bg is retained as an explicit request for the (now-default)
+# detached mode, so existing callers keep working and it still overrides the env.
+# (#952)
+FOREGROUND=false
+[[ "${VOX_FOREGROUND:-0}" == "1" ]] && FOREGROUND=true
 OUTPUT_FILE=""
 args=()
 
@@ -297,7 +304,11 @@ while [[ $# -gt 0 ]]; do
 		shift 2
 		;;
 	--bg)
-		BACKGROUND=true
+		FOREGROUND=false
+		shift
+		;;
+	--fg)
+		FOREGROUND=true
 		shift
 		;;
 	--output | -o)
@@ -436,16 +447,45 @@ if [[ -z "$PLAYER" ]]; then
 	exit 1
 fi
 
-if $BACKGROUND; then
+# Bounded-playback prefix for the detached path. `timeout` is GNU coreutils /
+# BusyBox and is ABSENT on stock macOS — exactly like `flock`, which the block
+# below already guards. It must be guarded the same way: an unguarded
+# `timeout -k 5 60 afplay …` on macOS is `command not found`, swallowed by
+# `|| true`, so the now-DEFAULT detached path would play NO audio there. Also
+# feature-probe `-k`, since older BusyBox `timeout` lacks it. With no usable
+# timeout, play unbounded — the pre-fix foreground default was unbounded too, and
+# a detached player cannot wedge the caller regardless. (#952)
+TIMEOUT_PREFIX=""
+if command -v timeout >/dev/null 2>&1; then
+	if timeout -k 1 1 true >/dev/null 2>&1; then
+		TIMEOUT_PREFIX="timeout -k 5 60"
+	else
+		TIMEOUT_PREFIX="timeout 60"
+	fi
+fi
+
+# Playback. DETACHED by default (#952): a long body must not have its audio —
+# and thus its trailing sign-off, which is synthesized as part of the wav at the
+# `. This is <speaker>.` append above — cut mid-word when a caller wraps vox in a
+# `timeout`. Synthesis runs at ~1x realtime, so a long body eats the caller's
+# budget during synth and a foreground player then gets SIGTERM'd partway through
+# playback; the tail is the first thing lost. Detaching playback means the
+# caller's timeout bounds synth only. The detached player keeps its OWN bounded
+# timeout (when one is available — see TIMEOUT_PREFIX), so a stuck player is
+# still bounded, just not by the caller's budget. flock serialization is
+# preserved: vox_play wraps the real player invocation inside the detached
+# subshell, so concurrent agents still take the lock in turn (#895). --output
+# already exited above, so this path only runs when actually speaking.
+if $FOREGROUND; then
+	# shellcheck disable=SC2086
+	vox_play $PLAYER "$audio_out"
+else
 	bgfile="$(mktemp --suffix=.wav)"
 	cp "$audio_out" "$bgfile"
 	(
 		trap 'rm -f "$bgfile"' EXIT
 		# shellcheck disable=SC2086
-		vox_play timeout -k 5 60 $PLAYER "$bgfile" || true
+		vox_play $TIMEOUT_PREFIX $PLAYER "$bgfile" || true
 	) &>/dev/null &
 	disown
-else
-	# shellcheck disable=SC2086
-	vox_play $PLAYER "$audio_out"
 fi
