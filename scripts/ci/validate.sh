@@ -79,6 +79,12 @@ else
 	while IFS= read -r f; do
 		SCRIPTS+=("$f")
 	done < <(find "$REPO_DIR/scripts/ci" -name "*.sh" -type f 2>/dev/null)
+	# Container scripts (e.g. the oakandwave-workflow bootstrap). Executable OR
+	# *.sh; the is_shell_script filter below drops non-shell files. Without this,
+	# containers/**/*.sh would escape shellcheck entirely (config exists != works).
+	while IFS= read -r f; do
+		SCRIPTS+=("$f")
+	done < <(find "$REPO_DIR/containers" -type f \( -executable -o -name "*.sh" \) 2>/dev/null)
 	# Skill helper scripts (non-SKILL.md files in skill dirs)
 	for skill_dir in "$REPO_DIR"/skills/*/; do
 		for helper in "$skill_dir"/*; do
@@ -129,6 +135,11 @@ else
 	while IFS= read -r f; do
 		SCRIPTS+=("$f")
 	done < <(find "$REPO_DIR/scripts" -type f \( -executable -o -name "*.sh" \) 2>/dev/null)
+	# Container scripts (e.g. the oakandwave-workflow bootstrap) — mirror the
+	# selector used above so shfmt covers the same tree as the linter.
+	while IFS= read -r f; do
+		SCRIPTS+=("$f")
+	done < <(find "$REPO_DIR/containers" -type f \( -executable -o -name "*.sh" \) 2>/dev/null)
 	# Skill helper scripts (non-SKILL.md files in skill dirs)
 	for skill_dir in "$REPO_DIR"/skills/*/; do
 		for helper in "$skill_dir"/*; do
