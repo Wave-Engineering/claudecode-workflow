@@ -15,7 +15,13 @@ the digest promoted), R-24 (OCI labels + registry permissions + cosign signature
 
 Pipeline under verification: `.github/workflows/oakandwave-workflow-image.yml`
 → `scripts/ci/build-oakandwave-image.sh` (build + label + push, emits the digest)
-→ `scripts/ci/sign-oakandwave-image.sh` (cosign sign + syft SBOM attest).
+→ `scripts/ci/sign-oakandwave-image.sh` (cosign sign + syft SBOM attest)
+→ `scripts/ci/throwaway-ci-ring.sh` (the `smoke` job — this runbook's §1–§5,
+automated, plus install-from-zero and the smoke suite; a red blocks the digest).
+
+The steps below are the manual companion to that ring: run them by hand to audit
+a candidate the operator wants to inspect directly. The ring performs the same
+provenance checks (labels, permissions, signature, SBOM) *before* it smokes.
 
 ---
 

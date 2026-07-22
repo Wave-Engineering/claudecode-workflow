@@ -35,6 +35,11 @@ jobs:
     env:
       IMAGE: ghcr.io/${{ github.repository_owner }}/oakandwave-workflow
       TAG: edge
+    # Expose the pushed digest so the throwaway-CI ring (smoke) pulls the exact
+    # bytes this job built + signed — the digest tested is the digest promoted
+    # (R-23), never a moving tag.
+    outputs:
+      digest_ref: ${{ steps.build.outputs.digest_ref }}
     steps:
       - uses: actions/checkout@v4
 
@@ -66,3 +71,41 @@ jobs:
         env:
           DIGEST_REF: ${{ steps.build.outputs.digest_ref }}
         run: ./scripts/ci/sign-oakandwave-image.sh
+
+  # Throwaway-CI ring (Story 2.2, E2E-01 — Dev Spec §6.3, R-05/R-23/R-24). Pulls
+  # the candidate BY DIGEST from ghcr, verifies labels/permissions/signature/SBOM,
+  # installs from zero, runs the smoke suite, tears down. A red smoke — or any
+  # failed provenance check — fails this job and blocks the digest from promotion.
+  # It never rebuilds locally: the digest tested is the digest the build job
+  # pushed and signed (R-23).
+  smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read # pull the candidate digest from ghcr
+    steps:
+      - uses: actions/checkout@v4 # the ring script + the smoke suite
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install smoke-suite dependencies
+        run: pip install pytest
+
+      - name: Throwaway-CI ring — verify provenance, install-from-zero, smoke
+        env:
+          DIGEST_REF: ${{ needs.build.outputs.digest_ref }}
+        run: ./scripts/ci/throwaway-ci-ring.sh
