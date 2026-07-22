@@ -85,8 +85,13 @@ throwaway-CI ring arrive in Phase 2 (Stories 2.1, 2.2).
 
 - **Kit MCP servers are not baked.** `./install` runs with `--no-mcps`: the kit's
   MCP servers install from private `Wave-Engineering/*` repos over the network,
-  which is non-hermetic and needs build-time credentials. Baking them (R-06/R-09)
-  is tracked with the mount-manifest / MCP-scoping work (Story 1.3, #963).
+  which is non-hermetic and needs build-time credentials. Story 1.3 (#963)
+  delivers the *scoping* half of R-09 — the mount manifest + resolver and the
+  additive composition of third-party/user MCPs (`mounts.d/`, `mount_resolver.py`).
+  Actually *baking* the kit's own MCP registrations into the image (the other
+  half of R-09) rides with the CI build (Story 2.1, #966), where build-time
+  private-repo credentials are already in play; the resolver already documents
+  the stable baked image paths those registrations target.
 - **Root-scoped runtimes.** The base installs `bun`/`node`/`uv`/`cargo` under
   `/root`, which the uid-1000 user cannot reach. The baked kit (skills, scripts,
   hooks) needs only `python3` + the system toolchain, so this does not affect the
