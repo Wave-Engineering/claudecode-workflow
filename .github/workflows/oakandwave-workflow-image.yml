@@ -1,0 +1,68 @@
+# oakandwave-workflow image — the Build stage of the contained-workflow pipeline
+# (DM-03, Story 2.1 / #966, Dev Spec §5.B).
+#
+#   build -> push to ghcr -> cosign sign -> syft SBOM -> stamp OCI labels
+#
+# The image *digest is the release* (R-05): everything versioned-with-the-release
+# is baked in, and CI stamps the provenance (semver / source / revision /
+# timestamp) plus a keyless cosign signature and a syft SBOM bound to the digest
+# (R-24). The throwaway-CI ring (Story 2.2, E2E-01) pulls that digest and verifies
+# labels/permissions/signature/SBOM before smoke — the digest tested is the digest
+# promoted (R-23).
+#
+# All build/sign logic lives in scripts/ci/*.sh (project rule: No Procedural Logic
+# in CI/CD YAML); the steps below only wire installer actions to those scripts.
+#
+# Trigger: merge to main and version tags rebuild the candidate; workflow_dispatch
+# allows a manual rebuild. It does NOT run on the kahuna integration branches, so
+# a wave never triggers a heavy push to ghcr.
+name: oakandwave-workflow image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write # keyless cosign (Fulcio/Rekor) via OIDC
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/oakandwave-workflow
+      TAG: edge
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # AOE_PULL_TOKEN (if provisioned) authenticates the cross-org base-image
+      # pull from ghcr.io/agent-of-empires; GITHUB_TOKEN pushes to this org.
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.AOE_PULL_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Build, label, and push the image
+        id: build
+        env:
+          OAKANDWAVE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: ./scripts/ci/build-oakandwave-image.sh
+
+      - name: Sign (cosign) + SBOM (syft) the digest
+        env:
+          DIGEST_REF: ${{ steps.build.outputs.digest_ref }}
+        run: ./scripts/ci/sign-oakandwave-image.sh
