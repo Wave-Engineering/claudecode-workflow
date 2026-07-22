@@ -34,6 +34,10 @@ bun.lock
 # Build output
 dist/
 
+# CI test reports (DM-05 JUnit / DM-06 coverage) — generated, uploaded as artifacts
+reports/
+.coverage
+
 # Pre-created worktrees for parallel agent execution
 .worktrees/
 
