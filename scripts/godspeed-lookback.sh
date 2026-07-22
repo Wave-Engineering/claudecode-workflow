@@ -610,8 +610,15 @@ _GODSPEED_GATED_PATH_RE='(sites/[^/]*prod[^/]*/|/production/|\.prod\.(ya?ml|json
 # ---------------------------------------------------------------------------
 # godspeed_gated_actions <tools_json>
 #
-# Echoes one line per gated action found (empty output = nothing gated).
+# Echoes one line per gated action found. Empty output means nothing gated —
+# and ONLY that: a payload it cannot read (malformed JSON, a non-array, an
+# array of non-objects, or the EXTRACTION_FAILED sentinel) emits a fail-closed
+# reason line instead of empty, so "I could not look" never renders as
+# "nothing found". (#950)
+#
 # <tools_json> is a JSON array of {name, input} from the last assistant turn.
+# Callers gate on non-empty output → STOP, so a fail-closed reason string is a
+# STOP by construction.
 # ---------------------------------------------------------------------------
 godspeed_gated_actions() {
 	local tools_json="${1:-}"
@@ -635,6 +642,47 @@ godspeed_gated_actions() {
 		printf 'godspeed: jq unavailable — action gate INERT this turn\n' >&2
 		return 0
 	}
+
+	# The payload must be a JSON array of objects whose `input` is itself an
+	# object (or absent). That is the exact shape the extraction below can read;
+	# anything else is treated as GATED. (#950)
+	#
+	# The defect: the extraction runs `jq ... 2>/dev/null || true`, so any input
+	# it cannot parse collapsed to empty `cmds`, and godspeed_decision reads empty
+	# as "nothing gated" — a fail-OPEN on the gate that fires every turn. Measured
+	# directly: `{not valid json` -> empty -> NOOP.
+	#
+	# The `.input` clause is NOT redundant with "array of objects". `.input` is
+	# indexed as `.input.command` / `.input.file_path`, which ERRORS on a string,
+	# number, boolean, or array `.input` — `//` catches null/false, not an
+	# indexing error. So `[{"name":"Bash","input":"git push --force"}]` is an
+	# array of objects, passes a top-level-only check, then crashes the
+	# extraction to empty. Worse, jq aborts the whole single pass, so a genuine
+	# force-push sharing the array with one bad sibling is missed too. Both were
+	# reproduced. (The reviewer's `(.input // {})` form would let `input:false`
+	# through — `//` replaces false — and it still crashes on `false.command`;
+	# `.input==null or (.input|type)=="object"` is exact.)
+	#
+	# This is the last layer of the #920 family. In production tools_json comes
+	# from godspeed_turn_tools, whose output is always well-formed — but this
+	# function is public, directly callable, and must not depend on an upstream
+	# guard it does not own. The check runs ONCE, at the contract boundary.
+	#
+	# Fail CLOSED, matching the EXTRACTION_FAILED convention above: an extraction
+	# that cannot read its input is not evidence of no gated action. `[]` is NOT
+	# caught — an empty array is a well-formed "nothing this turn" and stays a
+	# legitimate NOOP; `all(empty)` is vacuously true. Runs BEFORE the PCRE check
+	# on purpose: garbage input is a stronger, jq-only signal than a missing regex
+	# engine, and should fail closed even where PCRE is absent.
+	if ! printf '%s' "$tools_json" |
+		jq -e 'type == "array"
+		       and all(.[]; type == "object"
+		                    and (.input == null or (.input | type) == "object"))' \
+			>/dev/null 2>&1; then
+		printf 'malformed tool payload: not a JSON array of {input:object} — treated as gated (fail-closed)\n'
+		return 0
+	fi
+
 	_godspeed_require_pcre || {
 		printf 'godspeed: PCRE unavailable — action gate INERT this turn\n' >&2
 		return 0
