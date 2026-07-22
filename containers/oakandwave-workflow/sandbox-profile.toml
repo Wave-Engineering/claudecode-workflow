@@ -1,0 +1,56 @@
+# oakandwave-workflow — me-ful sandbox profile (Story 1.2, Plan #959).
+#
+# The ISOLATED aoe profile config that launches an agent on the
+# oakandwave-workflow image as uid-1000 (non-root) so files written to
+# bind-mounts land host-user-owned (bakerb) — the "me-ful" contract
+# (Dev Spec §5.1, R-04).
+#
+# ⚠️  ISOLATED PROFILE ONLY. Install this into a *dedicated* aoe profile, never
+#     the fleet's global config:
+#         aoe profile create meful-test
+#         install -m 600 containers/oakandwave-workflow/sandbox-profile.toml \
+#             ~/.config/agent-of-empires/profiles/meful-test/config.toml
+#     The me-ful ownership outcome is proven in an isolated profile (MV-01),
+#     NEVER against the live fleet's ~/.config/agent-of-empires/config.toml
+#     (Dev Spec §5.N#1). Pasting this into the global config would sandbox every
+#     fleet session — do not.
+#
+# ── me-ful mechanism (verified against aoe 1.13.0) ───────────────────────────
+#   Docker here is rootful with no userns remap, so a bind-mount write is owned
+#   by whatever uid the container runs as (TC-2). The uid-1000 identity is
+#   carried by the IMAGE, not by an aoe uid switch: Story 1.1's Dockerfile ends
+#   with `USER ubuntu` (uid 1000), and aoe launches that image without a
+#   `--user` override, so the session runs as uid-1000 `ubuntu` and writes land
+#   bakerb-owned on the host.
+#
+#   NOTE — aoe 1.13.0 has NO native [sandbox] uid/user/home_dir key. Its
+#   SandboxConfig schema is: auto_cleanup, container_runtime, default_image,
+#   default_terminal_mode, enabled_by_default, environment, extra_volumes,
+#   mount_ssh, selinux_relabel, volume_ignores (confirmed from the 1.13.0 binary
+#   and the resolved global config). The uid/user/home_dir keys below therefore
+#   DECLARE the identity contract the image must satisfy (and are forward-
+#   compatible for a future aoe that exposes a native uid override); aoe 1.13.0
+#   does not consume them. MV-01 is the authoritative runtime proof that writes
+#   land uid-1000 — the unit oracle proves only that this config is correct and
+#   aoe-loadable.
+
+[sandbox]
+# Launch every session in this profile in a container sandbox.
+enabled_by_default = true
+
+# The me-ful image. Its default USER is uid-1000 `ubuntu` (Story 1.1) — this is
+# the operative lever that runs the container as uid 1000 under aoe 1.13.0.
+default_image = "oakandwave-workflow:edge"
+
+# Rootful docker, no userns remap (TC-2): in-container uid == host uid.
+container_runtime = "docker"
+
+# ── Declared me-ful identity contract (R-04) ─────────────────────────────────
+# Reuse the base image's uid-1000 `ubuntu` user (TC-2); ownership works by uid
+# regardless of name. These are the values MV-01 confirms produce bakerb-owned
+# (uid 1000) writes on the host. See the header note on aoe 1.13.0 consumption:
+# under 1.13.0 these are declarative (the image USER delivers the uid); they are
+# kept here as the identity contract and for forward-compatibility.
+uid = 1000
+user = "ubuntu"
+home_dir = "/home/ubuntu"
