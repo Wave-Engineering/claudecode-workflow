@@ -83,7 +83,7 @@ flowchart LR
     s2["memory + settings.local<br/>~/.oaw/state/&lt;major&gt;/  (R-03)"]
   end
   subgraph ro["3 · read-only-secrets"]
-    s3["~/.secrets (ro)  ·  Story 1.5"]
+    s3["~/.secrets (ro)  ·  §3.5"]
   end
   subgraph ov["4 · user-environment overlay"]
     s4["MCP fragment (additive, R-09)<br/>toolbox (in-container, R-11)<br/>scripts (symlink, R-10)"]
@@ -99,7 +99,7 @@ flowchart LR
 |-------|-----------|-------------------|--------------|
 | Baked-in-image | Built by `./install` in the image; immutable per tag | *(none — in the image)* | R-06, R-09 |
 | Shared-mutable-rw | rw bind-mount, **sandbox-scoped** host source | `10-memory.toml` | R-03, R-20 |
-| Read-only secrets | ro bind-mount of the `~/.secrets` dir | `20-secrets.toml` *(Story 1.5)* | R-12, R-13 |
+| Read-only secrets | ro bind-mount of the `~/.secrets` dir (§3.5) | `20-secrets.toml` | R-12, R-13, R-14 |
 | User-environment overlay | additive / in-container / symlink, by artifact type | `30-user-overlay.toml` | R-09, R-10, R-11 |
 | Durable caches | rw bind-mount, major-partitioned | `40-durable-caches.toml` | §5.3 |
 
@@ -156,6 +156,46 @@ Kit binaries (from the image) win over the user overlay on `PATH`, so the RTE
 stays authoritative — the same digest-determines-behavior rule that the promotion
 gate depends on (Dev Spec §5.3).
 
+### 3.5 Secrets: the read-only mount (Story 1.5)
+
+The whole `~/.secrets` dir enters as **one read-only bind-mount**
+([`20-secrets.toml`](../../containers/oakandwave-workflow/mounts.d/20-secrets.toml))
+targeting `/home/ubuntu/.secrets` — the default the bootstrap's `OAW_SECRETS_DIR`
+already resolves (Dev Spec §5.5).
+
+- **Never baked (R-12).** The image *is* the release: it ships to every ring and
+  registry, so a secret baked into any layer would leak with the digest. Secrets
+  are provided **only** through this runtime mount; the image `RUN` deliberately
+  tolerates `check-deps`' missing-token advisory rather than baking the tokens
+  (Dockerfile §"Bake the kit"). The resolver enforces the ro half — a fragment
+  fat-fingered to `mode = "rw"` raises `R-12 VIOLATION` (`test_secrets_rw_fragment_is_rejected`).
+- **Live mid-session (R-13).** A bind-mount *is* the host dir, so a file the host
+  adds to `~/.secrets` after the container started is visible inside the running
+  container with no restart — proven by `test_secrets_readonly` (IT-02) and MV-07.
+- **Fail-loud on a missing required secret (R-14).** A values-free
+  `required.manifest` inside the dir (mounted with it) drives the bootstrap's
+  required-secret check (Story 1.4); a missing required secret aborts the boot.
+
+**Consumer split (the load-bearing nuance).** The mount is live, but *how* live
+depends on how a consumer reads a secret:
+
+| Modality | Source | Liveness |
+|----------|--------|----------|
+| **path** | a loose file `~/.secrets/<NAME>`, read on demand | **fully live** (R-13) — the consumer re-reads the file |
+| **env** | `~/.secrets/.env`, sourced once by `bootstrap.sh` at boot | snapshot-at-boot — a value added *after* boot reaches only path consumers until the next re-source |
+
+So **prefer file-path consumers** where liveness matters: `.env` is convenient
+but its values are frozen at the boot source. Loose files stay path-modality and
+are **never auto-exported** (SKETCHBOOK D6), which is also why they stay live.
+
+**Blast-radius tradeoff (open item).** Mounting the *whole* dir means every ring
+— and every process in the container, across the GitLab/GitHub IP boundary — sees
+*every* secret. That is a deliberate, flagged tradeoff for the foundation: it is
+one mount, ro, with no per-secret plumbing. **Least-privilege per-secret scoping
+is an open design item** (Dev Spec §5.5, §5.N); the `read-only-secrets` layer is
+exactly where a future scoped-secrets mechanism slots in without disturbing the
+rest of the taxonomy. See §5 for the carried open item.
+
 ## 4. Boundaries and invariants
 
 - **Stateless-container invariant (R-01/R-02).** The container filesystem is
@@ -178,10 +218,11 @@ gate depends on (Dev Spec §5.3).
   observation; it is confirmed against the full manifest in MV-02 (closing story
   4.3). The resolver's R-03 guard is the *static* half of that assurance; MV-02
   is the runtime half.
-- **Secrets blast-radius** (Dev Spec §5.5, §5.N): the whole-`~/.secrets`-dir
-  mount means every ring sees every secret, including across the GitLab/GitHub IP
-  boundary. Least-privilege scoping is an open design item; the manifest's
-  `read-only-secrets` layer is where a future scoped-secrets mechanism slots in.
+- **Secrets blast-radius** (Dev Spec §5.5, §5.N; documented in §3.5): the
+  whole-`~/.secrets`-dir mount means every ring sees every secret, including
+  across the GitLab/GitHub IP boundary. Least-privilege per-secret scoping is an
+  open design item; the manifest's `read-only-secrets` layer is where a future
+  scoped-secrets mechanism slots in without disturbing the taxonomy.
 - **AoE bootstrap seam** (Dev Spec §5.N#5): whether aoe respects the image
   `ENTRYPOINT` or `docker exec`s the agent directly determines where the
   bootstrap (Story 1.4) hooks the resolver in. The resolver is seam-agnostic — it
@@ -195,4 +236,6 @@ gate depends on (Dev Spec §5.3).
 | R-09 MCP additive scoping | `test_mounts.py::test_mcp_composes_additively`; IT-03 |
 | R-10 binaries in-container | `test_mounts.py::test_compiled_binary_installs_in_container`; IT-01/IT-03 |
 | R-11 declarative toolbox | `test_mounts.py::test_toolbox_is_durable_in_container`; IT-03 |
+| R-12 secrets never baked / ro | `test_secrets.py::{test_secrets_mount_is_readonly,test_secrets_rw_fragment_is_rejected,test_secrets_never_baked_into_image}`; `test_secrets_readonly` (IT-02) |
+| R-13 secret liveness | `test_secrets.py::test_secrets_readonly` (IT-02); MV-07 |
 | R-01 stateless / host-backed | this doc (DM-11); IT-03; MV-02 |
