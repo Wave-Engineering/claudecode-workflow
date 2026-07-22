@@ -1,0 +1,39 @@
+# 40-durable-caches.toml — durable caches (Dev Spec §5.3).
+#
+# The container filesystem is disposable; these caches survive `docker rm` on a
+# host-backed mount so a candidate recreate does not re-download the world. Each
+# is sandbox-scoped under ~/.oaw/cache/<major>/ (major-partitioned like state)
+# and, where the tool reads an env var, declares it so the bootstrap (Story 1.4)
+# can export it. These are caches, not shared durable STATE, so they are not
+# under the R-03 sandbox-scoped-memory guard — but keeping them off the live tree
+# is still the right hygiene.
+
+[[mount]]
+name = "cargo"
+layer = "durable-cache"
+mode = "rw"
+source = "~/.oaw/cache/<major>/cargo"
+target = "/home/ubuntu/.cargo"
+env = { CARGO_HOME = "/home/ubuntu/.cargo" }
+
+[[mount]]
+name = "go-mod-cache"
+layer = "durable-cache"
+mode = "rw"
+source = "~/.oaw/cache/<major>/go-mod"
+target = "/home/ubuntu/go/pkg/mod"
+env = { GOMODCACHE = "/home/ubuntu/go/pkg/mod" }
+
+[[mount]]
+name = "uv-cache"
+layer = "durable-cache"
+mode = "rw"
+source = "~/.oaw/cache/<major>/uv"
+target = "/home/ubuntu/.cache/uv"
+
+[[mount]]
+name = "ms-playwright"
+layer = "durable-cache"
+mode = "rw"
+source = "~/.oaw/cache/<major>/ms-playwright"
+target = "/home/ubuntu/.cache/ms-playwright"
