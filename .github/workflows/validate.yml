@@ -26,7 +26,22 @@ jobs:
           python-version: '3.12'
 
       - name: Install test dependencies
-        run: pip install pytest
+        run: pip install pytest pytest-cov
 
       - name: Run test suite (cc-workflow#795 — gate the pytest suite)
+        env:
+          # DM-05/DM-06 (Story 2.1, #966): emit JUnit + coverage into reports/.
+          CC_TEST_REPORTS_DIR: reports
         run: ./scripts/ci/test.sh
+
+      # Coverage is a COMPLETENESS SIGNAL, uploaded regardless of the test gate
+      # (if: always()) — a red suite still publishes its reports (R-06, DM-06).
+      - name: Upload JUnit + coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            reports/junit.xml
+            reports/coverage.xml
+          if-no-files-found: warn
