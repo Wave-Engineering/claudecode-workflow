@@ -41,10 +41,12 @@ fragment deterministically. Each file holds one or more `[[mount]]` tables.
 | file | layer | owner story |
 |------|-------|-------------|
 | `10-memory.toml` | shared-mutable-rw (memory + `settings.local.json`) | 1.3 (#963) |
+| `20-secrets.toml` | read-only-secrets (ro `~/.secrets` dir mount) | 1.5 (#965) |
 | `30-user-overlay.toml` | user-overlay (MCP fragment, toolbox, user scripts) | 1.3 (#963) |
 | `40-durable-caches.toml` | durable-cache (cargo, go-mod, uv, ms-playwright) | 1.3 (#963) |
 
-**`20-secrets.toml`** (the `read-only-secrets` layer — the ro `~/.secrets` dir
-mount) lands with **Story 1.5 (#965)**; the resolver already supports the
-`read-only-secrets` layer (and enforces `mode = "ro"`), so that story is a
-drop-in fragment, no resolver change.
+`20-secrets.toml` was a drop-in for Story 1.3's resolver: the
+`read-only-secrets` layer and its `mode = "ro"` enforcement (R-12) already
+existed, so Story 1.5 added only the fragment (no resolver change). The whole
+`~/.secrets` dir mounts ro; a host-added file is live mid-session (R-13) — see
+`architecture.md` §3.5 for the consumer split and blast-radius tradeoff.
