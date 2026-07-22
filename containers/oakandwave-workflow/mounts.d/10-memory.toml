@@ -1,0 +1,27 @@
+# 10-memory.toml — shared-mutable-rw memory (Dev Spec §5.3, R-03, R-20).
+#
+# The ONE rw seam into shared durable state. Its host source is sandbox-scoped
+# under ~/.oaw/state/<major>/ — NEVER the live-fleet ~/.claude/projects/*/memory
+# tree. mount_resolver.py fails LOUD (check_sandbox_scoped_memory) if a future
+# edit points this at ~/.claude: a broken :edge candidate must never gain write
+# access to the live fleet's memory. The <major> segment partitions the state
+# namespace so mixing majors is isolated, not corrupting (R-20).
+
+[[mount]]
+name = "memory"
+layer = "shared-mutable-rw"
+mode = "rw"
+sandbox_scoped = true
+source = "~/.oaw/state/<major>/memory"
+target = "/home/ubuntu/.claude/projects/_sandbox/memory"
+
+# settings.local.json — the genuinely-shared knobs (permissions / env / identity).
+# settings.json (hook wiring) is BAKED in the image (versioned); Claude Code
+# merges the two. This half is host-backed and sandbox-scoped like memory.
+[[mount]]
+name = "settings-local"
+layer = "shared-mutable-rw"
+mode = "rw"
+sandbox_scoped = true
+source = "~/.oaw/state/<major>/settings.local.json"
+target = "/home/ubuntu/.claude/settings.local.json"
