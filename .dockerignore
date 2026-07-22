@@ -1,0 +1,18 @@
+# Build-context trimming for containers/oakandwave-workflow/Dockerfile
+# (the repo root is the build context; `./install` needs skills/, scripts/,
+# src/, config/, assets/, install, deps.json, mcps.json — do NOT exclude those).
+
+.git
+.github
+.gitlab-ci.yml
+.claude
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+dist
+reports
+node_modules
+*.png
+tests
+sdlc-dashboard
+CHANGELOG.md
