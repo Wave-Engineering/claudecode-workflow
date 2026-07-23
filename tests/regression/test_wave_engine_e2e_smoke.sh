@@ -23,6 +23,7 @@ set -uo pipefail
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 SETTINGS="$REPO_DIR/config/settings.template.json"
 
+
 FAILS=0
 fail() {
 	echo "  [FAIL] $*"
@@ -53,6 +54,14 @@ fi
 
 FIX="$(mktemp -d)"
 trap 'rm -rf "$FIX"' EXIT
+
+# FlightDeck emit isolation (#947 defect 3): the REAL CLI this harness drives
+# emits FlightDeck events as a side effect. Without isolation they land in the
+# operator's durable buffer (~/.claude/status/events.jsonl) and ship to the LIVE
+# deck as fake "e2e-smoke" campaigns — exactly the test residue #947 found in the
+# closed lane. Point the buffer into the throwaway fixture and never ship.
+export FLIGHTDECK_EVENTS_PATH="$FIX/flightdeck-events.jsonl"
+unset FLIGHTDECK_INGEST_URL
 # wave-status resolves its root via `git rev-parse` — the fixture must be a repo.
 git -C "$FIX" init -q
 git -C "$FIX" config user.email smoke@example.com

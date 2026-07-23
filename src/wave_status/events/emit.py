@@ -53,6 +53,10 @@ __all__ = [
 _UNSET = object()
 
 # Map the ergonomic snake_case emit() kwargs to the schema's camelCase keys.
+# ``activity_type`` and ``host`` (#947) are additive convention fields — the
+# schema's ``additionalProperties: true`` carries them; both validators ignore
+# unknown keys. ``activityType: session`` marks presence (never a campaign card);
+# ``host`` is the emitting machine, distinct from ``agent`` (Dev-Name).
 _FIELD_KEYS: dict[str, str] = {
     "wave": "wave",
     "phase": "phase",
@@ -66,6 +70,8 @@ _FIELD_KEYS: dict[str, str] = {
     "action": "action",
     "label": "label",
     "detail": "detail",
+    "activity_type": "activityType",
+    "host": "host",
 }
 
 
@@ -245,6 +251,8 @@ def emit(
     action: str | None = None,
     label: str | None = None,
     detail: object = None,
+    activity_type: str | None = None,
+    host: str | None = None,
     buffer: Path | None = None,
     ship_now: bool = True,
 ) -> dict | None:
@@ -262,7 +270,7 @@ def emit(
         "wave": wave, "phase": phase, "flight": flight, "agent": agent,
         "log_ref": log_ref, "concern_kind": concern_kind, "source": source,
         "metric": metric, "unit": unit, "action": action, "label": label,
-        "detail": detail,
+        "detail": detail, "activity_type": activity_type, "host": host,
     }
     for snake, val in local.items():
         if val is not None:
@@ -317,6 +325,7 @@ def _build_arg_fields(args) -> dict:
     for name in (
         "wave", "phase", "flight", "agent", "log_ref", "concern_kind",
         "source", "metric", "unit", "action", "label", "detail",
+        "activity_type", "host",
     ):
         val = getattr(args, name, None)
         if val is not None:
@@ -367,6 +376,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--action", default=None)
     p.add_argument("--label", default=None)
     p.add_argument("--detail", default=None)
+    p.add_argument("--activity-type", dest="activity_type", default=None,
+                   help="convention field: campaign|float|session (#947)")
+    p.add_argument("--host", default=None,
+                   help="emitting host — distinct from --agent (Dev-Name)")
     p.add_argument("--no-ship", dest="ship_now", action="store_false", default=True)
     args = p.parse_args(argv)
 
