@@ -12,9 +12,9 @@ own them and are all executed and recorded in the closing story (4.3, #976).
 | MV-01 | Files land `bakerb`-owned under the me-ful config (isolated profile) | R-04 | Story 1.2 (#962) |
 | MV-02 | Live `~/.claude` not exposed under the full custom mount set | R-01, R-03 | Story 1.3+ |
 | MV-03 | Network egress reaches scream-hole / discord / github from inside | R-05 | later |
-| MV-04 | `aoe send` reaches into a running container (control-plane ingress) | R-15 | later |
+| MV-04 | `aoe send` reaches into a running container (control-plane ingress) | R-15 | Story 3.1 (#970) |
 | MV-05 | A broken container quarantines and recreates on `:stable`, zero loss | R-02, R-17 | Story 3.2+ |
-| MV-06 | A wedged/OOM-killed `claude` still flushed its transcript | R-15 | later |
+| MV-06 | A wedged/OOM-killed `claude` still flushed its transcript | R-15 | Story 3.1 (#970) |
 | MV-07 | A secret added mid-session is usable with no container restart | R-13 | Story 1.5 (#965) |
 
 ---
@@ -241,4 +241,196 @@ rm -rf /tmp/meful-secrets
 
 | Date | Operator | Image digest / ID | step-3 read | step-4 write | step-6 read | PASS/FAIL | Notes |
 |------|----------|-------------------|-------------|--------------|-------------|-----------|-------|
+| _pending_ | _pending_ | _pending_ | | | | | Executed and recorded in closing story 4.3 (#976) |
+
+---
+
+## MV-04 — `aoe send` reaches into a running container (control-plane ingress) `[R-15]`
+
+**Goal.** Prove the host can reach a **control-plane message** into a *running*
+sandbox session — `aoe send <session> "<text>"` is delivered to the agent inside
+the container. This is the ingress the flight surgeon's remediation and the
+quarantine step (Story 3.2, #971) ride: the probe *detects* from outside by
+reading the transcript (R-15, no ingress needed), but nudging or stopping a
+wedged agent needs a proven host→container control path (Dev Spec TC-7 / §5.N#5 —
+the AoE bootstrap/ingress seam is UNPROVEN).
+
+**Why manual.** The surgeon's *detection* is unit-proven
+(`tests/contained-workflow/test_surgeon.py`) and reads only the host-backed
+transcript — it never sends into the container. But whether `aoe send` traverses
+the host↔container boundary at all is a live aoe + docker property (no automated
+harness can stand up a real sandbox session in the pytest lane).
+
+### Preconditions
+
+- **aoe 1.13.0**, **rootful docker** — as MV-01.
+- Image built locally:
+  `make -C containers/oakandwave-workflow build` → `oakandwave-workflow:edge`.
+- An isolated aoe profile (as MV-01) so no fleet session is touched.
+
+### Procedure
+
+1. **Launch a sandbox session** on the image in the isolated profile:
+
+   ```bash
+   aoe -p meful-test add --sandbox --sandbox-image oakandwave-workflow:edge \
+     --launch /tmp/meful-ws
+   ```
+
+2. **Note the session id** and confirm it is `running` (or `idle`, i.e. up):
+
+   ```bash
+   aoe -p meful-test list --json | jq -r '.[] | "\(.id)\t\(.title)"'
+   aoe -p meful-test status -v
+   ```
+
+3. **Send a control-plane message** from the host into that session:
+
+   ```bash
+   aoe -p meful-test send <session-id> "flight-surgeon ping: reply PONG"
+   ```
+
+4. **Confirm the message was delivered** — the agent received the text (visible
+   in the attached TUI, or as a new user-turn in the session's **host-backed
+   transcript** the surgeon reads):
+
+   ```bash
+   # from the host, tail the session's host-backed .jsonl and look for the ping
+   python3 scripts/flight-surgeon/surgeon.py --live \
+     --transcripts-root ~/.claude/projects   # locates the transcript path
+   ```
+
+   **EXPECT:** the sent text appears as a new user turn in the transcript (and/or
+   the agent reacts). A "session not found" / no-delivery is a **FAIL** — the
+   host→container control path is not available, and Story 3.2's active
+   remediation must fall back to a docker-level stop (`docker stop <cid>`) rather
+   than an in-band `aoe send`.
+
+5. **Record** the result: date, operator, image digest/ID, the send command's
+   exit, whether the text landed in the transcript, and PASS/FAIL.
+
+### Cleanup
+
+```bash
+aoe -p meful-test remove <session-id>
+```
+
+### Failure handling
+
+- **`aoe send` errors or the text never lands.** Capture the container id and
+  aoe's log (`aoe logs`), and confirm the container is up
+  (`docker inspect --format '{{.State.Status}}' <cid>`). A missing ingress path is
+  the §5.N#5 seam resolving to "no in-band ingress" — record it and route Story
+  3.2 to the docker-level stop path. Open a note against Story 3.2 (#971).
+
+### Result log
+
+| Date | Operator | Image digest / ID | `aoe send` exit | landed in transcript? | PASS/FAIL | Notes |
+|------|----------|-------------------|-----------------|-----------------------|-----------|-------|
+| _pending_ | _pending_ | _pending_ | | | | Executed and recorded in closing story 4.3 (#976) |
+
+---
+
+## MV-06 — A wedged/OOM-killed `claude` still flushed its transcript `[R-15]`
+
+**Goal.** Prove the surgeon's core assumption: when a `claude` process is
+**hard-killed** (SIGKILL / OOM) inside a running container, the host-backed
+`.jsonl` transcript still reflects work up to (near) the failure boundary — so the
+host-side probe can read it and classify the container. This is the **F1
+transcript-flush keystone** (Dev Spec §5.N#2).
+
+**Why manual.** It needs a real container, a real running agent, and a real
+hard-kill; the transcript-flush behaviour of the harness under SIGKILL cannot be
+exercised in the pytest lane. The surgeon's *parsing* of a truncated tail **is**
+unit-proven (`test_read_transcript_tolerates_a_truncated_tail`) — this procedure
+proves the upstream fact that a hard-kill leaves a *usable* transcript at all.
+
+**Fail-safe note.** The surgeon is **fail-safe** with respect to this probe: if a
+hard-kill loses the last turn, the transcript simply stops growing *earlier*, so
+the probe detects the stall **sooner**, never misses it. A lost last-turn cannot
+turn a broken container into a "healthy" verdict. Operator field experience (many
+hard-kills, never a flush problem) indicates this is likely-ok; this procedure
+confirms it and records the boundary behaviour.
+
+### Preconditions
+
+- **aoe 1.13.0**, **rootful docker** — as MV-01.
+- Image built locally:
+  `make -C containers/oakandwave-workflow build` → `oakandwave-workflow:edge`.
+- An isolated aoe profile (as MV-01).
+
+### Procedure
+
+1. **Launch a sandbox session** on the image (isolated profile) and give the agent
+   a small task so the transcript is actively growing:
+
+   ```bash
+   aoe -p meful-test add --sandbox --sandbox-image oakandwave-workflow:edge \
+     --launch /tmp/meful-ws
+   aoe -p meful-test send <session-id> "run: for i in 1 2 3; do echo $i; sleep 2; done"
+   ```
+
+2. **Confirm the transcript is growing** on the host (record its size/last line):
+
+   ```bash
+   python3 scripts/flight-surgeon/surgeon.py --live --transcripts-root ~/.claude/projects
+   # note the resolved transcript path P from the summary, then:
+   wc -l "$P"; tail -1 "$P"
+   ```
+
+3. **Hard-kill the in-container `claude` process** (SIGKILL — simulate a wedge/OOM,
+   NOT a graceful stop):
+
+   ```bash
+   cid=$(docker ps --filter name=<session> --format '{{.ID}}')
+   docker exec "$cid" bash -lc 'pkill -9 -f claude || kill -9 $(pgrep -o claude)'
+   # (or, to simulate OOM at the container level: docker kill --signal=KILL "$cid")
+   ```
+
+4. **Read the transcript from the HOST** (the container may be dead) and confirm
+   it retained work up to near the kill boundary:
+
+   ```bash
+   wc -l "$P"; tail -3 "$P"
+   ```
+
+   **EXPECT:** the transcript still parses and reflects the work performed before
+   the kill (the last one or two turns may be absent — that is acceptable and
+   fail-safe). A **completely empty or unparseable** transcript after real work
+   was done is a **FAIL** (the flush keystone does not hold; escalate).
+
+5. **Confirm the surgeon classifies it** — with the process dead the session goes
+   `stopped`/`error`, or if aoe still reports `running` the flat transcript trips
+   the stall after the threshold:
+
+   ```bash
+   python3 scripts/flight-surgeon/surgeon.py --live --transcripts-root ~/.claude/projects
+   ```
+
+   **EXPECT:** the container is not reported healthy-and-progressing — either a
+   non-running status, or (if still `running`) a stall once N minutes elapse.
+
+6. **Record** the result: date, operator, image digest/ID, the pre-kill and
+   post-kill line counts, whether the transcript remained parseable, the surgeon's
+   verdict, and PASS/FAIL.
+
+### Cleanup
+
+```bash
+aoe -p meful-test remove <session-id>
+```
+
+### Failure handling
+
+- **Transcript empty/unparseable after a hard-kill.** The flush keystone
+  (§5.N#2) does not hold for this harness/kill mode — capture the kill signal, the
+  container's last logs (`docker logs <cid>`), and the transcript bytes, and open a
+  bug against Story 3.1 (#970). The surgeon's stall path still fires (the
+  transcript stops growing), so detection is not lost — but the boundary evidence
+  is, which this procedure exists to catch.
+
+### Result log
+
+| Date | Operator | Image digest / ID | pre-kill lines | post-kill lines | parseable? | surgeon verdict | PASS/FAIL |
+|------|----------|-------------------|----------------|-----------------|------------|-----------------|-----------|
 | _pending_ | _pending_ | _pending_ | | | | | Executed and recorded in closing story 4.3 (#976) |
