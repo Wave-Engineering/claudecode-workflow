@@ -142,13 +142,16 @@ WORKDIR ${KIT_SRC}
 # under --no-mcps — the remainder are runtime-only items check-deps can never see
 # at build time: the secret tokens (slack-bot-token, discord-bot-token; never
 # baked — R-12, provided at runtime via the ro ~/.secrets mount) and any
-# host-specific hook path in settings.template.json. The tolerance greps the
-# check-deps SUMMARY sentinel, which fires on ANY missing-dep count — it does not
-# distinguish which deps, so today's expected-missing items (the two secrets + the
-# host hook) are tolerated alongside anything else check-deps would report
-# (tightening to a per-dep whitelist tracked in #1016). The real guarantees: a
-# genuine install error aborts under set -euo pipefail BEFORE check-deps (sentinel
-# absent → build fails), and the positive assertions below cover the kit AND all
+# host-specific hook path in settings.template.json. The tolerance FIRST greps the
+# check-deps SUMMARY sentinel (a non-zero rc that ISN'T the advisory is a genuine
+# install error → build fails), THEN pipes the advisory through
+# `assert-only-expected-deps-missing.sh`, which fails the build if ANY missing dep
+# is outside the expected-missing whitelist (the two secret tokens + the runtime-
+# installed wtf-server hook). So a real regression — gh/jq/python3/curl/git going
+# missing — can no longer hide behind the content-agnostic sentinel (#1016). The
+# real guarantees: a genuine install error aborts under set -euo pipefail BEFORE
+# check-deps (sentinel absent → build fails), the whitelist gate rejects any
+# unexpected missing dep, and the positive assertions below cover the kit AND all
 # five MCP servers.
 #
 # Pre-create ~/.claude.json ({} is augmented in place): the two jq-registering
@@ -164,6 +167,7 @@ RUN set +e; \
 	if [ "$rc" -ne 0 ]; then \
 		printf '%s\n' "$out" | grep -q "required dependency/dependencies missing" \
 			|| { echo "install failed (not the dependency advisory) — rc=$rc"; exit "$rc"; }; \
+		printf '%s\n' "$out" | ./scripts/ci/assert-only-expected-deps-missing.sh; \
 	fi; \
 	test -d "$HOME/.claude/skills"; \
 	test -n "$(find "$HOME/.claude/skills" -name SKILL.md -print -quit)"; \
