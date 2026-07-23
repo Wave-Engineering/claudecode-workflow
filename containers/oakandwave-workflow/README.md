@@ -81,6 +81,25 @@ Promotion is a digest retag (`:edge → :stable`), never a rebuild — the diges
 tested is the digest promoted (R-07/R-23). The build/push/sign pipeline and the
 throwaway-CI ring arrive in Phase 2 (Stories 2.1, 2.2).
 
+## Fleet adoption (Story 2.4)
+
+The fleet adopts `:stable` **per-agent, at container-recreate** — never
+mid-session, never a synchronized flip (R-08). At *its own* recreate boundary an
+agent runs `scripts/ci/adopt-stable.sh`, which resolves the moving `:stable` tag
+to its immutable digest + version and asks the unit-tested decision module
+(`adoption.py`) whether to adopt:
+
+- **same-major minor/patch** → adopt at recreate (safe by same-major compat,
+  R-18; an updated and a not-yet-updated agent coexist over one
+  `~/.oaw/state/<major>/` namespace);
+- **already current** → no-op (no redundant recreate);
+- **major cross** → held by default — an opt-in, deliberate cross (§5.8), never
+  automatic (`ALLOW_MAJOR_CROSS=true` opts in).
+
+A running container is pinned by digest, so a `:stable` retag can never reach it;
+only the next recreate resolves the tag. Rollback is a repoint at the prior digest
+— the wrapper keeps it in `~/.oaw/adoption/rollback` (§5.6).
+
 ## Deferred in this story
 
 - **Kit MCP servers are not baked.** `./install` runs with `--no-mcps`: the kit's
