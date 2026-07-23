@@ -13,7 +13,7 @@ gathers signals and applies an already-tested plan:
 |---------|--------------------------|------------------|
 | Build + provenance labels | `oakandwave-oci-labels.sh` | `scripts/ci/build-oakandwave-image.sh` |
 | Dogfood launch args | `containers/oakandwave-workflow/profiles.py` | `scripts/ci/dogfood-cutover.sh` |
-| Soak accrual | `containers/oakandwave-workflow/soak_ledger.py` | (surgeon-driven) |
+| Soak accrual | `containers/oakandwave-workflow/soak_ledger.py` | manual/periodic — NOT yet surgeon-automatic (#1008) |
 | Health verdict | `scripts/flight-surgeon/surgeon.py` | `scripts/flight-surgeon/surgeon.py --live` |
 | Promotion gate + retag | `containers/oakandwave-workflow/promotion_gate.py` | `scripts/ci/promote-oakandwave-image.sh` |
 | Per-agent adoption | `containers/oakandwave-workflow/adoption.py` | `scripts/ci/adopt-stable.sh` |
@@ -85,18 +85,18 @@ make -C containers/oakandwave-workflow verify
 
 Cut the OaW dev team onto `:edge` in the **dogfood** profile (skills overlay OFF,
 image-only — the profile the gate trusts, R-21) with the flight surgeon watching.
-Clean work accrues soak in FlightDeck; a broken candidate is caught and held.
+Clean work is meant to accrue soak (via `soak_ledger.py`; wiring the surgeon to feed it automatically is tracked in #1008 — until then, run `soak_ledger.py` periodically by hand), and a broken candidate is caught and held.
 
 ```bash
 # 1) PLAN (default): prints the exact `aoe add` line per workspace + the surgeon
 #    watch command, launches NOTHING.
 EDGE_REF=oakandwave-workflow:edge \
-  DOGFOOD_WORKSPACES="/path/to/ws1 /path/to/ws2" \
+  CUTOVER_WORKSPACES="/path/to/ws1 /path/to/ws2" \
   scripts/ci/dogfood-cutover.sh
 
 # 2) APPLY (deliberate, per-cutover go — this cuts LIVE agents onto the candidate):
 DOGFOOD_CUTOVER_APPLY=true EDGE_REF=oakandwave-workflow:edge \
-  DOGFOOD_WORKSPACES="/path/to/ws1 /path/to/ws2" \
+  CUTOVER_WORKSPACES="/path/to/ws1 /path/to/ws2" \
   scripts/ci/dogfood-cutover.sh
 ```
 

@@ -4,8 +4,9 @@
 #
 # This is the mechanical entrypoint for the dogfood cutover (§4.3): launch each
 # target workspace as a dogfood-profile container on :edge, and start the flight
-# surgeon watching them so clean work accrues soak (soak_ledger.py) and a broken
-# candidate is caught (surgeon.py). The three pieces it composes are already
+# surgeon watching them so a broken candidate is caught (surgeon.py). (Soak accrual
+# via soak_ledger.py is NOT yet auto-fed by the surgeon — a manual/periodic step
+# until #1008 wires it.) The three pieces it composes are already
 # unit-proven; this wrapper only *plans* and — under an explicit operator apply —
 # *applies* the launches.
 #
@@ -33,8 +34,9 @@
 #                       (required — the OaW dev team's working trees).
 #   OAW_MAJOR           the kit major for the dogfood profile's <major> mounts
 #                       (default 1).
-#   SOAK_LEDGER         the FlightDeck soak ledger the surgeon/accrual write
-#                       (default ~/.oaw/soak/ledger.jsonl) — the gate reads this.
+#   OAW_SOAK_LEDGER     the FlightDeck soak ledger the gate reads (default
+#                       ~/.oaw/soak/ledger.jsonl). NOTE: nothing here writes it yet —
+#                       auto-accrual (surgeon→ledger) is tracked in #1008.
 #   SURGEON_TRANSCRIPTS_ROOT  root the surgeon resolves host-backed transcripts
 #                       under (default ~/.claude/projects).
 #   DOGFOOD_CUTOVER_APPLY  "true" ⇒ actually launch (operator go); default false ⇒
@@ -49,7 +51,7 @@ SURGEON_PY="$REPO_DIR/scripts/flight-surgeon/surgeon.py"
 
 EDGE_REF="${EDGE_REF:-ghcr.io/wave-engineering/oakandwave-workflow:edge}"
 OAW_MAJOR="${OAW_MAJOR:-1}"
-SOAK_LEDGER="${SOAK_LEDGER:-$HOME/.oaw/soak/ledger.jsonl}"
+OAW_SOAK_LEDGER="${OAW_SOAK_LEDGER:-$HOME/.oaw/soak/ledger.jsonl}"
 SURGEON_TRANSCRIPTS_ROOT="${SURGEON_TRANSCRIPTS_ROOT:-$HOME/.claude/projects}"
 APPLY="${DOGFOOD_CUTOVER_APPLY:-false}"
 
@@ -93,7 +95,7 @@ surgeon_cmd=(
 	--fail-on-quarantine
 )
 echo "==> flight surgeon watch command: ${surgeon_cmd[*]}"
-echo "    soak ledger (clean work accrues here; the gate reads it): $SOAK_LEDGER"
+echo "    soak ledger (the gate reads it; accrual NOT yet auto-wired — #1008): $OAW_SOAK_LEDGER"
 
 if [[ "$APPLY" != "true" ]]; then
 	echo "==> [plan] DOGFOOD_CUTOVER_APPLY!=true — planned $(echo "$CUTOVER_WORKSPACES" | wc -w) launch(es), launched 0, started no surgeon."
