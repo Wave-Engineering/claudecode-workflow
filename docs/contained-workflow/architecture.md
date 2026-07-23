@@ -207,9 +207,19 @@ rest of the taxonomy. See §5 for the carried open item.
 - **Portability (PC-3).** No OaW-org specifics (cephfs paths, secret contents)
   are baked into the image; org infrastructure is a run-layer overlay only. The
   manifest's host sources are the run-layer seam.
-- **Major-partitioned namespace (R-20).** `~/.oaw/state/<major>/` and
-  `~/.oaw/cache/<major>/` are keyed by kit major, so mixing majors is isolated,
-  not corrupting — the SemVer compatibility contract (Dev Spec §5.8).
+- **Major-partitioned namespace + within-major compat (R-18/R-20).**
+  `~/.oaw/state/<major>/` and `~/.oaw/cache/<major>/` are keyed by kit major, so
+  mixing majors is isolated, not corrupting (R-20). *Within* a major, all minors
+  resolve the ONE namespace and shared-state changes are **additive +
+  forward-tolerant** (R-18): a new minor may add a field but never drop or
+  redefine one, so an updated and a not-yet-updated agent interoperate over the
+  same tree — the old reader ignores fields it does not know; the new reader
+  defaults fields the old writer never wrote. A breaking shared-state change is
+  therefore a major bump (which lands in a fresh namespace), not a silent minor —
+  the SemVer compatibility contract (Dev Spec §5.8), and the reason no shared-state
+  migration engine is built (§1.5). Canonical oracle:
+  `tests/contained-workflow/test_compat.py` (`test_namespace_partition` +
+  `test_within_major_change_is_additive_and_forward_tolerant`).
 
 ## 5. Open items carried by this component
 
