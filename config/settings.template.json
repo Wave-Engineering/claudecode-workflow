@@ -56,7 +56,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/bakerb/.local/share/wtf-server/hooks/wtf-post-tool-use.sh"
+            "command": "~/.local/share/wtf-server/hooks/wtf-post-tool-use.sh"
           }
         ]
       },
