@@ -1,0 +1,22 @@
+{
+  "$comment": "The versioned shared-state schema — Story 3.4 (#973), Plan #959, Dev Spec §5.8 (R-18/R-19/R-20). This file IS the versioned contract the mechanical compat-break guard (compat_guard.py) reasons over. `schema_version.major` moves with the kit major and partitions the durable-state namespace ~/.oaw/state/<major>/ (R-20). WITHIN a major, every change to `fields` MUST be additive + forward-tolerant (R-18): you may ADD an optional field, but removing a field, changing a field's type, or tightening an optional field to required is a BREAKING change that FORCES a major bump. The guard blocks a silent minor ship of such a break (R-19). To evolve this file, edit `fields` and set `schema_version`; run `scripts/ci/compat-guard.sh`, which diffs this file against its committed baseline and trips if a breaking change did not bump the major. (The guard is invokable today but is NOT yet wired to run automatically in CI on real PRs — tracked in #1002.)",
+  "schema_version": "0.1.0",
+  "state_record": "agent-state.json",
+  "fields": {
+    "task": {
+      "type": "string",
+      "required": false,
+      "description": "The logical unit of work the agent is progressing."
+    },
+    "cursor": {
+      "type": "integer",
+      "required": false,
+      "description": "Progress cursor within the task; forward-tolerant readers default it to 0."
+    },
+    "retries": {
+      "type": "integer",
+      "required": false,
+      "description": "Retry count for the current task; added additively — old readers ignore it, new readers default it to 0."
+    }
+  }
+}
