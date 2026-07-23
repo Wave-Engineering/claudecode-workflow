@@ -4,11 +4,12 @@
 #
 # This is the mechanical entrypoint for the dogfood cutover (§4.3): launch each
 # target workspace as a dogfood-profile container on :edge, and start the flight
-# surgeon watching them so a broken candidate is caught (surgeon.py). (Soak accrual
-# via soak_ledger.py is NOT yet auto-fed by the surgeon — a manual/periodic step
-# until #1008 wires it.) The three pieces it composes are already
-# unit-proven; this wrapper only *plans* and — under an explicit operator apply —
-# *applies* the launches.
+# surgeon watching them so a broken candidate is caught (surgeon.py). Soak accrual is
+# now auto-wired: run scripts/ci/soak-accrual-bridge.sh (#1008) periodically alongside
+# this cutover — it drives the surgeon over the live ring and feeds each running
+# dogfood session's clean span to soak_ledger, so the gate's SOAK_HOURS fills. The
+# pieces it composes are already unit-proven; this wrapper only *plans* and — under an
+# explicit operator apply — *applies* the launches.
 #
 # The DECISIONS live in tested modules, never in this shell (project rule):
 #   * the dogfood launch args (the oaw.profile=dogfood label, overlay OFF)  —
@@ -35,8 +36,9 @@
 #   OAW_MAJOR           the kit major for the dogfood profile's <major> mounts
 #                       (default 1).
 #   OAW_SOAK_LEDGER     the FlightDeck soak ledger the gate reads (default
-#                       ~/.oaw/soak/ledger.jsonl). NOTE: nothing here writes it yet —
-#                       auto-accrual (surgeon→ledger) is tracked in #1008.
+#                       ~/.oaw/soak/ledger.jsonl). This script does not write it; the
+#                       soak-accrual bridge (scripts/ci/soak-accrual-bridge.sh, #1008)
+#                       does — run it periodically alongside this cutover.
 #   SURGEON_TRANSCRIPTS_ROOT  root the surgeon resolves host-backed transcripts
 #                       under (default ~/.claude/projects).
 #   DOGFOOD_CUTOVER_APPLY  "true" ⇒ actually launch (operator go); default false ⇒
@@ -95,7 +97,8 @@ surgeon_cmd=(
 	--fail-on-quarantine
 )
 echo "==> flight surgeon watch command: ${surgeon_cmd[*]}"
-echo "    soak ledger (the gate reads it; accrual NOT yet auto-wired — #1008): $OAW_SOAK_LEDGER"
+echo "    soak ledger (the gate reads it): $OAW_SOAK_LEDGER"
+echo "    accrue soak from the live ring: scripts/ci/soak-accrual-bridge.sh (#1008)"
 
 if [[ "$APPLY" != "true" ]]; then
 	echo "==> [plan] DOGFOOD_CUTOVER_APPLY!=true — planned $(echo "$CUTOVER_WORKSPACES" | wc -w) launch(es), launched 0, started no surgeon."

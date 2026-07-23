@@ -13,7 +13,7 @@ gathers signals and applies an already-tested plan:
 |---------|--------------------------|------------------|
 | Build + provenance labels | `oakandwave-oci-labels.sh` | `scripts/ci/build-oakandwave-image.sh` |
 | Dogfood launch args | `containers/oakandwave-workflow/profiles.py` | `scripts/ci/dogfood-cutover.sh` |
-| Soak accrual | `containers/oakandwave-workflow/soak_ledger.py` | manual/periodic — NOT yet surgeon-automatic (#1008) |
+| Soak accrual | `containers/oakandwave-workflow/soak_ledger.py` | `scripts/ci/soak-accrual-bridge.sh` — surgeon `--live` → `soak_ledger.accrue` (#1008) |
 | Health verdict | `scripts/flight-surgeon/surgeon.py` | `scripts/flight-surgeon/surgeon.py --live` |
 | Promotion gate + retag | `containers/oakandwave-workflow/promotion_gate.py` | `scripts/ci/promote-oakandwave-image.sh` |
 | Per-agent adoption | `containers/oakandwave-workflow/adoption.py` | `scripts/ci/adopt-stable.sh` |
@@ -85,7 +85,7 @@ make -C containers/oakandwave-workflow verify
 
 Cut the OaW dev team onto `:edge` in the **dogfood** profile (skills overlay OFF,
 image-only — the profile the gate trusts, R-21) with the flight surgeon watching.
-Clean work is meant to accrue soak (via `soak_ledger.py`; wiring the surgeon to feed it automatically is tracked in #1008 — until then, run `soak_ledger.py` periodically by hand), and a broken candidate is caught and held.
+Clean work accrues soak **automatically**: the soak-accrual bridge (`scripts/ci/soak-accrual-bridge.sh`, #1008) drives the flight surgeon over the live ring and feeds each running dogfood session's clean span to `soak_ledger`, so the promotion gate's `SOAK_HOURS` fills over time (run it periodically / from a cron during the cutover). A broken candidate is caught and held.
 
 ```bash
 # 1) PLAN (default): prints the exact `aoe add` line per workspace + the surgeon
@@ -116,6 +116,26 @@ python3 scripts/flight-surgeon/surgeon.py --live \
 It correlates transcript growth with aoe status: `running` + flat-for-N-minutes =
 stalled; a same-tool-K-times / no-forward-progress heuristic catches loops
 (R-16). Clean spans become soak records (`soak_ledger.py`).
+
+**Accrue soak** from the live ring (the R-15 surgeon is stdlib-only and can't import
+`soak_ledger`, so a separate bridge runs both — #1008):
+
+```bash
+# Feed each running dogfood session's clean span to the gate's soak ledger.
+# Idempotent (watermarked per session) — safe to run on a cron during the cutover.
+OAW_SOAK_LEDGER=~/.oaw/soak/ledger.jsonl \
+  scripts/ci/soak-accrual-bridge.sh
+
+# Preview what WOULD accrue without writing:
+SOAK_BRIDGE_DRY_RUN=true scripts/ci/soak-accrual-bridge.sh
+```
+
+The bridge runs `surgeon.py --live` for each session's health verdict + `oaw.profile`
+label and `aoe list --json` for its `created_at` (the soak-span start), then hands the
+running sessions to `soak_ledger.accrue`. dev-mode (R-22) and broken (§4.3) sessions
+are excluded by `soak_ledger` — with a reason, never a silent drop. **The live
+end-to-end cycle (soak → gate green → promote) is proven in the operator field-run
+(MV-04/MV-06); the mapping + accrual are hermetically unit-tested.**
 
 ---
 
@@ -278,6 +298,7 @@ transparent.
 | Cut the team onto `:edge` (plan) | `scripts/ci/dogfood-cutover.sh` |
 | Cut the team onto `:edge` (apply) | `DOGFOOD_CUTOVER_APPLY=true scripts/ci/dogfood-cutover.sh` |
 | Watch the dogfood ring | `python3 scripts/flight-surgeon/surgeon.py --live` |
+| Accrue dogfood soak (bridge) | `scripts/ci/soak-accrual-bridge.sh` |
 | Evaluate the promotion gate | `PROMOTE_DRY_RUN=true scripts/ci/promote-oakandwave-image.sh` |
 | Promote (green + ACK) | `PROMOTE_DRY_RUN=false PROMOTE_ACK=true scripts/ci/promote-oakandwave-image.sh` |
 | Adopt `:stable` at recreate | `ADOPT_DRY_RUN=false scripts/ci/adopt-stable.sh` |
