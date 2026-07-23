@@ -34,6 +34,15 @@
 #                       false ⇒ no promotion even when the gate is green).
 #   GATE_SIGNALS_CMD    optional command emitting `KEY=VALUE` lines (a FlightDeck
 #                       query seam); its output is sourced before reading signals.
+#   OAW_SOAK_LEDGER     optional path to the soak `.jsonl` ledger. When set (and
+#   OAW_QUARANTINE_LEDGER  GATE_SIGNALS_CMD is unset), the gate's SOAK_HOURS /
+#                       QUARANTINE_COUNT are computed from these ledgers through the
+#                       PROFILE FILTER (containers/oakandwave-workflow/profiles.py):
+#                       dev-mode runs and breakages are excluded, so they never
+#                       accrue soak nor trip the zero-quarantines condition (R-22 —
+#                       the gate half of the profile filter; the surgeon is the
+#                       probe half). This is how "the gate filters on the label" is
+#                       wired end-to-end, not merely available as a library.
 #   THROWAWAY_CI_PASSED E2E-01 smoke result for DIGEST_REF (true/false).
 #   THROWAWAY_CI_DIGEST the digest E2E-01 tested (defaults to DIGEST_REF; the gate
 #                       still requires it to equal the promotion target — R-23).
@@ -51,6 +60,21 @@ REPO_DIR="$(cd "$HERE/../.." && pwd)"
 GATE_PY="$REPO_DIR/containers/oakandwave-workflow/promotion_gate.py"
 
 : "${DIGEST_REF:?DIGEST_REF must be set (registry/image@sha256:...)}"
+
+PROFILES_PY="$REPO_DIR/containers/oakandwave-workflow/profiles.py"
+
+# --- Profile-filtered telemetry: the gate half of R-22 ------------------------
+# When soak/quarantine ledgers are supplied and no explicit GATE_SIGNALS_CMD is
+# set, default the signal seam to the profile filter: profiles.py folds the
+# ledgers into SOAK_HOURS / QUARANTINE_COUNT while EXCLUDING dev-mode records, so
+# a dev-mode session cannot inflate soak and a dev-mode breakage cannot fail the
+# gate (R-22). Explicitly-set GATE_SIGNALS_CMD wins (an operator can still inject
+# a live FlightDeck query).
+if [[ -z "${GATE_SIGNALS_CMD:-}" && (-n "${OAW_SOAK_LEDGER:-}" || -n "${OAW_QUARANTINE_LEDGER:-}") ]]; then
+	GATE_SIGNALS_CMD="python3 $(printf '%q' "$PROFILES_PY") --emit gate-signals"
+	[[ -n "${OAW_SOAK_LEDGER:-}" ]] && GATE_SIGNALS_CMD+=" --soak-ledger $(printf '%q' "$OAW_SOAK_LEDGER")"
+	[[ -n "${OAW_QUARANTINE_LEDGER:-}" ]] && GATE_SIGNALS_CMD+=" --quarantine-ledger $(printf '%q' "$OAW_QUARANTINE_LEDGER")"
+fi
 
 # --- Optional FlightDeck-query seam: populate signal env from its KV output ---
 if [[ -n "${GATE_SIGNALS_CMD:-}" ]]; then

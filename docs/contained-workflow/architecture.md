@@ -63,6 +63,32 @@ flowchart TB
 | CI build/push + throwaway-CI ring | Builds, signs, SBOMs, pushes by digest; smokes install-from-zero | 2.1/2.2 |
 | Promotion gate | Mechanical conjunction over FlightDeck + CI; retags the tested digest | 2.3 |
 | Flight surgeon | Host-side probe reading the host-backed transcript; quarantine + rollback | 3.1/3.2 |
+| Container profiles (`profiles.py`) | The two rings + the `oaw.profile` label; the gate-side telemetry filter | 4.1 (#974) |
+
+### 2.1 Container profiles (Story 4.1, R-21/R-22)
+
+The candidate runs in one of **two profiles**, distinguished by the `oaw.profile`
+docker label the surgeon and the promotion gate both read:
+
+| Profile | Skills overlay | `oaw.profile` | Candidate? | Role |
+|---------|----------------|---------------|------------|------|
+| **dogfood** | OFF — image-only | `dogfood` | yes | The real dogfood ring: its runs accrue soak and its breakages trip quarantine — it is what the gate measures. |
+| **dev-mode** | ON — the developer's working skills bind over the baked skills (the R-06 non-promotable exception) | `dev-mode` | **no** | Skill iteration without a rebuild. **Excluded from promotion telemetry** — dev-mode runs/breakages never count toward soak nor trip quarantine. |
+
+`containers/oakandwave-workflow/profiles.py` is the canonical owner of the label
+and the candidacy rule. It renders each profile's launch (`launch_spec` — the
+`oaw.profile` label plus, for dev-mode only, the skills-overlay `-v` bind, so
+"overlay ON" is a real mount and "overlay OFF" its absence), and provides the
+**gate-side filter** (`aggregate_gate_signals`) that folds the soak/quarantine
+ledgers into `SOAK_HOURS` / `QUARANTINE_COUNT` with every dev-mode record dropped.
+The **probe half** of the same filter lives in the flight surgeon
+(`scripts/flight-surgeon/surgeon.py`), which excludes dev-mode from
+`should_quarantine`; the surgeon re-states the alias table rather than importing
+`profiles.py` because it must depend on only the standard library (R-15), and a
+lock-step test keeps the two in agreement. The promote wrapper
+(`scripts/ci/promote-oakandwave-image.sh`) defaults its `GATE_SIGNALS_CMD` to this
+filter when `OAW_SOAK_LEDGER` / `OAW_QUARANTINE_LEDGER` are supplied — so the gate
+filters on the label end-to-end.
 
 ## 3. The mount manifest (Story 1.3, this story)
 
