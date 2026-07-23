@@ -45,6 +45,18 @@ KIT_DEP_TOOLS: list[tuple[str, list[str]]] = [
     ("aws", ["--version"]),
 ]
 
+# The kit's own MCP servers, baked at stable image paths by `./install` (R-09
+# baking half, Story from Plan #959). Each entry is the MCP server name, which is
+# BOTH the key under ~/.claude.json `.mcpServers` (registration) AND the basename
+# of its prebuilt binary in ~/.local/bin (executable). Sourced from mcps.json.
+KIT_MCP_SERVERS: list[str] = [
+    "disc-server",
+    "discord-watcher",
+    "nerf-server",
+    "sdlc-server",
+    "wtf-server",
+]
+
 
 def _image_ref() -> str:
     return os.environ.get("OAKANDWAVE_IMAGE", DEFAULT_IMAGE)
@@ -124,6 +136,47 @@ def test_image_toolchain() -> None:
     for binary, _ in KIT_DEP_TOOLS:
         assert f"/{binary}" in proc.stdout or binary in proc.stdout, (
             f"{binary} not resolved on PATH in {ref}:\n{proc.stdout}"
+        )
+
+
+def test_image_kit_mcps_baked() -> None:
+    """Every kit MCP server is registered AND its binary is executable (R-09).
+
+    The baking half of R-09: `./install` (no --no-mcps) walks mcps.json and each
+    server's install-remote.sh registers it under ~/.claude.json `.mcpServers`
+    (three via `claude mcp add`, two via a jq edit) and drops a prebuilt linux-x64
+    binary into ~/.local/bin. This asserts both halves for the uid-1000 runtime
+    user: registered in config (config-exists) AND the binary is executable
+    (config-works). A miss on any one server fails the digest.
+    """
+    docker, ref = _resolve_image_or_skip()
+
+    servers = " ".join(KIT_MCP_SERVERS)
+    script = "\n".join(
+        [
+            "set -e",
+            'cfg="$HOME/.claude.json"',
+            'test -f "$cfg"',
+            f"for m in {servers}; do",
+            '  jq -e --arg m "$m" \'.mcpServers[$m]\' "$cfg" >/dev/null '
+            '|| { echo "NOT REGISTERED: $m"; exit 1; }',
+            '  test -x "$HOME/.local/bin/$m" '
+            '|| { echo "BINARY MISSING/NOT EXECUTABLE: $m"; exit 1; }',
+            '  echo "BAKED: $m"',
+            "done",
+        ]
+    )
+
+    proc = _run_in_image(docker, ref, script)
+    assert proc.returncode == 0, (
+        f"kit MCP baking probe failed in {ref}:\n"
+        f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
+    )
+
+    # Every server must have emitted its BAKED confirmation line.
+    for m in KIT_MCP_SERVERS:
+        assert f"BAKED: {m}" in proc.stdout, (
+            f"{m} not confirmed baked in {ref}:\n{proc.stdout}"
         )
 
 
