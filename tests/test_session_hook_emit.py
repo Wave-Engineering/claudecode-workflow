@@ -28,6 +28,7 @@ def _run(phase: str, events_path: Path, stdin: str = ""):
     env["FLIGHTDECK_EMIT_CMD"] = "python3 -m wave_status.events.emit"
     env["FLIGHTDECK_SESSION_ID"] = "sess-abc"
     env.pop("FLIGHTDECK_INGEST_URL", None)
+    env.pop("FLIGHTDECK_EMIT_DISABLED", None)
     return subprocess.run(
         ["bash", str(_SCRIPT), phase],
         input=stdin, capture_output=True, text=True, env=env,
@@ -37,6 +38,11 @@ def _run(phase: str, events_path: Path, stdin: str = ""):
 def _last_event(events_path: Path) -> dict:
     lines = events_path.read_text(encoding="utf-8").splitlines()
     return json.loads(lines[-1])
+
+
+def _has_jq() -> bool:
+    from shutil import which
+    return which("jq") is not None
 
 
 class TestScriptEmits:
@@ -62,6 +68,7 @@ class TestScriptEmits:
         env["FLIGHTDECK_EMIT_CMD"] = "python3 -m wave_status.events.emit"
         env["FLIGHTDECK_SESSION_ID"] = "s"
         env.pop("FLIGHTDECK_INGEST_URL", None)
+        env.pop("FLIGHTDECK_EMIT_DISABLED", None)
         r = subprocess.run(["bash", str(_SCRIPT)], input="", capture_output=True, text=True, env=env)
         assert r.returncode == 0
         assert _last_event(ep)["kind"] == "step"
@@ -74,6 +81,7 @@ class TestScriptEmits:
         env["FLIGHTDECK_EMIT_CMD"] = "python3 -m wave_status.events.emit"
         env.pop("FLIGHTDECK_SESSION_ID", None)
         env.pop("FLIGHTDECK_INGEST_URL", None)
+        env.pop("FLIGHTDECK_EMIT_DISABLED", None)
         # Claude Code passes the hook payload as JSON on stdin.
         payload = json.dumps({"session_id": "from-stdin", "hook_event_name": "Stop"})
         r = subprocess.run(
@@ -95,13 +103,103 @@ class TestScriptEmits:
         env["FLIGHTDECK_EMIT_CMD"] = "false"  # force the emit command to fail
         env["FLIGHTDECK_SESSION_ID"] = "s"
         env.pop("FLIGHTDECK_INGEST_URL", None)
+        env.pop("FLIGHTDECK_EMIT_DISABLED", None)
         r = subprocess.run(["bash", str(_SCRIPT), "idle"], input="", capture_output=True, text=True, env=env)
         assert r.returncode == 0  # fire-and-forget: a hook must never fail a turn
 
+    def test_session_events_are_presence_shaped(self, tmp_path):
+        # #947 defect 1: every session event declares activityType "session" and
+        # carries the hostname in its own `host` field (never as `agent` when an
+        # identity exists — see TestAgentIdentity).
+        ep = tmp_path / "events.jsonl"
+        r = _run("idle", ep)
+        assert r.returncode == 0, r.stderr
+        ev = _last_event(ep)
+        assert ev["activityType"] == "session"
+        assert ev["host"]  # non-empty hostname
 
-def _has_jq() -> bool:
-    from shutil import which
-    return which("jq") is not None
+    def test_legacy_emit_cli_fallback(self, tmp_path):
+        # #947 deploy-ordering: an OLDER installed emit CLI rejects the additive
+        # --activity-type/--host flags (argparse exit 2). The hook must retry with
+        # the legacy argument set rather than silently losing the event.
+        ep = tmp_path / "events.jsonl"
+        stub = tmp_path / "old-cli.sh"
+        stub.write_text(
+            "#!/usr/bin/env bash\n"
+            'for a in "$@"; do\n'
+            '  case "$a" in --activity-type|--host) echo "unrecognized arguments" >&2; exit 2 ;; esac\n'
+            "done\n"
+            f'exec python3 -m wave_status.events.emit "$@"\n',
+            encoding="utf-8",
+        )
+        stub.chmod(0o755)
+        env = os.environ.copy()
+        env["PYTHONPATH"] = _SRC + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        env["FLIGHTDECK_EVENTS_PATH"] = str(ep)
+        env["FLIGHTDECK_EMIT_CMD"] = f"bash {stub}"
+        env["FLIGHTDECK_SESSION_ID"] = "sess-old"
+        env.pop("FLIGHTDECK_INGEST_URL", None)
+        env.pop("FLIGHTDECK_EMIT_DISABLED", None)
+        r = subprocess.run(["bash", str(_SCRIPT), "idle"], input="", capture_output=True, text=True, env=env)
+        assert r.returncode == 0
+        ev = _last_event(ep)  # the event STILL landed, in the legacy shape
+        assert ev["activityId"] == "session:sess-old"
+        assert "activityType" not in ev
+
+
+class TestAgentIdentity:
+    """#947 defect 2: `agent` is the Dev-Name from .claude/agent-identity.json;
+    the hostname is only the VISIBLE degradation when identity is absent."""
+
+    def _run_with_root(self, root: Path, events_path: Path):
+        env = os.environ.copy()
+        env["PYTHONPATH"] = _SRC + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        env["FLIGHTDECK_EVENTS_PATH"] = str(events_path)
+        env["FLIGHTDECK_EMIT_CMD"] = "python3 -m wave_status.events.emit"
+        env.pop("FLIGHTDECK_INGEST_URL", None)
+        env.pop("FLIGHTDECK_EMIT_DISABLED", None)
+        env.pop("FLIGHTDECK_SESSION_ID", None)
+        # Claude Code hook payload carries the project cwd.
+        payload = json.dumps({"session_id": "sess-id", "cwd": str(root)})
+        return subprocess.run(
+            ["bash", str(_SCRIPT), "idle"],
+            input=payload, capture_output=True, text=True, env=env,
+        )
+
+    @pytest.mark.skipif(not _has_jq(), reason="identity resolution requires jq")
+    def test_identity_file_present_attributes_dev_name(self, tmp_path):
+        root = tmp_path / "proj"
+        (root / ".claude").mkdir(parents=True)
+        (root / ".claude" / "agent-identity.json").write_text(
+            json.dumps({"dev_team": "oaw", "dev_name": "babelfish", "dev_avatar": "🐠"}),
+            encoding="utf-8",
+        )
+        ep = tmp_path / "events.jsonl"
+        r = self._run_with_root(root, ep)
+        assert r.returncode == 0, r.stderr
+        ev = _last_event(ep)
+        assert ev["agent"] == "babelfish"
+        assert ev["host"] != "babelfish"  # hostname rides separately
+
+    @pytest.mark.skipif(not _has_jq(), reason="identity resolution requires jq")
+    def test_identity_missing_degrades_to_hostname_visibly(self, tmp_path):
+        root = tmp_path / "proj-no-identity"
+        root.mkdir()
+        ep = tmp_path / "events.jsonl"
+        r = self._run_with_root(root, ep)
+        assert r.returncode == 0, r.stderr
+        ev = _last_event(ep)
+        assert ev["agent"] == ev["host"]  # degraded: agent IS the hostname
+
+    @pytest.mark.skipif(not _has_jq(), reason="identity resolution requires jq")
+    def test_identity_malformed_degrades_not_fails(self, tmp_path):
+        root = tmp_path / "proj-bad-identity"
+        (root / ".claude").mkdir(parents=True)
+        (root / ".claude" / "agent-identity.json").write_text("{not json", encoding="utf-8")
+        ep = tmp_path / "events.jsonl"
+        r = self._run_with_root(root, ep)
+        assert r.returncode == 0, r.stderr  # never fails the turn
+        assert _last_event(ep)["agent"] == _last_event(ep)["host"]
 
 
 class TestSettingsWiring:
