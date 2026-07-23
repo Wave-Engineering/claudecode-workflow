@@ -63,7 +63,7 @@ oidc_issuer="${COSIGN_OIDC_ISSUER:-https://token.actions.githubusercontent.com}"
 smoke_suite="${SMOKE_SUITE:-$REPO_DIR/tests/contained-workflow/test_image.py}"
 
 # --- Required tooling ---------------------------------------------------------
-for tool in docker cosign python3; do
+for tool in docker cosign python3 curl; do
 	command -v "$tool" >/dev/null 2>&1 || {
 		echo "  [!] $tool not found on PATH — the ring needs it" >&2
 		exit 1
@@ -89,12 +89,25 @@ cosign verify \
 	"$DIGEST_REF" >/dev/null
 
 # --- 2. syft SBOM (R-24) — SPDX attestation bound to the digest ---------------
-echo "[ring] verify-sbom (cosign attestation, spdxjson)"
+# The attestation is TSA-timestamped and deliberately NOT in the public rekor
+# tlog: the SBOM predicate for this ~10 GB image exceeds rekor's body limit, so
+# the producer skips it (#995). Verify the RFC3161 timestamp against Sigstore's
+# public TSA cert chain (fetched below) and skip the tlog check; the identity
+# binding (cert-identity + OIDC issuer) is unchanged, so this is still an
+# identity-bound verification, just timestamp-anchored instead of tlog-anchored.
+echo "[ring] verify-sbom (cosign attestation, spdxjson — TSA-timestamped)"
+tsa_certchain_url="${TSA_CERTCHAIN_URL:-https://timestamp.sigstore.dev/api/v1/timestamp/certchain}"
+tsa_chain="$(mktemp -t sigstore-tsa-chain.XXXXXX.pem)"
+curl -fsSL "$tsa_certchain_url" -o "$tsa_chain"
 cosign verify-attestation \
 	--type spdxjson \
 	--certificate-identity-regexp "$cert_identity_regexp" \
 	--certificate-oidc-issuer "$oidc_issuer" \
+	--insecure-ignore-tlog=true \
+	--use-signed-timestamps=true \
+	--timestamp-certificate-chain "$tsa_chain" \
 	"$DIGEST_REF" >/dev/null
+rm -f "$tsa_chain"
 
 # --- 3. registry permissions + install-from-zero (R-24) -----------------------
 # A successful pull from a clean local store proves the candidate is
