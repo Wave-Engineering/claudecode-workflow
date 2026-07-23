@@ -17,6 +17,37 @@ own them and are all executed and recorded in the closing story (4.3, #976).
 | MV-06 | A wedged/OOM-killed `claude` still flushed its transcript | R-15 | Story 3.1 (#970) |
 | MV-07 | A secret added mid-session is usable with no container restart | R-13 | Story 1.5 (#965) |
 
+## Execution disposition — closing story 4.3 (#976)
+
+Executed **2026-07-23** in the wave P4W2 flight lane against the locally-built
+`oakandwave-workflow:edge` (image ID `sha256:2b75626d6365`). The flight lane has
+**docker + the real image** but **no live `aoe` session and no operator** (no
+interactive hard-kill, no live ghcr registry). Each MV therefore has two halves:
+the **mechanically-verifiable core**, discharged here by the docker-gated
+integration/e2e oracle (run green — see the per-MV result logs), and the
+**irreducibly-live-`aoe`-session portion**, which needs an operator field-run and
+is **explicitly deferred with rationale** (Dev Spec §7 DoD permits an explicit
+deferral; a silent skip does not). No MV **failed**; nothing needed a bug issue.
+
+| ID | Disposition | Core executed here (oracle, green) | Live-session portion — deferred |
+|----|-------------|------------------------------------|----------------------------------|
+| MV-01 | Core PASS · live-half deferred | `test_uid_config`, `test_bind_mount_write_is_host_owned` (IT-04) | `aoe --sandbox` launches with no `--user` override |
+| MV-02 | Core PASS · live-half deferred | `test_mounts.py` (memory source sandbox-scoped; live-fleet source rejected) | isolation under the full custom mount set in a live session (§5.N#3) |
+| MV-03 | **PASS — fully executed** | docker egress probe: `api.github.com`→200, `discord.com`→200 from inside the image | none (scream-hole is an internal service, not reachable from the flight network — noted, not a blocker) |
+| MV-04 | Deferred | `test_surgeon.py` (detection reads transcript, needs no ingress) | `aoe send` host→container ingress — the §5.N#5 open seam |
+| MV-05 | Core PASS · live-half deferred | `test_e2e03_real_rollback_preserves_on_disk_work` (E2E-03: real stop/`rm`/recreate, on-disk work survives) | the `aoe`-session trigger path (surgeon → quarantine on a live session) |
+| MV-06 | Deferred (fail-safe covered) | `test_read_transcript_tolerates_a_truncated_tail` | a real hard-kill/OOM of `claude` in a live session |
+| MV-07 | Core PASS · live-half deferred | `test_secrets_readonly` (IT-02: ro enforced, host-added file visible in a real container) | the mid-session add through a live `aoe` path-consumer |
+
+**Why the deferrals are safe.** MV-04/MV-06 map to §5.N **open probes** the Dev
+Spec already flags as unproven, and the surgeon is **fail-safe** against both: it
+reads the transcript from outside (never needs `aoe send`), and a lost last-turn
+makes it detect a stall *earlier*, never miss one (§5.N#2). Operator field
+experience (many hard-kills, never a flush problem) backs MV-06. The deferred
+halves are the *live-`aoe`* leg of guarantees whose *mechanics* are proven green
+above — an operator replays them on a real fleet session and appends a row to the
+matching result log.
+
 ---
 
 ## MV-01 — Files land `bakerb`-owned under the me-ful config `[R-04]`
@@ -132,7 +163,8 @@ If writes land uid-`0`/root-owned:
 
 | Date | Operator | Image digest / ID | `id -u` | `stat` result | PASS/FAIL | Notes |
 |------|----------|-------------------|---------|---------------|-----------|-------|
-| _pending_ | _pending_ | _pending_ | | | | Executed and recorded in closing story 4.3 (#976) |
+| 2026-07-23 | flight P4W2 (#976) | `sha256:2b75626d6365` | 1000 (image `USER ubuntu`) | uid-1000-owned (oracle) | **PASS (core)** | Image half via `test_ownership.py::test_uid_config` + `::test_bind_mount_write_is_host_owned` (IT-04) green against the real image — a container-written bind-mount file is uid-1000/host-owned, not root. aoe-half (no `--user` override) deferred to an operator field-run. |
+| _pending_ | operator | _pending_ | | | _deferred_ | Live-`aoe`-session half: confirm `aoe -p meful-test add --sandbox` launches uid-1000 with no `--user` override; append the `stat` result. |
 
 ---
 
@@ -241,7 +273,8 @@ rm -rf /tmp/meful-secrets
 
 | Date | Operator | Image digest / ID | step-3 read | step-4 write | step-6 read | PASS/FAIL | Notes |
 |------|----------|-------------------|-------------|--------------|-------------|-----------|-------|
-| _pending_ | _pending_ | _pending_ | | | | | Executed and recorded in closing story 4.3 (#976) |
+| 2026-07-23 | flight P4W2 (#976) | `sha256:2b75626d6365` | readable (oracle) | rejected `Read-only file system` (oracle) | host-added file visible (oracle) | **PASS (core)** | IT-02 oracle `test_secrets.py::test_secrets_readonly` green against a real container: the `~/.secrets` bind is ro (in-container write rejected, R-12) and a host-added file is visible via `docker exec` with no restart (R-13). Live-`aoe`-session path-consumer half deferred. |
+| _pending_ | operator | _pending_ | | | | _deferred_ | Live-`aoe`-session half: read a mid-session-added secret through a real aoe session's path-consumer; append the step-6 read. |
 
 ---
 
@@ -327,7 +360,8 @@ aoe -p meful-test remove <session-id>
 
 | Date | Operator | Image digest / ID | `aoe send` exit | landed in transcript? | PASS/FAIL | Notes |
 |------|----------|-------------------|-----------------|-----------------------|-----------|-------|
-| _pending_ | _pending_ | _pending_ | | | | Executed and recorded in closing story 4.3 (#976) |
+| 2026-07-23 | flight P4W2 (#976) | `sha256:2b75626d6365` | n/a | n/a | **DEFERRED** | `aoe send` host→container ingress is the §5.N#5 open seam — needs a live aoe session (unavailable in the flight lane). R-15 *detection* (what the surgeon actually rides — it reads the transcript, never sends) is unit-proven: `test_surgeon.py` green. Ingress is Story-3.2 remediation infra; the wrapper already has a `docker stop` fallback if the seam resolves to "no in-band ingress". |
+| _pending_ | operator | _pending_ | | | _deferred_ | Live-`aoe`-session run: `aoe -p meful-test send <sid> "…"`; confirm the text lands as a user turn in the host-backed transcript. |
 
 ---
 
@@ -433,7 +467,8 @@ aoe -p meful-test remove <session-id>
 
 | Date | Operator | Image digest / ID | pre-kill lines | post-kill lines | parseable? | surgeon verdict | PASS/FAIL |
 |------|----------|-------------------|----------------|-----------------|------------|-----------------|-----------|
-| _pending_ | _pending_ | _pending_ | | | | | Executed and recorded in closing story 4.3 (#976) |
+| 2026-07-23 | flight P4W2 (#976) | `sha256:2b75626d6365` | n/a | n/a | yes (oracle) | stall/not-healthy (oracle) | **DEFERRED (fail-safe)** | Real hard-kill/OOM of `claude` in a live session needs an operator. The surgeon's *parsing* of a truncated tail is unit-proven: `test_surgeon.py::test_read_transcript_tolerates_a_truncated_tail` green. Fail-safe: a lost last-turn makes the stall fire *earlier*, never a false-healthy (§5.N#2); operator field experience (many hard-kills, never a flush problem) backs the keystone. |
+| _pending_ | operator | _pending_ | | | | | Live run: hard-kill `claude` mid-task, confirm the host-backed transcript still parses and the surgeon does not report healthy-and-progressing. |
 
 ---
 
@@ -571,4 +606,127 @@ rm -rf /tmp/mv05-ws
 
 | Date | Operator | `:edge` / `:stable` digest | surgeon verdict | step-6 content | step-7 image | PASS/FAIL | Notes |
 |------|----------|----------------------------|-----------------|----------------|--------------|-----------|-------|
-| _pending_ | _pending_ | _pending_ | | | | | Executed and recorded in closing story 4.3 (#976) |
+| 2026-07-23 | flight P4W2 (#976) | `sha256:2b75626d6365` (both, tagged stand-ins) | should_quarantine (oracle) | `zero-work-lost` (oracle) | `:stable` (oracle) | **PASS (core)** | E2E-03 oracle `test_quarantine.py::test_e2e03_real_rollback_preserves_on_disk_work` green: plants a real container with host-backed work, runs the real stop/`docker rm`/recreate on `:stable`, and asserts the on-disk artifact survives (R-02/R-17). Live-`aoe`-session trigger path (surgeon→quarantine on a real session) deferred to an operator field-run. |
+| _pending_ | operator | _pending_ | | | | _deferred_ | Live run: quarantine a real dogfood `:edge` aoe session and confirm the recreate on `:stable` with zero durable loss. |
+
+---
+
+## MV-02 — Live `~/.claude` not exposed under the full custom mount set `[R-01, R-03]`
+
+**Goal.** Prove that when a container comes up with the **full custom mount
+manifest** (the five-layer set of §5.3, memory + secrets + overlay + caches), the
+live-fleet `~/.claude` tree is **not** exposed inside it — durable memory reads
+and writes land on the sandbox-scoped source `~/.oaw/state/<major>/`, never the
+live fleet's `~/.claude/projects/*/memory/` (R-03), and the container filesystem
+stays a disposable RTE (R-01).
+
+**Why manual.** The mount **resolver** is unit-proven
+(`tests/contained-workflow/test_mounts.py::test_memory_source_scoped` — it rejects
+a live-fleet memory source and accepts only a sandbox-scoped one) and IT-03
+builds the full mount set in a bare container. This procedure proves the same
+**through a live `aoe` sandbox session** with the whole manifest present at once —
+the §5.N#3 open probe (the "live `~/.claude` not exposed" result was a single
+default-`--sandbox` observation; confirm it holds under the full custom set).
+
+### Preconditions
+
+- **aoe 1.13.0**, **rootful docker** — as MV-01.
+- Image built locally; the full mount manifest resolved
+  (`containers/oakandwave-workflow/mount_resolver.py` + `mounts.d/`).
+- An isolated aoe profile (as MV-01).
+
+### Procedure
+
+1. **Resolve + launch** a sandbox session on the image with the full mount set
+   (memory source `~/.oaw/state/<major>/`, ro `~/.secrets`, overlay, caches):
+
+   ```bash
+   aoe -p meful-test add --sandbox --sandbox-image oakandwave-workflow:edge \
+     --launch /tmp/meful-ws
+   ```
+
+2. **Confirm the live-fleet tree is NOT mounted** inside the container:
+
+   ```bash
+   docker inspect --format '{{json .Mounts}}' <cid> | jq -r '.[].Source' \
+     | grep -F "$HOME/.claude/projects" && echo "EXPOSED (FAIL)" || echo "not exposed (PASS)"
+   ```
+
+   **EXPECT:** the live `~/.claude/projects/*/memory/` source appears in **no**
+   mount; the only memory source is `~/.oaw/state/<major>/`. A live-fleet source is
+   a **FAIL** (R-03 violated).
+
+3. **Confirm durable writes land on the sandbox-scoped source** — write memory
+   from inside and confirm it appears under `~/.oaw/state/<major>/` on the host,
+   never under `~/.claude`.
+
+4. **Record** the result: date, operator, image ID, the step-2 verdict, and
+   PASS/FAIL.
+
+### Failure handling
+
+- **Step 2 shows the live tree.** The resolver was bypassed or a manual `-v`
+  leaked the live path. Capture the resolved manifest
+  (`mount_resolver.py --emit`) and the container mounts; open a bug against Story
+  1.3 (#963).
+
+### Result log
+
+| Date | Operator | Image digest / ID | live tree exposed? | memory source | PASS/FAIL | Notes |
+|------|----------|-------------------|--------------------|---------------|-----------|-------|
+| 2026-07-23 | flight P4W2 (#976) | `sha256:2b75626d6365` | no (oracle) | `~/.oaw/state/<major>/` (oracle) | **PASS (core)** | Resolver oracle `test_mounts.py::test_memory_source_scoped` green: a live-fleet memory source is rejected, only a sandbox-scoped source resolves (R-03); IT-03 builds the full set clean. Live-`aoe`-session isolation under the full custom mount set (§5.N#3) deferred. |
+| _pending_ | operator | _pending_ | | | _deferred_ | Live run: inspect a real aoe session's mounts under the full manifest; confirm no `~/.claude/projects` source. |
+
+---
+
+## MV-03 — Network egress reaches scream-hole / discord / github from inside `[R-05]`
+
+**Goal.** Prove a container built on the image has working **egress on the default
+bridge** — it can reach the services the kit depends on (github, discord, and the
+OaW scream-hole) from inside, so a dogfood/candidate container is a usable RTE
+(R-05; TC-5). Unlike the other MVs this one needs **only docker** — no live `aoe`
+session — so it is fully executable in the flight lane.
+
+**Why (partly) manual.** No pytest oracle asserts live external egress (it is
+network-dependent and would make the unit lane non-hermetic). A direct
+`docker run` + `curl` from inside the real image is the procedure; it was executed
+in the closing story.
+
+### Preconditions
+
+- **rootful docker**; the image built (`oakandwave-workflow:edge`).
+- Network egress permitted on the default bridge (TC-5: `ghcr.io` needs a token;
+  general HTTPS egress otherwise works).
+
+### Procedure
+
+1. **Probe egress from inside the image** (no aoe needed):
+
+   ```bash
+   docker run --rm --entrypoint sh oakandwave-workflow:edge -c '
+     for url in https://api.github.com https://discord.com/api/v10/gateway \
+                <scream-hole-url>; do
+       code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 12 "$url")
+       echo "$url -> HTTP $code"
+     done'
+   ```
+
+   **EXPECT:** `HTTP 200` (or another non-error reachable code) for each endpoint
+   the environment can route to. A connection error / DNS failure to a routable
+   endpoint is a **FAIL** (egress broken).
+
+2. **Record** the result: date, operator, image ID, the per-endpoint codes, and
+   PASS/FAIL.
+
+### Failure handling
+
+- **A routable endpoint fails.** Check the docker network mode and the host
+  firewall (`docker network inspect bridge`); scream-hole is an **internal** OaW
+  service and only resolves on the OaW network — a failure there off-network is
+  expected and not a bug.
+
+### Result log
+
+| Date | Operator | Image digest / ID | github | discord | scream-hole | PASS/FAIL | Notes |
+|------|----------|-------------------|--------|---------|-------------|-----------|-------|
+| 2026-07-23 | flight P4W2 (#976) | `sha256:2b75626d6365` | HTTP 200 | HTTP 200 | not routable off-network | **PASS** | `docker run … curl` from inside the real image: `api.github.com`→200, `discord.com/api/v10/gateway`→200. General egress on the default bridge confirmed (TC-5). scream-hole is an internal service unreachable from the flight network — noted, not a failure; an on-OaW-network operator run appends its code. |
