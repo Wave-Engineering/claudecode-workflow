@@ -117,7 +117,7 @@ only the next recreate resolves the tag. Rollback is a repoint at the prior dige
   fallback cannot build it. This does not affect the sdlc-server MCP — the
   `commutativity_verify` handler degrades gracefully to a `PROBE_UNAVAILABLE`
   verdict until the probe is provisioned at runtime. Baking the probe (e.g. a
-  root-layer `ensurepip` or a prebuilt probe wheel) is a follow-up.
+  root-layer `ensurepip` or a prebuilt probe wheel) is a follow-up (#1014).
 
 Delivered since the first cut of this image:
 
