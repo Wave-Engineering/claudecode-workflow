@@ -319,13 +319,18 @@ def test_dev_mode_breakage_is_never_quarantined() -> None:
 # --- the shell wrapper's plumbing (hermetic, via dry-run + injected seams) ----
 
 
+def test_wrapper_is_executable() -> None:
+    """MV-05 invokes the wrapper directly in the field, so it must be +x. A hard
+    assert (not a skip) — the exec bit must not silently drop (cf. #948/#953)."""
+    assert WRAPPER.exists(), f"wrapper missing: {WRAPPER}"
+    assert os.access(WRAPPER, os.X_OK), "quarantine-container.sh must be executable"
+
+
 def test_wrapper_dry_run_emits_the_plan_without_docker() -> None:
     """The wrapper wires to the planner: with QUARANTINE_DRY_RUN + the injected
     inspect/stable seams it resolves the full plan and would stop/rm/recreate — with
     NO docker call. Proves the shell plumbing hermetically (the real stop/rm/recreate
     is the docker-gated test below)."""
-    if not os.access(WRAPPER, os.X_OK):
-        pytest.skip("wrapper not executable")
     inspect_file = QUAR_DIR / ".pytest-inspect.json"  # written+removed in-test
     try:
         inspect_file.write_text(json.dumps(make_inspect()))
@@ -352,8 +357,6 @@ def test_wrapper_dry_run_emits_the_plan_without_docker() -> None:
 def test_wrapper_refuses_without_surgeon_verdict() -> None:
     """The wrapper mirrors the planner's refusal up front: no SHOULD_QUARANTINE=true
     ⇒ abort, never quarantine a container the surgeon did not flag."""
-    if not os.access(WRAPPER, os.X_OK):
-        pytest.skip("wrapper not executable")
     env = dict(os.environ)
     env.update(CONTAINER_ID="edge123", QUARANTINE_DRY_RUN="true", OAW_STABLE_RESOLVED_REF=STABLE)
     env.pop("SHOULD_QUARANTINE", None)
