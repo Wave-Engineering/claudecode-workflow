@@ -366,39 +366,43 @@ pipx install <tool-name>
 
 For the cc-workflow kit itself, Python packages are built as zipapps (self-contained executables via `scripts/ci/build.sh`). They do NOT require pip install. If you see a pip-related error during install, it is likely from:
 
-1. **The commutativity-probe** — see the next section.
+1. **The commutativity-probe** — an external pip/uv package (not a kit zipapp) — see the next section.
 2. **A dependency of an MCP server** — use `bun install` (not pip) for MCP servers.
 
 ---
 
-## Troubleshooting: commutativity-probe pip install failure
+## Troubleshooting: commutativity-probe install failure
 
-The `commutativity-probe` is a Python tool used by the SDLC server. If its installation fails with PEP 668 or permission errors:
+The `commutativity-probe` is a Python CLI that `sdlc-server` shells out to for its
+`commutativity_verify` tool. It is an **external package** —
+[`Wave-Engineering/commutativity-probe`](https://github.com/Wave-Engineering/commutativity-probe)
+at a pinned tag — **not** a kit-internal zipapp. `sdlc-server`'s `install-remote.sh` installs it
+(trying `pipx` → venv+`pip` → `pip --user`, in that order) and drops the `commutativity-probe`
+console script on PATH at `~/.local/bin`. If it is missing, `commutativity_verify` degrades to a
+`PROBE_UNAVAILABLE` verdict (conservative-fail) — the sdlc-server MCP itself keeps working.
 
-```bash
-# The probe is distributed as a zipapp — it should NOT need pip install.
-# If something triggered a pip install attempt, the workaround is:
-
-# 1. Check if the zipapp already exists in the Cellar
-ls ~/.claude/scripts/commutativity-probe
-
-# 2. If missing, build it from source
-cd "$CCWORK_DIR" && ./scripts/ci/build.sh
-
-# 3. Verify it runs
-~/.claude/scripts/commutativity-probe --version
-```
-
-If build.sh itself fails due to missing Python dependencies:
+**If the install failed because the environment has no `pip`** (e.g. a `python3` built without
+`ensurepip`, as in the oakandwave-workflow image), install it with `uv` instead — `uv` builds the
+package with its own frontend and needs no system pip:
 
 ```bash
-# Create a temporary venv for the build
-python3 -m venv /tmp/ccwork-build-venv
-source /tmp/ccwork-build-venv/bin/activate
-pip install -r "$CCWORK_DIR/src/commutativity_probe/requirements.txt" 2>/dev/null || true
-cd "$CCWORK_DIR" && ./scripts/ci/build.sh
-deactivate
+# uv is the kit's Python toolchain manager; it needs no system pip/ensurepip.
+uv tool install "git+https://github.com/Wave-Engineering/commutativity-probe.git@v0.1.0"
+
+# Verify it resolves and runs. The CLI uses subcommands (analyze/validate/predict) and
+# has NO --version, so check --help (which exits 0):
+command -v commutativity-probe
+commutativity-probe --help
 ```
+
+**If `pip` IS available**, re-run `sdlc-server`'s installer, or install manually:
+
+```bash
+pipx install "git+https://github.com/Wave-Engineering/commutativity-probe.git@v0.1.0"
+```
+
+Either way, ensure `~/.local/bin` is on your PATH — that is where the console script lands and
+where sdlc-server resolves it via `command -v`.
 
 ---
 
