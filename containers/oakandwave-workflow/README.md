@@ -7,9 +7,13 @@ is baked in, and nothing versioned is bind-mounted (R-06). Run the OaW dev team
 in these containers (the **dogfood ring**) to prove a candidate before the wider
 fleet adopts it.
 
-Design authority: `docs/contained-workflow-devspec.md` (Plan #959). This story
-(1.1) delivers the image, its build system, and the toolchain oracle; isolation,
-mounts, secrets, promotion, and the flight surgeon land in later waves.
+Design authority: `docs/contained-workflow-devspec.md` (Plan #959). The full
+lifecycle is built and landed — image + build system, me-ful isolation, the
+five-layer mount manifest, the read-only secrets mount, the CI build/push/sign
+pipeline, the throwaway-CI ring, the mechanical promotion gate, rolling per-agent
+adoption, the flight surgeon + lossless quarantine, the SemVer compat guard, and
+the dev-mode/dogfood profiles. The operator's day-to-day runbook is
+`docs/contained-workflow/ops-runbook.md`.
 
 ## What's in the image
 
@@ -20,7 +24,8 @@ mounts, secrets, promotion, and the flight surgeon land in later waves.
 | Kit | `./install`-ed skills, scripts, hooks, and config for the uid-1000 user (`/home/ubuntu/.claude`, `/home/ubuntu/.local/bin`) |
 
 The runtime user is **uid-1000 / non-root** (R-04); the me-ful ownership contract
-(files land host-user-owned) is wired by the aoe `[sandbox]` config in Story 1.2.
+(files land host-user-owned) is wired by the aoe `[sandbox]` config
+(`sandbox-profile.toml`).
 
 ## Build
 
@@ -78,10 +83,12 @@ are in `docs/contained-workflow/environment-prerequisites.md`.
 - `:stable` — the promoted digest the fleet pulls at container-recreate.
 
 Promotion is a digest retag (`:edge → :stable`), never a rebuild — the digest
-tested is the digest promoted (R-07/R-23). The build/push/sign pipeline and the
-throwaway-CI ring arrive in Phase 2 (Stories 2.1, 2.2).
+tested is the digest promoted (R-07/R-23). The build/push/sign pipeline
+(`.github/workflows/oakandwave-workflow-image.yml`) and the throwaway-CI ring both
+run in CI; the operator flow for building, dogfooding, and promoting a candidate
+is `docs/contained-workflow/ops-runbook.md`.
 
-## Fleet adoption (Story 2.4)
+## Fleet adoption
 
 The fleet adopts `:stable` **per-agent, at container-recreate** — never
 mid-session, never a synchronized flip (R-08). At *its own* recreate boundary an
@@ -100,19 +107,21 @@ A running container is pinned by digest, so a `:stable` retag can never reach it
 only the next recreate resolves the tag. Rollback is a repoint at the prior digest
 — the wrapper keeps it in `~/.oaw/adoption/rollback` (§5.6).
 
-## Deferred in this story
+## Known deferrals
 
-- **Kit MCP servers are not baked.** `./install` runs with `--no-mcps`: the kit's
-  MCP servers install from private `Wave-Engineering/*` repos over the network,
-  which is non-hermetic and needs build-time credentials. Story 1.3 (#963)
-  delivers the *scoping* half of R-09 — the mount manifest + resolver and the
-  additive composition of third-party/user MCPs (`mounts.d/`, `mount_resolver.py`).
-  Actually *baking* the kit's own MCP registrations into the image (the other
-  half of R-09) rides with the CI build (Story 2.1, #966), where build-time
-  private-repo credentials are already in play; the resolver already documents
-  the stable baked image paths those registrations target.
-- **Root-scoped runtimes.** The base installs `bun`/`node`/`uv`/`cargo` under
-  `/root`, which the uid-1000 user cannot reach. The baked kit (skills, scripts,
-  hooks) needs only `python3` + the system toolchain, so this does not affect the
-  1.1 oracle; exposing those runtimes to the runtime user rides with the
-  runtime-user/mount work (Stories 1.2–1.3).
+- **Kit MCP servers are not yet baked (open).** `./install` still runs with
+  `--no-mcps` (Dockerfile): the kit's MCP servers install from private
+  `Wave-Engineering/*` repos over the network, which is non-hermetic and needs
+  build-time credentials. The *scoping* half of R-09 is delivered — the mount
+  manifest + resolver and the additive composition of third-party/user MCPs
+  (`mounts.d/`, `mount_resolver.py`). *Baking* the kit's own MCP registrations at
+  stable image paths (the other half of R-09) was slated to ride with the CI
+  build (#966) where private-repo credentials are in play, but the image build
+  does not yet do it — this half remains open (VRTM R-09 row records it). The
+  resolver already documents the stable baked image paths those registrations
+  target.
+- **Root-scoped base runtimes.** The base installs `bun`/`node`/`uv`/`cargo`
+  under `/root`, which the uid-1000 user cannot reach. The baked kit (skills,
+  scripts, hooks) needs only `python3` + the system toolchain, so this does not
+  affect the kit at runtime; exposing those base runtimes to the runtime user is
+  a follow-up if a kit component ever needs them directly.
