@@ -123,7 +123,9 @@ stalled; a same-tool-K-times / no-forward-progress heuristic catches loops
 ```bash
 # Feed each running dogfood session's clean span to the gate's soak ledger.
 # Idempotent (watermarked per session) — safe to run on a cron during the cutover.
+# LOOK_BACK MUST match the cron cadence (see below). Run it AT LEAST every LOOK_BACK.
 OAW_SOAK_LEDGER=~/.oaw/soak/ledger.jsonl \
+  OAW_SOAK_LOOKBACK_HOURS=1 \
   scripts/ci/soak-accrual-bridge.sh
 
 # Preview what WOULD accrue without writing:
@@ -133,9 +135,22 @@ SOAK_BRIDGE_DRY_RUN=true scripts/ci/soak-accrual-bridge.sh
 The bridge runs `surgeon.py --live` for each session's health verdict + `oaw.profile`
 label and `aoe list --json` for its `created_at` (the soak-span start), then hands the
 running sessions to `soak_ledger.accrue`. dev-mode (R-22) and broken (§4.3) sessions
-are excluded by `soak_ledger` — with a reason, never a silent drop. **The live
-end-to-end cycle (soak → gate green → promote) is proven in the operator field-run
-(MV-04/MV-06); the mapping + accrual are hermetically unit-tested.**
+are excluded by `soak_ledger` — with a reason, never a silent drop.
+
+**`OAW_SOAK_LOOKBACK_HOURS` (default 1) — set it to the accrual cron cadence.** The
+surgeon's verdict is *point-in-time*: it certifies a session clean **now**, not across
+its whole history. So each pass credits at most `LOOK_BACK` of soak, ending at the `now`
+it just verified — the first pass does **not** back-credit a long-lived session's full
+age, and a broken→recovered session does **not** get its dirty gap credited (soak is
+*measured, never asserted* — R-07; *clean work only* — §4.3). The contract: run the
+bridge **at least every `LOOK_BACK`**. `LOOK_BACK` must be **≥** the interval between
+runs (a longer gap silently under-credits the uncovered clean time — the safe
+direction), and should be **≈** the cadence (a value much larger than the interval
+widens the residual dirty window a recovery pass can reach back over). Example: an
+hourly cron ⇒ `OAW_SOAK_LOOKBACK_HOURS=1`.
+
+**The live end-to-end cycle (soak → gate green → promote) is proven in the operator
+field-run (MV-04/MV-06); the mapping + accrual are hermetically unit-tested.**
 
 ---
 

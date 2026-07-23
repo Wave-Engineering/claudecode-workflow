@@ -31,13 +31,26 @@ The flow (all three steps are here, none in shell — project rule):
 
 Two design decisions worth scrutiny (documented at their code sites):
 
-* **``active_since`` = aoe ``created_at``** (§ :func:`build_observations`). ``aoe list
-  --json`` exposes a per-session ``created_at`` (the session-creation timestamp); that
-  is the session's active-span start. If it is missing/unparseable we fall back to the
-  **transcript's earliest entry timestamp** (:func:`_earliest_transcript_ts`). Because
-  ``soak_ledger`` watermarks per session, ``active_since`` only shapes the *first*
-  accrual pass — every later pass counts only new time past the last recorded ``until``
-  — so an imperfect ``active_since`` cannot double-count.
+* **``active_since`` = ``max(created_at, now − LOOK_BACK)``** — a bounded per-pass
+  look-back (§ :func:`build_observations`). ``aoe list --json`` exposes a per-session
+  ``created_at`` (the session-start time; the transcript's earliest entry is the
+  fallback), but the surgeon's health verdict is **point-in-time at ``now``**: it
+  certifies the session clean *now*, not across its whole history. Crediting the raw
+  ``[created_at, now]`` span from one end-of-window verdict would **assert** clean time
+  that was never sampled — violating R-07 ("soak is measured, never asserted") two
+  ways: (a) the *first* observation of an N-hour-old session would back-credit all N
+  hours of un-health-checked history; (b) a broken→recovered flap would back-credit the
+  broken interval — a broken pass writes no record, so the watermark does not advance,
+  and the next clean pass's span would reach back across the dirty gap (contradicting
+  §4.3 "clean work only accrues soak"). Clamping ``active_since`` to ``now − LOOK_BACK``
+  bounds **both**: each pass credits at most ``LOOK_BACK`` of time, ending at the ``now``
+  it just health-verified; a recovered session can only reach back ``LOOK_BACK`` from
+  ``now``, so a broken gap older than ``LOOK_BACK`` is never credited. The operator's
+  contract: run the pass at least every ``LOOK_BACK`` (``OAW_SOAK_LOOKBACK_HOURS``,
+  default 1h — set it to the cron cadence). A skipped/late pass merely under-credits the
+  uncovered clean time — soak is earned, never granted; under-credit is safe,
+  over-credit is the hazard. ``soak_ledger``'s per-session watermark still prevents any
+  double-count across overlapping passes.
 * **The bridge selects on ``running`` only; candidacy (R-22) is delegated to
   ``soak_ledger.accrue``.** Only a *running* session has an open span ending "now"
   (``active_until = now``); an idle/stopped one has finished and must not have idle time
@@ -71,9 +84,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -97,6 +111,17 @@ import surgeon as sg  # noqa: E402
 
 DEFAULT_LEDGER = "~/.oaw/soak/ledger.jsonl"
 DEFAULT_TRANSCRIPTS_ROOT = "~/.claude/projects"
+
+# The bounded per-pass look-back (hours). Each pass credits at most this much time,
+# ending at the ``now`` it just health-verified — so a point-in-time "clean now"
+# verdict never back-credits un-sampled history (first-pass full-age credit) nor a
+# broken→recovered gap (R-07 "measured, never asserted"; §4.3 "clean work only"). The
+# operator sets ``OAW_SOAK_LOOKBACK_HOURS`` to the accrual cron cadence: LOOK_BACK must
+# be >= the interval between passes, or clean time between passes is silently
+# under-credited (safe direction); much larger than the interval widens the residual
+# broken-gap a recovery pass can reach back over, so keep it ~= the cadence.
+DEFAULT_LOOKBACK_HOURS = 1.0
+LOOKBACK_ENV = "OAW_SOAK_LOOKBACK_HOURS"
 
 RUNNING = "running"
 
@@ -200,6 +225,7 @@ def build_observations(
     *,
     now: datetime,
     transcripts_root: object = DEFAULT_TRANSCRIPTS_ROOT,
+    lookback_hours: float = DEFAULT_LOOKBACK_HOURS,
 ) -> tuple[list[dict], list[tuple[str, str]]]:
     """Map surgeon assessments + aoe sessions → ``soak_ledger`` observations.
 
@@ -213,8 +239,15 @@ def build_observations(
     profile + broken flag is passed straight through, and ``soak_ledger.accrue`` applies
     those exclusions at its single enforcement point, with a reason.
 
-    ``active_since`` per session: aoe ``created_at`` (primary), else the transcript's
-    earliest entry (fallback). ``active_until`` = ``now`` (the session is live)."""
+    ``active_since`` per session is the session-start signal — aoe ``created_at``
+    (primary), else the transcript's earliest entry (fallback) — **clamped up to
+    ``now − lookback_hours``**. The clamp is load-bearing: the surgeon's verdict is
+    point-in-time at ``now``, so a pass may only credit the window it actually sampled.
+    Without it the first pass would back-credit a session's whole age, and a
+    broken→recovered flap would back-credit the dirty gap (see the module docstring's
+    sampling-model argument). A session with no start signal at all still gets
+    ``active_since = now − lookback`` (it is running + clean now; credit only the
+    bounded look-back). ``active_until`` = ``now`` (the session is live)."""
     created_at: dict[str, object] = {}
     path_by_id: dict[str, str] = {}
     for s in sessions:
@@ -222,6 +255,8 @@ def build_observations(
         if isinstance(sid, str):
             created_at[sid] = s.get("created_at")
             path_by_id[sid] = str(s.get("path", ""))
+
+    floor = now - timedelta(hours=lookback_hours)
 
     observations: list[dict] = []
     skipped: list[tuple[str, str]] = []
@@ -240,15 +275,19 @@ def build_observations(
             )
             continue
 
-        active_since = created_at.get(sid)
-        if sl.parse_ts(active_since) is None:
-            active_since = _earliest_transcript_ts(transcripts_root, path_by_id.get(sid, ""))
+        # Session-start signal: created_at (primary), transcript-earliest (fallback).
+        start = sl.parse_ts(created_at.get(sid))
+        if start is None:
+            start = sl.parse_ts(_earliest_transcript_ts(transcripts_root, path_by_id.get(sid, "")))
+        # Clamp UP to the look-back floor: credit at most `lookback_hours`, ending at the
+        # health-verified `now`. With no start signal, the floor itself is the start.
+        effective_since = max(start, floor) if start is not None else floor
 
         observations.append(
             {
                 "session": sid,
                 "profile": a.get("profile", "unknown"),
-                "active_since": active_since,
+                "active_since": effective_since.isoformat(),
                 "active_until": now.isoformat(),
                 "broken": bool(health.get("broken", False)),
             }
@@ -263,6 +302,7 @@ def run(
     *,
     ledger_path: object = DEFAULT_LEDGER,
     transcripts_root: object = DEFAULT_TRANSCRIPTS_ROOT,
+    lookback_hours: float = DEFAULT_LOOKBACK_HOURS,
     now: datetime | None = None,
     dry_run: bool = False,
     surgeon_runner=_run,
@@ -277,7 +317,11 @@ def run(
     assessments = gather_surgeon_assessments(transcripts_root, runner=surgeon_runner)
     sessions = gather_aoe_sessions(runner=aoe_runner)
     observations, skipped = build_observations(
-        assessments, sessions, now=now, transcripts_root=transcripts_root
+        assessments,
+        sessions,
+        now=now,
+        transcripts_root=transcripts_root,
+        lookback_hours=lookback_hours,
     )
     if dry_run:
         return observations, skipped, []
@@ -286,6 +330,20 @@ def run(
 
 
 # --- CLI ----------------------------------------------------------------------
+
+
+def _default_lookback() -> float:
+    """The look-back default: ``OAW_SOAK_LOOKBACK_HOURS`` if a valid positive float,
+    else :data:`DEFAULT_LOOKBACK_HOURS`. A malformed env value falls back (never
+    crashes the pass) — the operator's misconfiguration must not silently corrupt soak."""
+    raw = os.environ.get(LOOKBACK_ENV)
+    if raw is None:
+        return DEFAULT_LOOKBACK_HOURS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_LOOKBACK_HOURS
+    return value if value > 0 else DEFAULT_LOOKBACK_HOURS
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -302,6 +360,14 @@ def main(argv: list[str] | None = None) -> int:
         f"(default {DEFAULT_TRANSCRIPTS_ROOT})",
     )
     parser.add_argument(
+        "--lookback-hours",
+        type=float,
+        default=_default_lookback(),
+        help=f"bounded per-pass look-back in hours — each pass credits at most this "
+        f"much time, verified clean at now (env {LOOKBACK_ENV}, default "
+        f"{DEFAULT_LOOKBACK_HOURS}h; set it to your accrual cron cadence)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="build + print the observations that WOULD accrue; write nothing",
@@ -312,6 +378,7 @@ def main(argv: list[str] | None = None) -> int:
         observations, skipped, results = run(
             ledger_path=args.ledger,
             transcripts_root=args.transcripts_root,
+            lookback_hours=args.lookback_hours,
             dry_run=args.dry_run,
         )
     except (BridgeError, sl.SoakError, OSError, json.JSONDecodeError) as exc:
