@@ -685,31 +685,49 @@ The authoritative design rationale is `docs/contained-workflow-SKETCHBOOK.md` (m
 
 ### Appendix V: Verification Requirements Traceability Matrix (VRTM)
 
-*Populated after implementation; Status filled as each Phase closes.*
+**Deliverable DM-08.** Completed by the closing story (4.3, #976), 2026-07-23. Status
+for every requirement below.
+
+**Status legend.**
+- **Verified** — the requirement's verification item(s) are green: a unit/integration/e2e
+  oracle passed (in this closing story's run or in the landed owning story's CI).
+- **Verified · live-MV deferred** — the automated oracle discharges the requirement's
+  mechanically-testable core; the irreducibly-live-`aoe`-session leg of the paired MV is
+  explicitly deferred to an operator field-run (`docs/contained-workflow/manual-verification.md`,
+  §7 DoD permits an explicit deferral). No requirement rests **only** on a deferred MV.
+- **Verified (shape) · semantic-break deferred** — R-19 only: the shape-break guard is
+  proven red-first; mechanically detecting a *semantic* break (a field whose meaning
+  changes without its shape changing) is the §5.N#4 open item.
+
+Evidence detail: the oracle names are in the Verification Item column; MV execution and the
+deferred halves are recorded in `docs/contained-workflow/manual-verification.md` (DM-10, §
+"Execution disposition"); registry-artifact verification is `deployment-verification.md`
+(DM-12). Live-registry E2E-01/E2E-02 self-skip in a credential-less worktree and run green
+in the image-build CI on the owning-story merges (P2W1/P2W2 promote commits).
 
 | Req ID | Requirement (short) | Source | Verification Item | Verification Method | Status |
 |--------|--------------------|--------|-------------------|---------------------|--------|
-| R-01 | stateless / host-backed | Story 1.3 / §6 | IT-03, MV-02 | integration / manual | Pending |
-| R-02 | recreate lossless | Story 3.2 / §6 | E2E-03, MV-05 | e2e / manual | Pending |
-| R-03 | sandbox-scoped memory source | Story 1.3 | IT-03, MV-02 | integration / manual | Pending |
-| R-04 | uid-1000 ownership | Story 1.2 | IT-04, MV-01 | integration / manual | Pending |
-| R-05 | image = release | Story 1.1 / 2.2 | E2E-01, MV-03 | e2e / manual | Pending |
-| R-06 | versioned baked | Story 1.1 / 1.4 | IT-01, IT-03 | integration | Pending |
-| R-07 | mechanical promotion gate | Story 2.3 | E2E-02, test_gate_conjunction | e2e / unit | Pending |
-| R-08 | rolling adoption | Story 2.4 | E2E-02 | e2e | Pending |
-| R-09 | MCP additive scoping | Story 1.3 | IT-03 | integration | Pending |
-| R-10 | binaries in-container | Story 1.3 / 1.4 | IT-01, IT-03 | integration | Pending |
-| R-11 | declarative toolbox | Story 1.3 | IT-03 | integration | Pending |
-| R-12 | secrets never baked | Story 1.5 | IT-02 | integration | Pending |
-| R-13 | secret liveness | Story 1.5 | IT-02, MV-07 | integration / manual | Pending |
-| R-14 | fail-loud missing secret | Story 1.4 | test_bootstrap_failloud | unit | Pending |
-| R-15 | host-side probe (kit-independent) | Story 3.1 / §7 DoD | E2E-03, §7 DoD, test_stall_and_loop, MV-06 | e2e / manual / unit | Pending |
-| R-16 | stall/loop classify | Story 3.1 | test_stall_and_loop | unit | Pending |
-| R-17 | quarantine lossless | Story 3.2 | E2E-03, MV-05 | e2e / manual | Pending |
-| R-18 | same-major interop | Story 3.3 | IT-05 | integration | Pending |
-| R-19 | compat-break guard (shape break; semantic-break enforcement open, §5.N#4) | Story 3.4 | IT-05 (red-first) | integration | Pending — semantic-break case unsolved |
-| R-20 | namespace partition | Story 3.3 | test_namespace_partition, IT-05 | unit / integration | Pending |
-| R-21 | two profiles | Story 4.1 | test_profile_filter | unit | Pending |
-| R-22 | gate/probe profile filter | Story 4.1 / 3.1 | test_profile_filter | unit | Pending |
-| R-23 | digest continuity | Story 2.2 / 2.3 | E2E-01 | e2e | Pending |
-| R-24 | provenance verified | Story 2.1 / 2.2 | E2E-01, test_oci_labels | e2e / unit | Pending |
+| R-01 | stateless / host-backed | Story 1.3 / §6 | IT-03, MV-02 | integration / manual | Verified · live-MV deferred (MV-02) |
+| R-02 | recreate lossless | Story 3.2 / §6 | E2E-03, MV-05 | e2e / manual | Verified (E2E-03 oracle green) · live-MV deferred (MV-05) |
+| R-03 | sandbox-scoped memory source | Story 1.3 | IT-03, MV-02 | integration / manual | Verified (resolver oracle + IT-03) · live-MV deferred (MV-02) |
+| R-04 | uid-1000 ownership | Story 1.2 | IT-04, MV-01 | integration / manual | Verified (IT-04 oracle green) · live-MV deferred (MV-01) |
+| R-05 | image = release | Story 1.1 / 2.2 | E2E-01, MV-03 | e2e / manual | Verified (MV-03 egress executed; image oracle green; E2E-01 in CI) |
+| R-06 | versioned baked | Story 1.1 / 1.4 | IT-01, IT-03 | integration | Verified |
+| R-07 | mechanical promotion gate | Story 2.3 | E2E-02, test_gate_conjunction | e2e / unit | Verified (test_gate_conjunction green; E2E-02 cycle in CI) |
+| R-08 | rolling adoption | Story 2.4 | E2E-02 | e2e | Verified (adoption oracle green; E2E-02 cycle in CI) |
+| R-09 | MCP additive scoping | Story 1.3 | IT-03 | integration | Verified (additive-scoping half) · **kit-MCP-baking half NOT delivered** — the image still `./install --no-mcps` (Dockerfile); baking the kit's own registrations at stable image paths rides with the CI build (#966), still open |
+| R-10 | binaries in-container | Story 1.3 / 1.4 | IT-01, IT-03 | integration | Verified |
+| R-11 | declarative toolbox | Story 1.3 | IT-03 | integration | Verified |
+| R-12 | secrets never baked | Story 1.5 | IT-02 | integration | Verified (IT-02 oracle green) |
+| R-13 | secret liveness | Story 1.5 | IT-02, MV-07 | integration / manual | Verified (IT-02 oracle green) · live-MV deferred (MV-07) |
+| R-14 | fail-loud missing secret | Story 1.4 | test_bootstrap_failloud | unit | Verified |
+| R-15 | host-side probe (kit-independent) | Story 3.1 / §7 DoD | E2E-03, §7 DoD, test_stall_and_loop, MV-06 | e2e / manual / unit | Verified (detection oracles green) · live-MV deferred (MV-04, MV-06 — fail-safe, §5.N#2/#5) |
+| R-16 | stall/loop classify | Story 3.1 | test_stall_and_loop | unit | Verified |
+| R-17 | quarantine lossless | Story 3.2 | E2E-03, MV-05 | e2e / manual | Verified (E2E-03 oracle green) · live-MV deferred (MV-05) |
+| R-18 | same-major interop | Story 3.3 | IT-05 | integration | Verified |
+| R-19 | compat-break guard (shape break; semantic-break enforcement open, §5.N#4) | Story 3.4 | IT-05 (red-first) | integration | Verified (shape) · semantic-break deferred (§5.N#4) |
+| R-20 | namespace partition | Story 3.3 | test_namespace_partition, IT-05 | unit / integration | Verified |
+| R-21 | two profiles | Story 4.1 | test_profile_filter | unit | Verified |
+| R-22 | gate/probe profile filter | Story 4.1 / 3.1 | test_profile_filter | unit | Verified |
+| R-23 | digest continuity | Story 2.2 / 2.3 | E2E-01 | e2e | Verified (E2E-01 by-digest in CI; deployment-verification.md §5) |
+| R-24 | provenance verified | Story 2.1 / 2.2 | E2E-01, test_oci_labels | e2e / unit | Verified (test_oci_labels green; E2E-01 + deployment-verification.md §1–4) |
