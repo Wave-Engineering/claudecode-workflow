@@ -109,19 +109,31 @@ only the next recreate resolves the tag. Rollback is a repoint at the prior dige
 
 ## Known deferrals
 
-- **Kit MCP servers are not yet baked (open).** `./install` still runs with
-  `--no-mcps` (Dockerfile): the kit's MCP servers install from private
-  `Wave-Engineering/*` repos over the network, which is non-hermetic and needs
-  build-time credentials. The *scoping* half of R-09 is delivered — the mount
-  manifest + resolver and the additive composition of third-party/user MCPs
-  (`mounts.d/`, `mount_resolver.py`). *Baking* the kit's own MCP registrations at
-  stable image paths (the other half of R-09) was slated to ride with the CI
-  build (#966) where private-repo credentials are in play, but the image build
-  does not yet do it — this half remains open (VRTM R-09 row records it). The
-  resolver already documents the stable baked image paths those registrations
-  target.
-- **Root-scoped base runtimes.** The base installs `bun`/`node`/`uv`/`cargo`
-  under `/root`, which the uid-1000 user cannot reach. The baked kit (skills,
-  scripts, hooks) needs only `python3` + the system toolchain, so this does not
-  affect the kit at runtime; exposing those base runtimes to the runtime user is
-  a follow-up if a kit component ever needs them directly.
+- **commutativity-probe (sdlc-server bundle) is not baked (best-effort).** The
+  five kit MCP servers themselves ARE baked (R-09 baking half, delivered in
+  #1013 — see below). sdlc-server additionally *bundles* a Python
+  `commutativity-probe` CLI; its in-image install is best-effort and currently
+  fails because the base `python3` ships without `pip`/`ensurepip`, so the venv
+  fallback cannot build it. This does not affect the sdlc-server MCP — the
+  `commutativity_verify` handler degrades gracefully to a `PROBE_UNAVAILABLE`
+  verdict until the probe is provisioned at runtime. Baking the probe (e.g. a
+  root-layer `ensurepip` or a prebuilt probe wheel) is a follow-up (#1014).
+
+Delivered since the first cut of this image:
+
+- **Kit MCP servers are now baked (R-09 baking half — #1013).** `./install` runs
+  *without* `--no-mcps`: the kit MCP repos are all PUBLIC
+  (`Wave-Engineering/mcp-server-{discord,discord-watcher,wtf,nerf,sdlc}`), each
+  shipping a prebuilt linux-x64 release binary, so the install is hermetic over
+  the public network — no build credentials, no operator step. All five servers
+  land registered in the uid-1000 user's `~/.claude.json` `.mcpServers` with
+  their binaries in `~/.local/bin`; the Dockerfile asserts this in-build and the
+  image oracle re-asserts it (`test_image_kit_mcps_baked`). The *scoping* half —
+  additive composition of third-party/user MCPs via the mount manifest + resolver
+  (`mounts.d/`, `mount_resolver.py`) — was already delivered.
+- **Base language runtimes exposed to the runtime user (#1013).** The base
+  installs `claude`/`bun`/`node`/`uv` under `/root` (mode 700), unreachable by
+  the uid-1000 user. A root layer now relocates them to `/usr/local/bin` (on PATH
+  for every user) so the kit install can register MCP servers (`claude mcp add`)
+  and any TS/Bun tooling resolves `bun`/`node`. `cargo`/`rustc` remain root-only
+  (no kit component needs them); exposing them is a follow-up if that changes.

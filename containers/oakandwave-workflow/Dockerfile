@@ -85,11 +85,49 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWSCLI_VE
 	&& /tmp/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli \
 	&& rm -rf /tmp/awscli.zip /tmp/aws
 
-# --- Bake the kit for the uid-1000 (ubuntu) runtime user ----------------------
+# --- Expose the base's language runtimes to the uid-1000 runtime user ---------
+# The base installs claude, bun, node/npm and uv UNDER /root (mode 700), so the
+# uid-1000 `ubuntu` user cannot reach any of them (a known base issue). The kit
+# install (next stage) runs AS ubuntu and needs `claude` to register the kit's
+# own MCP servers (`claude mcp add --scope user`); deps.json also declares
+# `bun`/`node` for MCP tooling. Relocate the standalone binaries — and node's
+# runtime tree — to world-readable paths already on the system PATH
+# (/usr/local/bin). The standalone binaries are `cp -L`'d (symlinks dereferenced);
+# node is copied whole (`cp -a`) but its internal bin symlinks are RELATIVE, so they
+# resolve inside /opt/node — either way nothing points back into the unreadable
+# /root. Runs as root, BEFORE the USER ubuntu switch. The final
+# `su ubuntu` line proves each runtime actually executes as the non-root user
+# (config-exists ≠ config-works).
+RUN set -eux; \
+	install -d -m 0755 /opt; \
+	cp -L /root/.local/bin/claude /usr/local/bin/claude; \
+	cp -L /root/.bun/bin/bun /usr/local/bin/bun; \
+	cp -L /root/.local/bin/uv /usr/local/bin/uv; \
+	cp -L /root/.local/bin/uvx /usr/local/bin/uvx; \
+	chmod 0755 /usr/local/bin/claude /usr/local/bin/bun /usr/local/bin/uv /usr/local/bin/uvx; \
+	ln -sf /usr/local/bin/bun /usr/local/bin/bunx; \
+	node_dir="$(dirname "$(dirname "$(readlink -f /root/.local/bin/node)")")"; \
+	cp -a "$node_dir" /opt/node; \
+	ln -sf /opt/node/bin/node /usr/local/bin/node; \
+	ln -sf /opt/node/bin/npm /usr/local/bin/npm; \
+	ln -sf /opt/node/bin/npx /usr/local/bin/npx; \
+	su ubuntu -c 'export HOME=/home/ubuntu; \
+		/usr/local/bin/claude --version \
+		&& /usr/local/bin/bun --version \
+		&& /usr/local/bin/node --version \
+		&& /usr/local/bin/npm --version \
+		&& /usr/local/bin/uv --version'
+
+# --- Bake the kit (skills, scripts, hooks, config AND MCP servers) ------------
 # Reuse the base's uid-1000 `ubuntu` user (TC-2). The kit installs $HOME-rooted,
-# so it must run AS that user for the runtime user to resolve it. MCP servers are
-# NOT baked here (they pull private repos over the network — non-hermetic; see
-# README "Deferred"); --no-mcps keeps the foundation image self-contained.
+# so it must run AS that user for the runtime user to resolve it. The kit's own
+# MCP servers ARE baked here (R-09 baking half): every kit MCP repo is PUBLIC
+# (Wave-Engineering/mcp-server-{sdlc,discord,discord-watcher,wtf,nerf} +
+# commutativity-probe), each shipping a prebuilt linux-x64 release binary — no
+# build secret and no operator step, so the install is hermetic over the public
+# network. `./install` (no --no-mcps) walks mcps.json and runs each server's
+# install-remote.sh: three register via `claude mcp add`, two via a jq edit of
+# ~/.claude.json (pre-created below so the first — disc-server — lands too).
 ENV KIT_SRC=/opt/oakandwave-workflow
 COPY --chown=ubuntu:ubuntu . ${KIT_SRC}
 
@@ -99,14 +137,28 @@ ENV HOME=/home/ubuntu
 ENV PATH="/home/ubuntu/.local/bin:/usr/local/go/bin:${PATH}"
 WORKDIR ${KIT_SRC}
 # install's final step is a runtime-readiness advisory (check-deps.sh) whose exit
-# code is the count of missing deps. In a build it necessarily flags `bun` (only
-# needed for the deferred MCP builds) and the secret tokens (never baked — R-12;
-# provided at runtime via the ro ~/.secrets mount). Tolerate ONLY that specific
-# advisory — the sentinel line is emitted solely by check-deps as the last step,
-# after all install work — and fail the build on any other error. Then positively
-# assert the kit actually landed.
+# code is the count of missing deps. `bun` (and node/claude) are now on PATH (the
+# runtime-exposure layer above), so the advisory no longer flags bun as it did
+# under --no-mcps — the remainder are runtime-only items check-deps can never see
+# at build time: the secret tokens (slack-bot-token, discord-bot-token; never
+# baked — R-12, provided at runtime via the ro ~/.secrets mount) and any
+# host-specific hook path in settings.template.json. The tolerance greps the
+# check-deps SUMMARY sentinel, which fires on ANY missing-dep count — it does not
+# distinguish which deps, so today's expected-missing items (the two secrets + the
+# host hook) are tolerated alongside anything else check-deps would report
+# (tightening to a per-dep whitelist tracked in #1016). The real guarantees: a
+# genuine install error aborts under set -euo pipefail BEFORE check-deps (sentinel
+# absent → build fails), and the positive assertions below cover the kit AND all
+# five MCP servers.
+#
+# Pre-create ~/.claude.json ({} is augmented in place): the two jq-registering
+# MCPs (disc-server, sdlc-server) skip registration if it is absent, and
+# disc-server sorts first — so without this seed the first MCP would silently not
+# register. `claude mcp add` (the other three) merges into the same file.
 RUN set +e; \
-	out="$(./install --no-mcps --without-logrotate --yes 2>&1)"; rc=$?; \
+	mkdir -p "$HOME/.claude"; \
+	[ -f "$HOME/.claude.json" ] || printf '{}\n' > "$HOME/.claude.json"; \
+	out="$(./install --without-logrotate --yes 2>&1)"; rc=$?; \
 	set -e; \
 	printf '%s\n' "$out"; \
 	if [ "$rc" -ne 0 ]; then \
@@ -115,7 +167,14 @@ RUN set +e; \
 	fi; \
 	test -d "$HOME/.claude/skills"; \
 	test -n "$(find "$HOME/.claude/skills" -name SKILL.md -print -quit)"; \
-	test -f "$HOME/.claude/settings.json"
+	test -f "$HOME/.claude/settings.json"; \
+	for m in disc-server discord-watcher nerf-server sdlc-server wtf-server; do \
+		jq -e --arg m "$m" '.mcpServers[$m]' "$HOME/.claude.json" >/dev/null \
+			|| { echo "MCP baking FAILED: $m not registered in ~/.claude.json"; exit 1; }; \
+		test -x "$HOME/.local/bin/$m" \
+			|| { echo "MCP baking FAILED: $HOME/.local/bin/$m missing or not executable"; exit 1; }; \
+		echo "MCP baked: $m (registered + binary executable)"; \
+	done
 
 WORKDIR /home/ubuntu
 
