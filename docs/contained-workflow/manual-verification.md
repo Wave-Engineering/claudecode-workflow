@@ -13,7 +13,7 @@ own them and are all executed and recorded in the closing story (4.3, #976).
 | MV-02 | Live `~/.claude` not exposed under the full custom mount set | R-01, R-03 | Story 1.3+ |
 | MV-03 | Network egress reaches scream-hole / discord / github from inside | R-05 | later |
 | MV-04 | `aoe send` reaches into a running container (control-plane ingress) | R-15 | Story 3.1 (#970) |
-| MV-05 | A broken container quarantines and recreates on `:stable`, zero loss | R-02, R-17 | Story 3.2+ |
+| MV-05 | A broken container quarantines and recreates on `:stable`, zero loss | R-02, R-17 | Story 3.2 (#971) |
 | MV-06 | A wedged/OOM-killed `claude` still flushed its transcript | R-15 | Story 3.1 (#970) |
 | MV-07 | A secret added mid-session is usable with no container restart | R-13 | Story 1.5 (#965) |
 
@@ -433,4 +433,142 @@ aoe -p meful-test remove <session-id>
 
 | Date | Operator | Image digest / ID | pre-kill lines | post-kill lines | parseable? | surgeon verdict | PASS/FAIL |
 |------|----------|-------------------|----------------|-----------------|------------|-----------------|-----------|
+| _pending_ | _pending_ | _pending_ | | | | | Executed and recorded in closing story 4.3 (#976) |
+
+---
+
+## MV-05 — A broken container quarantines and recreates on `:stable`, zero loss `[R-02, R-17]`
+
+**Goal.** Prove the whole quarantine lifecycle end-to-end on a **real** container:
+a broken `:edge` dogfood container is detected by the flight surgeon, quarantined
+(stop → `docker rm` → recreate on `:stable`), and comes back with **zero durable
+work lost** — the lossless-rollback keystone (Dev Spec §4.6; R-02/R-17).
+
+**Why manual.** The lossless *mechanics* are unit-proven in the stock pytest lane
+(`tests/contained-workflow/test_quarantine.py`) — including the docker-gated
+`test_e2e03_real_rollback_preserves_on_disk_work`, which plants a real container
+with a host-backed bind holding work, runs the real stop/`rm`/recreate, and asserts
+the on-disk file survives. This procedure proves the same through the **real aoe
+sandbox session** an agent runs in and the **real surgeon → quarantine wrapper**
+trigger path: that `aoe` recreates the session on `:stable`, that host-backed
+memory/workspace survive the `docker rm`, and that the quarantined `:edge` digest is
+held from promotion. It needs a live aoe session + the `:edge`/`:stable` image pair,
+so it cannot run in the pytest lane.
+
+### Preconditions
+
+- **aoe 1.13.0**, **rootful docker** — as MV-01.
+- An `:edge` and a `:stable` image (distinct digests). For an isolated run, build
+  the image and tag two stand-ins:
+  `make -C containers/oakandwave-workflow build` then
+  `docker tag oakandwave-workflow:edge oaw-mv05:edge` and
+  `docker tag oakandwave-workflow:edge oaw-mv05:stable`.
+- An isolated aoe profile (as MV-01) so no fleet session is touched.
+- The flight surgeon (`scripts/flight-surgeon/surgeon.py`) and the quarantine
+  wrapper (`scripts/ci/quarantine-container.sh`) present.
+
+### Procedure
+
+1. **Launch a dogfood sandbox session on `:edge`** in the isolated profile, with a
+   host-backed workspace (the durable mount under test):
+
+   ```bash
+   mkdir -p /tmp/mv05-ws && cd /tmp/mv05-ws && git init -q
+   aoe -p meful-test add --sandbox --sandbox-image oaw-mv05:edge --launch /tmp/mv05-ws
+   ```
+
+2. **Do real work that lands on the host-backed mount** — write a durable artifact
+   from inside the session (this is the "work" that must survive):
+
+   ```bash
+   echo 'zero-work-lost' > /tmp/mv05-ws/durable-work.txt
+   ```
+
+   Confirm on the **host**: `cat /tmp/mv05-ws/durable-work.txt` → `zero-work-lost`.
+
+3. **Plant the break.** Wedge the agent so the surgeon classifies it broken — e.g.
+   drive it into a tool loop, or hard-kill `claude` inside the container while aoe
+   still reports `running` (as MV-06 step 3). The transcript stops progressing.
+
+4. **Confirm the surgeon flags it** (host-side, reading the host-backed transcript —
+   no container access):
+
+   ```bash
+   python3 scripts/flight-surgeon/surgeon.py --live \
+     --transcripts-root ~/.claude/projects --fail-on-quarantine ; echo "exit=$?"
+   ```
+
+   **EXPECT:** the container is reported `should_quarantine=true` and the exit is
+   `3`. A dogfood breakage must flag; a `dev-mode` one would not (R-22).
+
+5. **Note the container id** and **run the quarantine** on the surgeon's verdict:
+
+   ```bash
+   cid=$(docker ps --filter name=<session> --format '{{.ID}}')
+   CONTAINER_ID="$cid" SHOULD_QUARANTINE=true \
+     OAW_STABLE_RESOLVED_REF=oaw-mv05:stable \
+     scripts/ci/quarantine-container.sh
+   ```
+
+   The wrapper prints the lossless plan (`N host-backed mount(s) preserved`), then
+   stops + `docker rm`s the broken container and recreates on `:stable`. It appends
+   a quarantine record to `~/.oaw/quarantine/ledger.jsonl`.
+
+6. **Confirm zero work lost** on the **host** — the durable artifact survived the
+   `docker rm` + recreate:
+
+   ```bash
+   cat /tmp/mv05-ws/durable-work.txt   # expect: zero-work-lost
+   ```
+
+   **EXPECT:** `zero-work-lost` — unchanged. A missing/empty file is a **FAIL**
+   (R-02 violated — the rollback was not lossless).
+
+7. **Confirm the recreate is on `:stable`** and re-attached the host source:
+
+   ```bash
+   new=$(docker ps --filter name=<session> --format '{{.ID}}')
+   docker inspect --format '{{.Config.Image}}' "$new"      # expect: oaw-mv05:stable
+   docker inspect --format '{{json .Mounts}}' "$new"       # /tmp/mv05-ws still bind-mounted
+   ```
+
+8. **Confirm the bad `:edge` digest is held from promotion** — the ledger carries
+   the quarantine so the gate's zero-quarantines condition (R-07) trips:
+
+   ```bash
+   tail -1 ~/.oaw/quarantine/ledger.jsonl   # {"event":"quarantine","held_digest":"…edge…",…}
+   ```
+
+9. **Record** the result in the log below: date, operator, `:edge`/`:stable`
+   digests, the surgeon verdict, the step-6 file content, the step-7 image, and
+   PASS/FAIL.
+
+### Cleanup
+
+```bash
+aoe -p meful-test remove <session-id>
+docker rmi oaw-mv05:edge oaw-mv05:stable
+rm -rf /tmp/mv05-ws
+```
+
+### Failure handling
+
+- **Step 6 file missing/empty.** The durable state was not host-backed, or the
+  recreate did not re-attach the source. Inspect the broken container's mounts
+  before the run (`docker inspect --format '{{json .Mounts}}' <cid>`): a durable RW
+  `volume` (not a `bind`) is the R-01 violation the planner refuses — if the wrapper
+  *proceeded*, capture the plan JSON and open a bug against Story 3.2 (#971). If the
+  mount was a bind but the file is gone, capture the recreate's `-v` args.
+- **Step 4 does not flag.** Confirm the profile label is `dogfood` (a `dev-mode`
+  label excludes from quarantine by design, R-22) and that aoe still reports the
+  session `running`; a `stopped`/`error` session is a different (non-stall) path.
+- **`aoe`-side recreate.** The wrapper recreates via `docker run`; the fleet path
+  recreates the aoe **session** on `:stable` (`aoe add --sandbox --sandbox-image
+  oaw-mv05:stable`). If the host→container stop seam (MV-04) resolved to "no in-band
+  ingress", the wrapper's `docker stop` is the fallback — record which path was used.
+
+### Result log
+
+| Date | Operator | `:edge` / `:stable` digest | surgeon verdict | step-6 content | step-7 image | PASS/FAIL | Notes |
+|------|----------|----------------------------|-----------------|----------------|--------------|-----------|-------|
 | _pending_ | _pending_ | _pending_ | | | | | Executed and recorded in closing story 4.3 (#976) |
