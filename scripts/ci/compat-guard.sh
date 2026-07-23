@@ -2,9 +2,8 @@
 # compat-guard.sh — the mechanical compat-break guard, wired to git
 # (Story 3.4 / #973, Plan #959, Dev Spec §5.8, R-18/R-19).
 #
-# The compat-break guard mechanism (invokable now; NOT yet run by CI on real PRs —
-# wiring it into a workflow with a red/green baseline proof is tracked in #1002).
-# It sources the shared-state schema's committed BASELINE and
+# Run by CI on every PR — the `validate` job in .github/workflows/validate.yml (#1002) —
+# and invokable locally. It sources the shared-state schema's committed BASELINE and
 # diffs the working-tree CANDIDATE against it, then hands both to the unit-tested
 # decision module. If the candidate is a same-major-breaking change that did NOT
 # bump the major — the silent minor ship R-19 forbids — the guard trips and this
