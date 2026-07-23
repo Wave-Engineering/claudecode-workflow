@@ -92,8 +92,10 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWSCLI_VE
 # own MCP servers (`claude mcp add --scope user`); deps.json also declares
 # `bun`/`node` for MCP tooling. Relocate the standalone binaries — and node's
 # runtime tree — to world-readable paths already on the system PATH
-# (/usr/local/bin), dereferencing every /root symlink so nothing points back into
-# the unreadable /root. Runs as root, BEFORE the USER ubuntu switch. The final
+# (/usr/local/bin). The standalone binaries are `cp -L`'d (symlinks dereferenced);
+# node is copied whole (`cp -a`) but its internal bin symlinks are RELATIVE, so they
+# resolve inside /opt/node — either way nothing points back into the unreadable
+# /root. Runs as root, BEFORE the USER ubuntu switch. The final
 # `su ubuntu` line proves each runtime actually executes as the non-root user
 # (config-exists ≠ config-works).
 RUN set -eux; \
@@ -140,10 +142,14 @@ WORKDIR ${KIT_SRC}
 # under --no-mcps — the remainder are runtime-only items check-deps can never see
 # at build time: the secret tokens (slack-bot-token, discord-bot-token; never
 # baked — R-12, provided at runtime via the ro ~/.secrets mount) and any
-# host-specific hook path in settings.template.json. Tolerate ONLY that specific
-# advisory — the sentinel line is emitted solely by check-deps as the last step,
-# after all install work — and fail the build on any other error. Then positively
-# assert the kit AND its MCP servers actually landed.
+# host-specific hook path in settings.template.json. The tolerance greps the
+# check-deps SUMMARY sentinel, which fires on ANY missing-dep count — it does not
+# distinguish which deps, so today's expected-missing items (the two secrets + the
+# host hook) are tolerated alongside anything else check-deps would report
+# (tightening to a per-dep whitelist tracked in #1016). The real guarantees: a
+# genuine install error aborts under set -euo pipefail BEFORE check-deps (sentinel
+# absent → build fails), and the positive assertions below cover the kit AND all
+# five MCP servers.
 #
 # Pre-create ~/.claude.json ({} is augmented in place): the two jq-registering
 # MCPs (disc-server, sdlc-server) skip registration if it is absent, and
