@@ -57,6 +57,13 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
+        with:
+          # Pinned to cosign v2.x: the SBOM attestation skips the public rekor
+          # tlog (its predicate exceeds rekor's body ceiling for this ~10 GB
+          # image, failing every run — #995) and uses an RFC3161 TSA instead.
+          # cosign v3 dropped the --tlog-upload lever for the declarative
+          # signing-config model; migrating to that is a follow-up.
+          cosign-release: 'v2.6.4'
 
       - name: Install syft
         uses: anchore/sbom-action/download-syft@v0
@@ -96,6 +103,13 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
+        with:
+          # Pinned to cosign v2.x: the SBOM attestation skips the public rekor
+          # tlog (its predicate exceeds rekor's body ceiling for this ~10 GB
+          # image, failing every run — #995) and uses an RFC3161 TSA instead.
+          # cosign v3 dropped the --tlog-upload lever for the declarative
+          # signing-config model; migrating to that is a follow-up.
+          cosign-release: 'v2.6.4'
 
       - name: Set up Python
         uses: actions/setup-python@v5

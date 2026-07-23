@@ -185,7 +185,7 @@ def test_ring_against_live_digest() -> None:
     digest = os.environ.get("OAKANDWAVE_RING_DIGEST")
     if not digest:
         pytest.skip("set OAKANDWAVE_RING_DIGEST to a live signed digest to run E2E-01")
-    for tool in ("docker", "cosign", "python3"):
+    for tool in ("docker", "cosign", "python3", "curl"):
         if shutil.which(tool) is None:
             pytest.fail(f"OAKANDWAVE_RING_DIGEST set but {tool} not on PATH")
 
