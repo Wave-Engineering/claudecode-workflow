@@ -49,6 +49,9 @@ endif
 ifdef AWSCLI_VERSION
 BUILD_ARGS += --build-arg AWSCLI_VERSION=$(AWSCLI_VERSION)
 endif
+ifdef SDLC_PROBE_REF
+BUILD_ARGS += --build-arg SDLC_PROBE_REF=$(SDLC_PROBE_REF)
+endif
 
 .PHONY: build test ci verify clean
 

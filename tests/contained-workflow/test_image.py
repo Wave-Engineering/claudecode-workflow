@@ -180,6 +180,39 @@ def test_image_kit_mcps_baked() -> None:
         )
 
 
+def test_image_commutativity_probe_baked() -> None:
+    """sdlc-server's commutativity-probe CLI resolves + runs in-image (#1014, R-09).
+
+    sdlc-server shells out to a ``commutativity-probe`` CLI for its
+    ``commutativity_verify`` tool; with the CLI absent from PATH the handler
+    degrades to a ``PROBE_UNAVAILABLE`` verdict (conservative-fail). The probe is
+    a Python package, and sdlc-server's ``install-remote.sh`` installs it via
+    pip/pipx/venv — all of which need pip, which the base ``python3`` lacks (no
+    ensurepip). The Dockerfile bakes it with ``uv tool install`` instead. This
+    asserts the uid-1000 runtime user resolves the console script on PATH and it
+    executes (``--help`` exits 0; a bare invocation would require a subcommand).
+    """
+    docker, ref = _resolve_image_or_skip()
+
+    script = "\n".join(
+        [
+            "set -e",
+            "command -v commutativity-probe",
+            "commutativity-probe --help >/dev/null",
+            "echo PROBE_OK",
+        ]
+    )
+
+    proc = _run_in_image(docker, ref, script)
+    assert proc.returncode == 0, (
+        f"commutativity-probe not resolvable/executable in {ref}:\n"
+        f"--- stdout ---\n{proc.stdout}\n--- stderr ---\n{proc.stderr}"
+    )
+    assert "PROBE_OK" in proc.stdout, (
+        f"commutativity-probe did not confirm in {ref}:\n{proc.stdout}"
+    )
+
+
 def test_image_runs_as_non_root_uid_1000() -> None:
     """The image's default user is the uid-1000 (non-root) runtime user (R-04).
 

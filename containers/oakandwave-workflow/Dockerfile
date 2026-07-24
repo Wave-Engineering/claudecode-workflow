@@ -122,12 +122,14 @@ RUN set -eux; \
 # Reuse the base's uid-1000 `ubuntu` user (TC-2). The kit installs $HOME-rooted,
 # so it must run AS that user for the runtime user to resolve it. The kit's own
 # MCP servers ARE baked here (R-09 baking half): every kit MCP repo is PUBLIC
-# (Wave-Engineering/mcp-server-{sdlc,discord,discord-watcher,wtf,nerf} +
-# commutativity-probe), each shipping a prebuilt linux-x64 release binary — no
-# build secret and no operator step, so the install is hermetic over the public
-# network. `./install` (no --no-mcps) walks mcps.json and runs each server's
-# install-remote.sh: three register via `claude mcp add`, two via a jq edit of
-# ~/.claude.json (pre-created below so the first — disc-server — lands too).
+# (Wave-Engineering/mcp-server-{sdlc,discord,discord-watcher,wtf,nerf}), each
+# shipping a prebuilt linux-x64 release binary — no build secret and no operator
+# step, so the install is hermetic over the public network. `./install` (no
+# --no-mcps) walks mcps.json and runs each server's install-remote.sh: three
+# register via `claude mcp add`, two via a jq edit of ~/.claude.json (pre-created
+# below so the first — disc-server — lands too). sdlc-server additionally bundles
+# a Python `commutativity-probe` CLI — NOT a prebuilt binary and NOT in mcps.json;
+# it is baked separately in the dedicated step below (#1014).
 ENV KIT_SRC=/opt/oakandwave-workflow
 COPY --chown=ubuntu:ubuntu . ${KIT_SRC}
 
@@ -179,6 +181,30 @@ RUN set +e; \
 			|| { echo "MCP baking FAILED: $HOME/.local/bin/$m missing or not executable"; exit 1; }; \
 		echo "MCP baked: $m (registered + binary executable)"; \
 	done
+
+# --- Bake sdlc-server's commutativity-probe CLI (R-09 residual — #1014) --------
+# sdlc-server shells out to a `commutativity-probe` CLI to service its
+# `commutativity_verify` tool; with the CLI absent the handler degrades to a
+# PROBE_UNAVAILABLE verdict (conservative-fail). The probe is a Python package at
+# a pinned tag, NOT a prebuilt release binary like the five servers above.
+# sdlc-server's install-remote.sh (run by `./install`) tries pipx / venv+pip /
+# pip --user to install it — every path needs pip, which the base's python3 lacks
+# (no ensurepip) — so all three no-op with a warning during the install above.
+# `uv` (baked onto PATH in the runtime-exposure layer) installs it with its OWN
+# build frontend, needing no system pip: it builds the package in an isolated
+# environment and drops the `commutativity-probe` console script into
+# ~/.local/bin — exactly where sdlc-server's `command -v` resolves it at runtime.
+# UV_TOOL_BIN_DIR is pinned to the known-on-PATH bin dir so placement is
+# deterministic regardless of any XDG_* the base image may set. The `--help`
+# probe exits 0 (bare invocation requires a subcommand); a non-zero aborts the
+# build under `set -eux`.
+ARG SDLC_PROBE_REF=v0.1.0
+RUN set -eux; \
+	UV_TOOL_BIN_DIR="$HOME/.local/bin" \
+		uv tool install "git+https://github.com/Wave-Engineering/commutativity-probe.git@${SDLC_PROBE_REF}"; \
+	command -v commutativity-probe; \
+	commutativity-probe --help >/dev/null; \
+	echo "commutativity-probe baked: $(command -v commutativity-probe)"
 
 WORKDIR /home/ubuntu
 
