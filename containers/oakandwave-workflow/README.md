@@ -107,19 +107,19 @@ A running container is pinned by digest, so a `:stable` retag can never reach it
 only the next recreate resolves the tag. Rollback is a repoint at the prior digest
 — the wrapper keeps it in `~/.oaw/adoption/rollback` (§5.6).
 
-## Known deferrals
-
-- **commutativity-probe (sdlc-server bundle) is not baked (best-effort).** The
-  five kit MCP servers themselves ARE baked (R-09 baking half, delivered in
-  #1013 — see below). sdlc-server additionally *bundles* a Python
-  `commutativity-probe` CLI; its in-image install is best-effort and currently
-  fails because the base `python3` ships without `pip`/`ensurepip`, so the venv
-  fallback cannot build it. This does not affect the sdlc-server MCP — the
-  `commutativity_verify` handler degrades gracefully to a `PROBE_UNAVAILABLE`
-  verdict until the probe is provisioned at runtime. Baking the probe (e.g. a
-  root-layer `ensurepip` or a prebuilt probe wheel) is a follow-up (#1014).
-
 Delivered since the first cut of this image:
+
+- **commutativity-probe is now baked (R-09 residual — #1014).** sdlc-server
+  shells out to a Python `commutativity-probe` CLI for its `commutativity_verify`
+  tool; without it the handler degrades to a `PROBE_UNAVAILABLE` verdict
+  (conservative-fail). sdlc-server's `install-remote.sh` installs the probe via
+  pipx / venv+pip / pip --user — every path needs pip, which the base `python3`
+  lacks (no `ensurepip`), so all three no-op with a warning. The Dockerfile
+  instead installs it with `uv tool install` (pinned `SDLC_PROBE_REF`, default
+  `v0.1.0`): `uv` builds the package with its own frontend — no system pip — and
+  drops the console script into `~/.local/bin`, on PATH for the uid-1000 user
+  where sdlc-server resolves it. Asserted by
+  `tests/contained-workflow/test_image.py::test_image_commutativity_probe_baked`.
 
 - **Kit MCP servers are now baked (R-09 baking half — #1013).** `./install` runs
   *without* `--no-mcps`: the kit MCP repos are all PUBLIC
