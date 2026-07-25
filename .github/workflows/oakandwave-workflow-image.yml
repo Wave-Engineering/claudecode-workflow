@@ -33,7 +33,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      IMAGE: ghcr.io/${{ github.repository_owner }}/oakandwave-workflow
+      # GHCR path MUST be lowercase — the org login "Wave-Engineering" carries capitals,
+      # and `${{ github.repository_owner }}` would interpolate them into the image path
+      # (the Docker client + GHCR reject uppercase repo names). Hardcoded lowercase here,
+      # matching flightdeck and the sibling scripts; scripts/ci/lowercase-image-guard.sh
+      # fails CI if a capitalized (or raw repository_owner) image ref is ever reintroduced.
+      IMAGE: ghcr.io/wave-engineering/oakandwave-workflow
       TAG: edge
     # Expose the pushed digest so the throwaway-CI ring (smoke) pulls the exact
     # bytes this job built + signed — the digest tested is the digest promoted
