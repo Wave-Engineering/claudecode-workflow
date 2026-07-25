@@ -280,3 +280,75 @@ class TestEmitCli:
         )
         assert r.returncode == 0  # fire-and-forget: never fail the caller
         assert not ep.exists() or ep.read_text() == ""
+
+
+class TestResolveAgent:
+    """resolve_agent() — the FlightDeck card's Dev-Name title source (#1026)."""
+
+    def test_env_wins(self, monkeypatch):
+        from wave_status.events.emit import resolve_agent
+
+        monkeypatch.setenv("FLIGHTDECK_AGENT", "babelfish")
+        assert resolve_agent("/any/root") == "babelfish"
+
+    def test_reads_dev_name_from_identity(self, tmp_path, monkeypatch):
+        from wave_status.events.emit import resolve_agent
+
+        monkeypatch.delenv("FLIGHTDECK_AGENT", raising=False)
+        cl = tmp_path / ".claude"
+        cl.mkdir()
+        (cl / "agent-identity.json").write_text(
+            json.dumps({"dev_name": "dangling-pointer", "dev_team": "bs"}), encoding="utf-8"
+        )
+        assert resolve_agent(tmp_path) == "dangling-pointer"
+
+    def test_missing_identity_returns_none(self, tmp_path, monkeypatch):
+        from wave_status.events.emit import resolve_agent
+
+        monkeypatch.delenv("FLIGHTDECK_AGENT", raising=False)
+        assert resolve_agent(tmp_path / "no-such") is None
+
+    def test_env_beats_present_identity_file(self, tmp_path, monkeypatch):
+        from wave_status.events.emit import resolve_agent
+
+        cl = tmp_path / ".claude"
+        cl.mkdir()
+        (cl / "agent-identity.json").write_text(json.dumps({"dev_name": "from-file"}), encoding="utf-8")
+        monkeypatch.setenv("FLIGHTDECK_AGENT", "from-env")
+        assert resolve_agent(tmp_path) == "from-env"
+
+    def test_malformed_or_nondict_json_returns_none(self, tmp_path, monkeypatch):
+        from wave_status.events.emit import resolve_agent
+
+        monkeypatch.delenv("FLIGHTDECK_AGENT", raising=False)
+        cl = tmp_path / ".claude"
+        cl.mkdir()
+        (cl / "agent-identity.json").write_text("not json {", encoding="utf-8")
+        assert resolve_agent(tmp_path) is None
+        (cl / "agent-identity.json").write_text('["a","list"]', encoding="utf-8")
+        assert resolve_agent(tmp_path) is None
+
+    def test_empty_dev_name_returns_none(self, tmp_path, monkeypatch):
+        from wave_status.events.emit import resolve_agent
+
+        monkeypatch.delenv("FLIGHTDECK_AGENT", raising=False)
+        cl = tmp_path / ".claude"
+        cl.mkdir()
+        (cl / "agent-identity.json").write_text(json.dumps({"dev_name": ""}), encoding="utf-8")
+        assert resolve_agent(tmp_path) is None
+
+    def test_legacy_tmp_fallback(self, tmp_path, monkeypatch):
+        # #1026: transition-window fallback to /tmp/claude-agent-<md5(root)>.json
+        # when the canonical file is absent (mirrors flightdeck-session-emit.sh).
+        import hashlib
+
+        from wave_status.events.emit import resolve_agent
+
+        monkeypatch.delenv("FLIGHTDECK_AGENT", raising=False)
+        digest = hashlib.md5(str(tmp_path).encode("utf-8")).hexdigest()
+        legacy = Path("/tmp") / f"claude-agent-{digest}.json"
+        legacy.write_text(json.dumps({"dev_name": "legacy-name"}), encoding="utf-8")
+        try:
+            assert resolve_agent(tmp_path) == "legacy-name"  # no canonical file → uses /tmp
+        finally:
+            legacy.unlink(missing_ok=True)
