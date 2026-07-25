@@ -759,3 +759,23 @@ class TestAC2_ExhaustiveLegalExits:
         assert "WAVE_AXIOMS.md" in head, (
             "Top-of-file `## Axioms` block must reference WAVE_AXIOMS.md."
         )
+
+
+class TestFlightdeckCampaignCard:
+    """#1026: the driver owns the FlightDeck campaign card — the launch sequence pins
+    the activity id to the plan and emits the card's vitals (so it's keyed
+    deterministically on the plan, not the repo path)."""
+
+    def test_launch_pins_activity_id_to_plan(self, skill_text: str) -> None:
+        launch = _bootstrap(skill_text)  # the "Launch sequence" section
+        assert "export FLIGHTDECK_ACTIVITY_ID=" in launch, (
+            "Launch sequence must pin FLIGHTDECK_ACTIVITY_ID to the plan id so the "
+            "campaign card keys on the plan, not the repo path (#1026)."
+        )
+
+    def test_launch_emits_campaign_activity_start_vitals(self, skill_text: str) -> None:
+        launch = _bootstrap(skill_text)
+        assert "wave-status emit activity_start" in launch
+        assert "--activity-type campaign" in launch
+        assert "planTotal" in launch  # the wave denominator
+        assert "dev_name" in launch  # the Dev-Name (card title)

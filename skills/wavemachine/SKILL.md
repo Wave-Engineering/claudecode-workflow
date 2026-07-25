@@ -167,6 +167,30 @@ legacy `/wavemachine` pre-flight; see that skill for the detailed rationale.)
 
 ## Launch sequence (before the loop)
 
+**First — pin the FlightDeck campaign card (#1026).** BEFORE any `wave-status` emit,
+`export FLIGHTDECK_ACTIVITY_ID=<plan_id>` (the Plan tracking-issue number this campaign
+runs) in the loop's shell. Every main-session emit — the state mutators (steps 1/§ below)
+AND the per-wave tee, which keys on the same id — then lands on ONE card, keyed
+deterministically on the plan, never the repo path (the driver owns the campaign card:
+`wave-status init` runs in the sdlc-server MCP process whose env the driver cannot pin, so
+the card can only be keyed here). Then emit its vitals ONCE (idempotent on resume — it just
+refreshes the card):
+
+```bash
+dev_name="$(jq -r '.dev_name // empty' .claude/agent-identity.json 2>/dev/null)"
+wave-status emit activity_start \
+  --activity-id "$FLIGHTDECK_ACTIVITY_ID" --activity-type campaign \
+  ${dev_name:+--agent "$dev_name"} \
+  --detail "{\"planTotal\": <total waves in the approved plan>}" \
+  --label "<project>" || true
+```
+(Omit `--agent` when the Dev-Name is absent — `${dev_name:+…}` — so the card falls back to
+the project label rather than rendering an empty title; quote `<project>` in case it has spaces.)
+
+`<total waves…>` (the wave denominator) and `<project>` (the fallback title) come from
+`wave_show`/the plan. `--agent` is the Dev-Name (card title). The per-wave `promoted` step
+then accrues the numerator (`per-wave-workflow.js`, #1026 incr 2).
+
 1. Set the `wavemachine_active` flag (`wave-status wavemachine-start --launcher main`).
    Unset it on EVERY exit path (`wave-status wavemachine-stop`) — treat as a `finally`.
 2. Regenerate + open the status panel (`generate-status-panel` then `xdg-open`).

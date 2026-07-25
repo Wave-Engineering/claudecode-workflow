@@ -655,19 +655,13 @@ def init_state(plan_data: dict, root: Path, *, force: bool = False) -> None:
     # --- flights.json (empty initially) ---
     save_json(d / "flights.json", {"flights": {}})
 
-    # FlightDeck campaign card (#1026): tag this as a `campaign` activity (not a
-    # session) and carry the wave DENOMINATOR (`planTotal`) so the card can render
-    # "completed/planTotal" instead of "0/?". The Dev-Name (title) is resolved from
-    # the identity file by emit_state_event; the numerator accrues from per-wave
-    # `promoted` steps. `label` stays the project — the card's fallback title.
-    _emit_event(
-        root,
-        "activity_start",
-        wave=first_wave,
-        label=plan_data.get("project"),
-        activity_type="campaign",
-        detail={"planTotal": len(wave_ids)},
-    )
+    # A bare activity_start marks the plan's creation. The FlightDeck CAMPAIGN card
+    # (Dev-Name title, planTotal denominator, campaign type) is emitted by the
+    # wavemachine DRIVER keyed on <plan_id> — see skills/wavemachine (#1026). The
+    # driver owns the campaign card so it is keyed deterministically on the plan id
+    # rather than the repo path: init runs via the sdlc-server MCP process, whose env
+    # the driver cannot pin, so it could never be re-keyed here from the driver's shell.
+    _emit_event(root, "activity_start", wave=first_wave, label=plan_data.get("project"))
 
 
 def extend_state(plan_data: dict, root: Path) -> None:
