@@ -52,7 +52,26 @@ class TestHelpers:
 
 class TestEmitInstructions:
     def test_emits_step_scoped_by_phase_and_label(self, src):
-        assert "wave-status emit step --activity-id '${WAVE_ID}' --wave '${WAVE_ID}' --phase '${ph}' --label '${label}'" in src
+        # #1026: activity-id is the CAMPAIGN (AID = planId || WAVE_ID), not the wave;
+        # `--wave` still tags the current wave for scope.
+        assert "wave-status emit step --activity-id '${AID}' --wave '${WAVE_ID}' --phase '${ph}' --label '${label}'" in src
+
+
+class TestCampaignScoping:
+    """#1026: per-wave telemetry keys on the campaign, and a promotion increments
+    the wave numerator."""
+
+    def test_aid_is_campaign_scoped(self, src):
+        # The tee keys on the campaign (planId), falling back to WAVE_ID only for a
+        # bare/test run — this is what stops a separate card spawning per wave.
+        assert "const AID = PLAN_ID || WAVE_ID" in src
+        # No emit still keys activity-id on WAVE_ID directly.
+        assert "--activity-id '${WAVE_ID}'" not in src
+
+    def test_promotion_emits_the_numerator_step(self, src):
+        # The terminal node appends a disposition-labeled tee; a `promoted` label is
+        # what the flightdeck fold counts (completed++), i.e. the wave numerator.
+        assert "flightdeckTee({ phase: 'Promote', label: disposition })" in src
 
     def test_token_metric_is_a_seamed_null_stub(self, src):
         # A metric named tokens, with NO --value ⇒ null (honest stub), marked #853.
