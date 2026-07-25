@@ -655,7 +655,19 @@ def init_state(plan_data: dict, root: Path, *, force: bool = False) -> None:
     # --- flights.json (empty initially) ---
     save_json(d / "flights.json", {"flights": {}})
 
-    _emit_event(root, "activity_start", wave=first_wave, label=plan_data.get("project"))
+    # FlightDeck campaign card (#1026): tag this as a `campaign` activity (not a
+    # session) and carry the wave DENOMINATOR (`planTotal`) so the card can render
+    # "completed/planTotal" instead of "0/?". The Dev-Name (title) is resolved from
+    # the identity file by emit_state_event; the numerator accrues from per-wave
+    # `promoted` steps. `label` stays the project — the card's fallback title.
+    _emit_event(
+        root,
+        "activity_start",
+        wave=first_wave,
+        label=plan_data.get("project"),
+        activity_type="campaign",
+        detail={"planTotal": len(wave_ids)},
+    )
 
 
 def extend_state(plan_data: dict, root: Path) -> None:

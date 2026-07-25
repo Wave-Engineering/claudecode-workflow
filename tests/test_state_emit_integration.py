@@ -72,6 +72,22 @@ class TestOneEventPerMutation:
         state.init_state(sample_plan, temp_git_repo)
         ev = _one("activity_start")
         assert ev["wave"] == "wave-1"
+        # FlightDeck campaign card (#1026): tagged a `campaign` (not a session), and
+        # carries the wave DENOMINATOR so the card renders completed/planTotal, not "0/?".
+        assert ev["activityType"] == "campaign"
+        assert ev["detail"]["planTotal"] == 3  # sample_plan has wave-1/2/3
+
+    def test_init_state_activity_start_carries_dev_name(self, temp_git_repo, sample_plan):
+        # #1026: the card title is the Dev-Name from the identity file (the render
+        # falls back to the project label when it is absent).
+        cl = temp_git_repo / ".claude"
+        cl.mkdir(exist_ok=True)
+        (cl / "agent-identity.json").write_text(
+            json.dumps({"dev_name": "dangling-pointer", "dev_team": "bs"}), encoding="utf-8"
+        )
+        state.init_state(sample_plan, temp_git_repo)
+        ev = _one("activity_start")
+        assert ev["agent"] == "dangling-pointer"
 
     def test_planning_phase(self, inited):
         state.planning(inited)

@@ -31,6 +31,7 @@ DI-seams (env vars):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -106,6 +107,45 @@ def activity_id_for_root(root: object) -> str:
         return name or "unknown"
     except Exception:
         return "unknown"
+
+
+def _dev_name_from(path: Path) -> str | None:
+    """Read ``dev_name`` from a JSON identity file, or ``None``. Never raises
+    (missing file, malformed JSON, non-dict, and empty name all yield ``None``)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        name = data.get("dev_name")
+        return name if isinstance(name, str) and name else None
+    except Exception:
+        return None
+
+
+def resolve_agent(root: object) -> str | None:
+    """Resolve the emitting agent's Dev-Name for the FlightDeck card title (#1026).
+
+    Resolution order, mirroring ``scripts/flightdeck-session-emit.sh`` and the
+    CLAUDE.md identity rule:
+
+    1. ``FLIGHTDECK_AGENT`` env (an operator/driver can pin it);
+    2. the canonical ``<root>/.claude/agent-identity.json`` ``dev_name``;
+    3. the legacy ``/tmp/claude-agent-<md5(root)>.json`` ``dev_name`` — the
+       transition-window fallback while the fleet cycles off the /tmp scheme.
+
+    Returns ``None`` when none resolve, so the card render falls back to the
+    project label rather than showing a hostname. Never raises.
+    """
+    env = os.environ.get("FLIGHTDECK_AGENT")
+    if env:
+        return env
+    root_s = str(root)
+    name = _dev_name_from(Path(root_s) / ".claude" / "agent-identity.json")
+    if name:
+        return name
+    try:
+        digest = hashlib.md5(root_s.encode("utf-8")).hexdigest()  # noqa: S324 (non-crypto keying)
+    except Exception:
+        return None
+    return _dev_name_from(Path("/tmp") / f"claude-agent-{digest}.json")
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +347,7 @@ def emit_state_event(root: object, kind: str, **fields: object) -> dict | None:
         return emit(
             kind,
             activity_id=activity_id_for_root(root),
-            agent=os.environ.get("FLIGHTDECK_AGENT"),
+            agent=resolve_agent(root),
             log_ref=os.environ.get("FLIGHTDECK_LOG_REF"),
             **fields,
         )
