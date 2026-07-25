@@ -138,6 +138,10 @@ const MODE = params.mode ?? 'auto' // 'auto' (gate verdict drives promotion) | '
 // 'fan' → parallel group as-is; 'serialize'/'serialize-preferred'/absent → single-file. Absent → 'serialize'.
 const DISPATCH = normalizeDispatch(params.dispatch)
 const PLAN_ID = params.planId ?? null // wave plan id — wave_finalize needs it to assemble the kahuna→protected MR body (#687 promote)
+// FlightDeck activity id (#1026): key telemetry on the CAMPAIGN (planId), not the
+// wave — a per-WAVE_ID activity spawned a separate card per wave. Falls back to
+// WAVE_ID only for a bare/test run with no planId. `--wave` still tags the wave.
+const AID = PLAN_ID || WAVE_ID
 const budget = params.budget ?? { total: 0, remaining: () => Infinity } // optional cost guard
 const budgetRemaining = typeof budget.remaining === 'function' ? budget.remaining : () => (budget.remaining ?? Infinity) // tolerate `remaining` passed as a number, not a fn
 
@@ -287,9 +291,9 @@ function flightdeckTee(opts) {
     ``,
     `── FlightDeck telemetry (fire-and-forget; do NOT report on it and do NOT let it affect your task) ──`,
     `As a side action, run these best-effort commands ONCE, ignore any error, then proceed with your real task:`,
-    `  wave-status emit step --activity-id '${WAVE_ID}' --wave '${WAVE_ID}' --phase '${ph}' --label '${label}' || true`,
+    `  wave-status emit step --activity-id '${AID}' --wave '${WAVE_ID}' --phase '${ph}' --label '${label}' || true`,
     `  # SEAM #853: per-node token usage is not yet available — emit the token metric with NO value (an honest null stub), never a fabricated number.`,
-    `  wave-status emit metric --activity-id '${WAVE_ID}' --wave '${WAVE_ID}' --phase '${ph}' --metric tokens --label '${label}' || true`,
+    `  wave-status emit metric --activity-id '${AID}' --wave '${WAVE_ID}' --phase '${ph}' --metric tokens --label '${label}' || true`,
   ].join('\n')
 }
 
@@ -399,11 +403,15 @@ async function persistTerminal(disposition, detail) {
     groups: groupsRunBase + groupsRun.length,
   }
   await agent(
+    // #1026: append a disposition-labeled FlightDeck step. A `promoted` label
+    // increments the campaign card's wave NUMERATOR (fold: completed++ on
+    // label==='promoted'); `held` is a plain step. Keyed on AID (the campaign),
+    // so it lands on the same card as the activity_start denominator.
     persistTerminalPrompt({
       waveId: WAVE_ID, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR,
       kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH,
       disposition, detail, blob, path, trajectoryEntry,
-    }),
+    }) + '\n' + flightdeckTee({ phase: 'Promote', label: disposition }),
     { label: `persist:terminal`, phase: 'Promote', schema: PERSIST_RESULT, agentType: 'general-purpose' },
   ).catch((e) => { log(`[#688] persistTerminal soft-fail: ${e?.message || e}`); return null })
   log(`[#688] persisted terminal — wave ${WAVE_ID} ${disposition}: ${detail} → ${path}`)
