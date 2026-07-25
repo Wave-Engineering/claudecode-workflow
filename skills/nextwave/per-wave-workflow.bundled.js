@@ -1138,6 +1138,36 @@ function flightdeckTee(opts) {
   ].join('\n')
 }
 
+// #1026 AC5 — the trust gate's vitals as FlightDeck metrics, emitted ONCE at the wave
+// terminal (the gate has resolved by promote/hold). Both are HONEST derivations from the
+// gate's REAL signal results — never fabricated (R-19), same discipline as the #853 token
+// stub above (which stays value-less):
+//   • confidence = fraction of the trust signals that passed (0..1) — how solid the verdict is.
+//   • drift      = did the commutativity / intent-drift signal flag drift? ("true"|"false").
+// A gate with no signals (SKIPPED / non-gate exit) emits NEITHER — an honest absence, not a
+// zero. The card already renders both cells (flightdeck card.ts) — this fills them.
+function flightdeckGateMetrics(gate) {
+  const signals = (gate && gate.signals) || []
+  const lines = []
+  if (signals.length > 0) {
+    const confidence = (signals.filter((s) => s.passed).length / signals.length).toFixed(2)
+    lines.push(`  wave-status emit metric --activity-id '${AID}' --wave '${WAVE_ID}' --phase 'Promote' --metric confidence --value '${confidence}' || true`)
+  }
+  const commutativity = signals.find((s) => s.signal === 'commutativity')
+  if (commutativity) {
+    // drift detected ⇔ the commutativity / intent-drift signal did NOT pass.
+    const drift = commutativity.passed ? 'false' : 'true'
+    lines.push(`  wave-status emit metric --activity-id '${AID}' --wave '${WAVE_ID}' --phase 'Promote' --metric drift --value '${drift}' || true`)
+  }
+  if (lines.length === 0) return ''
+  return [
+    ``,
+    `── FlightDeck trust-gate vitals (#1026 AC5; fire-and-forget; do NOT report on it and do NOT let it affect your task) ──`,
+    `As a side action, run these best-effort commands ONCE, ignore any error, then proceed with your real task:`,
+    ...lines,
+  ].join('\n')
+}
+
 // teeAgent(prompt, opts): run a real agent() node with the FlightDeck tee appended
 // to its prompt. PURE delegation — string concat + the runtime `agent`; no I/O, no
 // Date. Returns agent()'s promise so any existing `.catch(...)` still chains.
@@ -1252,7 +1282,8 @@ async function persistTerminal(disposition, detail) {
       waveId: WAVE_ID, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR,
       kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH,
       disposition, detail, blob, path, trajectoryEntry,
-    }) + '\n' + flightdeckTee({ phase: 'Promote', label: disposition }),
+    }) + '\n' + flightdeckTee({ phase: 'Promote', label: disposition })
+       + '\n' + flightdeckGateMetrics(gate), // #1026 AC5: confidence + drift from the resolved gate
     { label: `persist:terminal`, phase: 'Promote', schema: PERSIST_RESULT, agentType: 'general-purpose' },
   ).catch((e) => { log(`[#688] persistTerminal soft-fail: ${e?.message || e}`); return null })
   log(`[#688] persisted terminal — wave ${WAVE_ID} ${disposition}: ${detail} → ${path}`)

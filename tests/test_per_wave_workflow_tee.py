@@ -90,6 +90,46 @@ class TestCampaignScoping:
         assert "|| true" in src  # emit failures are swallowed in the prompt
 
 
+class TestGateMetrics:
+    """#1026 AC5 — confidence + drift emitted from the RESOLVED trust gate at the wave
+    terminal. Both are honest derivations from the gate's real signal results (never
+    fabricated, R-19), and a gate with no signals emits neither (honest absence)."""
+
+    def test_helper_defined(self, src):
+        assert "function flightdeckGateMetrics(gate)" in src
+
+    def test_confidence_is_the_passed_signal_fraction(self, src):
+        # confidence = (passed / total).toFixed(2) — a REAL fraction of the trust
+        # signals, not a fabricated constant.
+        assert "signals.filter((s) => s.passed).length / signals.length).toFixed(2)" in src
+        assert "--metric confidence --value '${confidence}'" in src
+
+    def test_drift_is_the_commutativity_intent_drift_signal(self, src):
+        assert "signals.find((s) => s.signal === 'commutativity')" in src
+        # drift detected ⇔ the commutativity signal did NOT pass.
+        assert "commutativity.passed ? 'false' : 'true'" in src
+        assert "--metric drift --value '${drift}'" in src
+
+    def test_honest_absence_when_gate_has_no_signals(self, src):
+        # SKIPPED / non-gate exit ⇒ no signals ⇒ NEITHER metric emitted (not a zero).
+        assert "const signals = (gate && gate.signals) || []" in src
+        assert "if (lines.length === 0) return ''" in src
+
+    def test_terminal_wires_the_gate_metrics(self, src):
+        # appended to the terminal prompt alongside the promoted/held tee.
+        assert "flightdeckGateMetrics(gate)" in src
+        assert "flightdeckTee({ phase: 'Promote', label: disposition })" in src
+
+    def test_gate_metrics_are_fire_and_forget(self, src):
+        metric_lines = [
+            ln for ln in src.splitlines()
+            if "--metric confidence" in ln or "--metric drift" in ln
+        ]
+        assert metric_lines
+        for ln in metric_lines:
+            assert "|| true" in ln
+
+
 # ---------------------------------------------------------------------------
 # Spine nodes teed; trust-critical nodes intentionally NOT teed
 # ---------------------------------------------------------------------------
