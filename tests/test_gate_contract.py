@@ -112,3 +112,53 @@ class TestPromotionLifecycle:
             "promotion must confirm the merge actually landed on the protected branch "
             "(not treat a pending merge as done)"
         )
+
+
+class TestCiSignal:
+    """CI trust signal — waits on the kahuna->protected MERGE-RESULT pipeline.
+    #1035: bounded ci_wait_run + a direct /merge-pipeline fallback so the signal no
+    longer over-waits ~30-57 min/wave on GitLab's head_pipeline freshness race."""
+
+    def test_signal_ci_waits_on_the_merge_result(self) -> None:
+        src = _gate_src()
+        assert "ciSignalPrompt" in src, "ci signal prompt missing"
+        assert "ci_wait_run" in src and "require_merge_result" in src, (
+            "ci signal must ci_wait_run on the merge-result pipeline"
+        )
+
+    def test_ci_wait_run_is_bounded(self) -> None:
+        # #1035 bleed fix: with no explicit timeout the tool rode its ~1800s idle default
+        # and burned ~30-57 min/wave to confirm a <3-min pipeline. Bound it explicitly.
+        src = _gate_src()
+        assert "timeout_sec=420" in src, "ci_wait_run must pass an explicit bounded timeout_sec (#1035)"
+        assert "poll_interval_sec=15" in src, "ci_wait_run must pass an explicit poll_interval_sec (#1035)"
+
+    def test_direct_merge_pipeline_fallback(self) -> None:
+        # #1035: when ci_wait_run does not confirm success (the GitLab head_pipeline
+        # freshness race), read the MR's OWN /merge pipeline directly instead of HOLDing.
+        src = _gate_src()
+        assert "FALLBACK" in src, "ci signal must have the step-2b direct fallback (#1035)"
+        assert "merge_requests/" in src and "pipelines" in src, (
+            "fallback must read the MR's own pipelines directly"
+        )
+        assert "refs/merge-requests/" in src, "fallback must target the /merge pipeline ref"
+
+    def test_fallback_never_grades_a_branch_or_head_pipeline(self) -> None:
+        # The safety invariant survives the fallback: only a green MERGE-RESULT run passes;
+        # a branch or GitLab detached-head pipeline is never graded.
+        src = _gate_src()
+        assert "refs/merge-requests/N/head" in src, (
+            "the GitLab detached-head pipeline must be named as the invalid one"
+        )
+        assert "branch/head fallback" in src, (
+            "the fallback must explicitly disclaim being a branch/head fallback (safety invariant)"
+        )
+
+    def test_fallback_binds_to_current_head_sha(self) -> None:
+        # #1035 review: step-2b must NOT drop step-2's freshness binding — a green /merge run
+        # for a PREVIOUS head is stale. Require the selected pipeline's sha == the MR head SHA.
+        src = _gate_src()
+        assert "head_sha" in src, "step-2b must read the MR's current head SHA for freshness"
+        assert "sha EQUALS" in src, (
+            "step-2b must PASS only if the /merge pipeline's sha matches the current head (freshness)"
+        )
