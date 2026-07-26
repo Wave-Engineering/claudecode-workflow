@@ -140,3 +140,11 @@ echo "==> promote: retag $promoted_digest → $stable_ref (exact digest, no rebu
 docker buildx imagetools create --tag "$stable_ref" "$promoted_digest"
 
 echo "==> promoted: $stable_ref now points at the digest E2E-01 tested"
+
+# Publishing :stable to the public Docker Hub OaW brand + re-signing it there needs a
+# keyless-cosign OIDC identity, which this operator shell does not have — it runs in
+# GitHub Actions (id-token). Print the follow-up so the operator chains it explicitly;
+# it only ever mirrors this already-promoted :stable (nothing unvetted reaches the brand).
+echo
+echo "==> next (public Docker Hub mirror + re-sign, runs in GitHub Actions):"
+echo "      gh workflow run oakandwave-workflow-mirror.yml"

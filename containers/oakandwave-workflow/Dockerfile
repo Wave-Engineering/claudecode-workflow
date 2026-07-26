@@ -211,7 +211,7 @@ WORKDIR /home/ubuntu
 # --- OCI provenance (CI stamps the authoritative semver/revision in Story 2.1) -
 LABEL org.opencontainers.image.title="oakandwave-workflow" \
 	org.opencontainers.image.description="Versioned OaW Claude Code kit image on the AoE sandbox base" \
-	org.opencontainers.image.source="https://github.com/Wave-Engineering/claudecode-workflow" \
+	org.opencontainers.image.source="https://github.com/wave-engineering/claudecode-workflow" \
 	org.opencontainers.image.base.name="${BASE_IMAGE}"
 
 # ENTRYPOINT/CMD inherited from the base (CMD ["sleep","infinity"]); aoe manages
