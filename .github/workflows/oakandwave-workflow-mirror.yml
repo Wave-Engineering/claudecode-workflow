@@ -1,0 +1,82 @@
+name: Mirror :stable to Docker Hub
+
+# Mirror the already-promoted GHCR :stable image to the public Docker Hub OaW brand
+# (docker.io/oakandwave/oakandwave-workflow) and RE-SIGN it there.
+#
+# This is the OIDC half of publishing that cannot run in the operator's local
+# promote step: keyless cosign needs a Fulcio OIDC identity, which a GHA job has
+# (id-token: write) and an operator shell does not. The mechanical promotion gate +
+# edge->stable retag stay operator-side (scripts/ci/promote-oakandwave-image.sh) —
+# this workflow only ever touches an ALREADY-promoted :stable, so nothing unvetted
+# reaches the public brand and there is no gate-signal-in-CI problem.
+#
+# Run it AFTER a promotion:  gh workflow run oakandwave-workflow-mirror.yml
+on:
+  # Manual only — run it AFTER a promotion. No inputs on purpose: the workflow always
+  # mirrors the CURRENT promoted :stable, so there is no operator-facing way to point the
+  # public brand at an arbitrary (e.g. :edge) digest — the no-:edge invariant holds
+  # mechanically, not by discipline (#1038 review).
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read # pull the :stable image + resolve its digest from ghcr
+  id-token: write # keyless cosign (Fulcio/Rekor) via OIDC — re-sign the Docker Hub digest
+
+env:
+  # Lowercase paths — Docker Hub rejects a mixed-case repository path (and GHCR the same).
+  GHCR_IMAGE: ghcr.io/wave-engineering/oakandwave-workflow
+  DOCKERHUB_IMAGE: docker.io/oakandwave/oakandwave-workflow
+  STABLE_TAG: stable
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io (source)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub (destination)
+        uses: docker/login-action@v3
+        with:
+          username: oakandwave
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          # Match the build workflow's pin (#995: SBOM attestation uses an RFC3161 TSA,
+          # off the public rekor tlog; cosign v3 dropped the --tlog-upload lever).
+          cosign-release: 'v2.6.4'
+
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Resolve the :stable digest to mirror
+        id: resolve
+        run: ./scripts/ci/resolve-stable-digest.sh
+
+      - name: Mirror the :stable digest to Docker Hub oakandwave
+        # Copy the EXACT digest (not the moving tag) cross-registry; imagetools copies the
+        # manifest + blobs using each registry's own creds and rebuilds nothing.
+        env:
+          SRC_DIGEST: ${{ steps.resolve.outputs.digest_ref }}
+        run: |
+          docker buildx imagetools create --tag "${DOCKERHUB_IMAGE}:${STABLE_TAG}" "$SRC_DIGEST"
+
+      - name: Re-sign the Docker Hub digest (cosign keyless + syft SBOM)
+        # cosign signatures are registry+digest-bound, so the cross-registry copy does NOT
+        # carry the GHCR signature — sign the Docker Hub digest fresh. Reuses the exact same
+        # signing script the build job uses; OIDC (id-token) makes keyless work here.
+        env:
+          DIGEST_REF: ${{ steps.resolve.outputs.dockerhub_digest_ref }}
+        run: ./scripts/ci/sign-oakandwave-image.sh

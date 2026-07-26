@@ -54,7 +54,13 @@ fi
 if [[ -z "$source" ]]; then
 	source="$(_git remote get-url origin)" || source=""
 fi
-[[ -n "$source" ]] || source="https://github.com/Wave-Engineering/claudecode-workflow"
+[[ -n "$source" ]] || source="https://github.com/wave-engineering/claudecode-workflow"
+
+# Lowercase the source URL. GHCR tolerates a capitalized org in an OCI label, but the
+# Docker Hub mirror + the OaW lowercase-everywhere convention want it lowercase, and
+# GITHUB_REPOSITORY carries the org's capitals ("Wave-Engineering"). github.com paths
+# are case-insensitive, so this resolves to the identical repo.
+source="${source,,}"
 
 # --- build timestamp (RFC3339, UTC) -------------------------------------------
 created="${OAKANDWAVE_CREATED:-}"

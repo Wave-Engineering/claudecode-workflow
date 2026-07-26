@@ -106,10 +106,14 @@ def test_oci_labels() -> None:
         labels["org.opencontainers.image.revision"]
         == "0123456789abcdef0123456789abcdef01234567"
     )
+    # The source URL is lowercased (#1038): GITHUB_REPOSITORY carries the org's capitals
+    # ("Wave-Engineering"), but the label — like the image path — must be lowercase so the
+    # Docker Hub mirror and the OaW lowercase-everywhere convention hold. github.com paths
+    # are case-insensitive, so this resolves to the identical repo.
     assert (
         labels["org.opencontainers.image.source"]
-        == "https://github.com/Wave-Engineering/claudecode-workflow"
-    )
+        == "https://github.com/wave-engineering/claudecode-workflow"
+    ), f"source must be lowercased; got {labels['org.opencontainers.image.source']!r}"
     assert labels["org.opencontainers.image.created"] == "2026-07-22T12:00:00Z"
 
 

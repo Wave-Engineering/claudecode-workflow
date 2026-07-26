@@ -88,6 +88,27 @@ identity is the image workflow and whose issuer is GitHub Actions OIDC. A bare
 `cosign verify` that ignores the identity is **not** sufficient — anyone can sign
 a public digest; the identity binding is the security property.
 
+### 2a. Docker Hub `:stable` mirror signature (#1038)
+
+The public-brand image at `docker.io/oakandwave/oakandwave-workflow:stable` is
+**re-signed** by the mirror workflow (`.github/workflows/oakandwave-workflow-mirror.yml`),
+because a cosign signature is registry+digest-bound and does not survive the
+cross-registry copy. Its keyless cert identity is therefore the **mirror** workflow,
+not the image build — verifying the Docker Hub signature with §2's image-workflow
+regexp fails on a legitimately-signed image. Pin the mirror identity instead:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp "https://github.com/Wave-Engineering/claudecode-workflow/.github/workflows/oakandwave-workflow-mirror.yml@.*" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  "docker.io/oakandwave/oakandwave-workflow@sha256:<digest>"
+```
+
+The Docker Hub digest is **identical** to the GHCR `:stable` digest — the mirror
+copies the exact digest (R-23) — so §5's digest-continuity check ties the two
+registries to one content sha. (§3's SBOM regexp is the broad `.../.*`, so the
+attestation already verifies on either registry.)
+
 ---
 
 ## 3. Syft SBOM (R-24)
