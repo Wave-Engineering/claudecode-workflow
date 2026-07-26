@@ -1,0 +1,50 @@
+name: "OaW sign image"
+description: >-
+  Keyless cosign signature + optional syft SBOM attestation, bound to an image digest.
+  The DRY core of OaW fleet image signing — consume it via a SHA-pinned `uses:`. Needs the
+  calling job to grant `permissions: id-token: write` (keyless cosign OIDC) and to be logged
+  in to the digest's registry.
+inputs:
+  digest-ref:
+    description: "The immutable digest to sign (registry/image@sha256:...). Never a moving tag (R-23)."
+    required: true
+  attach-sbom:
+    description: "Also generate + attest a syft SPDX SBOM."
+    required: false
+    default: "true"
+  sbom-tlog:
+    description: >-
+      Upload the SBOM attestation to the public rekor tlog. Set "false" for large images
+      whose SBOM predicate exceeds rekor's body ceiling — it then uses an RFC3161 TSA
+      timestamp instead (#995). The signature always goes to rekor regardless.
+    required: false
+    default: "true"
+  tsa-server-url:
+    description: "RFC3161 TSA endpoint used when sbom-tlog=false."
+    required: false
+    default: "https://timestamp.sigstore.dev/api/v1/timestamp"
+  cosign-version:
+    description: "cosign release to install (pinned; v3 dropped the --tlog-upload lever used by the TSA path)."
+    required: false
+    default: "v2.6.4"
+runs:
+  using: "composite"
+  steps:
+    - name: Install cosign
+      uses: sigstore/cosign-installer@v3
+      with:
+        cosign-release: ${{ inputs.cosign-version }}
+    - name: Install syft
+      if: ${{ inputs.attach-sbom == 'true' }}
+      uses: anchore/sbom-action/download-syft@v0
+    - name: Sign the digest (+ SBOM)
+      shell: bash
+      env:
+        DIGEST_REF: ${{ inputs.digest-ref }}
+        ATTACH_SBOM: ${{ inputs.attach-sbom }}
+        SBOM_TLOG: ${{ inputs.sbom-tlog }}
+        TSA_SERVER_URL: ${{ inputs.tsa-server-url }}
+      # Invoke via `bash` (not a direct exec) so the action never depends on the script's
+      # execute bit surviving a consuming repo's checkout — a mode loss would otherwise fail
+      # exit 126 in the CONSUMER's CI, which the local test (which also uses `bash`) can't catch.
+      run: bash "${GITHUB_ACTION_PATH}/oaw-sign-image.sh"
