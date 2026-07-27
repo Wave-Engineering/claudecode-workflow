@@ -9,11 +9,19 @@ import {
   parseArgs,
   computePending,
   waveIdOf,
+  campaignBranchFor,
+  waveKahunaFor,
+  isIntegrated,
   resolveIntentTier,
   routeVerdict,
   routeJudgment,
+  routeRelease,
   runCampaign,
   waveOversightPrompt,
+  dodVerificationPrompt,
+  releaseMergePrompt,
+  DOD_VERDICT,
+  RELEASE_RESULT,
   JUDGMENT_RESULT,
 } from '../../skills/nextwave/campaign-loop.js'
 
@@ -53,12 +61,65 @@ ok(computePending(allWaves, ['wave-1', 'wave-2', 'wave-3', 'wave-4']).length ===
 // idempotent: same promoted set → same pending
 ok(JSON.stringify(computePending(allWaves, ['wave-1'])) === JSON.stringify(computePending(allWaves, ['wave-1'])), 'computePending is idempotent')
 
+// ── #1052 branch topology (campaign/ vs kahuna/ — the git D/F constraint) ─────
+ok(campaignBranchFor({ planId: 56, slug: 'Blueshift Plan' }) === 'campaign/56-blueshift-plan', 'campaignBranchFor: campaign/<planId>-<slug>, slugified')
+ok(waveKahunaFor({ planId: 56, waveId: 'W-1' }) === 'kahuna/56-W-1', 'waveKahunaFor: kahuna/<planId>-<waveId> (plan-namespaced — two campaigns cannot collide on kahuna/W-1)')
+// The prefixes MUST differ: git cannot hold a branch that is a directory prefix of another branch
+// (`campaign/56-x` + `campaign/56-x/W-1` → fatal: cannot lock ref … exists). A shared prefix would
+// make every wave branch unrepresentable, so this is a correctness assertion, not cosmetics.
+{
+  const camp = campaignBranchFor({ planId: 56, slug: 'x' })
+  const kah = waveKahunaFor({ planId: 56, waveId: 'W-1' })
+  ok(!kah.startsWith(`${camp}/`) && !camp.startsWith(`${kah}/`), '#1052: wave kahuna is NOT a path-child of the campaign branch (git D/F ref conflict)')
+}
+ok(waveKahunaFor({ waveId: 'W-1' }) === 'kahuna/W-1', 'waveKahunaFor without planId → kahuna/<waveId>')
+// The campaign slug is human-typed (a plan title), so a case-only restatement must NOT resolve to a
+// second campaign branch — git refs are case-sensitive but macOS/Windows checkouts are not, so the
+// two could never coexist anyway. The waveId is engine-generated and stays verbatim (one wave, one
+// spelling, matching resume.js's flight-branch names).
+ok(campaignBranchFor({ planId: 56, slug: 'BlueShift PLAN' }) === campaignBranchFor({ planId: 56, slug: 'blueshift plan' }),
+  '#1052: campaign branch is case-INSENSITIVE in the slug (a retitled plan must not fork a second campaign branch)')
+ok(waveKahunaFor({ planId: 56, waveId: 'W-1' }) !== waveKahunaFor({ planId: 56, waveId: 'w-1' }),
+  '#1052: waveId casing is preserved verbatim (resume.js builds flight branches + its cleanup glob from the same un-lowercased id)')
+
+// ── isIntegrated (the landed predicate, incl. the legacy-record path) ─────────
+ok(isIntegrated({ integrated: true }) === true, 'isIntegrated: integrated:true → landed')
+ok(isIntegrated({ integrated: false, promoted: true }) === false, 'isIntegrated: explicit integrated:false WINS over a stale promoted:true')
+ok(isIntegrated({ promoted: true }) === true, 'isIntegrated: legacy record (promoted only) → landed — a mid-campaign engine upgrade must not stall')
+ok(isIntegrated({ promoted: false }) === false, 'isIntegrated: legacy record, not landed')
+ok(isIntegrated({}) === false && isIntegrated(null) === false, 'isIntegrated: absence → not landed (conservative)')
+
 // ── routeVerdict ──────────────────────────────────────────────────────────────
-ok(routeVerdict({ gate: 'PASS', promoted: true }).advance === true, 'routeVerdict PASS+promoted → advance')
-ok(routeVerdict({ gate: 'PASS', promoted: false }).advance === false, 'routeVerdict PASS+!promoted → HOLD (promoted≠delivered)')
+ok(routeVerdict({ gate: 'PASS', integrated: true }).advance === true, 'routeVerdict PASS+integrated → advance')
+ok(routeVerdict({ gate: 'PASS', integrated: false }).advance === false, 'routeVerdict PASS+!integrated → HOLD (integrated≠delivered)')
+ok(routeVerdict({ gate: 'PASS', promoted: true }).advance === true, 'routeVerdict PASS+promoted (legacy record) → advance')
+ok(routeVerdict({ gate: 'PASS', promoted: false }).advance === false, 'routeVerdict PASS+!promoted → HOLD')
 ok(routeVerdict({ gate: 'HOLD' }).advance === false, 'routeVerdict HOLD → hold')
 ok(routeVerdict({ gate: 'SKIPPED' }).advance === false, 'routeVerdict SKIPPED → hold')
 ok(routeVerdict({}).advance === false, 'routeVerdict {} → hold (conservative)')
+
+// ── #1052 routeRelease — the SINGLE protected-branch write predicate ──────────
+const PLAN = [{ id: 'w1' }, { id: 'w2' }, { id: 'w3' }]
+const MET = { met: true }
+ok(routeRelease({ report: { outcome: 'completed', wavesAdvanced: ['w1', 'w2', 'w3'] }, allWaves: PLAN, dod: MET }).release === true, 'routeRelease: complete plan + DoD met → RELEASE')
+ok(routeRelease({ report: { outcome: 'held', heldAt: 'w2', wavesAdvanced: ['w1'] }, allWaves: PLAN, dod: MET }).release === false, 'routeRelease: campaign held → block (even with a met DoD)')
+ok(routeRelease({ report: { outcome: 'completed', wavesAdvanced: ['w1', 'w2'] }, allWaves: PLAN, dod: MET }).release === false, 'routeRelease: plan INCOMPLETE (w3 missing) → block — completeness is judged against the FULL plan, not this run')
+// The resume case: a run that only advanced w3 still releases, because w1/w2 are durably integrated.
+// Without alreadyIntegrated a resumed campaign could NEVER satisfy completeness and would hold
+// forever with every wave actually integrated.
+ok(routeRelease({ report: { outcome: 'completed', wavesAdvanced: ['w3'], alreadyIntegrated: ['w1', 'w2'] }, allWaves: PLAN, dod: MET }).release === true, 'routeRelease: resumed run + alreadyIntegrated → RELEASE (slice-independent)')
+ok(routeRelease({ report: { outcome: 'completed', wavesAdvanced: ['w1', 'w2', 'w3'] }, allWaves: PLAN, dod: { met: false, unmet: ['AC3'] } }).release === false, 'routeRelease: DoD NOT met → block (this is why one-merge-at-the-end is a gate, not decoration)')
+ok(routeRelease({ report: { outcome: 'completed', wavesAdvanced: ['w1', 'w2', 'w3'] }, allWaves: PLAN, dod: null }).release === false, 'routeRelease: DoD verdict ABSENT → block (an undeterminable DoD is not a met DoD)')
+ok(routeRelease({ report: { outcome: 'completed', wavesAdvanced: ['w1', 'w2', 'w3'] }, allWaves: PLAN, dod: { met: 'yes' } }).release === false, 'routeRelease: malformed DoD (met not === true) → block')
+ok(routeRelease({ report: { outcome: 'completed', wavesAdvanced: [] }, allWaves: [], dod: MET }).release === false, 'routeRelease: empty plan → block (a campaign with no waves is a misconfiguration, not a no-op)')
+ok(routeRelease({}).release === false, 'routeRelease({}) → block (conservative on absence)')
+// A wave id that is not in the plan is not evidence ABOUT the plan. alreadyIntegrated is
+// agent-reported and feeds the completeness half of the ONE trunk-write predicate, so a bogus id
+// must not be able to shrink missing[] into a release. (campaign-workflow.js filters to the plan's
+// id set before this call; this pins that routeRelease does not itself credit unknown ids.)
+ok(routeRelease({ report: { outcome: 'completed', wavesAdvanced: ['w1'], alreadyIntegrated: ['w2', 'nope', 'also-not-a-wave'] }, allWaves: PLAN, dod: MET }).release === false,
+  '#1052: unknown wave ids in alreadyIntegrated do NOT satisfy completeness (w3 still missing)')
+ok(typeof routeRelease({}).reason === 'string' && routeRelease({}).reason.length > 0, 'routeRelease always carries a human-readable reason')
 
 // ── routeJudgment ─────────────────────────────────────────────────────────────
 ok(routeJudgment({ continue: true }).advance === true, 'routeJudgment continue:true → advance')
@@ -170,6 +231,28 @@ async function main() {
   ok(waveOversightPrompt({ intentTier: 'issues-only' }).includes('ISSUES-ONLY tier'), 'lens: issues-only tier calibration')
   ok(/kahuna\/w2/.test(prompt), 'lens: names the kahuna branch for live inspection')
   ok(JUDGMENT_RESULT.required.includes('continue') && JUDGMENT_RESULT.additionalProperties === false, 'JUDGMENT_RESULT schema requires continue, no extra props')
+
+  // ── #1052 the release nodes — DoD verification, then the ONE trunk merge ──
+  const dodP = dodVerificationPrompt({ planId: '56', targetRepo: 'o/r', targetRepoDir: '/tmp/r', campaignBranch: 'campaign/56-x', protectedBranch: 'main', wavesIntegrated: ['w1', 'w2'] })
+  ok(/campaign\/56-x/.test(dodP), 'dod prompt: verifies against the CAMPAIGN branch')
+  ok(/plan_load_dod/.test(dodP), 'dod prompt: loads the plan DoD (the criteria, not an invented list)')
+  // The DoD node must ANSWER, never act — a node that could merge would make routeRelease advisory.
+  ok(!/pr_merge\b/.test(dodP) && !/gh pr merge/.test(dodP), 'dod prompt: NEVER merges — it answers; routing is the pure predicate\'s job')
+  ok(DOD_VERDICT.required.includes('met') && DOD_VERDICT.additionalProperties === false, 'DOD_VERDICT schema requires met, no extra props')
+
+  const relP = releaseMergePrompt({ planId: '56', targetRepo: 'o/r', campaignBranch: 'campaign/56-x', protectedBranch: 'main', wavesIntegrated: ['w1', 'w2'] })
+  ok(/campaign\/56-x/.test(relP) && /main/.test(relP), 'release prompt: names both refs (campaign → protected)')
+  // A wave's pipeline ran against the campaign branch, which drifts from trunk — so the release
+  // needs its OWN merge-result CI run against current trunk. A branch-CI signal is weaker.
+  ok(/require_merge_result/.test(relP), 'release prompt: gates on a MERGE-RESULT CI run (no per-wave pipeline tested this diff against current trunk)')
+  ok(/ci_wait_run/.test(relP), 'release prompt: waits on that CI run before merging')
+  ok(/Refs #/.test(relP), 'release prompt: honors Refs #N (do-not-close) when closing issues (#1046)')
+  ok(RELEASE_RESULT.required.includes('released') && RELEASE_RESULT.additionalProperties === false, 'RELEASE_RESULT schema requires released, no extra props')
+
+  // The oversight lens must know BOTH branches, so a mid-campaign `promoted:false` reads as the
+  // normal state it now is (nothing has shipped yet) rather than as catalog-I evidence.
+  const campPrompt = waveOversightPrompt({ justLanded: { wave: 'w2' }, trajectory: [], remainingPlan: ['w3'], intentTier: 'issues-only', kahunaBranch: 'kahuna/56-w2', campaignBranch: 'campaign/56-x', protectedBranch: 'main' })
+  ok(/campaign\/56-x/.test(campPrompt), 'lens: names the campaign branch (where the wave INTEGRATED)')
 
   console.log('')
   if (failed > 0) {

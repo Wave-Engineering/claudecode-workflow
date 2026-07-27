@@ -161,3 +161,85 @@ class TestPrimePlanningAndReconcile:
         assert "IDEMPOTENT" in src, (
             "reconcile merge must be idempotent (skip already-merged branches)"
         )
+
+
+class TestKahunaBootstrap:
+    """#1052 — the wave's integration branch is established off the INTEGRATION BASE
+    before the flight loop, by this engine.
+
+    Before #1052 nothing in this repo created `origin/<kahuna>`; the only creator was
+    server-side `wave_init`, which cuts ONE plan-scoped branch off trunk. Inside a
+    campaign that is wrong twice over (shared across waves, so wave 1's promote deletes
+    wave 2's base; and trunk-based, so wave 2's flights miss wave 1's integrated work),
+    while every downstream node — worktree setup, the gate's diff, the promote merge —
+    reads `origin/<kahuna>` as a precondition.
+    """
+
+    def test_bootstrap_node_exists(self) -> None:
+        src = _wf_src()
+        assert "KAHUNA-BOOTSTRAP" in src, (
+            "per-wave workflow must establish this wave's kahuna branch (nothing else creates it)"
+        )
+
+    def test_bootstrap_bases_on_integration_base_not_protected(self) -> None:
+        # The whole point: cut from INTEGRATION_BASE. Basing on the protected branch inside a
+        # campaign hands the wave a baseline missing every previously-integrated wave.
+        src = _wf_src()
+        assert "branch ${KAHUNA_BRANCH} origin/${INTEGRATION_BASE}" in src, (
+            "the kahuna branch must be cut from origin/<integrationBase>"
+        )
+
+    def test_bootstrap_reuses_never_recuts(self) -> None:
+        # An existing kahuna carries this wave's already-integrated flights; re-cutting
+        # (or resetting/force-pushing) it silently discards them.
+        src = _wf_src()
+        assert "REUSE it" in src and "Do NOT re-cut" in src, (
+            "bootstrap must reuse an existing kahuna branch, never re-cut it"
+        )
+
+    def test_bootstrap_verifies_then_fails_loud(self) -> None:
+        # Read-back verification, and abort rather than fall back — least of all to trunk.
+        src = _wf_src()
+        assert "rev-parse refs/remotes/origin/${KAHUNA_BRANCH}" in src, (
+            "bootstrap must verify the branch by reading it back from origin"
+        )
+        assert "could not establish the wave's integration branch" in src, (
+            "an unestablished kahuna must abort the wave (throw), not proceed"
+        )
+
+    def test_bootstrap_requires_a_verified_sha(self) -> None:
+        # `head_sha` is optional in the schema, so a schema-valid `{ready: true}` carrying no sha would
+        # pass a bare `ready` check — "reported ready" wearing "verified ready"'s clothes, over a branch
+        # nobody read back. Same defect the promotion-PR node closes by requiring a concrete pr_number.
+        src = _wf_src()
+        assert "/^[0-9a-f]{7,40}$/.test(bootstrapSha)" in src, (
+            "bootstrap must require a sha-shaped head_sha, not merely ready:true"
+        )
+
+    def test_kahuna_may_not_be_the_base_or_trunk(self) -> None:
+        # Flights merge INTO the kahuna and the gate diffs it AGAINST the base. If they are the same ref
+        # every flight lands on the base ungated, and by the time the gate looked its diff would be empty.
+        src = _wf_src()
+        assert "must not equal ${label}" in src, (
+            "bootstrap must reject a kahuna branch equal to the integration base or the protected branch"
+        )
+
+    def test_reuse_log_does_not_assert_unverified_ancestry(self) -> None:
+        # Catalog G: report the observed post-state, not the assumption. Existence != descended-from-base.
+        src = _wf_src()
+        assert "merge-base --is-ancestor" in src, "the reuse path must actually CHECK ancestry"
+        assert "based_on_base" in src, "and report it as a field rather than asserting it in the log"
+        assert "reused (already based on)" not in src, (
+            "the log must not claim an ancestry the node never verified"
+        )
+
+    def test_trajectory_entry_carries_integrated(self) -> None:
+        # #1052: the durable trajectory entry must carry `integrated`, not `promoted` alone.
+        # A record with only `promoted` is indistinguishable from a pre-#1052 one, and the
+        # campaign's (deliberately conservative) rehydrate would decline to count the wave —
+        # re-running an already-integrated wave, whose now-empty diff conservative-fails the
+        # review signal into a HOLD, stalling the campaign short of its release gate.
+        src = _wf_src()
+        assert "integrated: disposition === 'promoted'" in src, (
+            "the trajectory entry must carry `integrated` (current vocabulary), not only `promoted`"
+        )

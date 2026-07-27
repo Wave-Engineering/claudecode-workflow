@@ -41,8 +41,20 @@ rehydrate (durable resume)
    → flight loop  [ serial groups; parallel issues; dynamic re-plan; CLOSED legal exits ]
        per group:  plan(Prime) → parallel issue-workers → merge+reconcile(Prime)
    → trust gate   [ 4 signals in parallel → one more legal exit ]
-   → promote (kahuna→protected)  OR  hold-for-review
+   → integrate (kahuna→integration base)  OR  hold-for-review
 ```
+
+**Where the wave lands (#1052).** The final node merges the kahuna branch into this wave's
+**integration base**, which is *not* necessarily the protected branch:
+
+- **inside a campaign** (`/wavemachine`) the base is the campaign's own long-lived branch, so the
+  node performs an **integration**; the protected branch is written exactly once, by the campaign's
+  release gate, after every wave has integrated *and* the DoD is met.
+- **standalone** (a human running one wave) there is no campaign branch, the wave *is* the whole
+  increment, and the base defaults to the protected branch — so integration and release coincide.
+
+A wave never decides to write trunk; it writes whatever base it was handed. See the BRANCH TOPOLOGY
+note in `campaign-loop.js` for why the interim merge-backs were removed.
 
 Every halt is a coded condition; every judgment is an `agent()`; nothing can stall the
 campaign on a question it did not need to ask. The skill's job is thin: resolve the
@@ -75,10 +87,11 @@ Supplied by the caller (`/wavemachine` per wave, or a human launching one wave):
 | `issues` | the wave's issue numbers (one repo — single-repo-per-wave axiom, §4.1). **Required, non-empty.** |
 | `targetRepo` | `owner/repo` for `gh -R` scoping |
 | `targetRepoDir` | the clone the durable worktrees attach to (§4.2) |
-| `kahunaBranch` | the integration target; every flight PR targets this, never the protected branch |
-| `preserveKahuna` | #722: `true` ⇒ persistent per-plan kahuna (shared across a plan's waves) — promote does NOT delete it. Default `false` = per-wave disposable (deleted on promote). See lifecycle below. |
+| `kahunaBranch` | the wave's own integration target; every flight PR targets this, never the integration base and never the protected branch |
+| `integrationBase` | #1052: where the kahuna branch merges on the success exit — the **campaign branch** in a campaign, the protected branch for a standalone wave. Defaults to `protectedBranch` (the standalone shape). A campaign driver ALWAYS passes it. |
+| `preserveKahuna` | #722: `true` ⇒ persistent per-plan kahuna (shared across a plan's waves) — promote does NOT delete it. Default `false` = per-wave disposable. **Retired inside a campaign (#1052)** — accepted but ignored when `integrationBase !== protectedBranch`. See lifecycle below. |
 | `dispatch` | #824: the wave's dispatch hint from `phases-waves.json` (written by `/prepwaves` #823). `fan` ⇒ the planner's conflict-free group runs in parallel; `serialize` / `serialize-preferred` / **absent** ⇒ single-file (one issue per flight-group). Threaded into the engine and **enforced** by the flight loop — see "Dispatch enforcement" below. Absent ⇒ `serialize` (CT-01). |
-| `protectedBranch` | the promotion target on the success exit |
+| `protectedBranch` | the trunk. Used to *recognize* trunk (the engine derives "am I in a campaign?" from `integrationBase !== protectedBranch`), and as the default `integrationBase` for a standalone wave. A campaign wave never writes it. |
 | `mode` | `auto` (verdict drives promotion) \| `interactive` (verdict returned; human routes) |
 | `planId` | wave plan id — the gate's PR-open node needs it to assemble the kahuna→protected MR body (#687/#5) |
 | `budget` | optional `{ total, remaining() }` cost guard (the `cost` legal exit) |
@@ -86,25 +99,23 @@ Supplied by the caller (`/wavemachine` per wave, or a human launching one wave):
 The closed numeric guards (`maxGroups`, `maxRework`, `maxIdle`, `costFloor`) have
 safe defaults in the script and rarely need overriding.
 
-### Kahuna branch lifecycle — per-wave disposable vs per-plan persistent (#722)
+### Kahuna branch lifecycle — disposable again (#1052 supersedes #722)
 
-Two models; the campaign driver picks one by the **shape of the `kahunaBranch` it passes** and
-the `preserveKahuna` flag:
+**Inside a campaign, every wave's kahuna is disposable.** It is cut off the campaign branch, the
+wave integrates it there, and the promote node deletes it. Nothing continues from a kahuna across
+waves, so a **squash** merge is harmless — which is the whole reason the interim merge-backs went
+away (#892: a persistent branch plus a squash merge cannot show equality with its base, because the
+squash rewrites the history the equality check compares).
 
-- **Per-wave disposable (default, `preserveKahuna` omitted/false).** `kahunaBranch` defaults to
-  `kahuna/<waveId>`; the wave promotes it onto the protected branch and the promote node **deletes
-  it** — the integration branch existed only for this wave. Each wave branches fresh off the
-  protected/release HEAD.
-- **Per-plan persistent (`preserveKahuna: true`).** A campaign that threads ONE kahuna across a
-  plan's waves (e.g. `kahuna/56-quartermaster-docs-labs`, cumulative integration over waves 1..N)
-  passes `preserveKahuna: true` so the promote node **does NOT delete** the branch after each wave.
-  Deleting it after wave 1 (the old unconditional behavior) stranded waves 2..N off a **diverged
-  base** — origin recreated at the post-promotion HEAD while local work still descended from the
-  pre-promotion base, so the next wave's push was rejected non-fast-forward. `preserveKahuna: true`
-  eliminates that. The plan's final wave (or the driver) retires the branch.
+The cross-wave state that #722 needed a persistent kahuna for now lives on the **campaign branch**,
+which is long-lived by design and never squashed onto (waves merge *into* it; it merges onto trunk
+once). `preserveKahuna: true` is therefore **accepted but ignored** when `integrationBase !==
+protectedBranch` — a stale launcher passing it cannot resurrect the divergence. The engine logs when
+it ignores the flag.
 
-**Drivers MUST match the flag to the branch shape:** a shared per-plan `kahunaBranch` with
-`preserveKahuna` left false will delete the branch mid-plan and break the remaining waves.
+**Standalone waves keep the old semantics.** With no campaign branch, `integrationBase` is the
+protected branch, and `preserveKahuna` behaves exactly as #722 documented: `false` (default) ⇒ the
+promote node deletes the kahuna after the merge; `true` ⇒ it survives.
 
 ### Dispatch enforcement — the `dispatch` hint governs flight parallelism (#824)
 
@@ -139,7 +150,9 @@ annotated `serialize` and never reaches the executor as `fan`.
 1. **Resolve wave inputs.** Read the next pending wave for this Plan (`wave_next_pending`),
    its issue list, the `kahuna_branch` (always populated — `/wavemachine` bootstraps it
    at Plan launch), the target repo + clone dir, the protected branch (from
-   `.claude-project.md`), and the wave's **`dispatch`** field (from `phases-waves.json`;
+   `.claude-project.md`), the **`integrationBase`** (the campaign branch when running under
+   `/wavemachine`; omit for a standalone wave and it defaults to the protected branch, #1052),
+   and the wave's **`dispatch`** field (from `phases-waves.json`;
    absent ⇒ `serialize`, CT-01) to thread into `args.dispatch`. Refuse if `kahuna_branch` is
    unset — wave state was not bootstrapped through the campaign launch sequence.
 2. **Validate specs.** Confirm every wave issue is structurally buildable
@@ -147,27 +160,36 @@ annotated `serialize` and never reaches the executor as `fan`.
 3. **Launch the Workflow.** Invoke the single-file artifact `per-wave-workflow.bundled.js`
    (via the Workflow tool's `scriptPath`) with the inputs above passed as **`args` (a JSON
    object)**. The script owns everything from here: rehydrate → flight loop → trust gate (which
-   opens the kahuna→protected DRAFT PR first, then runs the four signals on it, #5) → promote.
+   opens the kahuna→base DRAFT PR first, then runs the four signals on it, #5) → integrate.
 4. **Consume the verdict.** The Workflow's return is the per-wave gate (§5): a Workflow
    cannot pause mid-run for human input, so its *ending with a verdict* IS the gate. The
-   return carries `gate` ∈ `PASS | HOLD | SKIPPED` **and** `promoted` ∈ `true | false`, plus
-   `concerns`/`deferrals` (informational — surfaced and continued, never halted-on). **`gate`
-   and `promoted` are distinct facts** — read both:
-   - `auto` + `{ gate:'PASS', promoted:true }` ⇒ the Workflow's promote node landed the
-     kahuna→protected merge. The wave is DONE on the protected branch. Report it.
-   - `auto` + `{ gate:'PASS', promoted:false }` ⇒ the gate passed but the promote node
+   return carries `gate` ∈ `PASS | HOLD | SKIPPED`, **`integrated`** ∈ `true | false` (did the
+   kahuna→base merge land — the field the campaign loop routes on), `promoted` (the same fact
+   under its legacy name, kept so a mid-campaign engine upgrade doesn't strand in-flight
+   records), `integrationBase`, plus `concerns`/`deferrals` (informational — surfaced and
+   continued, never halted-on). **`gate` and `integrated` are distinct facts** — read both:
+   - `auto` + `{ gate:'PASS', integrated:true }` ⇒ the promote node landed the kahuna→base
+     merge. In a campaign the wave is on the **campaign branch**, not trunk — it is *integrated,
+     not released*; the campaign's DoD gate decides release. Standalone, base *is* trunk, so the
+     wave is done. Report which one it was.
+   - `auto` + `{ gate:'PASS', integrated:false }` ⇒ the gate passed but the promote node
      **soft-failed — the merge did NOT land** (the wave is recorded HELD; `reason` carries the
-     promote error). The code is sound but not on the protected branch → surface as a HOLD for
-     manual promotion, NOT as success. (Promotion can be retried on resume — the kahuna branch
+     promote error). The code is sound but not on the integration base → surface as a HOLD for
+     manual integration, NOT as success. (It can be retried on resume — the kahuna branch
      is gate-clean.)
-   - `interactive` + `{ gate:'PASS', promoted:false }` ⇒ by design the Workflow never
-     auto-promotes; surface the verdict + the kahuna→protected diff and STOP for the human, who
-     routes promotion. When the human lands the kahuna→protected merge, the wave's terminal
+   - `interactive` + `{ gate:'PASS', integrated:false }` ⇒ by design the Workflow never
+     auto-promotes; surface the verdict + the kahuna→base diff and STOP for the human, who
+     routes the merge. When the human lands it, the wave's terminal
      disposition is updated to `promoted` in wave-status — that durable record is what
      `/wavemachine`'s interactive branch reads (`waveDisposition`) to advance, so it never
      advances on the operator's word alone. (`/wavemachine` owns this branch in a campaign.)
-   - `{ gate:'HOLD' }` / `{ gate:'SKIPPED' }` (always `promoted:false`) ⇒ a trust signal failed
+   - `{ gate:'HOLD' }` / `{ gate:'SKIPPED' }` (always `integrated:false`) ⇒ a trust signal failed
      or the flight loop hit a HOLD exit before the gate; surface the failing signals / halt reason.
+
+   **The durable disposition string is still `promoted | held`** and now means "landed on its
+   integration base". It was deliberately not renamed: in-flight campaigns and the `wave-status`
+   CLI both read that value, so renaming it would strand every existing record for a vocabulary
+   improvement. `released` is a separate, campaign-level fact that only the release node asserts.
 5. **Report.** Surface a human-readable summary: groups run, issues merged, any HOLD
    reason, collected concerns/deferrals. Post wave status to `#wave-status` if running
    under a campaign.
@@ -206,7 +228,7 @@ closed**: the only ways the per-wave Workflow stops are the script's coded exits
 
 | Exit | Condition | Meaning |
 |---|---|---|
-| success | `pending` empty | all issues merged to kahuna → trust gate runs |
+| success | `pending` empty | all issues merged to kahuna → trust gate runs, then kahuna→integration base |
 | runaway | `groupsRun ≥ MAX_GROUPS` | too many groups → human review |
 | thrash | `idleRounds ≥ MAX_IDLE` | groups with zero net merges → not converging |
 | cost | `budget` floor | stop before the ceiling |
@@ -224,9 +246,13 @@ stalling on (#78/#79/#90), now expressed as bounded control flow.
 ## Non-Negotiables
 
 - EXECUTION primitive — NO design decisions. Workers are SPEC EXECUTORS.
-- **NEVER merge directly to the protected branch.** Flight PRs target the kahuna branch;
-  the kahuna→protected merge is the only path to the protected branch and is gated by
-  the four-signal trust gate (§3.4).
+- **NEVER merge directly to the integration base from a flight.** Flight PRs target the kahuna
+  branch; the kahuna→base merge is the only path off the kahuna branch and is gated by the
+  four-signal trust gate (§3.4).
+- **A wave inside a campaign NEVER writes the protected branch (#1052).** Its base is the campaign
+  branch; the single trunk write belongs to the campaign's release gate, after the DoD. The engine
+  forces this structurally — every gate node takes `integrationBase`, and no wave-level path takes
+  `protectedBranch` as a merge target.
 - **Single-repo per wave** (§4.1) — a wave resolves to exactly one `target_repo`.
 - **Durable worktrees, not `/tmp`** (§4.2, `lesson_tmp_identity_boot_wipe`): the wave's
   worktrees live under `<target>/.claude/.worktrees/wave-<id>/`. Idempotent re-attach on
