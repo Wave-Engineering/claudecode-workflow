@@ -564,11 +564,35 @@ Checks `$VISUAL` and `$EDITOR` environment variables, then user preferences, the
 
 ---
 
+### `/muse` -- Conception and Shaping (the front door)
+
+The conversation that happens *before* anyone knows what they're building. Takes an ill-defined itch and gets it to `/ddd`-ready in two movements: **conception** (find the real problem, the Designer confirms it) and **shaping** (propose candidate solutions, record what was decided and why). Writes `docs/SKETCHBOOK.md`, which `/ddd begin` then extends.
+
+**When to use it:**
+- When the problem itself is still fuzzy — "something's off but I can't name it"
+- When you have a feature request and suspect the real pain is somewhere else
+- Before `/ddd`, always: event storming an undecided identity models a thing nobody chose
+
+**Examples:**
+
+```
+/muse            # start the conversation; there are no subcommands
+```
+
+**The two movements:** conception (four ADD drivers elicited invisibly → the Designer explicitly confirms the problem statement) → shaping (candidate shapes proposed and pressed → numbered, attributed, reasoned decisions + an open-questions register). One continuous conversation; the movements are never announced to the Designer.
+
+**How it ends:** when every remaining open question is *behavioral* ("what happens when X fails?") rather than *definitional* ("what is this thing?"). Behavioral questions are exactly what `/ddd` answers; definitional ones still open means shaping isn't finished.
+
+**Key detail:** the Designer holds the lock. `/muse` never self-confirms the problem statement, and a later re-see that amends it must go back for explicit re-confirmation. The decision ledger is append-only — a decision found wrong is superseded by a new numbered decision, never edited away, because the correction is meaningless without the thing it corrected.
+
+---
+
 ### `/ddd` -- Domain-Driven Design Facilitation
 
 A structured workflow for domain modeling using event storming. Guides you through 8 stages of domain discovery, formalizes the results into a Domain Model document, and hands off to `/devspec create` for Dev Spec generation.
 
 **When to use it:**
+- After `/muse` has settled the problem and shaped a solution (the normal path)
 - When starting a new project and need to discover the domain model
 - When translating business requirements into technical architecture
 - When you want a structured domain model to feed into Dev Spec creation
@@ -582,7 +606,9 @@ A structured workflow for domain modeling using event storming. Guides you throu
 /ddd resume      # Resume interrupted event storming session
 ```
 
-**The pipeline:** `/ddd begin` (8-stage event storming → `docs/SKETCHBOOK.md`) → `/ddd draft` (formalize → `docs/DOMAIN-MODEL.md`) → `/ddd accept` (verify and hand off) → `/devspec create` (generate Dev Spec).
+**The pipeline:** `/muse` (conception + shaping → `docs/SKETCHBOOK.md`) → `/ddd begin` (8-stage event storming, **appended to the same sketchbook**) → `/ddd draft` (formalize → `docs/DOMAIN-MODEL.md`) → `/ddd accept` (verify and hand off) → `/devspec create` (generate Dev Spec).
+
+**Sketchbook ownership:** `/ddd begin` resolves the sketchbook path first and **appends** when it already exists — it never overwrites `/muse`'s problem statement, decision ledger, or open questions. One document, growing across stages, each adding resolution to the last.
 
 **Event storming stages:** Domain Context → Events (brainstorm) → Events (organize) → Commands → Actors → Policies → Aggregates → Read Models. Progress is checkpointed to the sketchbook after each stage.
 
