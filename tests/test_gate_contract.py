@@ -77,23 +77,40 @@ class TestPromotionContract:
             "the flag presumes a merge queue/train that no longer exists"
         )
 
-    def test_promotion_targets_kahuna_to_protected(self) -> None:
-        # Flights never merge straight to the protected branch — only kahuna->protected promotes.
+    def test_promotion_targets_kahuna_to_integration_base(self) -> None:
+        # Flights never merge straight to the integration base — only kahuna->base promotes.
         src = _gate_src()
-        assert "kahunaBranch" in src and "protectedBranch" in src, (
-            "promotion must route kahuna_branch -> protected_branch"
+        assert "kahunaBranch" in src and "integrationBase" in src, (
+            "promotion must route kahuna_branch -> integration_base"
         )
+
+    def test_gate_takes_no_protected_branch_target(self) -> None:
+        # #1052: the integration base is NOT necessarily the protected branch — inside a campaign
+        # it is the campaign branch, and the protected branch is written exactly once, by the
+        # campaign's release gate. Asserted NEGATIVELY: a `protectedBranch` PARAMETER on any gate
+        # node is how the next wrong-target merge gets written (a caller passing a campaign branch
+        # into a param named `protectedBranch` reads as authorization to touch trunk). Prose may
+        # name the protected branch; a parameter may not.
+        src = _gate_src()
+        for bad in ("protectedBranch,", "protectedBranch }", "protectedBranch }}", "${protectedBranch}"):
+            assert bad not in src, (
+                f"gate.js must not take a protectedBranch parameter (found {bad!r}) — "
+                "the merge target is integrationBase (#1052)"
+            )
 
 
 class TestPromotionLifecycle:
     """kahuna-branch lifecycle on promotion — relocated from the all-green /
-    any-red kahuna-handling skill assertions (#722 per-plan persistence)."""
+    any-red kahuna-handling skill assertions (#722, retired in-campaign by #1052)."""
 
-    def test_can_preserve_per_plan_kahuna(self) -> None:
-        # #722: a per-plan kahuna shared across waves 1..N must PERSIST, else
-        # deleting it after wave 1 strands the later waves off a diverged base.
+    def test_preserve_kahuna_flag_survives_for_standalone(self) -> None:
+        # #722 gave a per-plan kahuna the ability to PERSIST across waves. #1052 retires that
+        # NEED inside a campaign (the campaign branch carries cross-wave state, so each wave's
+        # kahuna is disposable again — which is what makes a squash merge harmless, #892). The
+        # flag itself must still exist: a STANDALONE /nextwave run has no campaign branch, so
+        # its caller may still ask for a surviving kahuna.
         assert "preserveKahuna" in _gate_src(), (
-            "promotion must support preserveKahuna (#722 per-plan kahuna persistence)"
+            "promotion must still honor preserveKahuna for standalone waves (#722/#1052)"
         )
 
     def test_deletes_disposable_per_wave_kahuna(self) -> None:

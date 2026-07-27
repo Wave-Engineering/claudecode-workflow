@@ -105,7 +105,7 @@ try {
     //    corrupts durable resume/prune state).
     const promoteArgs = {
       waveId: 'W-7', targetRepo: 'o/r', targetRepoDir: '/clone', kahunaBranch: 'kahuna/1-x',
-      protectedBranch: 'release', disposition: 'promoted', detail: 'gate PASS',
+      integrationBase: 'campaign/1-x', disposition: 'promoted', detail: 'gate PASS',
       blob: toBlob(state), path: '/clone/.claude/status/wave-W-7.json', trajectoryEntry: {},
     }
     const promotePrompt = persistTerminalPrompt(promoteArgs)
@@ -117,6 +117,16 @@ try {
     assert.ok(heldPrompt.includes('wave-status hold-wave W-7'), 'held → wave-status hold-wave <waveId>')
     assert.ok(!/wave-status complete\b/.test(heldPrompt), 'held must NEVER call `complete`')
     ok('persistTerminalPrompt held-branch emits `hold-wave`, never `complete`')
+
+    // #1052: the prompt states WHERE the wave landed, and that ref is `integrationBase` (the campaign
+    // branch inside a campaign), not the protected branch. Asserted because this test previously
+    // passed while rendering `undefined` into both branches of the prompt — it named the base nowhere,
+    // so a renamed parameter was invisible here and only failed in a sibling suite.
+    for (const [label, p] of [['promoted', promotePrompt], ['held', heldPrompt]]) {
+      assert.ok(p.includes('campaign/1-x'), `${label} prompt must name the integration base it landed on (or did not)`)
+      assert.ok(!/undefined/.test(p), `${label} prompt must not render undefined (renamed/missing param)`)
+    }
+    ok('persistTerminalPrompt names the integrationBase in both branches, never `undefined` (#1052)')
   } catch (e) {
     bad('round-trip', e)
   }

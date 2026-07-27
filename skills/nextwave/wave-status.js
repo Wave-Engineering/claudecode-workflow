@@ -64,12 +64,47 @@ export function toBlob(state) {
 //   2. the full-overwrite blob write.
 // `newlyMerged` is the issues merged THIS iteration that still need their MR recorded +
 // issue closed; `blob` is the already-normalized object to write verbatim.
-export function persistIterationPrompt({ waveId, targetRepo, kahunaBranch, newlyMerged, blob, path }) {
+// #1046/#1052 — WHERE THE ISSUE CLOSES. Until #1052 this node closed the issue on the platform at
+// the moment its flight merged into kahuna. Under the campaign shape that is factually wrong: the
+// work is on a campaign branch, the protected branch has not been written, and nothing has shipped.
+// A closed issue is the board's claim that the work is delivered, and closing here would make that
+// claim N waves early — then a campaign abort would leave a trail of closed issues for work that
+// was deleted. So: durable engine state (wave_close_issue) is recorded HERE, because the flight
+// genuinely did land on the integration base; the PLATFORM close moves to the campaign's release
+// node (campaign-loop.js releaseMergePrompt step 4), which runs after the one trunk merge.
+//
+// `inCampaign` selects between the two. A standalone /nextwave wave promotes straight to the
+// protected branch, so for it merge and release coincide and the platform close still belongs here
+// — there is no later node to do it, and omitting it would silently stop closing issues.
+export function persistIterationPrompt({ waveId, targetRepo, kahunaBranch, newlyMerged, blob, path, inCampaign = false, integrationBase }) {
+  const closeStep = inCampaign
+    ? [
+        `    c. Record the merge in DURABLE ENGINE STATE ONLY — do NOT close the issue on the platform:`,
+        `         - wave_close_issue(issue_number=<n>) — updates durable wave state (NO-OP if already`,
+        `           closed). This records that the flight LANDED, which it did.`,
+        `         - Do NOT run 'gh issue close' / 'glab issue close'. This wave landed on`,
+        `           ${integrationBase || 'the campaign branch'}, NOT the protected branch — the work has`,
+        `           not shipped yet, and a closed issue would claim it had (#1046/#1052). The campaign's`,
+        `           release node closes these issues after the single protected-branch merge. If the`,
+        `           campaign is later aborted, these issues must still be open.`,
+        `         - Leave the issue in its in-review/In Test marker if the project has one; never set a`,
+        `           terminal state by hand before the merge that earns it.`,
+      ]
+    : [
+        `    c. Close the issue on BOTH surfaces (idempotent; runs for EVERY newly-merged issue,`,
+        `       regardless of which merge path A/B/C landed it). This is a STANDALONE wave — it promotes`,
+        `       straight to the protected branch, so its merge IS the delivery:`,
+        `         - wave_close_issue(issue_number=<n>) — updates durable wave state (NO-OP if already closed).`,
+        `         - Platform-close the issue itself: a kahuna-targeted MR/PR does NOT auto-close via`,
+        `           "Closes #N" because the kahuna branch is not the protected base, so close it explicitly —`,
+        `           GitHub: gh issue close <n> -R ${targetRepo} ; GitLab: glab issue close <n> (use the`,
+        `           project's platform). Closing an already-closed issue is a NO-OP (#633).`,
+      ]
   return [
     `You are the wave-status PERSISTENCE node for wave ${waveId} of ${targetRepo}. You perform two`,
     `DURABLE, IDEMPOTENT side-effects, then return. Do NOT do any other work.`,
     ``,
-    `STEP 1 — per newly-merged issue (record MR + close), idempotent:`,
+    `STEP 1 — per newly-merged issue (record MR${inCampaign ? '' : ' + close'}), idempotent:`,
     `  Newly-merged issues this iteration: [${newlyMerged.join(', ') || 'none'}].`,
     `  For EACH, in order:`,
     `    a. Resolve the merge reference into ${kahunaBranch}: the PR/MR that merged the issue's`,
@@ -77,13 +112,7 @@ export function persistIterationPrompt({ waveId, targetRepo, kahunaBranch, newly
     `       PR ref if discoverable (gh -R ${targetRepo}); else fall back to the ref "${kahunaBranch}".`,
     `    b. Call wave_record_mr(issue_number=<n>, mr_ref=<resolved ref>). This is keyed on the issue —`,
     `       re-recording an already-recorded issue is an OVERWRITE, not a duplicate. Safe to repeat.`,
-    `    c. Close the issue on BOTH surfaces (idempotent; runs for EVERY newly-merged issue,`,
-    `       regardless of which merge path A/B/C landed it):`,
-    `         - wave_close_issue(issue_number=<n>) — updates durable wave state (NO-OP if already closed).`,
-    `         - Platform-close the issue itself: a kahuna-targeted MR/PR does NOT auto-close via`,
-    `           "Closes #N" because the kahuna branch is not the protected base, so close it explicitly —`,
-    `           GitHub: gh issue close <n> -R ${targetRepo} ; GitLab: glab issue close <n> (use the`,
-    `           project's platform). Closing an already-closed issue is a NO-OP (#633).`,
+    ...closeStep,
     `  If a tool errors, record it in notes and CONTINUE — persistence must not halt the wave.`,
     ``,
     `STEP 2 — write the durable loop blob (full overwrite, idempotent):`,
@@ -101,19 +130,28 @@ export function persistIterationPrompt({ waveId, targetRepo, kahunaBranch, newly
 
 // ── persistTerminal agent prompt ────────────────────────────────────────────────────
 // Records the wave's terminal disposition into BOTH (a) wave-status's wave-completion
-// record (so the campaign driver's cold-start rehydrate can prune a promoted wave, §5),
+// record (so the campaign driver's cold-start rehydrate can prune an integrated wave, §5),
 // and (b) the durable blob's `terminal` field (so a resume sees the same disposition).
-export function persistTerminalPrompt({ waveId, targetRepo, targetRepoDir, kahunaBranch, protectedBranch, disposition, detail, blob, path, trajectoryEntry }) {
+//
+// #1052: the disposition vocabulary stays `promoted | held` — it is a persisted durable value that
+// mid-campaign resumes and the wave-status CLI both read, so renaming it would strand every
+// in-flight campaign's records for a vocabulary improvement. What changed is what it MEANS:
+// "landed on the integration base", which the campaign loop reads through isIntegrated(). The
+// campaign's release is recorded separately, once, by the release node.
+export function persistTerminalPrompt({ waveId, targetRepo, targetRepoDir, kahunaBranch, integrationBase, disposition, detail, blob, path, trajectoryEntry }) {
   return [
     `You are the wave-status PERSISTENCE node for wave ${waveId} of ${targetRepo}. Record the wave's`,
     `TERMINAL disposition durably + idempotently, then return. Do NOT do any other work.`,
     ``,
     `Disposition: "${disposition}" (one of promoted | held). Detail: ${JSON.stringify(detail)}.`,
+    `"promoted" here means the wave LANDED ON ITS INTEGRATION BASE (${integrationBase}) — inside a`,
+    `campaign that is the campaign branch, not the protected branch (#1052). The wave-completion`,
+    `record is what lets the campaign advance and prune on resume; it is NOT a delivery claim.`,
     ``,
     ...(disposition === 'promoted'
       ? [
-          `STEP 1 — wave-completion record (idempotent, PROMOTED): the wave reached the protected`,
-          `  branch, so mark it COMPLETED and advance the campaign pointer. Run FROM the target clone`,
+          `STEP 1 — wave-completion record (idempotent, PROMOTED): the wave landed on ${integrationBase},`,
+          `  so mark it COMPLETED and advance the campaign pointer. Run FROM the target clone`,
           `  so the CLI resolves the same .claude/status/ that holds the blob (the pre-flight`,
           `  'command -v wave-status' probe guarantees the deployed console command is on PATH):`,
           `    cd ${targetRepoDir} && wave-status complete ${waveId}`,
@@ -121,8 +159,8 @@ export function persistTerminalPrompt({ waveId, targetRepo, targetRepoDir, kahun
           `  current_wave marks the wrong wave). 'complete' is idempotent for an already-completed wave.`,
         ]
       : [
-          `STEP 1 — wave-completion record (idempotent, HELD): the wave did NOT reach the protected`,
-          `  branch (gate HOLD/SKIPPED, reconcile-blocked, or PASS-not-promoted). Mark it HELD and do`,
+          `STEP 1 — wave-completion record (idempotent, HELD): the wave did NOT land on ${integrationBase}`,
+          `  (gate HOLD/SKIPPED, reconcile-blocked, or PASS-not-promoted). Mark it HELD and do`,
           `  NOT advance the campaign pointer — NEVER call 'complete' on a held wave (ENG-1/#846: a`,
           `  'completed' write on a non-promoted exit corrupts durable resume/prune state). Run FROM`,
           `  the target clone so the CLI resolves the same .claude/status/ (the pre-flight`,
@@ -144,8 +182,11 @@ export function persistTerminalPrompt({ waveId, targetRepo, targetRepoDir, kahun
     `  oversight judgment seed). The base entry below is authored by the loop; you ADD two best-effort,`,
     `  shell-derived fields, then upsert it. The append is idempotent per wave (keyed on the wave id —`,
     `  re-running OVERWRITES this wave's entry, never duplicates), so it is safe on resume.`,
-    `    a. Compute "files_touched": the changed-file set of this wave, i.e. run`,
-    `         git -C ${targetRepoDir} diff --name-only ${protectedBranch}...${kahunaBranch}`,
+    `    a. Compute "files_touched": the changed-file set of THIS WAVE — diffed against its own`,
+    `       integration base, so in a campaign it is what this wave added on top of the waves before`,
+    `       it, not the whole campaign re-attributed to every wave (which would make the oversight`,
+    `       judge's per-wave file sets monotonically grow and read as a hotspot, #1052):`,
+    `         git -C ${targetRepoDir} diff --name-only ${integrationBase}...${kahunaBranch}`,
     `       and put the resulting path list (JSON array of strings) on the entry. On any git error,`,
     `       set files_touched to [] and note it — do NOT fail the step.`,
     `    b. Compute "engine_fingerprint": the md5 of the running per-wave-workflow bundle if you can`,

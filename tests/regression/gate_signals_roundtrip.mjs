@@ -9,7 +9,7 @@
 //      diff-scoped (the §3.4 refinement: changed-files, never the whole tree).
 //   3. the CI prompt's pass predicate is final_status == "success" and nothing else (#898).
 //   4. the promote prompt is wave_finalize → pr_merge → delete-branch (CODE ONLY), and reports
-//      promoted ONLY once the merge is observable on the protected branch.
+//      promoted ONLY once the merge is observable on the integration base.
 
 import assert from 'node:assert/strict'
 import {
@@ -33,7 +33,11 @@ const bad = (name, e) => { console.log(`  [FAIL] ${name}: ${e?.message || e}`); 
 console.log('test_gate_signals_roundtrip')
 console.log('──────────────────────────────────────────')
 
-const A = { waveId: 'W-7', kahunaBranch: 'kahuna/692-x', protectedBranch: 'main', targetRepo: 'org/repo', targetRepoDir: '/tmp/repo' }
+// #1052: the gate's merge target is `integrationBase`, NOT `protectedBranch`. Inside a campaign the
+// base is the campaign branch and the protected branch is written exactly once, by the campaign's
+// release gate — so the fixture uses a CAMPAIGN branch. A stray `main` in any gate prompt is a real
+// failure: it would mean a wave prompt hard-codes trunk instead of honoring the base it was handed.
+const A = { waveId: 'W-7', kahunaBranch: 'kahuna/692-x', integrationBase: 'campaign/692-x', targetRepo: 'org/repo', targetRepoDir: '/tmp/repo' }
 const PR = 4242 // the draft promotion PR the gate opens (#5); threaded into ci + promote
 
 // ── 1. conservative-fail: an errored signal HOLDs, never PASSes ───────────────────────
@@ -58,7 +62,8 @@ try {
   assert.match(c, /STRONG/); assert.match(c, /MEDIUM/)
   assert.match(c, /PROBE_UNAVAILABLE/) // the conservative-fail verdict is named
   assert.match(c, /ORACLE_REQUIRED/) // #6: gate HOLDs on ORACLE_REQUIRED (named explicitly)
-  assert.match(c, new RegExp(A.protectedBranch)) // base_ref is the protected branch
+  assert.match(c, new RegExp(A.integrationBase.replace('/', '\\/'))) // base_ref is the INTEGRATION BASE (#1052)
+  assert.ok(!/base_ref=undefined/.test(c), 'base_ref must never render undefined (a renamed param silently voids the probe scope)')
   ok('commutativity prompt: commutativity_verify + STRONG/MEDIUM + PROBE_UNAVAILABLE + ORACLE_REQUIRED fail (#6)')
 
   const ci = ciSignalPrompt({ ...A, prNumber: PR })
@@ -69,7 +74,7 @@ try {
   // #476: the gate must REQUIRE a merge-result pipeline. Without this flag the tool
   // will happily grade a branch pipeline — or a SKIPPED one, which GitLab normalizes
   // to "success" — as though it validated the merge. That is a silent false PASS on
-  // the only thing standing between an autonomous wave and the protected branch.
+  // the only thing standing between an autonomous wave and the integration base.
   assert.match(ci, /require_merge_result=true/)
   // #476: the freshness anchor. Without pr_number the tool cannot prove the run it
   // grades belongs to the CURRENT head — a green merge-result run for a PREVIOUS
@@ -81,9 +86,9 @@ try {
   assert.match(ci, /do NOT search for it/i) // #5: deterministic, no race to "find" the PR
   ok('ci prompt: ci_wait_run on the gate-opened PR (#5) + MERGE-RESULT + success-only + diff-scoped (#452, §3.4)')
 
-  // #5 — the gate opens the kahuna→protected DRAFT PR FIRST (before the signals)
+  // #5 — the gate opens the kahuna→base DRAFT PR FIRST (before the signals)
   const op = openPromotionPrPrompt({ ...A, planId: 692 })
-  assert.match(op, /wave_finalize/) // opens the kahuna→protected MR
+  assert.match(op, /wave_finalize/) // opens the kahuna→integrationBase MR
   assert.match(op, /DRAFT/) // as a draft (can't auto-merge before the gate decides)
   assert.match(op, /idempotent/i) // re-open returns the existing PR
   assert.match(op, /do NOT merge/i) // PR-open node never merges
@@ -95,29 +100,29 @@ try {
   assert.equal(OPEN_PR_RESULT.properties.pr_number.type, 'integer')
   ok('open-pr prompt: wave_finalize DRAFT, idempotent, never merges; OPEN_PR_RESULT requires boolean opened (#5)')
 
-  // #847/ENG-5: review is a 2-step stage→review sub-pipeline; diff is origin/<protected>...origin/<kahuna>,
-  // NEVER a hard-coded `main`. Use a release-branch fixture so a stray `origin/main` is a real failure.
+  // #847/ENG-5: review is a 2-step stage→review sub-pipeline; diff is origin/<base>...origin/<kahuna>,
+  // NEVER a hard-coded `main`. Use a non-default base fixture so a stray `origin/main` is a real failure.
   const RVW = {
-    waveId: 'W-7', kahunaBranch: 'kahuna/692-x', protectedBranch: 'release',
+    waveId: 'W-7', kahunaBranch: 'kahuna/692-x', integrationBase: 'release',
     targetRepo: 'org/repo', targetRepoDir: '/tmp/repo',
     workspaceDir: '/tmp/rvw-wt', changedFiles: ['src/a.js', 'src/b.py'],
   }
   const stage = reviewStagePrompt(RVW)
   assert.match(stage, /fetch origin release kahuna\/692-x/) // fetches BOTH refs by name (never assumes main)
-  assert.match(stage, /origin\/release\.\.\.origin\/kahuna\/692-x/) // diffs origin/<protected>...origin/<kahuna>
+  assert.match(stage, /origin\/release\.\.\.origin\/kahuna\/692-x/) // diffs origin/<base>...origin/<kahuna>
   assert.match(stage, /CONSERVATIVE-FAIL/i) // empty/failed stage HOLDs, never silent pass
-  assert.ok(!/origin\/main/.test(stage), 'stage must NOT reference origin/main (protected=release)')
+  assert.ok(!/origin\/main/.test(stage), 'stage must NOT reference origin/main (base=release)')
   assert.equal(REVIEW_STAGE.required[0], 'staged')
   assert.equal(REVIEW_STAGE.properties.staged.type, 'boolean')
-  ok('review STAGE prompt: fetch+diff origin/<protected>...origin/<kahuna>, conservative-fail on empty (ENG-5)')
+  ok('review STAGE prompt: fetch+diff origin/<base>...origin/<kahuna>, conservative-fail on empty (ENG-5)')
 
   const rv = reviewSignalPrompt(RVW)
-  assert.match(rv, /origin\/release\.\.\.origin\/kahuna\/692-x/) // base-ref: origin/<protected>...origin/<kahuna>
-  assert.ok(!/origin\/main/.test(rv), 'review prompt must NEVER reference origin/main (protected=release)')
+  assert.match(rv, /origin\/release\.\.\.origin\/kahuna\/692-x/) // base-ref: origin/<base>...origin/<kahuna>
+  assert.ok(!/origin\/main/.test(rv), 'review prompt must NEVER reference origin/main (base=release)')
   assert.match(rv, /CHANGED FILES/) // diff-scoped (§3.4)
   assert.match(rv, /src\/a\.js/) // scoped to the staged changed-file set
   assert.match(rv, /critical/i); assert.match(rv, /important/i) // pass predicate
-  ok('review prompt: reads staged workspace + origin/<protected>...origin/<kahuna> + diff-scoped (ENG-5, §3.4)')
+  ok('review prompt: reads staged workspace + origin/<base>...origin/<kahuna> + diff-scoped (ENG-5, §3.4)')
 
   const tv = trivySignalPrompt(A)
   assert.match(tv, /trivy fs --scanners vuln --severity HIGH,CRITICAL/)
@@ -137,7 +142,7 @@ try {
   assert.match(p, /pr ready|mark it ready/i) // un-draft the existing PR before merging
   assert.match(p, /pr_merge/)
   assert.doesNotMatch(p, /skip_train/) // #898: queue-less — no train to skip
-  assert.match(p, /pr_merge_wait/) // confirm the merge is observable on the protected branch
+  assert.match(p, /pr_merge_wait/) // confirm the merge is observable on the integration base
   assert.match(p, /delete/i) // kahuna branch deleted after promotion
   // promoted:true ONLY if the merge actually landed (no fabricated success)
   assert.match(p, /promoted \(true ONLY if the merge actually landed/)

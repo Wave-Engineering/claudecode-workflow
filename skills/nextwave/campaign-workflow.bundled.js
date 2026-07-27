@@ -6,10 +6,12 @@
 export const meta = {
   name: 'campaign-workflow',
   description:
-    'Deterministic auto-mode campaign Workflow (#749, design §6.1): rehydrate pending waves from durable wave-status → per wave run the per-wave spine, route on {gate, promoted}, call the wave-oversight judgment sub-agent → advance on continue, hold-and-end on a flag. No LLM in the loop ⇒ cannot stall (#736 dissolves). Parameterized by the wave plan + per-wave launch blob via args.',
+    'Deterministic auto-mode campaign Workflow (#749/#1052, design §6.1): bootstrap ONE campaign branch → rehydrate pending waves from durable wave-status → per wave run the per-wave spine onto the campaign branch, route on {gate, integrated}, call the wave-oversight judgment sub-agent → advance on continue, hold-and-end on a flag → at the end verify the DoD and land the campaign on the protected branch in a SINGLE merge. No LLM in the loop ⇒ cannot stall (#736 dissolves). Parameterized by the wave plan + per-wave launch blob via args.',
   phases: [
-    { title: 'Rehydrate', detail: 'cold-start: read promoted waves + trajectory from durable wave-status, prune (§6.1.3)' },
+    { title: 'Bootstrap', detail: 'ensure the campaign branch exists off the protected branch (#1052)' },
+    { title: 'Rehydrate', detail: 'cold-start: read integrated waves + trajectory from durable wave-status, prune (§6.1.3)' },
     { title: 'Campaign loop', detail: 'per wave: spine → verdict route → wave-oversight judgment → advance/hold (§2)' },
+    { title: 'Release', detail: 'DoD verification, then the single campaign→protected merge (#1052)' },
   ],
 }
 
@@ -30,7 +32,7 @@ export const meta = {
 // THE KEY SEAM: `runCampaign` takes `runWave` (launch the per-wave spine) and `judge` (call the
 // wave-oversight sub-agent) as INJECTED async functions. The Workflow entrypoint injects the real
 // `workflow()` / `agent()` calls; the tests inject scripted fakes — so #749's "multi-wave advances
-// on PASS+promoted+continue, ends on a HOLD/flag" procedures are deterministic unit tests, not
+// on PASS+integrated+continue, ends on a HOLD/flag" procedures are deterministic unit tests, not
 // integration runs. No LLM in the loop CONTROL FLOW ⇒ it provably cannot stall (#736 dissolves).
 
 // ── args intake (same contract as per-wave-workflow.js #1/#3: the runtime global is `args`,
@@ -50,14 +52,89 @@ function parseArgs(raw) {
   throw new Error(`campaign-workflow: \`args\` must be an object or JSON string, got ${typeof raw}.`)
 }
 
+// ── BRANCH TOPOLOGY (#1052 — one campaign branch all the way through) ────────────────────────
+//
+// TWO LEVELS, TWO NAMES. A campaign writes the protected branch EXACTLY ONCE, at the DoD gate:
+//
+//   protected ──┬──────────────────────────────────────────────────────► (one merge, at DoD)
+//               │                                                      ▲
+//               └─► campaign/<plan>-<slug> ──W1──W2──W3── … ──WN ──────┘
+//                        ▲         ▲        ▲
+//                     kahuna/<plan>-<waveId>  (one per wave, disposable)
+//
+// WHY (BJ, 2026-07-26): waves 1..N-1 landed on the protected branch are a half-delivered feature
+// wearing a released commit's clothes. It is not an increment until the DoD is met. Three costs of
+// the interim merge-back: (1) an abort at wave 4 of 7 must REVERT four promoted waves from trunk
+// history instead of deleting one unmerged branch; (2) everyone else working from the protected
+// branch pulls half-finished work; (3) it is not a real increment, so calling it one is a lie the
+// board tells. The single merge at DoD removes all three by construction.
+//
+// WHY THIS DISSOLVES #892 (rather than needing a better merge method). #892 is "squash-merge +
+// a long-lived integration branch are incompatible": the squash rewrites history the persistent
+// kahuna still carries, so wave 2's promotion hits add/add. Here every wave gets a FRESH
+// DISPOSABLE kahuna cut off the campaign branch, and nothing continues from it after it lands —
+// so a squash is harmless, and there is no interim merge-back for the protected branch to
+// diverge from either. The failure mode is unreachable, not mitigated. `preserveKahuna` (#722)
+// therefore has nothing left to express in campaign mode: the branch that persists is the
+// CAMPAIGN branch, and the per-wave kahuna is disposable again as it was originally.
+//
+// WHY THE PREFIXES DIFFER (a git constraint, verified empirically, not a style choice). The
+// tempting name for a wave branch is a child of the campaign branch — `kahuna/56-plan/w1` under
+// `kahuna/56-plan`. That ref is IMPOSSIBLE: git stores branches as files under refs/heads/, so a
+// branch cannot be a directory prefix of another branch. Reproduced locally:
+//     $ git branch kahuna/56-plan && git branch kahuna/56-plan/w1
+//     fatal: cannot lock ref 'refs/heads/kahuna/56-plan/w1':
+//            'refs/heads/kahuna/56-plan' exists; cannot create 'refs/heads/kahuna/56-plan/w1'
+// Distinct top-level prefixes (`campaign/` vs `kahuna/`) put the two levels in separate
+// namespaces, so the D/F conflict cannot arise at any nesting depth. Do NOT "tidy" these into
+// one prefix — it re-creates an unrepresentable ref.
+const safeRef = (s) => String(s ?? '').replace(/[^A-Za-z0-9._-]/g, '-').replace(/^-+|-+$/g, '')
+
+// The campaign branch: cut off the protected branch once, at campaign start; merged to protected
+// once, at the DoD gate. Lives for the whole campaign.
+//
+// LOWERCASED. The slug comes from a plan title, so it arrives mixed-case, and git refs ARE
+// case-sensitive while macOS/Windows checkouts are not — `campaign/56-Blueshift` and
+// `campaign/56-blueshift` are two refs that cannot coexist in one working tree. Since the whole
+// point of this name is that a resume recomputes it identically, a case-only difference between a
+// plan title and its restatement would silently start a SECOND campaign. Lowercase removes the
+// axis.
+function campaignBranchFor({ planId, slug } = {}) {
+  const p = safeRef(planId)
+  const s = safeRef(slug)
+  if (!p || !s) throw new Error(`campaignBranchFor: need both planId and slug, got ${JSON.stringify({ planId, slug })}`)
+  return `campaign/${p}-${s}`.toLowerCase()
+}
+
+// A wave's integration branch: cut off the CAMPAIGN branch, merged into it, then deleted.
+// Disposable — see the #892 note above for why that is now safe.
+//
+// The waveId is kept VERBATIM (unlike the campaign slug above): wave ids are engine-generated
+// (`W-1`), not human-typed, so there is no case-drift to guard against. And it must stay verbatim
+// so ONE wave has ONE spelling everywhere — resume.js embeds the same id, sanitized but not
+// lowercased (`safeWaveId`), in every flight branch (`<type>/<n>-<waveId>-<slug>`) and in the
+// terminal cleanup glob that matches them. Lowercasing only here would split a single wave's
+// branch names across two casings for no gain.
+function waveKahunaFor({ planId, waveId } = {}) {
+  const w = safeRef(waveId)
+  if (!w) throw new Error(`waveKahunaFor: need a waveId, got ${JSON.stringify(waveId)}`)
+  const p = safeRef(planId)
+  return p ? `kahuna/${p}-${w}` : `kahuna/${w}`
+}
+
 // ── cold-start rehydrate / prune (§6.1 step 3, reboot-proof) ─────────────────────────────────
-// Given the campaign's full ordered wave list and the set of wave ids already PROMOTED (read back
-// from durable wave-status on cold start), return the pending waves IN ORDER. Pure: a reboot at
-// wave 5 prunes waves 1–4 and resumes at 5. Idempotent — re-running with the same promoted set
-// yields the same pending list.
-function computePending(allWaves, promotedWaveIds) {
-  const promoted = new Set((promotedWaveIds ?? []).map(String))
-  return (allWaves ?? []).filter((w) => !promoted.has(String(waveIdOf(w))))
+// Given the campaign's full ordered wave list and the set of wave ids already INTEGRATED (read
+// back from durable wave-status on cold start), return the pending waves IN ORDER. Pure: a reboot
+// at wave 5 prunes waves 1–4 and resumes at 5. Idempotent — re-running with the same integrated
+// set yields the same pending list.
+//
+// #1052: the pruning predicate is INTEGRATED (landed on the campaign branch), NOT released
+// (landed on protected). Under the single-merge shape nothing is released until every wave is
+// integrated, so a released-keyed prune would never prune anything and every resume would re-run
+// the whole campaign. This is one of the four `promoted` consumers the split had to reach.
+function computePending(allWaves, integratedWaveIds) {
+  const integrated = new Set((integratedWaveIds ?? []).map(String))
+  return (allWaves ?? []).filter((w) => !integrated.has(String(waveIdOf(w))))
 }
 
 // A wave entry may be a bare id or an object carrying {id|waveId|wave, issues, ...}. One accessor
@@ -68,17 +145,41 @@ function waveIdOf(wave) {
   return wave
 }
 
-// ── verdict routing (§6.1 step 1) — the per-wave spine's {gate, promoted} return ─────────────
-// ADVANCE only on a wave that PASSED its trust gate AND actually landed on the protected branch
-// (promoted===true). A PASS that did not promote (interactive, or a promotion that did not land)
-// HOLDs — the campaign never builds the next wave on a baseline that never reached the trunk
-// (catalog signal I: "promoted ≠ delivered"). Anything else (HOLD/SKIPPED) HOLDs.
+// ── verdict routing (§6.1 step 1) — the per-wave spine's {gate, integrated} return ────────────
+//
+// #1052 — THE `promoted` SPLIT. `promoted` used to mean one thing because there was one merge per
+// wave and it went to the protected branch. Under the single-merge shape those are two different
+// events, and conflating them is a correctness bug in both directions:
+//
+//   integrated — the wave landed on the CAMPAIGN branch. Per-wave. Gates advancing to wave N+1,
+//                and is the prune predicate on resume.
+//   released   — the CAMPAIGN landed on the protected branch. Once, at the DoD gate. Gates
+//                closing issues (#1046) and is the only thing that means "delivered".
+//
+// A wave that is integrated-but-not-released is the NORMAL mid-campaign state, not a failure —
+// which is exactly why the old `promoted`-keyed router would hold every wave forever here.
+//
+// COMPATIBILITY, and why it is not merely defensive: an in-flight campaign launched by the
+// PREVIOUS engine returns `{promoted:true}` from a wave whose spine promoted straight to the
+// protected branch, and a resumed campaign can mix old and new records in one trajectory. Reading
+// `integrated ?? promoted` treats the old field as what it factually was — that wave DID land
+// somewhere the next wave can build on — so a mid-campaign engine upgrade advances instead of
+// stalling. (Catalog F: engine drift mid-campaign is a real event, not a hypothetical.)
+function isIntegrated(verdict) {
+  if (verdict?.integrated != null) return verdict.integrated === true
+  return verdict?.promoted === true // legacy record (pre-#1052 engine) — landed, per the shape of its day
+}
+
+// ADVANCE only on a wave that PASSED its trust gate AND actually landed on the campaign branch.
+// A PASS that did not land (interactive, or a merge that did not complete) HOLDs — the campaign
+// never builds the next wave on a baseline that never landed (catalog signal I: "promoted ≠
+// delivered"). Anything else (HOLD/SKIPPED) HOLDs.
 function routeVerdict(verdict) {
   const gate = verdict?.gate ?? null
-  const promoted = verdict?.promoted === true
-  if (gate === 'PASS' && promoted) return { advance: true, reason: 'gate PASS and promoted' }
-  if (gate === 'PASS' && !promoted) {
-    return { advance: false, reason: `gate PASS but NOT promoted (${verdict?.reason || 'did not land on protected branch'}) — campaign holds rather than build on an un-landed baseline` }
+  const integrated = isIntegrated(verdict)
+  if (gate === 'PASS' && integrated) return { advance: true, reason: 'gate PASS and integrated onto the campaign branch' }
+  if (gate === 'PASS' && !integrated) {
+    return { advance: false, reason: `gate PASS but NOT integrated (${verdict?.reason || 'did not land on the campaign branch'}) — campaign holds rather than build on an un-landed baseline` }
   }
   return { advance: false, reason: `gate ${gate ?? 'UNKNOWN'}${verdict?.reason ? `: ${verdict.reason}` : ''}` }
 }
@@ -94,7 +195,8 @@ function routeJudgment(judgment) {
 }
 
 // ── the loop DRIVER (pure given its injected seams) ──────────────────────────────────────────
-// runWave(wave, index)  → Promise<verdict>   (the per-wave spine; verdict carries {gate, promoted})
+// runWave(wave, index)  → Promise<verdict>   (the per-wave spine; verdict carries {gate, integrated}
+//                                             — or legacy {gate, promoted}, read via isIntegrated)
 // judge(wave, context)  → Promise<judgment>  (the wave-oversight sub-agent; {continue, concern, ...})
 //                          context = { completed:[{wave,verdict}], remaining:[waveId], index }
 // onEvent(event)        → void               (optional progress sink: {type, wave, ...})
@@ -121,7 +223,10 @@ async function runCampaign({ pending, runWave, judge, onEvent }) {
       return hold(id, `per-wave spine errored: ${e?.message || e}`, completed, wavesAdvanced)
     }
     const vr = routeVerdict(verdict)
-    emit({ type: 'verdict', wave: id, gate: verdict?.gate ?? null, promoted: verdict?.promoted === true, advance: vr.advance })
+    // Emit `integrated` via the same predicate the router used (#1052) — reading raw `promoted`
+    // here would log `integrated=false` for a legacy-record wave that just advanced, i.e. the
+    // progress line would contradict the decision it is narrating.
+    emit({ type: 'verdict', wave: id, gate: verdict?.gate ?? null, integrated: isIntegrated(verdict), advance: vr.advance })
     if (!vr.advance) {
       completed.push({ wave: id, verdict, judgment: null })
       return hold(id, vr.reason, completed, wavesAdvanced)
@@ -165,6 +270,185 @@ function hold(heldAt, heldReason, completed, wavesAdvanced) {
   return { outcome: 'held', heldAt, heldReason, wavesAdvanced, completed }
 }
 
+// ── THE RELEASE GATE (#1052) — the single write to the protected branch ───────────────────────
+//
+// Every wave integrated onto the campaign branch. This is the ONE moment the protected branch is
+// written, and it is the only place in the engine allowed to do so. Two conditions, both required:
+//
+//   1. the campaign COMPLETED — every wave in the plan integrated (not "every pending wave this
+//      run"; a resumed run's `pending` is a subset, so completeness is judged against the FULL plan);
+//   2. the DoD is met.
+//
+// WHY THE FULL-PLAN CHECK IS LOAD-BEARING. `runCampaign` returns outcome:'completed' when it
+// exhausts the waves IT was given. On a resume that list was already pruned to the pending subset,
+// so 'completed' there means "the rest finished" — not "all of them did". Releasing on that alone
+// would ship a campaign whose earlier waves were pruned because they were integrated... which is
+// fine... OR pruned from a DIFFERENT plan revision, which is not. Comparing against the full
+// ordered plan makes the predicate independent of how the run was sliced.
+//
+// WHY DoD-FAILS-MEANS-NO-MERGE IS THE WHOLE POINT. Without it, "one merge at the end" is
+// indistinguishable from "one unconditional merge at the end" — the DoD gate would be decoration
+// and the campaign would release whatever it happened to build. This predicate is why the shape is
+// safer than per-wave promotion rather than merely tidier.
+//
+// CONSERVATIVE ON ABSENCE: an unreadable/missing DoD, a malformed verdict, or an unmet criterion
+// all BLOCK. An undeterminable DoD is not a met DoD (SEAMS invariant 6). The campaign branch is
+// durable, so a blocked release is fully resumable once the DoD is genuinely satisfied — the cost
+// of holding is a conversation; the cost of releasing wrongly is a revert of the whole campaign.
+function routeRelease({ report, allWaves, dod } = {}) {
+  const outcome = report?.outcome ?? null
+  if (outcome !== 'completed') {
+    return { release: false, reason: `campaign did not complete (outcome=${outcome ?? 'unknown'}${report?.heldAt ? `, held at ${report.heldAt}` : ''}) — the protected branch is written only on a complete campaign` }
+  }
+
+  // Completeness against the FULL plan, not this run's slice (see above).
+  const planIds = (allWaves ?? []).map((w) => String(waveIdOf(w)))
+  const landed = new Set([
+    ...(report?.wavesAdvanced ?? []).map(String),
+    // A wave pruned before this run is already integrated durably; the caller passes it through
+    // `alreadyIntegrated` on the report when resuming.
+    ...(report?.alreadyIntegrated ?? []).map(String),
+  ])
+  const missing = planIds.filter((id) => !landed.has(id))
+  if (missing.length > 0) {
+    return { release: false, reason: `campaign incomplete — ${missing.length} of ${planIds.length} wave(s) not integrated: [${missing.join(', ')}]` }
+  }
+  if (planIds.length === 0) {
+    return { release: false, reason: 'empty wave plan — nothing to release (a campaign with no waves is a misconfiguration, not a no-op)' }
+  }
+
+  // The DoD verdict. `met:true` is the ONLY release token; everything else holds.
+  if (dod == null) {
+    return { release: false, reason: 'DoD verdict absent — cannot prove the Definition of Done is met, so the protected branch is not written (an undeterminable DoD is not a met DoD)' }
+  }
+  if (dod.met !== true) {
+    const unmet = Array.isArray(dod.unmet) && dod.unmet.length > 0 ? `: [${dod.unmet.join('; ')}]` : ''
+    return { release: false, reason: `DoD not met${unmet}${dod.reason ? ` — ${dod.reason}` : ''}` }
+  }
+
+  return { release: true, reason: `campaign complete (${planIds.length} wave(s) integrated) and DoD met` }
+}
+
+// The DoD verdict contract the release-gate agent returns. `met` is the only field routed on;
+// `unmet` + `reason` exist so a blocked release explains itself to the human without a re-run.
+const DOD_VERDICT = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['met'],
+  properties: {
+    met: { type: 'boolean' },
+    unmet: { type: 'array', items: { type: 'string' } },
+    reason: { type: 'string' },
+    evidence: { type: 'string' },
+  },
+}
+
+// The release-node result contract — `released` must reflect an ACTUALLY-LANDED merge, never a
+// merge-requested-but-pending one (the same discipline the per-wave promote node carries: catalog
+// signal I, "promoted ≠ delivered").
+const RELEASE_RESULT = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['released'],
+  properties: {
+    released: { type: 'boolean' },
+    pr_ref: { type: 'string' },
+    merge_sha: { type: 'string' },
+    notes: { type: 'string' },
+  },
+}
+
+// ── DoD verification prompt (#1052 — the release gate's evidence step) ───────────────────────
+// Runs ONCE, after every wave integrated, BEFORE anything touches the protected branch. It only
+// ANSWERS; routeRelease() decides. Keeping the judgment out of the prompt is why "DoD unmet ⇒ no
+// merge" is testable without an agent in the loop.
+function dodVerificationPrompt({ planId, targetRepo, targetRepoDir, campaignBranch, protectedBranch, wavesIntegrated }) {
+  return [
+    `You are the CAMPAIGN RELEASE-GATE DoD node for plan ${planId ?? '<unknown>'} of ${targetRepo}.`,
+    `Every wave has integrated onto ${campaignBranch}. NOTHING has touched ${protectedBranch} yet, and`,
+    `nothing will unless you can show the Definition of Done is MET. Answer only — do NOT merge, do NOT`,
+    `push, do NOT open a PR, do NOT modify any branch. Your verdict is evidence, not a decision.`,
+    ``,
+    `Waves integrated: [${(wavesIntegrated ?? []).join(', ') || 'none'}].`,
+    ``,
+    `1. Load the plan's Definition of Done: sdlc-server plan_load_dod(plan_id=${planId ?? '<plan>'},`,
+    `   repo="${targetRepo}"). If the plan has a DoD manifest, ALSO run dod_load_manifest +`,
+    `   dod_verify_deliverable for each declared deliverable — a wave suite passing is NOT the same as`,
+    `   a manifest deliverable existing (the flights wrote both their code and their tests; the manifest`,
+    `   is the reference they did not author).`,
+    `2. Verify each DoD criterion against the CAMPAIGN BRANCH state, in ${targetRepoDir}:`,
+    `     git -C ${targetRepoDir} fetch origin && git -C ${targetRepoDir} diff --stat origin/${protectedBranch}...origin/${campaignBranch}`,
+    `   Check the ACTUAL tree, not the issue checkboxes — a checked box is a claim, the tree is the fact.`,
+    `   Where a criterion names a test suite, RUN it (dod_run_test_suite / the project's own tooling).`,
+    `3. Be specific about what is NOT met. A blocked release must explain itself well enough that the`,
+    `   human does not have to re-derive it: name the criterion, not "some criteria failed".`,
+    ``,
+    `CONSERVATIVE ON ABSENCE — this is the contract, not a preference: if the DoD cannot be LOADED, is`,
+    `absent, is ambiguous, or you cannot verify a criterion, return met=false and say why. An`,
+    `undeterminable DoD is NOT a met DoD. You are the last check before ${protectedBranch} is written`,
+    `for the first and only time in this campaign; a wrong "met" ships a half-built campaign to trunk`,
+    `and costs a multi-wave revert, while a wrong "not met" costs one conversation. Bias accordingly.`,
+    ``,
+    `Return EXACTLY: met (bool), unmet (array of strings — the criteria not satisfied, empty if met),`,
+    `reason (1-2 sentences), evidence (what you actually ran/read to decide).`,
+  ].join('\n')
+}
+
+// ── release-merge prompt (#1052 — the ONE write to the protected branch) ─────────────────────
+// Reached only when routeRelease() returned release:true. Carries its own merge-result CI gate
+// against the protected branch, which is NOT redundant with the per-wave signals — see below.
+function releaseMergePrompt({ planId, targetRepo, campaignBranch, protectedBranch, wavesIntegrated }) {
+  return [
+    `You are the CAMPAIGN RELEASE node for plan ${planId ?? '<unknown>'} of ${targetRepo}. The campaign`,
+    `is complete (waves [${(wavesIntegrated ?? []).join(', ') || 'none'}] all integrated onto`,
+    `${campaignBranch}) and the DoD gate PASSED. Land ${campaignBranch} → ${protectedBranch}.`,
+    ``,
+    `THIS IS THE ONLY WRITE TO ${protectedBranch} IN THE ENTIRE CAMPAIGN. It is a real increment for the`,
+    `first time: until this merge, ${protectedBranch} has been untouched since the campaign began, and`,
+    `everyone else has been working from a trunk this campaign never disturbed. Treat it accordingly.`,
+    ``,
+    `1. Open the ${campaignBranch}→${protectedBranch} PR (sdlc-server pr_create, or find the existing one`,
+    `   — idempotent on the branch pair; do NOT open a second). Title: the plan's release summary.`,
+    `   Body: the wave list + the DoD verdict. Open it as a DRAFT so a green CI cannot auto-merge it`,
+    `   before you have verified the merge-result pipeline yourself.`,
+    ``,
+    `2. GATE ON THE MERGE-RESULT PIPELINE AGAINST ${protectedBranch}. This is a REQUIRED, INDEPENDENT`,
+    `   check — not a re-run of the per-wave signals, and not optional:`,
+    `     sdlc-server ci_wait_run(repo="${targetRepo}", require_merge_result=true, pr_number=<n>,`,
+    `                             timeout_sec=1800, poll_interval_sec=20)`,
+    `   WHY IT CANNOT BE SKIPPED even though every wave was green: each wave's CI validated`,
+    `   kahuna→${campaignBranch}, i.e. the wave against the CAMPAIGN branch. ${campaignBranch} itself`,
+    `   drifts from ${protectedBranch} for the whole campaign — other people's merges land on trunk`,
+    `   while this campaign runs. So NO per-wave pipeline ever tested this composed diff against the`,
+    `   CURRENT ${protectedBranch}. A campaign of all-green waves can still break trunk, and this is`,
+    `   the only pipeline that would ever catch it. Use require_merge_result=true (a branch pipeline`,
+    `   proves nothing about the merge) and the explicit timeout (#1035 — the default idle bleeds`,
+    `   ~30-57 min/run). timeout_sec is 1800 here, not 420: this is a whole-campaign diff, and its`,
+    `   pipeline is legitimately longer than a single wave's.`,
+    `   If it is NOT green: STOP. Return released=false with the failure in notes. Leave the PR open as`,
+    `   a DRAFT and do NOT merge — a red merge-result on the release is exactly the signal the whole`,
+    `   no-interim-merge-back shape exists to be able to act on, while trunk is still clean.`,
+    ``,
+    `3. On green: mark ready (gh -R ${targetRepo} pr ready <n>) and merge it. Then CONFIRM IT LANDED`,
+    `   before reporting released — poll until state=MERGED with a merge commit (pr_merge_wait, or`,
+    `   gh -R ${targetRepo} pr view <n> --json state,mergeCommit). Never treat a pending merge as done.`,
+    `   The merge METHOD does not matter here (squash is fine): nothing continues from ${campaignBranch}`,
+    `   after this point, so there is no persistent branch left to diverge (this is what dissolves #892`,
+    `   rather than working around it).`,
+    ``,
+    `4. Only AFTER the merge is confirmed landed: close the campaign's issues (#1046 — an issue closes`,
+    `   when its work is on ${protectedBranch}, never before). Honor an explicit do-not-close: if a`,
+    `   flight body used "Refs #N" rather than "Closes #N", do NOT close that issue by number — that`,
+    `   was a deliberate signal, and overriding it is the #1046 defect. Verify each close by READING`,
+    `   THE ISSUE STATE BACK, not by the mutation's return code.`,
+    ``,
+    `5. Delete ${campaignBranch} on origin — the campaign is released and the branch is spent.`,
+    ``,
+    `Return: released (true ONLY if the merge actually landed on ${protectedBranch}), pr_ref, merge_sha,`,
+    `notes (1-2 sentences; on any failure released=false with the reason).`,
+  ].join('\n')
+}
+
 // ── intent-tier resolver (§3 — tiered intent, graceful degradation) ──────────────────────────
 // A rehydrate agent reports what intent artifacts EXIST (it runs devspec_locate / ddd_locate_*);
 // this PURE fn picks the richest available tier so the choice is deterministic + testable. The
@@ -183,7 +467,7 @@ function resolveIntentTier({ devspec, domainModel, sketchbook } = {}) {
 // cross-wave catalog (A–J, [[project_wave_oversight_failure_catalog]]) — "go with what came in over
 // Discord" (BJ, 2026-06-20). routeJudgment + JUDGMENT_RESULT are the stable contract; this body is
 // the lens. Same record + wrong lens = a checkpoint that rubber-stamps; this is the difference.
-function waveOversightPrompt({ justLanded, trajectory, remainingPlan, intentTier, intentRefs, kahunaBranch }) {
+function waveOversightPrompt({ justLanded, trajectory, remainingPlan, intentTier, intentRefs, kahunaBranch, campaignBranch, protectedBranch }) {
   const tier = intentTier ?? 'issues-only'
   const calibration = {
     'devspec': `DEVSPEC tier — the un-gameable reference the flights did not write. Hold spec-fidelity: run dod_check_coverage / dod_verify_deliverable for HARD VRTM + Deliverables-Manifest traceability, and devspec_* checks. A wave that passed its own tests but misses a manifest deliverable is DRIFT.`,
@@ -192,11 +476,27 @@ function waveOversightPrompt({ justLanded, trajectory, remainingPlan, intentTier
   }[tier] ?? `ISSUES-ONLY tier.`
   return [
     `You are the WAVE-OVERSIGHT judgment agent — the campaign-layer checkpoint BETWEEN waves. A wave`,
-    `just PASSED its per-wave trust gate and promoted to the protected branch. Your question (§4):`,
-    `given the INTENT and the TRAJECTORY so far, is it sound to continue into the rest of the`,
-    `campaign — or is something lurking that every individual per-wave gate structurally could NOT`,
-    `catch? You are the only view with the whole trajectory + the un-gameable intent; the flights`,
-    `wrote both their code AND their tests, so "green per wave" is not "correct to intent".`,
+    `just PASSED its per-wave trust gate and INTEGRATED onto the campaign branch`,
+    `${campaignBranch ? `(${campaignBranch})` : ''}. Your question (§4): given the INTENT and the`,
+    `TRAJECTORY so far, is it sound to continue into the rest of the campaign — or is something lurking`,
+    `that every individual per-wave gate structurally could NOT catch? You are the only view with the`,
+    `whole trajectory + the un-gameable intent; the flights wrote both their code AND their tests, so`,
+    `"green per wave" is not "correct to intent".`,
+    ``,
+    `#1052 — WHAT "INTEGRATED" MEANS HERE, AND WHY IT RAISES YOUR STAKES. Nothing in this campaign has`,
+    `reached ${protectedBranch || 'the protected branch'} yet, and nothing will until every wave lands`,
+    `and the DoD gate passes — then it lands in ONE merge. Two consequences for your judgment:`,
+    `  • A flag from you is CHEAP right now. The protected branch is untouched, so acting on a concern`,
+    `    costs deleting or reworking an unmerged branch — not reverting promoted commits out of trunk`,
+    `    history. This is the window where a lurking problem is cheapest to name. Use it.`,
+    `  • Trajectory entries reading released:false mid-campaign are the NORMAL state, not a failure`,
+    `    signal. Judge on `+'`integrated`'+` and the trust signals. Do NOT read "not yet on the protected`,
+    `    branch" as catalog-I evidence ("promoted ≠ delivered") — that shape is about a landed merge whose`,
+    `    artifact never actually shipped, not about a campaign correctly withholding its single trunk`,
+    `    write until the DoD is met.`,
+    `  • Vocabulary note: in a post-#1052 record `+'`promoted`'+` is a SYNONYM for `+'`integrated`'+` (both mean`,
+    `    "landed on the campaign branch"), NOT a claim about trunk. So `+'`promoted:false`'+` on a recent entry`,
+    `    means the wave did not land — read it as such. Only `+'`released`'+` speaks to the protected branch.`,
     ``,
     `── INTENT TIER: ${tier} ──`,
     calibration,
@@ -292,16 +592,23 @@ const JUDGMENT_RESULT = {
 //
 // Design of record: docs/campaign-workflow-design.md §2/§6.1. The auto-mode campaign loop is a
 // deterministic Workflow: it iterates the pending waves, runs each per-wave spine
-// (per-wave-workflow.js) as a nested workflow(), routes on the {gate, promoted} verdict, calls the
+// (per-wave-workflow.js) as a nested workflow(), routes on the {gate, integrated} verdict, calls the
 // wave-oversight judgment sub-agent (§2.2 — the launching session cannot re-invoke itself), and
 // advances on continue / holds-and-ends on a flag. NO LLM in the loop control flow ⇒ it provably
 // cannot stall ⇒ the stall-guard (#736) dissolves.
 //
-// THIN BY DESIGN: every deterministic decision (parse, rehydrate/prune, verdict + judgment routing,
-// the loop driver) lives in campaign-loop.js (pure, unit-tested). This file only WIRES the real
-// side-effecting seams — workflow() for the spine, agent() for rehydrate + judgment — into
-// runCampaign(). Source-of-truth modules are inlined by campaign-bundle.mjs into the single-file
-// artifact campaign-workflow.bundled.js the Workflow tool invokes.
+// #1052 — ONE BRANCH ALL THE WAY THROUGH. Every wave integrates onto a single long-lived CAMPAIGN
+// branch; the protected branch is written EXACTLY ONCE, at the end, and only if the DoD is met.
+// The topology, the three costs of interim merge-backs, and why this dissolves #892 rather than
+// mitigating it are documented in campaign-loop.js (BRANCH TOPOLOGY). This file owns the two nodes
+// that shape makes necessary: the campaign-branch BOOTSTRAP (phase 1) and the RELEASE gate
+// (phase 3 — DoD verification, then the single trunk merge).
+//
+// THIN BY DESIGN: every deterministic decision (parse, rehydrate/prune, verdict + judgment + release
+// routing, the loop driver) lives in campaign-loop.js (pure, unit-tested). This file only WIRES the
+// real side-effecting seams — workflow() for the spine, agent() for bootstrap + rehydrate + judgment
+// + DoD + release — into runCampaign(). Source-of-truth modules are inlined by campaign-bundle.mjs
+// into the single-file artifact campaign-workflow.bundled.js the Workflow tool invokes.
 
 
 
@@ -322,23 +629,123 @@ if (ALL_WAVES.length === 0) {
       `Launch with {waves:[{id, issues:[...]}, ...], targetRepo, targetRepoDir} via the Workflow tool's \`args\`.`,
   )
 }
+// #1052 — THE CAMPAIGN BRANCH. Every wave integrates here; the protected branch is untouched until
+// the release gate. An explicit params.campaignBranch wins (a resumed campaign MUST be handed the
+// same branch it started on); otherwise derive it deterministically from the plan so a resume that
+// forgot to pass it still recomputes the same name rather than silently starting a second campaign.
+//
+// A random or timestamped component would be WRONG here — it would make the derived name unstable
+// across resumes, which is precisely the failure the determinism is protecting against.
+//
+// There is NO placeholder for a missing planId or slug. campaignBranchFor throws on either, and that
+// throw is load-bearing: defaulting them (e.g. to 'plan'/'campaign') makes EVERY under-specified
+// campaign resolve to the same `campaign/plan-campaign`, whereupon the bootstrap's reuse-wins rule
+// adopts a DIFFERENT campaign's branch and its commits, and the release node lands both campaigns'
+// work on trunk as one increment. A campaign launched without a plan id and slug is a
+// misconfiguration, not a defaultable case — same fail-loud stance as the empty-plan and
+// branch-equals-trunk guards below.
+// The explicit override is lowercased through the SAME normalization as the derived name. Otherwise a
+// launcher that hand-builds `campaign/56-Blueshift` and a resume that omits the param (deriving
+// `campaign/56-blueshift`) would name two different case-sensitive server refs for one campaign — the
+// exact fork the derived-path lowercasing exists to prevent, reached by nothing more exotic than
+// forgetting to re-pass the parameter.
+const CAMPAIGN_BRANCH = String(params.campaignBranch ?? campaignBranchFor({
+  planId: PLAN_ID,
+  slug: params.slug ?? params.campaignSlug,
+})).toLowerCase()
+if (CAMPAIGN_BRANCH === PROTECTED_BRANCH) {
+  // Fail loud rather than run a campaign whose "integration branch" IS trunk — that would restore
+  // per-wave trunk writes under a name that claims otherwise, the exact shape #1052 removes.
+  throw new Error(
+    `campaign-workflow: campaignBranch (${CAMPAIGN_BRANCH}) must not equal protectedBranch (${PROTECTED_BRANCH}). ` +
+      `A campaign integrates onto its own branch and writes the protected branch exactly once, at the DoD gate (#1052).`,
+  )
+}
 // The per-wave spine artifact this campaign drives (nested workflow()). Default to the committed
 // bundle next to this file; overridable for tests / alternate deployments.
 const PER_WAVE_SCRIPT = params.perWaveScriptPath ?? 'skills/nextwave/per-wave-workflow.bundled.js'
+// Skip the trunk merge and end with the campaign branch intact + the DoD verdict reported. For a
+// campaign whose release is a human decision (or a dry run). The DoD node still runs — its verdict
+// is the useful artifact; only the merge is withheld.
+const RELEASE_MODE = params.release === false ? 'hold' : 'auto'
 
-// ── PHASE 1 — REHYDRATE (§6.1.3, reboot-proof) ───────────────────────────────────────────────
-// Read the durable wave-status: which waves already PROMOTED (prune them) + the cross-wave
+// ── PHASE 1 — BOOTSTRAP THE CAMPAIGN BRANCH (#1052) ──────────────────────────────────────────
+// Idempotent create-or-reuse, and the ORDER of those two matters: on a resume the branch already
+// exists and carries every previously-integrated wave, so re-cutting it from the protected branch
+// would silently discard the whole campaign to date. Reuse-if-exists is the correctness case;
+// create-if-absent is the fresh-campaign case.
+//
+// Hard-fails the campaign on error. This is the one place where a soft-fail would be actively
+// dangerous: if the campaign branch does not exist, every wave's INTEGRATION_BASE resolves to a
+// missing ref, and the recovery an agent would most plausibly reach for is "base it on the
+// protected branch instead" — which is exactly the per-wave trunk write this shape exists to
+// prevent. No branch, no campaign.
+phase('Bootstrap')
+const BOOTSTRAP_RESULT = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['ready'],
+  properties: {
+    ready: { type: 'boolean' },
+    created: { type: 'boolean' }, // true = fresh cut off the protected branch; false = reused an existing campaign branch
+    head_sha: { type: 'string' },
+    notes: { type: 'string' },
+  },
+}
+const bootstrap = await agent(
+  [
+    `You are the CAMPAIGN BRANCH BOOTSTRAP node for plan ${PLAN_ID ?? 'n/a'} of ${TARGET_REPO}.`,
+    `Ensure the campaign branch ${CAMPAIGN_BRANCH} exists on origin. Do NOT do any other work — do not`,
+    `merge anything, do not touch ${PROTECTED_BRANCH}, do not create any wave/kahuna branches.`,
+    ``,
+    `Work in ${TARGET_REPO_DIR}:`,
+    `1. git -C ${TARGET_REPO_DIR} fetch origin --prune`,
+    `2. If origin/${CAMPAIGN_BRANCH} ALREADY EXISTS: REUSE it. Return ready=true, created=false, and its`,
+    `   head sha. Do NOT reset, re-cut, or force-push it — this is a RESUMED campaign and that branch`,
+    `   carries every wave integrated so far. Re-cutting it from ${PROTECTED_BRANCH} would silently`,
+    `   discard the whole campaign to date; that is the single worst outcome available at this step.`,
+    `3. If it does NOT exist: create it from the CURRENT tip of origin/${PROTECTED_BRANCH} and push it:`,
+    `     git -C ${TARGET_REPO_DIR} branch ${CAMPAIGN_BRANCH} origin/${PROTECTED_BRANCH}`,
+    `     git -C ${TARGET_REPO_DIR} push -u origin ${CAMPAIGN_BRANCH}`,
+    `   Return ready=true, created=true, head sha.`,
+    `4. VERIFY BY READING BACK — not by the push's exit code: confirm origin/${CAMPAIGN_BRANCH} resolves`,
+    `   (git -C ${TARGET_REPO_DIR} rev-parse origin/${CAMPAIGN_BRANCH}) and report that sha.`,
+    ``,
+    `If the branch can NEITHER be found NOR created, return ready=false with the reason in notes. Do NOT`,
+    `substitute ${PROTECTED_BRANCH} or any other ref as a fallback — the campaign will abort, which is`,
+    `the correct outcome (#1052: waves must never integrate onto the protected branch).`,
+    ``,
+    `Return: ready (bool), created (bool), head_sha (string), notes (1-2 sentences).`,
+  ].join('\n'),
+  { label: 'bootstrap:campaign-branch', phase: 'Bootstrap', schema: BOOTSTRAP_RESULT, agentType: 'general-purpose' },
+).catch((e) => ({ ready: false, notes: `bootstrap error: ${e?.message || e}` }))
+
+if (!bootstrap?.ready) {
+  throw new Error(
+    `campaign-workflow: could not establish the campaign branch ${CAMPAIGN_BRANCH} (${bootstrap?.notes || 'unknown reason'}). ` +
+      `Aborting — waves must integrate onto the campaign branch, never onto ${PROTECTED_BRANCH} (#1052).`,
+  )
+}
+log(`[#1052] campaign branch ${CAMPAIGN_BRANCH} ${bootstrap.created ? 'CREATED off' : 'REUSED (resume) — not re-cut from'} ${PROTECTED_BRANCH}${bootstrap.head_sha ? ` @ ${bootstrap.head_sha}` : ''}`)
+
+// ── PHASE 2 — REHYDRATE (§6.1.3, reboot-proof) ───────────────────────────────────────────────
+// Read the durable wave-status: which waves already INTEGRATED (prune them) + the cross-wave
 // trajectory (#748) that seeds the judgment agent. The script cannot call the CLI directly, so a
 // cheap agent reads it (wave-status trajectory-show + the wave-completion records) and returns the
-// structured rehydrate. A read failure is conservative: assume nothing promoted (re-run waves —
+// structured rehydrate. A read failure is conservative: assume nothing integrated (re-run waves —
 // the per-wave spine is idempotent) and an empty trajectory.
+//
+// #1052: the prune predicate is INTEGRATED, not released. Nothing is released until the campaign
+// ends, so a released-keyed rehydrate would prune nothing and re-run the whole campaign on every
+// resume. The persisted disposition is still the string 'promoted' (durable value, deliberately not
+// renamed — see wave-status.js) and now MEANS "landed on the integration base".
 phase('Rehydrate')
 const REHYDRATE_RESULT = {
   type: 'object',
   additionalProperties: false,
-  required: ['promotedWaveIds'],
+  required: ['integratedWaveIds'],
   properties: {
-    promotedWaveIds: { type: 'array', items: { type: 'string' } },
+    integratedWaveIds: { type: 'array', items: { type: 'string' } },
     trajectory: { type: 'array', items: { type: 'object', additionalProperties: true } },
   },
 }
@@ -348,25 +755,61 @@ const rehydrated = await agent(
     `wave-status in the target clone and return the cold-start campaign state. Do NOT do any other work.`,
     ``,
     `Run FROM the target clone (cd ${TARGET_REPO_DIR}) so the CLI resolves its .claude/status/:`,
-    `  1. promotedWaveIds: the wave ids whose terminal disposition is 'promoted' (a wave that landed`,
-    `     on ${PROTECTED_BRANCH}). Read the durable trajectory + wave-completion records:`,
-    `       wave-status trajectory-show   (JSON array; entries with promoted:true are promoted)`,
-    `     plus any wave-completion record the store exposes. Be CONSERVATIVE — only list a wave as`,
-    `     promoted if the record clearly says so; when unsure, omit it (the spine re-runs idempotently).`,
+    `  1. integratedWaveIds: the wave ids that have LANDED ON THE CAMPAIGN BRANCH ${CAMPAIGN_BRANCH}`,
+    `     — i.e. whose terminal disposition is 'promoted' (that durable value means "landed on its`,
+    `     integration base", which in a campaign is the campaign branch, NOT ${PROTECTED_BRANCH};`,
+    `     #1052). Read the durable trajectory + wave-completion records:`,
+    `       wave-status trajectory-show   (JSON array; entries with integrated:true — or, from a`,
+    `                                      pre-#1052 record, promoted:true — have landed)`,
+    `     plus any wave-completion record the store exposes. Do NOT require anything to be on`,
+    `     ${PROTECTED_BRANCH}: nothing in this campaign reaches it until the release gate at the end,`,
+    `     so a protected-branch test would report every wave as un-run and re-run the whole campaign.`,
+    `     Be CONSERVATIVE — only list a wave as integrated if the record clearly says so; when unsure,`,
+    `     omit it (the spine re-runs idempotently, so a false omission costs time, not correctness).`,
     `  2. trajectory: the full \`wave-status trajectory-show\` array verbatim (seeds the judgment agent).`,
     ``,
-    `If wave-status is absent/empty (fresh campaign) return { promotedWaveIds: [], trajectory: [] }.`,
-    `Return EXACTLY: promotedWaveIds (array of strings), trajectory (array of objects).`,
+    `If wave-status is absent/empty (fresh campaign) return { integratedWaveIds: [], trajectory: [] }.`,
+    `Return EXACTLY: integratedWaveIds (array of strings), trajectory (array of objects).`,
   ].join('\n'),
   { label: 'rehydrate', phase: 'Rehydrate', schema: REHYDRATE_RESULT, agentType: 'general-purpose' },
 ).catch((e) => {
   log(`[#749] rehydrate soft-fail → assume fresh campaign (spine is idempotent): ${e?.message || e}`)
-  return { promotedWaveIds: [], trajectory: [] }
+  return { integratedWaveIds: [], trajectory: [] }
 })
 
-const pending = computePending(ALL_WAVES, rehydrated?.promotedWaveIds ?? [])
+// The waves already integrated before this run. Kept because the release gate judges completeness
+// against the FULL plan (routeRelease): a resumed run's `wavesAdvanced` covers only its own slice,
+// so without these a resumed campaign could never satisfy the completeness predicate and would
+// never release — it would hold forever with every wave actually integrated.
+//
+// FILTERED to the plan's own wave ids. This list is agent-reported, and it feeds the completeness
+// half of routeRelease — the predicate that authorizes the one write to the protected branch. An
+// id that is not in the plan cannot be evidence about the plan, so an over-reporting or confused
+// rehydrate agent must not be able to shrink `missing[]` and manufacture a release. (The DoD node is
+// the other, independent half of that gate; this makes the completeness half self-consistent too.)
+const PLAN_WAVE_IDS = new Set(ALL_WAVES.map((w) => String(waveIdOf(w))))
+const reportedIntegrated = (rehydrated?.integratedWaveIds ?? []).map(String)
+const ALREADY_INTEGRATED = reportedIntegrated.filter((id) => PLAN_WAVE_IDS.has(id))
+for (const id of reportedIntegrated.filter((id) => !PLAN_WAVE_IDS.has(id))) {
+  log(`[#1052] discarding rehydrated wave id '${id}' — not in this plan; it cannot count toward release completeness.`)
+}
+// A freshly-CUT campaign branch and "waves already integrated onto it" cannot both be true. When they
+// co-occur, those integrations landed on some OTHER branch (a renamed/case-drifted campaign, a deleted
+// and re-cut branch, a stale durable store) — yet ALREADY_INTEGRATED still feeds routeRelease's landed
+// set, so `missing[]` could empty and the completeness half of the ONE trunk-write gate would pass on
+// evidence about a branch this run never touched. The plan-id filter above hardened this predicate
+// against out-of-plan ids; wrong-branch ids are the same class, and both facts are already in hand here.
+if (bootstrap.created === true && ALREADY_INTEGRATED.length > 0) {
+  throw new Error(
+    `campaign-workflow: ${CAMPAIGN_BRANCH} was just CUT FRESH off ${PROTECTED_BRANCH}, but wave-status reports ` +
+      `[${ALREADY_INTEGRATED.join(', ')}] already integrated — those landed on a DIFFERENT branch, so they are ` +
+      `not on this one. Aborting rather than count them toward release completeness (#1052). Resolve the ` +
+      `mismatch (recover the original campaign branch, or clear the stale wave-status records) and re-run.`,
+  )
+}
+const pending = computePending(ALL_WAVES, ALREADY_INTEGRATED)
 const baseTrajectory = Array.isArray(rehydrated?.trajectory) ? rehydrated.trajectory : []
-log(`[#749] rehydrated — ${(rehydrated?.promotedWaveIds ?? []).length} promoted, ${pending.length} pending: [${pending.map(waveIdOf).join(', ') || 'none'}]`)
+log(`[#749] rehydrated — ${ALREADY_INTEGRATED.length} integrated, ${pending.length} pending: [${pending.map(waveIdOf).join(', ') || 'none'}]`)
 
 // #750 INTENT-TIER RESOLVER (§3 — tiered intent, graceful degradation). One-time discovery: an
 // agent runs the sdlc-server locators (devspec_locate → ddd_locate_domain_model / ddd_locate_sketchbook)
@@ -403,8 +846,29 @@ const INTENT_TIER = INTENT_TIER_OVERRIDE ?? resolveIntentTier({ devspec: intent.
 const INTENT_REFS = { devspec: intent.devspec ?? null, domainModel: intent.domainModel ?? null, sketchbook: intent.sketchbook ?? null }
 log(`[#750] intent tier: ${INTENT_TIER}${INTENT_TIER_OVERRIDE ? ' (override)' : ''} — refs ${JSON.stringify(INTENT_REFS)}`)
 
-// ── PHASE 2 — CAMPAIGN LOOP (§2 — control flow is code; judgment is a seam) ───────────────────
+// ── PHASE 3 — CAMPAIGN LOOP (§2 — control flow is code; judgment is a seam) ───────────────────
 phase('Campaign loop')
+
+// This wave's disposable integration branch. Namespaced under the PLAN so two concurrent campaigns
+// in one repo cannot collide on `kahuna/W-1`, and deliberately under a DIFFERENT top-level prefix
+// from the campaign branch — a branch cannot be a directory prefix of another branch, so
+// `campaign/56-x` + `campaign/56-x/W-1` is an unrepresentable ref (see campaign-loop.js topology).
+//
+// The per-wave name ALWAYS wins inside a campaign — a plan-supplied `wave.kahunaBranch` is ignored.
+// That field is populated by server-side `wave_init`, which cuts ONE plan-scoped
+// `kahuna/<plan>-<slug>` off the plan's base_branch (default: trunk). Honoring it here would
+// reintroduce exactly what #1052 removes: a branch SHARED across waves (so wave 1's promote deletes
+// wave 2's base, since a campaign wave's kahuna is disposable) and cut off TRUNK rather than the
+// campaign branch (so each wave's flights would build on a baseline missing every previously
+// integrated wave). Log the override rather than dropping it silently — a stale launcher passing the
+// field is a real configuration the operator should see named.
+const kahunaFor = (wave, id) => {
+  const derived = waveKahunaFor({ planId: PLAN_ID, waveId: id })
+  if (wave.kahunaBranch && wave.kahunaBranch !== derived) {
+    log(`[#1052] ignoring plan-supplied kahunaBranch '${wave.kahunaBranch}' for wave ${id} — using ${derived}, cut off ${CAMPAIGN_BRANCH} (a wave_init plan-scoped branch is shared across waves and based on trunk).`)
+  }
+  return derived
+}
 
 // Seam 1 — run the per-wave spine as a nested Workflow (one level, §ok: per-wave does not nest).
 async function runWave(wave) {
@@ -412,16 +876,25 @@ async function runWave(wave) {
   const perWaveArgs = {
     waveId: id,
     issues: wave.issues ?? [],
-    kahunaBranch: wave.kahunaBranch ?? `kahuna/${id}`,
+    kahunaBranch: kahunaFor(wave, id),
     targetRepo: TARGET_REPO,
     targetRepoDir: TARGET_REPO_DIR,
+    // #1052 — the wave integrates onto the CAMPAIGN branch and promotes nowhere else. Both are
+    // passed: integrationBase is where the wave's PR targets and where its diffs are scoped, while
+    // protectedBranch is passed so the spine can tell the two apart (it derives IN_CAMPAIGN from
+    // integrationBase !== protectedBranch, which is what retires preserveKahuna and moves the
+    // platform issue-close to the release node). Omitting protectedBranch would make the spine
+    // default it to 'main' and mis-detect a campaign on any repo whose trunk is named otherwise.
+    integrationBase: CAMPAIGN_BRANCH,
     protectedBranch: PROTECTED_BRANCH,
     planId: PLAN_ID,
     mode: 'auto', // the campaign Workflow is auto-mode by definition (§2.4); interactive is the skill driver
-    preserveKahuna: wave.preserveKahuna ?? params.preserveKahuna ?? false,
     dispatch: wave.dispatch ?? 'serialize', // #824 R-06: thread the per-wave dispatch hint (/prepwaves #823) into the spine's args; absent → serialize (CT-01)
+    // NB: preserveKahuna is deliberately NOT threaded (#722 retired in campaign mode, #1052). The
+    // branch that must survive across waves is the campaign branch, and it does; each wave's kahuna
+    // is disposable again, which is what makes a squash merge harmless and #892 unreachable.
   }
-  log(`[#749] launching per-wave spine for ${id} (issues ${JSON.stringify(perWaveArgs.issues)})`)
+  log(`[#749] launching per-wave spine for ${id} → ${perWaveArgs.kahunaBranch} onto ${CAMPAIGN_BRANCH} (issues ${JSON.stringify(perWaveArgs.issues)})`)
   return workflow({ scriptPath: PER_WAVE_SCRIPT }, perWaveArgs)
 }
 
@@ -445,7 +918,11 @@ async function judge(wave, context) {
       remainingPlan: context.remaining,
       intentTier: INTENT_TIER,
       intentRefs: INTENT_REFS,
-      kahunaBranch: wave.kahunaBranch ?? `kahuna/${id}`,
+      kahunaBranch: kahunaFor(wave, id),
+      // #1052: the judge is told BOTH branches so it reads a mid-campaign `promoted:false` as the
+      // normal state it now is, and knows a flag here is cheap (trunk is still untouched).
+      campaignBranch: CAMPAIGN_BRANCH,
+      protectedBranch: PROTECTED_BRANCH,
     }),
     { label: `judgment:${id}`, phase: 'Campaign loop', schema: JUDGMENT_RESULT, agentType: 'general-purpose' },
   )
@@ -456,26 +933,115 @@ const report = await runCampaign({
   runWave,
   judge,
   onEvent: (e) => {
-    if (e.type === 'verdict') log(`[#749] ${e.wave}: gate=${e.gate} promoted=${e.promoted} → ${e.advance ? 'gate-advance' : 'HOLD'}`)
+    if (e.type === 'verdict') log(`[#749] ${e.wave}: gate=${e.gate} integrated=${e.integrated} → ${e.advance ? 'gate-advance' : 'HOLD'}`)
     else if (e.type === 'judgment') log(`[#749] ${e.wave}: judgment → ${e.advance ? 'continue' : 'FLAG/hold'}`)
     else if (e.type === 'advanced') log(`[#749] ${e.wave}: ADVANCED`)
   },
 })
 
 if (report.outcome === 'completed') {
-  log(`[#749] campaign COMPLETE — ${report.wavesAdvanced.length}/${pending.length} waves advanced: [${report.wavesAdvanced.join(', ')}]`)
+  log(`[#749] all pending waves integrated — ${report.wavesAdvanced.length}/${pending.length} advanced: [${report.wavesAdvanced.join(', ')}]`)
 } else {
   log(`[#749] campaign HELD at ${report.heldAt}: ${report.heldReason} (advanced: [${report.wavesAdvanced.join(', ') || 'none'}])`)
 }
 
+// ── PHASE 4 — RELEASE (#1052) — the ONE write to the protected branch ─────────────────────────
+// Two gates, in order, and neither is skippable:
+//   1. completeness — every wave in the FULL plan integrated (routeRelease; a resumed run's
+//      wavesAdvanced is only its own slice, hence alreadyIntegrated),
+//   2. the DoD is met — verified against the campaign branch's actual tree, not the checkboxes.
+//
+// The DoD node runs whenever the loop completed, INCLUDING when release is withheld: the verdict is
+// the thing a human needs in order to decide, so producing it is not conditional on acting on it.
+// It never runs after a HOLD — verifying a DoD against a knowingly-incomplete campaign would burn a
+// long agent turn to restate what routeRelease already knows.
+phase('Release')
+const wavesIntegrated = [...ALREADY_INTEGRATED, ...report.wavesAdvanced.map(String)]
+let dod = null
+if (report.outcome === 'completed') {
+  dod = await agent(
+    dodVerificationPrompt({
+      planId: PLAN_ID,
+      targetRepo: TARGET_REPO,
+      targetRepoDir: TARGET_REPO_DIR,
+      campaignBranch: CAMPAIGN_BRANCH,
+      protectedBranch: PROTECTED_BRANCH,
+      wavesIntegrated,
+    }),
+    { label: 'release:dod', phase: 'Release', schema: DOD_VERDICT, agentType: 'general-purpose' },
+  ).catch((e) => {
+    // Conservative on absence (SEAMS invariant 6): a DoD node that ERRORED has not shown the DoD is
+    // met, and an undeterminable DoD is not a met DoD. met:false BLOCKS the release; the campaign
+    // branch is durable, so this is fully resumable once the DoD genuinely holds.
+    log(`[#1052] DoD verification errored → release BLOCKED (conservative): ${e?.message || e}`)
+    return { met: false, reason: `DoD verification errored: ${e?.message || e}`, unmet: [] }
+  })
+  log(`[#1052] DoD verdict: met=${dod?.met === true}${dod?.reason ? ` — ${dod.reason}` : ''}`)
+} else {
+  log(`[#1052] campaign held before completion — skipping DoD verification (nothing to release)`)
+}
+
+// Pass the pre-run integrations through on the report so the pure predicate can judge completeness
+// against the whole plan without needing to know how this run was sliced.
+const releaseRoute = routeRelease({
+  report: { ...report, alreadyIntegrated: ALREADY_INTEGRATED },
+  allWaves: ALL_WAVES,
+  dod,
+})
+
+let release = null
+if (releaseRoute.release && RELEASE_MODE === 'auto') {
+  log(`[#1052] RELEASE GATE PASSED — ${releaseRoute.reason}. Landing ${CAMPAIGN_BRANCH} → ${PROTECTED_BRANCH} (the campaign's only trunk write).`)
+  release = await agent(
+    releaseMergePrompt({
+      planId: PLAN_ID,
+      targetRepo: TARGET_REPO,
+      campaignBranch: CAMPAIGN_BRANCH,
+      protectedBranch: PROTECTED_BRANCH,
+      wavesIntegrated,
+    }),
+    { label: 'release:merge', phase: 'Release', schema: RELEASE_RESULT, agentType: 'general-purpose' },
+  ).catch((e) => {
+    // A failed release is NOT reported as released, and it is NOT a campaign failure either: every
+    // wave is integrated and durable on the campaign branch, so the merge is retryable. Never claim
+    // a merge that did not land (catalog signal I).
+    log(`[#1052] release merge soft-fail — campaign branch intact, release retryable: ${e?.message || e}`)
+    return { released: false, notes: `release error: ${e?.message || e}` }
+  })
+  log(release?.released
+    ? `[#1052] RELEASED — ${CAMPAIGN_BRANCH} landed on ${PROTECTED_BRANCH}${release.merge_sha ? ` @ ${release.merge_sha}` : ''}`
+    : `[#1052] NOT released — ${release?.notes || 'see release node'}. ${CAMPAIGN_BRANCH} is intact; retry once the blocker clears.`)
+} else if (releaseRoute.release) {
+  log(`[#1052] release gate PASSED but release:false was requested — holding. ${CAMPAIGN_BRANCH} is ready to land on ${PROTECTED_BRANCH}.`)
+} else {
+  log(`[#1052] release BLOCKED — ${releaseRoute.reason}. ${PROTECTED_BRANCH} untouched; ${CAMPAIGN_BRANCH} preserved for inspection/resume.`)
+}
+
 // The return IS the campaign result the launching session / operator routes on (§2.2: a Workflow
-// ending with a report is the human handoff).
+// ending with a report is the human handoff). `integrated` and `released` are reported SEPARATELY
+// and are not interchangeable: waves can be fully integrated while released is false, which is a
+// campaign awaiting its DoD, not a delivered increment (#1052).
 return {
   outcome: report.outcome,
   plan: PLAN_ID,
   targetRepo: TARGET_REPO,
+  campaignBranch: CAMPAIGN_BRANCH,
+  protectedBranch: PROTECTED_BRANCH,
   wavesAdvanced: report.wavesAdvanced,
+  wavesIntegrated,
   heldAt: report.heldAt ?? null,
   heldReason: report.heldReason ?? null,
-  wavesCompleted: report.completed.map((c) => ({ wave: c.wave, gate: c.verdict?.gate ?? null, promoted: c.verdict?.promoted === true, judgment: c.judgment ? (c.judgment.continue ? 'continue' : 'flag') : null })),
+  dod: dod ? { met: dod.met === true, unmet: dod.unmet ?? [], reason: dod.reason ?? null } : null,
+  release: {
+    attempted: release != null,
+    released: release?.released === true,
+    reason: releaseRoute.reason,
+    pr_ref: release?.pr_ref ?? null,
+    merge_sha: release?.merge_sha ?? null,
+    notes: release?.notes ?? null,
+  },
+  // isIntegrated(), not an inline OR: the predicate gives an explicit `integrated:false` precedence
+  // over a stale `promoted:true`, and an OR-form silently inverts that — reporting a wave the loop
+  // correctly HELD as integrated. One predicate, one place (campaign-loop.js).
+  wavesCompleted: report.completed.map((c) => ({ wave: c.wave, gate: c.verdict?.gate ?? null, integrated: isIntegrated(c.verdict), judgment: c.judgment ? (c.judgment.continue ? 'continue' : 'flag') : null })),
 }

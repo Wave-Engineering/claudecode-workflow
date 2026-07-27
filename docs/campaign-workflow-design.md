@@ -88,7 +88,7 @@ The seed comprises:
   `deferrals[]`, rework / re-open events, the commutativity verdict, MRs/commits landed,
   issues closed. **Accumulated across waves** (see §5).
 
-- **The just-landed wave in full** — its kahuna-vs-protected diff, gate signals, reconcile report.
+- **The just-landed wave in full** — its kahuna-vs-integration-base diff, gate signals, reconcile report.
 
 - **The remaining plan** — so the judgment is "sound to proceed *into the rest*."
 

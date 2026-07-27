@@ -119,16 +119,38 @@ const params = parseArgs(typeof args !== 'undefined' ? args : undefined) // #1: 
 const WAVE_ID = params.waveId ?? 'W-?'
 const TARGET_REPO = params.targetRepo ?? 'Wave-Engineering/ccwork-testtarget' // owner/repo for gh -R scoping
 const TARGET_REPO_DIR = params.targetRepoDir ?? '/home/bakerb/sandbox/github/ccwork-testtarget' // clone the worktrees attach to
-const KAHUNA_BRANCH = params.kahunaBranch ?? `kahuna/${WAVE_ID}` // integration target; never the protected branch
-const PRESERVE_KAHUNA = params.preserveKahuna ?? false // #722: true ⇒ persistent per-plan kahuna (shared across a plan's waves) — promote does NOT delete it; default false = per-wave disposable (delete on promote)
-const PROTECTED_BRANCH = params.protectedBranch ?? 'main' // promotion target on the success exit
+const KAHUNA_BRANCH = params.kahunaBranch ?? `kahuna/${WAVE_ID}` // this wave's integration target; never the protected branch
+const PROTECTED_BRANCH = params.protectedBranch ?? 'main' // the trunk — see INTEGRATION_BASE: this wave never writes it
+// #1052 — WHERE THIS WAVE INTEGRATES TO. The wave lands on the CAMPAIGN branch, not the protected
+// branch; the protected branch is written exactly once, by the campaign's release gate, after every
+// wave has integrated AND the DoD is met (routeRelease in campaign-loop.js). A wave has no license
+// to touch trunk — see docs/campaign-workflow-design.md and the topology note in campaign-loop.js.
+//
+// The fallback is PROTECTED_BRANCH, which preserves the legacy single-wave shape for a bare
+// /nextwave run (one wave, no campaign, no campaign branch to integrate onto) — there the wave IS
+// the whole increment, so promoting to trunk is correct. A campaign driver ALWAYS passes this.
+const INTEGRATION_BASE = params.integrationBase ?? PROTECTED_BRANCH
+// True when this wave is part of a campaign (integrating onto a campaign branch) rather than a
+// standalone /nextwave run. Governs the terminal vocabulary: a campaign wave reports `integrated`,
+// a standalone wave reports `released` too, because for it the two events coincide.
+const IN_CAMPAIGN = INTEGRATION_BASE !== PROTECTED_BRANCH
+// #722/#1052: `preserveKahuna` is RETIRED for campaign waves. It existed because a per-plan kahuna
+// had to survive across waves, which is precisely the persistent-branch-plus-squash combination
+// that broke (#892). The campaign branch now holds cross-wave state, so every wave's kahuna is
+// disposable again — deleted on integration, nothing continues from it, so a squash is harmless.
+// Accepted-but-ignored in campaign mode (a stale launcher passing true must not resurrect the
+// divergence); still honored for a standalone wave, where no campaign branch exists.
+const PRESERVE_KAHUNA = IN_CAMPAIGN ? false : (params.preserveKahuna ?? false)
+if (IN_CAMPAIGN && params.preserveKahuna === true) {
+  log(`[#1052] ignoring preserveKahuna:true — this wave integrates onto ${INTEGRATION_BASE}, so its kahuna is disposable (the campaign branch carries cross-wave state; see #892).`)
+}
 const ALL_ISSUES = (params.issues ?? []).map(Number).filter(Number.isFinite) // the wave's issue numbers
 // #4 fail-loud: refuse an empty wave rather than silently defaulting the gate at the protected branch.
 if (ALL_ISSUES.length === 0) {
   throw new Error(
     `per-wave-workflow: empty wave issue list (params.issues=${JSON.stringify(params.issues ?? null)}). ` +
       `Refusing to run — an empty wave reaches the trust gate with nothing merged and would open/promote ` +
-      `at ${PROTECTED_BRANCH}. Launch with {issues:[...]} (and waveId/kahunaBranch/targetRepo) via the ` +
+      `at ${INTEGRATION_BASE}. Launch with {issues:[...]} (and waveId/kahunaBranch/targetRepo) via the ` +
       `Workflow tool's \`args\` as a JSON OBJECT.`,
   )
 }
@@ -387,7 +409,9 @@ async function persistIteration(state) {
   const newlyMerged = [...(state.newlyMerged || [])].map(Number)
   const path = blobPath(TARGET_REPO_DIR, WAVE_ID)
   await agent(
-    persistIterationPrompt({ waveId: WAVE_ID, targetRepo: TARGET_REPO, kahunaBranch: KAHUNA_BRANCH, newlyMerged, blob, path }),
+    // #1046/#1052: inCampaign moves the PLATFORM issue-close to the campaign's release node (the
+    // work is not delivered until trunk is written); durable engine state is still recorded here.
+    persistIterationPrompt({ waveId: WAVE_ID, targetRepo: TARGET_REPO, kahunaBranch: KAHUNA_BRANCH, newlyMerged, blob, path, inCampaign: IN_CAMPAIGN, integrationBase: INTEGRATION_BASE }),
     {
       label: `persist:${state.groupsRun}`,
       phase: 'Flight loop',
@@ -422,6 +446,14 @@ async function persistTerminal(disposition, detail) {
   // trust signals; `commutativity` lifts that signal's verdict out for the intent-drift lens.
   const trajectoryEntry = {
     gate: gate?.verdict ?? null,                 // PASS | HOLD | SKIPPED
+    // #1052: BOTH fields, deliberately. `integrated` is the current vocabulary ("landed on this
+    // wave's integration base"); `promoted` is retained for readers not yet upgraded. Writing only
+    // `promoted` would make THIS engine's records indistinguishable from pre-#1052 ones, and the
+    // campaign's rehydrate prompt — which is told to be conservative and omit anything ambiguous —
+    // would decline to count the wave as integrated. That re-runs an already-integrated wave, whose
+    // diff is now empty, and an empty review stage conservative-fails: a HOLD on a wave that in fact
+    // landed, stalling the campaign short of its release gate.
+    integrated: disposition === 'promoted',
     promoted: disposition === 'promoted',
     detail,
     signals: (gate?.signals || []).map((s) => ({ signal: s.signal, passed: s.passed, detail: s.detail })),
@@ -439,7 +471,7 @@ async function persistTerminal(disposition, detail) {
     // so it lands on the same card as the activity_start denominator.
     persistTerminalPrompt({
       waveId: WAVE_ID, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR,
-      kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH,
+      kahunaBranch: KAHUNA_BRANCH, integrationBase: INTEGRATION_BASE,
       disposition, detail, blob, path, trajectoryEntry,
     }) + '\n' + flightdeckTee({ phase: 'Promote', label: disposition })
        + '\n' + flightdeckGateMetrics(gate), // #1026 AC5: confidence + drift from the resolved gate
@@ -546,7 +578,8 @@ function workerPrompt(n, worktree) {
   return [
     `You are a FLIGHT worker for issue #${n} of ${TARGET_REPO}, wave ${WAVE_ID}.`,
     `Working directory: ${worktree} (handed to you — do NOT create your own worktree). Branch: ${branch}`,
-    `(already checked out, based on origin/${KAHUNA_BRANCH}). Your PR targets ${KAHUNA_BRANCH}, NEVER ${PROTECTED_BRANCH}.`,
+    `(already checked out, based on origin/${KAHUNA_BRANCH}). Your PR targets ${KAHUNA_BRANCH} — NEVER`,
+    `${INTEGRATION_BASE}${IN_CAMPAIGN ? ` (this wave's integration base)` : ''} and NEVER ${PROTECTED_BRANCH} (the trunk).`,
     ``,
     `IDEMPOTENT RESUME (§3.3): FIRST check if your branch already contains this implementation (e.g. the spec's`,
     `target files exist + the acceptance test passes). If so, return status="already-present" and do NOT redo work.`,
@@ -611,6 +644,97 @@ function primeReconcilePrompt(built, merged) {
 // ─────────────────────────────────────────────────────────────────────────────
 phase('Rehydrate')
 const seed = await rehydrate() // SEAM #686
+
+// ── #1052 KAHUNA BOOTSTRAP — establish this wave's integration branch off the BASE ────────────
+// Every downstream node assumes `origin/<KAHUNA_BRANCH>` exists: the worktree setup bases each
+// flight on it (`worktree add -b <flight> origin/<kahuna>`), the gate diffs
+// `origin/<base>...origin/<kahuna>`, and the promote node merges it. Nothing in this engine created
+// it — before #1052 the only creator was server-side `wave_init`, which cuts ONE plan-scoped
+// `kahuna/<plan>-<slug>` off the plan's base_branch. Inside a campaign that is doubly wrong: the
+// branch is shared across waves (so the disposable-kahuna model deletes wave N+1's base when wave N
+// promotes) and it is cut off TRUNK, not the campaign branch — so wave 2's flights would build on a
+// baseline missing wave 1's integrated work. This node makes the wave's kahuna real and correctly
+// based, which is what lets the branch be genuinely disposable (#892).
+//
+// Create-or-reuse, never re-cut: an existing branch carries this wave's already-integrated flights,
+// so re-cutting it would silently discard them. Fail loud rather than fall back — a wave whose
+// kahuna could not be established must not proceed to open a PR from a ref that does not exist.
+const KAHUNA_BOOTSTRAP = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['ready'],
+  properties: {
+    ready: { type: 'boolean' }, // origin/<kahuna> verifiably exists, based on origin/<base>
+    created: { type: 'boolean' }, // true = cut fresh this run; false = reused an existing branch
+    head_sha: { type: 'string' }, // REQUIRED in practice — see the sha guard below
+    based_on_base: { type: 'boolean' }, // reuse path: is origin/<base> an ancestor of origin/<kahuna>?
+    notes: { type: 'string' },
+  },
+}
+const kahunaBootstrap = await agent(
+  [
+    `You are the wave KAHUNA-BOOTSTRAP node for wave ${WAVE_ID} of ${TARGET_REPO}. Establish this`,
+    `wave's integration branch ${KAHUNA_BRANCH} off ${INTEGRATION_BASE}, then return. Do NOT do any`,
+    `other work — do not touch issues, flights, or PRs.`,
+    ``,
+    `Run every command FROM ${TARGET_REPO_DIR}.`,
+    ``,
+    `1. Fetch: git -C ${TARGET_REPO_DIR} fetch origin`,
+    `2. If origin/${KAHUNA_BRANCH} ALREADY EXISTS — REUSE it. Return created:false. Do NOT re-cut,`,
+    `   reset, or force-push it: it carries the flights this wave already integrated (a resume), and`,
+    `   re-cutting would silently discard them. Then CHECK its ancestry and report it — do not assume it:`,
+    `     git -C ${TARGET_REPO_DIR} merge-base --is-ancestor origin/${INTEGRATION_BASE} origin/${KAHUNA_BRANCH}`,
+    `   exit 0 → based_on_base:true; non-zero → based_on_base:false (say so in notes; this is NOT fatal —`,
+    `   the base may simply have advanced since the branch was cut, and the gate's commutativity +`,
+    `   merge-result CI signals are what adjudicate a genuinely divergent base).`,
+    `3. Otherwise cut it from the integration base and publish it:`,
+    `     git -C ${TARGET_REPO_DIR} branch ${KAHUNA_BRANCH} origin/${INTEGRATION_BASE}`,
+    `     git -C ${TARGET_REPO_DIR} push -u origin ${KAHUNA_BRANCH}`,
+    `   The base is ${INTEGRATION_BASE} — NEVER the protected branch (${PROTECTED_BRANCH}) when those`,
+    `   differ. Inside a campaign, basing on trunk would give this wave a baseline missing every`,
+    `   previously-integrated wave's work (#1052).`,
+    `4. VERIFY by reading it back, and report the sha you actually observed:`,
+    `     git -C ${TARGET_REPO_DIR} rev-parse refs/remotes/origin/${KAHUNA_BRANCH}`,
+    ``,
+    `Return ready:true ONLY if step 4 printed a sha. If the branch could not be established, return`,
+    `ready:false with notes — do NOT substitute another ref (least of all ${PROTECTED_BRANCH}) and do`,
+    `not report success on an unverified push. The wave will abort, which is correct: every later node`,
+    `assumes origin/${KAHUNA_BRANCH} exists.`,
+  ].join('\n'),
+  { label: `kahuna-bootstrap:${WAVE_ID}`, phase: 'Rehydrate', schema: KAHUNA_BOOTSTRAP, agentType: 'general-purpose' },
+).catch((e) => ({ ready: false, notes: `kahuna bootstrap threw: ${e?.message || e}` }))
+// The sha is what makes `ready` mean "verified", not "reported". `head_sha` is optional in the schema,
+// so a schema-valid `{ready:true}` with no sha would pass a bare `ready` check on an unobserved branch —
+// the same defect the promotion-PR node closes by requiring a concrete `pr_number`. Requiring a
+// sha-shaped value keeps the read-back structural instead of a behavioral request in the prompt.
+const bootstrapSha = String(kahunaBootstrap?.head_sha ?? '')
+if (!kahunaBootstrap?.ready || !/^[0-9a-f]{7,40}$/.test(bootstrapSha)) {
+  throw new Error(
+    `per-wave-workflow: could not establish the wave's integration branch ${KAHUNA_BRANCH} off ` +
+      `${INTEGRATION_BASE} (${kahunaBootstrap?.notes || 'no detail'}${kahunaBootstrap?.ready && !bootstrapSha ? '; ready:true but no verified head sha' : ''}). ` +
+      `Refusing to run the wave — the flight worktrees, the trust gate's diff and the promote merge all ` +
+      `read origin/${KAHUNA_BRANCH}, so proceeding would fail later and less clearly. Nothing has been ` +
+      `written; re-run once the base is reachable.`,
+  )
+}
+// A kahuna that IS the base (or trunk) would send every flight merge straight into the branch the
+// gate is supposed to protect, with the gate's own diff empty by the time it looked. campaign-workflow
+// makes the symmetric assertion for the campaign branch; this is the per-wave half, and the bootstrap
+// is the right chokepoint — it is the last node before anything writes.
+for (const [label, ref] of [['the integration base', INTEGRATION_BASE], ['the protected branch', PROTECTED_BRANCH]]) {
+  if (KAHUNA_BRANCH === ref) {
+    throw new Error(
+      `per-wave-workflow: kahunaBranch (${KAHUNA_BRANCH}) must not equal ${label} (${ref}). Flights merge ` +
+        `into the kahuna and the trust gate diffs it AGAINST the base — if they are the same ref, every ` +
+        `flight lands on the base ungated and the gate's diff is empty (#1052).`,
+    )
+  }
+}
+// Report the ancestry the node actually observed — never assert it from the fact that a branch exists.
+const kahunaBasing = kahunaBootstrap.created
+  ? `cut from ${INTEGRATION_BASE}`
+  : `reused (${kahunaBootstrap.based_on_base === true ? `${INTEGRATION_BASE} is an ancestor` : kahunaBootstrap.based_on_base === false ? `NOT descended from current ${INTEGRATION_BASE} — the gate's commutativity + merge-result CI adjudicate` : 'ancestry unverified'})`
+log(`[#1052] kahuna ${KAHUNA_BRANCH} ${kahunaBasing} @ ${bootstrapSha.slice(0, 8)}`)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PHASE 2 — THE DYNAMIC FLIGHT LOOP (§3.1) — REAL, complete. The validated part.
@@ -732,14 +856,14 @@ let gate
 let promotionPrNumber = null // #5: the draft promotion PR the gate opens; the promote step merges THIS one (never a 2nd)
 if (!halt && pending.size === 0) {
   // #5 (live-gate finding, BLOCKING) — OPEN THE PROMOTION PR (DRAFT) FIRST, before the signals.
-  // The CI signal waits on the kahuna→protected MERGE-RESULT pipeline (#452); that pipeline only
+  // The CI signal waits on the kahuna→base MERGE-RESULT pipeline (#452); that pipeline only
   // exists once the PR exists. The old order created the PR at promotion (AFTER the gate), so
   // ci_wait_run found `no_merge_result_pr` and the signal had nothing to verify. Opening a DRAFT
   // PR here gives the CI signal a real pipeline AND prevents a green CI from auto-merging before
   // the gate has weighed all four signals. If the PR can't be opened (kahuna branch/artifacts
   // missing), the gate HOLDs — we cannot prove a wave we cannot even PR (conservative, §3.4).
   const prOpen = await teeAgent(
-    openPromotionPrPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR, planId: PLAN_ID }),
+    openPromotionPrPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, integrationBase: INTEGRATION_BASE, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR, planId: PLAN_ID }),
     { label: 'gate:open-pr', phase: 'Trust gate', schema: OPEN_PR_RESULT, agentType: 'general-purpose' },
   ).catch((e) => {
     log(`[#5] open promotion PR soft-fail → gate HOLDs (no PR to verify): ${e?.message || e}`)
@@ -754,7 +878,7 @@ if (!halt && pending.size === 0) {
   // Requiring a concrete number here keeps both structural (#699 independent review).
   if (!prOpen || !prOpen.opened || promotionPrNumber == null) {
     const detail = !prOpen || !prOpen.opened
-      ? `could not open ${KAHUNA_BRANCH}→${PROTECTED_BRANCH} draft PR: ${prOpen?.notes || 'unknown'}`
+      ? `could not open ${KAHUNA_BRANCH}→${INTEGRATION_BASE} draft PR: ${prOpen?.notes || 'unknown'}`
       : `PR-open returned opened:true but no pr_number — cannot identify the merge-result pipeline to verify`
     gate = { verdict: 'HOLD', failing: [{ signal: 'open-pr', passed: false, detail }], signals: [] }
   } else {
@@ -765,26 +889,28 @@ if (!halt && pending.size === 0) {
     // conservativeFail() (passed:false → HOLD), NOT an always-pass stub — an agent/tool error is
     // the absence of evidence, and a trust gate HOLDs on absence of evidence (SEAMS invariant 6).
     const signals = (await parallel([
-      // 1. commutativity — kahuna composed-diff safety vs the protected branch (single-target mode)
+      // 1. commutativity — kahuna composed-diff safety vs the integration base (single-target mode)
       () => agent(
-        commutativitySignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepoDir: TARGET_REPO_DIR }),
+        commutativitySignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, integrationBase: INTEGRATION_BASE, targetRepoDir: TARGET_REPO_DIR }),
         { label: 'gate:commutativity', phase: 'Trust gate', schema: SIG, agentType: 'general-purpose' },
       ).catch((e) => conservativeFail('commutativity', e)),
       // 2. CI on the MR MERGE-RESULT pipeline of the draft PR opened above — NOT the merge-commit branch HEAD (sdlc #452, #5)
       () => agent(
-        ciSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, prNumber: promotionPrNumber }),
+        ciSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, integrationBase: INTEGRATION_BASE, targetRepo: TARGET_REPO, prNumber: promotionPrNumber }),
         { label: 'gate:ci', phase: 'Trust gate', schema: SIG, agentType: 'general-purpose' },
       ).catch((e) => conservativeFail('ci', e)),
-      // 3. review the kahuna-vs-protected diff via a 2-STEP stage→review sub-pipeline (#847/ENG-5):
-      //    a Bash-capable general-purpose STAGE agent fetches + diffs origin/<protected>...origin/<kahuna>
+      // 3. review the kahuna-vs-base diff via a 2-STEP stage→review sub-pipeline (#847/ENG-5):
+      //    a Bash-capable general-purpose STAGE agent fetches + diffs origin/<base>...origin/<kahuna>
       //    and materializes the changed-file set into a durable workspace; then the SPECIALIZED
       //    feature-dev:code-reviewer reviews that workspace. code-reviewer is PRESERVED (NOT swapped to
       //    general-purpose — the EC-1 shortcut): it has no Bash to fetch the diff, so the stage step feeds
-      //    it. The diff is ALWAYS origin/<protected>...origin/<kahuna>, never a hard-coded `main` (the
-      //    empty-tree provisioning bug: an origin/main worktree reviews nothing on release-branch repos).
+      //    it. The diff is ALWAYS origin/<INTEGRATION_BASE>...origin/<kahuna>, never a hard-coded `main`
+      //    (the empty-tree provisioning bug: an origin/main worktree reviews nothing on release-branch
+      //    repos) — and inside a campaign the base is the campaign branch, so this is the diff the wave
+      //    actually adds on top of the waves before it, not a re-review of the whole campaign (#1052).
       () => (async () => {
         const staged = await agent(
-          reviewStagePrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR }),
+          reviewStagePrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, integrationBase: INTEGRATION_BASE, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR }),
           { label: 'gate:review:stage', phase: 'Trust gate', schema: REVIEW_STAGE, agentType: 'general-purpose' },
         )
         // Conservative-fail on a failed/empty stage (fetch error or zero changed files): the reviewer has
@@ -793,7 +919,7 @@ if (!halt && pending.size === 0) {
           return conservativeFail('review', `stage step produced no diff to review: ${staged?.notes || 'staged=false'}`)
         }
         return agent(
-          reviewSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepoDir: TARGET_REPO_DIR, workspaceDir: staged.workspaceDir, changedFiles: staged.changedFiles }),
+          reviewSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, integrationBase: INTEGRATION_BASE, targetRepoDir: TARGET_REPO_DIR, workspaceDir: staged.workspaceDir, changedFiles: staged.changedFiles }),
           { label: 'gate:review', phase: 'Trust gate', schema: SIG, agentType: 'feature-dev:code-reviewer' },
         )
       })().catch((e) => conservativeFail('review', e)),
@@ -809,7 +935,7 @@ if (!halt && pending.size === 0) {
 
     const failed = signals.filter((s) => !s.passed)
     gate = failed.length === 0
-      ? { verdict: 'PASS', promote: `${KAHUNA_BRANCH}→${PROTECTED_BRANCH}`, prNumber: promotionPrNumber, signals }
+      ? { verdict: 'PASS', promote: `${KAHUNA_BRANCH}→${INTEGRATION_BASE}`, prNumber: promotionPrNumber, signals }
       : { verdict: 'HOLD', failing: failed, signals }
   }
 } else {
@@ -817,8 +943,9 @@ if (!halt && pending.size === 0) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PHASE 4 — PROMOTE or HOLD-FOR-REVIEW.
-//   AUTO: promote kahuna→protected on PASS.
+// PHASE 4 — PROMOTE (INTEGRATE) or HOLD-FOR-REVIEW.
+//   AUTO: promote kahuna→INTEGRATION_BASE on PASS. In a campaign that base is the campaign
+//         branch, so this is integration, never a trunk write (#1052).
 //   INTERACTIVE: the workflow ENDS returning the verdict (the return IS the human gate, §5).
 // ─────────────────────────────────────────────────────────────────────────────
 phase('Promote')
@@ -826,13 +953,13 @@ let result
 if (gate.verdict === 'PASS') {
   if (MODE === 'auto') {
     // #687/#5 promotion (CODE, runs ONLY here — a live wave's auto+PASS success exit, itself gated
-    // by the human cutover #691). The kahuna→protected DRAFT PR (#${promotionPrNumber}) was already
+    // by the human cutover #691). The kahuna→base DRAFT PR (#${promotionPrNumber}) was already
     // opened by the gate's PR-OPEN node and its merge-result CI already validated — so promotion
     // marks THAT SAME PR ready and pr_merge lands it (commutativity already proved the composed diff
     // safe); the kahuna branch is deleted. It never opens a second PR. The script can't call MCP/CLI
     // directly (§3.3) — the promote agent does it.
     const promo = await teeAgent(
-      promotePrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, protectedBranch: PROTECTED_BRANCH, targetRepo: TARGET_REPO, prNumber: promotionPrNumber, preserveKahuna: PRESERVE_KAHUNA }),
+      promotePrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, integrationBase: INTEGRATION_BASE, targetRepo: TARGET_REPO, prNumber: promotionPrNumber, preserveKahuna: PRESERVE_KAHUNA }),
       { label: 'promote', phase: 'Promote', schema: PROMOTE_RESULT, agentType: 'general-purpose' },
     ).catch((e) => {
       // A promotion error must NOT be reported as a successful promote (conservative): record HELD,
@@ -844,22 +971,27 @@ if (gate.verdict === 'PASS') {
     const promoted = !!(promo && promo.promoted)
     await persistTerminal(promoted ? 'promoted' : 'held',
       promoted
-        ? `gate PASS, promoted ${KAHUNA_BRANCH}→${PROTECTED_BRANCH}${promo.mr_ref ? ` (${promo.mr_ref})` : ''}`
+        ? `gate PASS, promoted ${KAHUNA_BRANCH}→${INTEGRATION_BASE}${promo.mr_ref ? ` (${promo.mr_ref})` : ''}`
         : `gate PASS, promotion did not land — ${promo?.notes || 'see promote node'}; HELD for manual promotion`) // SEAM #688
+    // #1052: report BOTH fields. `integrated` is what the campaign loop routes and prunes on;
+    // `promoted` is kept for the pre-#1052 campaign engine and any consumer still reading it, and
+    // is the SAME boolean — this merge landed on the integration base, which is the only merge a
+    // wave ever performs. `released` is deliberately absent: only the campaign's release node can
+    // assert that, and a wave claiming it would be the exact conflation #1052 exists to remove.
     result = promoted
-      ? { gate: 'PASS', promoted: true, wave: WAVE_ID, mr_ref: promo.mr_ref }
-      : { gate: 'PASS', promoted: false, wave: WAVE_ID, reason: `promotion did not land: ${promo?.notes || 'see promote node'}` }
+      ? { gate: 'PASS', integrated: true, promoted: true, wave: WAVE_ID, integrationBase: INTEGRATION_BASE, mr_ref: promo.mr_ref }
+      : { gate: 'PASS', integrated: false, promoted: false, wave: WAVE_ID, integrationBase: INTEGRATION_BASE, reason: `promotion did not land: ${promo?.notes || 'see promote node'}` }
   } else {
     // INTERACTIVE: do NOT promote — return the verdict; the campaign driver surfaces it + the human routes.
     await persistTerminal('held', 'gate PASS, interactive — awaiting human promotion') // SEAM #688
-    result = { gate: 'PASS', promoted: false, wave: WAVE_ID, reason: 'interactive: human routes promotion' }
+    result = { gate: 'PASS', integrated: false, promoted: false, wave: WAVE_ID, integrationBase: INTEGRATION_BASE, reason: 'interactive: human routes promotion' }
   }
 } else if (gate.verdict === 'HOLD') {
   await persistTerminal('held', `gate HOLD: ${(gate.failing || []).map((s) => s.signal).join(', ')}`) // SEAM #688
-  result = { gate: 'HOLD', wave: WAVE_ID, failing: gate.failing }
+  result = { gate: 'HOLD', integrated: false, promoted: false, wave: WAVE_ID, failing: gate.failing }
 } else {
   await persistTerminal('held', `gate SKIPPED: ${gate.reason}`) // SEAM #688
-  result = { gate: 'SKIPPED', wave: WAVE_ID, reason: gate.reason, haltReason: halt }
+  result = { gate: 'SKIPPED', integrated: false, promoted: false, wave: WAVE_ID, reason: gate.reason, haltReason: halt }
 }
 
 // Wave-terminal cleanup (§4.3): remove remaining worktrees + prune (both ends, not end-only).
