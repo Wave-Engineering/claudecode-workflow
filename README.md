@@ -71,7 +71,7 @@ Key features:
 | assesswaves | `/assesswaves` | Quick assessment of wave-pattern suitability |
 | ccfold | `/ccfold` | Merge upstream CLAUDE.md template updates into local project |
 | ccwork | `/ccwork` | Onboarding hub — tour the kit, run labs, configure integrations |
-| ddd | `/ddd` | Domain-Driven Design facilitation — event storming, domain modeling, concept handoff |
+| ddd | `/ddd` | Domain-Driven Design facilitation — event storming, domain modeling, concept handoff (extends `/muse`'s sketchbook) |
 | disc | `/disc` | Discord integration — check-in, send, read, list, resolve channels |
 | dod | `/dod` | Project Definition of Done verification against the Deliverables Manifest |
 | edit | `/edit` | Open file/URL in GUI editor |
@@ -83,6 +83,7 @@ Key features:
 | man | `/man` | Display usage information for any installed skill |
 | mmr | `/mmr` | Merge a PR/MR with squash |
 | multithread | `/multithread` | Parallel discussion over N independent items — enumerate + label, lead with a take, batch-answer, converge on "sorted / still open", iterate until dry, emit a decision record |
+| muse | `/muse` | Conception and shaping — the pipeline's front door; take an ill-defined problem to `/ddd`-ready, recording decisions and open questions to the sketchbook |
 | name | `/name` | Report or pick agent session identity |
 | nerf | `/nerf` | Context budget system — soft limits, doom modes, scope monitor |
 | nextwave | `/nextwave` | Execute spec-driven sub-agents per wave; reads each wave's `dispatch` hint to fan or serialize |

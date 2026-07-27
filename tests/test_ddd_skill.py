@@ -5,7 +5,9 @@ Validates:
 - /ddd accept includes domain model verification steps (exists, committed)
 - /ddd accept includes domain model summary (aggregate/command/policy counts)
 - /ddd accept suggests running /devspec create
-- /ddd begin, /ddd draft, /ddd resume templates are unchanged in structure
+- /ddd draft, /ddd resume templates are unchanged in structure
+- /ddd begin resolves an existing sketchbook and appends rather than
+  overwriting it (#1044); its 8 Socratic stages remain MCP-tool-free
 - docs/DDD-to-devspec-protocol.md is preserved (not deleted)
 - Help text reflects new /ddd accept behavior
 - Skill frontmatter description updated
@@ -242,6 +244,56 @@ class TestOtherTemplatesPreserved:
 
 
 # ---------------------------------------------------------------------------
+# 5b. /ddd begin must NOT clobber a sketchbook an earlier stage wrote (#1044)
+# ---------------------------------------------------------------------------
+
+
+class TestBeginDoesNotClobberSketchbook:
+    """`/ddd begin` appends to an existing sketchbook instead of overwriting it.
+
+    `/muse` (the conception + shaping stage upstream of `/ddd`) writes the confirmed problem
+    statement, the numbered decision ledger, and the open-questions register into the
+    sketchbook. `/ddd begin` historically created that file unconditionally with its own
+    header — which destroys the ledger on the very next pipeline step and makes muse's
+    artifact contract a no-op. `resume` and `draft` already gate on
+    ``ddd_locate_sketchbook``; ``begin`` must too.
+    """
+
+    def test_begin_checks_for_existing_sketchbook(self, skill_text: str) -> None:
+        """ddd-begin calls ddd_locate_sketchbook before writing anything."""
+        begin = _extract_template(skill_text, "ddd-begin")
+        assert "ddd_locate_sketchbook" in begin, (
+            "ddd-begin must call ddd_locate_sketchbook before writing — otherwise it "
+            "overwrites an upstream stage's decision ledger"
+        )
+
+    def test_begin_handles_both_existence_branches(self, skill_text: str) -> None:
+        """ddd-begin branches on exists: true vs exists: false."""
+        begin = _extract_template(skill_text, "ddd-begin")
+        assert "exists: true" in begin
+        assert "exists: false" in begin
+
+    def test_begin_appends_rather_than_overwrites(self, skill_text: str) -> None:
+        """ddd-begin states the append-not-overwrite rule explicitly."""
+        begin = _extract_template(skill_text, "ddd-begin").lower()
+        assert "append" in begin, "ddd-begin must instruct appending to an existing sketchbook"
+        assert "never overwrite" in begin, (
+            "ddd-begin must forbid overwriting an existing sketchbook in so many words"
+        )
+
+    def test_begin_preserves_existing_decisions(self, skill_text: str) -> None:
+        """ddd-begin must not edit or delete decisions recorded upstream.
+
+        A decision found to be wrong is superseded by a NEW numbered decision — the wrong
+        turn and its correction are both part of the record, and the correction is
+        meaningless without the thing it corrected.
+        """
+        begin = _extract_template(skill_text, "ddd-begin").lower()
+        assert "supersede" in begin
+        assert "never edit or delete" in begin
+
+
+# ---------------------------------------------------------------------------
 # 6. DDD-to-Dev Spec protocol is preserved
 # ---------------------------------------------------------------------------
 
@@ -405,8 +457,13 @@ class TestMcpToolInvocations:
     handlers instead of running hand-written bash checks.
 
     Added for #334 (Family 3 Phase 2 — ddd skill rewrite to use Phase 1
-    MCP tools). The /ddd begin template is intentionally NOT covered here
-    — it is 100% reasoning work and should not invoke any MCP tool.
+    MCP tools).
+
+    The /ddd begin template remains reasoning work: its 8 Socratic stages
+    invoke no MCP tool, and test_begin_does_not_call_mcp_tools enforces that
+    stage-scoped. Narrowed in #1044 for exactly ONE exemption — a single
+    ddd_locate_sketchbook call in the pre-stage preamble, which exists so
+    begin cannot clobber a sketchbook /muse already wrote.
     """
 
     def test_accept_calls_ddd_locate_domain_model(self, skill_text: str) -> None:
@@ -447,14 +504,19 @@ class TestMcpToolInvocations:
         assert "ddd_locate_sketchbook" in resume
 
     def test_begin_does_not_call_mcp_tools(self, skill_text: str) -> None:
-        """The ddd-begin template is pure reasoning work and must NOT call
-        any MCP tool handlers. This guards against scope creep — the 8-stage
-        Socratic event storming workflow is human+agent discovery, not
-        deterministic procedure."""
+        """The ddd-begin template's 8-stage workflow is pure reasoning work and must NOT
+        call MCP tool handlers. This guards against scope creep — the Socratic event
+        storming workflow is human+agent discovery, not deterministic procedure.
+
+        Narrowed for #1044: the single ``ddd_locate_sketchbook`` call in the *preamble*
+        (before Stage 1) is exempt. That call is not workflow procedure — it is the
+        write-safety check that stops ``begin`` from overwriting a sketchbook an upstream
+        stage authored. Resolving a path before writing to it is orthogonal to whether the
+        discovery conversation is tool-driven, and the 8 stages themselves remain free of
+        handler calls. Every other handler stays forbidden anywhere in the template.
+        """
         begin = _extract_template(skill_text, "ddd-begin")
-        # No ddd_* or devspec_* handler calls allowed in /ddd begin
         forbidden = [
-            "ddd_locate_sketchbook",
             "ddd_locate_domain_model",
             "ddd_verify_committed",
             "ddd_summary",
@@ -466,3 +528,15 @@ class TestMcpToolInvocations:
             assert tool not in begin, (
                 f"/ddd begin must be pure reasoning — found forbidden tool call: {tool}"
             )
+
+        # The 8-stage workflow itself stays tool-free: the only permitted handler call is
+        # the pre-Stage-1 write-safety check.
+        _, _, stages = begin.partition("## Stage 1")
+        assert "ddd_locate_sketchbook" not in stages, (
+            "ddd_locate_sketchbook is permitted only in the preamble write-safety check, "
+            "not inside the 8-stage event storming workflow"
+        )
+        assert begin.count("ddd_locate_sketchbook") == 1, (
+            "expected exactly one ddd_locate_sketchbook call in ddd-begin (the preamble "
+            f"write-safety check), found {begin.count('ddd_locate_sketchbook')}"
+        )

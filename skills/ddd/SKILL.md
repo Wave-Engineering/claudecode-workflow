@@ -15,7 +15,7 @@ This skill provides a structured workflow for Domain-Driven Design using event s
 
 ## Commands
 
-- **`/ddd begin`** — Start interactive event storming session (creates SKETCHBOOK.md)
+- **`/ddd begin`** — Start interactive event storming session (appends to SKETCHBOOK.md, or creates it)
 - **`/ddd draft`** — Formalize sketchbook into Domain Model document (creates DOMAIN-MODEL.md)
 - **`/ddd accept`** — Verify domain model and hand off to Dev Spec creation
 - **`/ddd resume`** — Resume interrupted event storming session
@@ -66,7 +66,7 @@ Begin an interactive Domain-Driven Design session. I'll guide you through 8 stag
 7. Aggregates
 8. Read Models
 
-Progress is saved to `docs/SKETCHBOOK.md` after each stage.
+Progress is saved to `docs/SKETCHBOOK.md` after each stage. If `/muse` already started the sketchbook, `/ddd begin` reads it and **appends** — the confirmed problem statement, decision ledger, and open questions carry forward untouched.
 
 ### `/ddd draft` — Formalize Domain Model
 Reads `docs/SKETCHBOOK.md` and produces a formal `docs/DOMAIN-MODEL.md` following the Domain Model template. Validates completeness and adds traceability.
@@ -82,6 +82,17 @@ If your event storming session was interrupted (context compaction, restart), th
 
 <!-- BEGIN TEMPLATE: ddd-begin -->
 ## Event Storming Session
+
+**Before proceeding:** Call `ddd_locate_sketchbook` to check whether the sketchbook already exists. The tool returns `{ ok: true, exists: true|false }`, plus `path` **only when `exists: true`** — do not reach for `path` on the create branch.
+
+**If `exists: true`** — an earlier stage (typically `/muse`) already wrote it. **Read it first, and APPEND to it — never overwrite it.** It carries the confirmed problem statement, the numbered decision ledger, and the open-questions register, and that content is the input to this session:
+
+- **Read the decisions before you start asking questions.** They record what was already settled and *why*. Event storming a domain whose decisions you haven't read means re-opening settled ground and wasting the Designer's time.
+- **Read the open questions.** The behavioral ones ("what happens when X fails?", "who's allowed to do Y?") were deliberately left for this session — they are your agenda.
+- **Append your stages** after the existing content; do not recreate the document's header or restructure what's there.
+- **Never edit or delete an existing decision.** If event storming reveals one was wrong, add a *new* numbered decision that supersedes it and says why. The wrong turn and its correction are both part of the record.
+
+**If `exists: false`** — the tool returns **no `path`** on this branch, so you supply the location: create `docs/SKETCHBOOK.md` **relative to the project root** (`git rev-parse --show-toplevel`), not to your current working directory, with the Stage 1 header below. Resolving it against a subdirectory cwd is how a second, orphaned sketchbook gets created alongside `/muse`'s.
 
 I'll guide you through discovering your domain model using event storming. This is a collaborative process — I wear two hats:
 
@@ -110,7 +121,9 @@ Let's start with the big picture.
 3. **Who are the actors?** (Humans, agents, systems that interact)
 4. **What's the core problem we're solving?**
 
-**Recording:** As you answer, I'll create `docs/SKETCHBOOK.md` and record:
+**If the sketchbook already exists**, most of this stage is already answered — the confirmed problem statement covers the core problem, and the decision ledger covers scope. Read it, confirm the actors with the Designer (event storming needs them named precisely), and move to Stage 2 rather than re-asking what's already recorded.
+
+**Recording:** As you answer, I'll record to the sketchbook at the path resolved above — **appending** if it already exists, creating it with this header if it does not:
 ```markdown
 # [Project] — Domain Discovery Sketchbook
 
@@ -366,7 +379,7 @@ After Stage 1, follow this pattern for remaining stages:
 ### Checkpoint After Each Stage
 
 After completing each stage:
-1. **Write to `docs/SKETCHBOOK.md`** — append the stage's content
+1. **Write to the sketchbook path resolved above** — append the stage's content
 2. **Summarize progress:** "We've completed Stage N. Here's what we discovered: [brief summary]"
 3. **Preview next stage:** "Next, we'll work on Stage N+1 [name]. Ready to continue?"
 4. **Wait for user confirmation** before proceeding
