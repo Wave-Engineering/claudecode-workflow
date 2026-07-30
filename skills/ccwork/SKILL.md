@@ -417,14 +417,14 @@ If the file exists, show the current configuration and ask if the user wants to 
 Check that the bot token file exists before proceeding:
 
 ```bash
-TOKEN_PATH="${DISCORD_TOKEN_PATH:-~/secrets/discord-bot-token}"
+TOKEN_PATH="${DISCORD_TOKEN_PATH:-~/.secrets/discord-bot-token}"
 ls -la "$TOKEN_PATH" 2>/dev/null
 ```
 
 - **If the file exists:** Confirm to the user and move on. Ask if they want to use this path or specify a different one.
 - **If the file does NOT exist:** Guide the user through setup:
   1. "You need a Discord bot token. If you haven't created a bot yet, visit: https://discord.com/developers/applications"
-  2. "Create the token file: `mkdir -p ~/secrets && echo 'YOUR_TOKEN' > ~/secrets/discord-bot-token && chmod 600 ~/secrets/discord-bot-token`"
+  2. "Create the token file: `mkdir -p ~/.secrets && echo 'YOUR_TOKEN' > ~/.secrets/discord-bot-token && chmod 600 ~/.secrets/discord-bot-token`"
   3. Wait for the user to confirm the file is in place before continuing.
 
 Record the token path for the final config.

@@ -212,7 +212,7 @@ Five layers, each with a fixed mechanism:
 Runs before the agent (via the `aoe-hooks` seam — open probe §5.N). Performs: skills symlink-sync (image-wins, host-fills, collision-logged), `settings.local` merge, secret sourcing, env validation. **Assertion-liveness:** every silent-skip path (missing mount, missing secret, shadowed skill, dangling link) becomes a logged or failing condition (R-14).
 
 ### 5.5 Secrets
-Read-only bind-mount of the whole `~/.secrets` dir (R-12). Live mid-session adds (R-13, proven). Prefer file-path consumers (fully live) over env-var consumers. `.env` = env modality, loose files = path modality. Fail loud at boot on a missing required secret (R-14). Whole-dir blast-radius (every ring sees every secret) is flagged; least-privilege scoping is an open item (§5.N).
+Read-only **named single-file** bind-mounts under `~/.secrets` (R-12; whole-dir superseded by #1061 — the host dir spans the OaW/Analogic IP boundary and the kit consumes one entry). Live mid-session adds (R-13, proven). Prefer file-path consumers (fully live) over env-var consumers. `.env` = env modality, loose files = path modality. Fail loud at boot on a missing required secret (R-14). Whole-dir blast-radius (every ring sees every secret) is flagged; least-privilege scoping is an open item (§5.N).
 
 ### 5.6 Promotion & rings
 Two rings: **dogfood** (persistent, real-workload) + **throwaway-CI** (install-from-nothing smoke). The promotion gate is a mechanical conjunction queried over FlightDeck + CI (R-07); adoption is rolling per-agent at container-recreate (R-08).

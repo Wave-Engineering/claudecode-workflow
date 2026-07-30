@@ -141,7 +141,7 @@ target path (bare basename self-references); **log every collision** (a silently
 shadowed host skill is the night's own "did nothing, said nothing" defect);
 tolerate an absent mount without dangling links.
 
-**D6 — Secrets: ro bind-mount of the whole `~/.secrets` DIR (not just `.env`).**
+**D6 — Secrets: ro bind-mount of the whole `~/.secrets` DIR (not just `.env`).** *(SUPERSEDED by #1061: named single-file mounts. The reasoning below still holds for why `.env` alone is insufficient — path-modality consumers need their files — but the whole-dir scope was replaced once it was clear the kit consumes one secret of ~80 across an IP boundary.)*
 *Proven (tested):* a directory bind-mount is **live** — a file the host adds mid-run
 appears in the running container immediately, readable, no restart; ro blocks the
 container from writing while the host keeps rw. *Asserted (correct Docker behavior,

@@ -132,7 +132,7 @@ The identity file lives at `<project_root>/.claude/agent-identity.json` — rebo
 
 Common causes:
 
-- **Token file missing or empty.** The default path is `~/secrets/discord-bot-token`. If the file does not exist or is empty, all API calls fail.
+- **Token file missing or empty.** The default path is `~/.secrets/discord-bot-token`. If the file does not exist or is empty, all API calls fail.
 - **Token is invalid.** The token may have been regenerated in the Discord Developer Portal, invalidating the old one.
 - **Bot not in the server.** The bot must be invited to your Discord server with the correct permissions.
 - **Missing Message Content Intent.** Discord requires bots to enable the "Message Content Intent" in the Developer Portal (Settings -> Bot -> Privileged Gateway Intents) to read message content.
@@ -140,7 +140,7 @@ Common causes:
 
 **Fix:**
 
-1. Verify the token file exists and is not empty: `cat ~/secrets/discord-bot-token | head -c 20` (check the first 20 characters -- do not print the full token).
+1. Verify the token file exists and is not empty: `cat ~/.secrets/discord-bot-token | head -c 20` (check the first 20 characters -- do not print the full token).
 2. Test a simple read: call `mcp__disc-server__disc_read` with a known `channel_id` and `limit: 1`.
 3. In the [Discord Developer Portal](https://discord.com/developers/applications), verify the bot's token, that Message Content Intent is enabled, and that the bot has been added to your server.
 4. Check the bot's permissions in the server: it needs Send Messages and Read Message History at minimum.
