@@ -64,8 +64,6 @@ Quick reference for all skills and the MCP tools they route to.
 | `/vox` | Voice announcements (TTS) | — (script) |
 | `/view` | Open file in GUI viewer | — (script) |
 | `/edit` | Open file in GUI editor | — (script) |
-| `/ping` | Post to Slack | — (script) |
-| `/pong` | Read Slack | — (script) |
 
 ## CLI Tools
 

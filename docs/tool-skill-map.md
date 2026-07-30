@@ -61,8 +61,6 @@ graph TB
     vox([/vox])
     view([/view])
     edit([/edit])
-    ping([/ping])
-    pong([/pong])
   end
 
   root --> direct
@@ -123,7 +121,7 @@ What each skill calls under the hood.
 
 ### No MCP tools (pure orchestration / UI)
 
-`/ccfold`, `/edit`, `/engage`, `/man`, `/name`, `/ping`, `/pong`, `/view`, `/vox`
+`/ccfold`, `/edit`, `/engage`, `/man`, `/name`, `/view`, `/vox`
 
 ---
 

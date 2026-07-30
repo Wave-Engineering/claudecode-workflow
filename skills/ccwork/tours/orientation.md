@@ -25,10 +25,10 @@ Narration: "These are your skills — slash commands you can use in any Claude C
 ### Check installed scripts
 
 ```bash
-ls ~/.local/bin/slackbot-send ~/.local/bin/vox ~/.local/bin/file-opener ~/.local/bin/statusline-command.sh 2>/dev/null || echo "(some scripts not installed)"
+ls ~/.local/bin/vox ~/.local/bin/file-opener ~/.local/bin/statusline-command.sh 2>/dev/null || echo "(some scripts not installed)"
 ```
 
-Narration: "These are your scripts — standalone tools that skills call under the hood. `vox` does text-to-speech, `file-opener` opens files in your GUI apps, `slackbot-send` talks to Slack. Discord lives in an MCP server (`disc-server`) rather than a script. Skills provide the intelligence; scripts and MCP tools provide the capabilities."
+Narration: "These are your scripts — standalone tools that skills call under the hood. `vox` does text-to-speech and `file-opener` opens files in your GUI apps. Discord lives in an MCP server (`disc-server`) rather than a script. Skills provide the intelligence; scripts and MCP tools provide the capabilities."
 
 ### Check settings
 
@@ -110,7 +110,7 @@ For the full explanation of the two-layer identity system, see [Identity System]
 
 ## Section 4: Communication
 
-Narration: "The kit can talk to Discord and Slack. Let me check what's configured."
+Narration: "The kit talks to Discord. Let me check what's configured."
 
 ### Check Discord config
 
@@ -118,19 +118,11 @@ Narration: "The kit can talk to Discord and Slack. Let me check what's configure
 cat ~/.claude/discord.json 2>/dev/null || echo "(no Discord config — run /ccwork setup discord to configure)"
 ```
 
-### Check Slack token
-
-```bash
-test -f ~/secrets/slack-bot-token && echo "Slack bot token: found" || echo "Slack bot token: not found"
-```
-
 ### Communication skills
 
 | Skill | What it does |
 |-------|-------------|
 | `/disc` | Discord — send, read, check in, create channels |
-| `/ping` | Post to Slack #ai-dev |
-| `/pong` | Read Slack #ai-dev |
 | `/vox` | Text-to-speech announcements |
 
 Narration: "If you're running multiple agents, Discord is how they coordinate. The discord-watcher channel server pushes real-time notifications into your session. See [Discord Configuration](../../../docs/discord-config.md) for setup details and per-team scoping strategies."

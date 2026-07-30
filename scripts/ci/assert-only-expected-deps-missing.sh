@@ -4,8 +4,7 @@
 #
 # The image build tolerates check-deps' missing-dependency advisory because a few
 # items are legitimately absent at BUILD time and only materialize at runtime:
-#   - the two secret tokens (slack-bot-token, discord-bot-token) — never baked
-#     (R-12), mounted read-only at runtime;
+#   - the discord bot token — never baked (R-12), mounted read-only at runtime;
 #   - the wtf-server PostToolUse hook — installed into the user's home at runtime.
 # The old tolerance grepped only the SUMMARY sentinel ("required
 # dependency/dependencies missing"), which fires on ANY missing count — it could
@@ -33,8 +32,10 @@ set -euo pipefail
 # Keep in sync with R-12 (secrets, runtime-mounted) and the runtime-installed
 # wtf-server hook. The wtf entry matches by basename so it holds regardless of the
 # home prefix ($HOME differs per user / container uid).
+# NOTE: slack-bot-token was removed here with Slack support (#1062). Do NOT
+# re-add a token to this list without a consumer — a whitelist entry for a
+# dependency nothing needs silently tolerates a real gap of the same name.
 EXPECTED_MISSING=(
-	'slack-bot-token'
 	'discord-bot-token'
 	'wtf-post-tool-use.sh'
 )

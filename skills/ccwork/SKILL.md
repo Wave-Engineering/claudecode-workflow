@@ -392,7 +392,6 @@ Show available setup subcommands:
   discord       Configure Discord integration (~/.claude/discord.json)
 
 Coming soon:
-  slack         Configure Slack integration
   ci            Configure CI/CD pipeline integration
 ```
 

@@ -24,7 +24,6 @@
     { "name": "trivy",      "required_by": "Dependency vulnerability scan (precheck)", "optional": true }
   ],
   "secrets": [
-    { "path": "~/secrets/slack-bot-token",   "required_by": "/ping skill" },
     { "path": "~/.secrets/discord-bot-token", "required_by": "disc-server and discord-watcher MCPs" }
   ]
 }

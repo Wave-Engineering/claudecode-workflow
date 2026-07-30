@@ -648,7 +648,7 @@ do_install() {
 	# expected_scripts list from do_check() so the two stay in lockstep.
 	# Skipped on --dry-run (would always fail — nothing was actually farmed).
 	if [[ "$DRY_RUN" != true ]]; then
-		local expected_prebuilt=(discord-status-post slackbot-send job-fetch file-opener vox)
+		local expected_prebuilt=(discord-status-post job-fetch file-opener vox)
 		local missing_prebuilt=()
 		for prebuilt in "${expected_prebuilt[@]}"; do
 			if [[ ! -L "$SCRIPTS_DIR/$prebuilt" && ! -x "$SCRIPTS_DIR/$prebuilt" ]]; then
@@ -844,7 +844,7 @@ do_check() {
 
 	echo "Symlink farm ($SCRIPTS_DIR -> Cellar)"
 	echo "--------------------------------------------"
-	local expected_scripts=(discord-status-post slackbot-send job-fetch file-opener vox)
+	local expected_scripts=(discord-status-post job-fetch file-opener vox)
 	for script_name in "${expected_scripts[@]}"; do
 		local link="$SCRIPTS_DIR/$script_name"
 		if [[ -L "$link" ]]; then
@@ -980,7 +980,7 @@ do_uninstall() {
 	fi
 	# Legacy plain-file uninstall: known script names from pre-Cellar layouts.
 	local known_scripts=(
-		discord-status-post slackbot-send job-fetch
+		discord-status-post job-fetch
 		file-opener vox worktree-manager cc-inspector discord-lock
 		generate-status-panel wave-status
 	)

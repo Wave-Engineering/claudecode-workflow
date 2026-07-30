@@ -22,9 +22,9 @@ The kit ships a `settings.template.json` that gets copied to `~/.claude/settings
 
 ### Layer 2: Scripts
 
-**What:** Shell scripts installed to `~/.local/bin/` -- things like `slackbot-send`, `vox`, `file-opener`, and `statusline-command.sh`.
+**What:** Shell scripts installed to `~/.local/bin/` -- things like `vox`, `file-opener`, and `statusline-command.sh`.
 
-**What they do:** Provide capabilities that Claude Code does not have natively. `vox` converts text to speech via a Chatterbox endpoint. `slackbot-send` posts Slack messages as a bot. `file-opener` opens files in the user's GUI editor. These are standalone tools that work from the command line independent of Claude Code.
+**What they do:** Provide capabilities that Claude Code does not have natively. `vox` converts text to speech via a Chatterbox endpoint. `file-opener` opens files in the user's GUI editor. These are standalone tools that work from the command line independent of Claude Code.
 
 **Why they are scripts, not skills:** Skills are prompts -- they tell Claude *what to do*. Scripts are executables -- they *do things*. A skill like `/vox` calls the `vox` script under the hood. The skill provides the intelligence (resolving intent, formatting the announcement); the script provides the capability (calling the TTS provider). This separation means scripts can be tested independently, used outside of Claude Code, and updated without changing the skill logic.
 
@@ -44,7 +44,7 @@ For richer integrations that need bidirectional data (Discord, GitLab/GitHub ori
 
 **What it does:** The discord-watcher polls Discord channels and delivers messages to the Claude Code session as `<channel>` notifications. This enables real-time inter-agent communication -- multiple Claude Code agents running on different machines (or different projects on the same machine) can talk to each other through Discord.
 
-**Why it is a separate layer:** The first three layers are pull-based -- Claude decides when to use a script or skill. Channels are push-based -- external events (a Discord message, a Slack notification) arrive without Claude asking for them. This is a fundamentally different interaction pattern that requires the MCP channel server infrastructure. Not every deployment needs channels -- they add complexity and require a running Discord server with a bot token -- but for teams running multiple agents, they enable coordination that would otherwise require human relay.
+**Why it is a separate layer:** The first three layers are pull-based -- Claude decides when to use a script or skill. Channels are push-based -- external events (a Discord message) arrive without Claude asking for them. This is a fundamentally different interaction pattern that requires the MCP channel server infrastructure. Not every deployment needs channels -- they add complexity and require a running Discord server with a bot token -- but for teams running multiple agents, they enable coordination that would otherwise require human relay.
 
 ---
 
@@ -60,7 +60,7 @@ The identity system has two layers that mirror the distinction between project-l
 
 **Lifecycle:** Set once on first session in a project, then persisted forever. It survives across sessions, across machines (since `CLAUDE.md` is committed to the repo), and across context compactions. Every agent working on the same project shares the same Dev-Team.
 
-**Why it exists:** When multiple agents are communicating through Discord or Slack, Dev-Team is the routing key for project-level addressing. A message to `@cc-workflow` reaches any agent working on the cc-workflow project, regardless of which specific session identity that agent has.
+**Why it exists:** When multiple agents are communicating through Discord, Dev-Team is the routing key for project-level addressing. A message to `@cc-workflow` reaches any agent working on the cc-workflow project, regardless of which specific session identity that agent has.
 
 ### Dev-Name and Dev-Avatar (Ephemeral)
 
@@ -91,7 +91,7 @@ Session start: Claude picks Dev-Name + Dev-Avatar
   }
         |
         v
-Used by: /disc, /ping, /pong, /name, statusline,
+Used by: /disc, /name, statusline,
          discord-watcher echo filtering, message signatures
 ```
 
@@ -162,13 +162,11 @@ These drive the development loop: creating issues, committing, reviewing, mergin
 
 ### Communication Skills
 
-These handle interaction with external systems: Discord, Slack, voice, and file viewers.
+These handle interaction with external systems: Discord, voice, and file viewers.
 
 | Skill | Purpose |
 |-------|---------|
 | `/disc` | Discord integration -- send, read, create channels, check in. |
-| `/ping` | Post a message to the `#ai-dev` Slack channel as this agent. |
-| `/pong` | Read recent messages from `#ai-dev` with smart filtering. |
 | `/vox` | Text-to-speech voice announcements. |
 | `/view` | Open a file or URL in a GUI viewer (read-only). |
 | `/edit` | Open a file or URL in a GUI editor (modification intent). |
