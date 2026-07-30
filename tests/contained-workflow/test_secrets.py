@@ -52,32 +52,87 @@ SECRETS_TARGET = "/home/ubuntu/.secrets"
 # --- Static R-12 oracles (pure; run in the stock lane) ------------------------
 
 
-def _secrets_mount() -> mr.ResolvedMount:
-    """Resolve the checked-in secrets fragment (and only it) for assertions."""
+def _secrets_mounts() -> list[mr.ResolvedMount]:
+    """Resolve the checked-in secrets fragment's mounts for assertions.
+
+    Returns a LIST, not a single mount. #1061 replaced the whole-`~/.secrets`-dir
+    mount with named single-file mounts, so the count is a design variable now —
+    every added secret is one more entry. This helper deliberately asserts nothing
+    about how many there are: pinning the count made the previous version of this
+    test fail on a change that strictly *narrowed* exposure, which is backwards
+    for a guard whose subject is blast radius.
+    """
     assert SECRETS_FRAGMENT.is_file(), f"missing secrets fragment: {SECRETS_FRAGMENT}"
     resolved = mr.resolve_manifest(MAJOR, home=FAKE_HOME, mounts_dir=MANIFEST_DIR)
     secrets = [m for m in resolved if m.layer == "read-only-secrets"]
     assert secrets, "no read-only-secrets mount in the resolved manifest"
-    assert len(secrets) == 1, f"expected one secrets mount, got {len(secrets)}"
-    return secrets[0]
+    return secrets
 
 
 def test_secrets_mount_is_readonly() -> None:
-    """R-12: secrets are provided ONLY via the ro mount — the checked-in fragment
-    resolves read-only, sourced from ~/.secrets, targeting the bootstrap's dir."""
-    m = _secrets_mount()
-    assert m.mode == "ro", f"secrets mount must be ro (R-12), got {m.mode!r}"
-    assert m.source == "/home/bakerb/.secrets", (
-        f"secrets source must be ~/.secrets, got {m.source!r}"
-    )
-    assert m.target == SECRETS_TARGET, (
-        f"secrets target must match bootstrap OAW_SECRETS_DIR default "
-        f"({SECRETS_TARGET}), got {m.target!r}"
-    )
-    # The docker -v rendering carries the :ro suffix — the mount is ro at runtime.
-    assert m.to_docker_volume().endswith(":ro"), (
-        f"docker volume spec must end :ro, got {m.to_docker_volume()!r}"
-    )
+    """R-12: secrets are provided ONLY via ro mounts — EVERY resolved
+    read-only-secrets mount is ro, sourced from ~/.secrets, and lands under the
+    bootstrap's OAW_SECRETS_DIR."""
+    mounts = _secrets_mounts()
+    for m in mounts:
+        assert m.mode == "ro", f"{m.name}: secrets mount must be ro (R-12), got {m.mode!r}"
+        # Compare against the path WITH its separator: a bare prefix test would
+        # also accept ~/.secrets-analogic/..., which is precisely the blast-radius
+        # this guard exists to bound.
+        assert m.source.startswith("/home/bakerb/.secrets/"), (
+            f"{m.name}: source must be a file under ~/.secrets/, got {m.source!r}"
+        )
+        assert m.target.startswith(SECRETS_TARGET + "/"), (
+            f"{m.name}: target must be under the bootstrap OAW_SECRETS_DIR "
+            f"({SECRETS_TARGET}/), got {m.target!r}"
+        )
+        # The docker -v rendering carries the :ro suffix — ro at runtime.
+        assert m.to_docker_volume().endswith(":ro"), (
+            f"{m.name}: docker volume spec must end :ro, got {m.to_docker_volume()!r}"
+        )
+
+
+def test_secrets_mounts_are_scoped_not_whole_dir() -> None:
+    """#1061: no mount may be the whole ~/.secrets directory.
+
+    The host dir spans both sides of the OaW/Analogic IP boundary (~80 entries);
+    the kit consumes one. A whole-dir mount hands every container every credential
+    on both sides of that line. This is the guard that keeps a future edit from
+    quietly restoring it — the failure it prevents is silent, since a wider mount
+    breaks nothing and looks like it works.
+    """
+    whole_dir = "/home/bakerb/.secrets"
+    for m in _secrets_mounts():
+        assert m.source != whole_dir, (
+            f"{m.name}: mounts the WHOLE secrets dir ({whole_dir}). Mount named "
+            f"files instead — see mounts.d/20-secrets.toml and #1061."
+        )
+
+
+def test_secrets_env_declares_no_literal_token() -> None:
+    """#1061: no manifest-declared env may carry a literal credential.
+
+    An environment variable is inherited by every child process; a file must be
+    deliberately opened. With transcripts host-durable (#1064), a literal token in
+    the environment is one `env` dump away from permanent storage.
+
+    SCOPE, stated honestly: this examines the *manifest's* `env` metadata, which is
+    the only surface reachable from CI — the host's `~/.secrets/.env` is not in the
+    repo and cannot be inspected here. An earlier version of this test looped over
+    that metadata without asserting it had any subject at all; since no fragment
+    declares `env`, the loop body never ran and the test passed over an empty
+    denominator — the very shape `cutover-prerequisites.md` §4 catalogues. The
+    guard below therefore asserts the *invariant that is actually checkable*: the
+    secrets layer declares no env at all, so the pointer-vs-value question cannot
+    be answered wrongly here. If a future fragment adds `env`, this fails and
+    forces the author to re-derive the rule rather than inherit a silent pass.
+    """
+    for m in _secrets_mounts():
+        assert not (m.env or {}), (
+            f"{m.name} declares manifest env {sorted((m.env or {}))!r}. The secrets "
+            f"layer passes POINTERS via the mounted .env file, not manifest env "
+            f"metadata — re-read #1061 before adding one."
+        )
 
 
 def test_secrets_rw_fragment_is_rejected() -> None:
@@ -162,6 +217,21 @@ def test_secrets_readonly() -> None:
          with no restart (R-13: liveness).
     Self-skips without docker/the image; OAKANDWAVE_REQUIRE_IMAGE makes absence a
     hard failure so CI proves the contract.
+
+    KNOWN SCOPE GAP (#1061), stated rather than hidden: this mounts a whole
+    tempdir, which is **no longer the shipped mount shape** — `20-secrets.toml`
+    now declares named single-FILE binds. The R-12 half generalises (ro is ro);
+    the R-13 half does NOT, and the difference matters:
+
+      - dir bind  : a file the host ADDS afterwards appears  (what this proves)
+      - file bind : the inode is bound, so an ADD is invisible and an atomic
+                    replace (`mv`/`sops`/editor save) silently pins the container
+                    to the old content until it is recreated
+
+    So a green run here does not license the claim "rotation is live" for the
+    shape we actually ship — only "in-place rewrite of a bound file is live".
+    Extending this oracle to the two file mounts is tracked in #1061's follow-up;
+    until then, treat the liveness assertion as scoped to the dir shape.
     """
     docker, ref = _docker_and_image_or_skip()
 

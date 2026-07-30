@@ -258,17 +258,95 @@ def test_missing_required_env_fails_loud(tmp_path: Path) -> None:
 
 
 def test_all_clean_exits_zero(tmp_path: Path) -> None:
-    """Fully-provisioned boot: no warnings, no fatals, exit 0."""
+    """Fully-provisioned boot: no fatals, exit 0.
+
+    A fully-provisioned boot declares its required set — otherwise R-14 is inert
+    and the boot is not, in fact, fully provisioned. `.env` carries POINTERS and
+    the declaration; the token is a loose file (#1061).
+    """
     home = _make_home(
         tmp_path,
         image_skills=["alpha"],
         host_skills=["beta"],
         settings_local='{"permissions": {}}\n',
+        secrets={
+            ".env": "OAW_REQUIRED_SECRETS=discord-bot-token\n"
+                    "DISCORD_TOKEN_PATH=/home/ubuntu/.secrets/discord-bot-token\n",
+            "discord-bot-token": "not-a-real-token\n",
+        },
     )
     proc = _run(home)
     assert proc.returncode == 0, proc.stderr
     assert "0 fatal(s)" in proc.stdout
     assert "complete" in proc.stderr
+    assert "INERT" not in proc.stderr, (
+        "a fully-provisioned boot must not report R-14 as inert"
+    )
+
+
+# --- R-14 inert-guard (#1061) --------------------------------------------------
+#
+# The guard these cover was, until #1061, a pass over an empty denominator: with
+# neither OAW_REQUIRED_SECRETS nor a manifest, `required` was empty, the loop ran
+# zero times, and validate_secrets returned success while examining nothing.
+
+
+def test_r14_inert_when_nothing_declared(tmp_path: Path) -> None:
+    """No declaration at all -> loud INERT warning (not a silent pass)."""
+    home = _make_home(tmp_path, secrets={"discord-bot-token": "tok\n"})
+    proc = _run(home)
+    assert proc.returncode == 0, "an undeclared set is tolerated, not fatal"
+    assert "INERT" in proc.stderr, (
+        "R-14 validating nothing must announce itself; a silent pass here is "
+        "indistinguishable from a real check"
+    )
+
+
+def test_r14_empty_declaration_is_deliberate_and_quiet(tmp_path: Path) -> None:
+    """OAW_REQUIRED_SECRETS="" declares 'none needed' -> no INERT warning."""
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    proc = _run(home)
+    assert proc.returncode == 0, proc.stderr
+    assert "INERT" not in proc.stderr, (
+        "an explicit empty declaration is deliberate and must not warn"
+    )
+
+
+def test_r14_declared_but_missing_secret_is_fatal(tmp_path: Path) -> None:
+    """A declared secret that is absent aborts the boot, naming the secret."""
+    home = _make_home(
+        tmp_path, secrets={".env": "OAW_REQUIRED_SECRETS=discord-bot-token\n"}
+    )
+    proc = _run(home)
+    assert proc.returncode != 0, "a missing required secret must fail the boot"
+    assert "discord-bot-token" in proc.stderr, "the fatal must name the secret"
+
+
+def test_r14_declared_secret_as_directory_is_fatal(tmp_path: Path) -> None:
+    """Docker's create-if-missing footgun: a bind whose host source is absent
+    appears as an empty DIRECTORY at the target. `-f` must reject it, or the
+    consumer fails later with a confusing read error instead of a named secret."""
+    home = _make_home(
+        tmp_path, secrets={".env": "OAW_REQUIRED_SECRETS=discord-bot-token\n"}
+    )
+    (home / ".secrets" / "discord-bot-token").mkdir()
+    proc = _run(home)
+    assert proc.returncode != 0, (
+        "a directory standing in for a secret file must fail the boot"
+    )
+    assert "discord-bot-token" in proc.stderr
+
+
+def test_missing_env_file_is_announced(tmp_path: Path) -> None:
+    """No .env -> warn. Since #1061 replaced the whole-dir mount with file
+    mounts, a file bind forces the secrets dir into existence, so the older
+    'missing mount: secrets dir not present' warning is unreachable — this is
+    the only remaining report of an unprovisioned secrets layer."""
+    home = _make_home(tmp_path, secrets={"discord-bot-token": "tok\n"})
+    proc = _run(home)
+    assert "no " in proc.stderr and ".env" in proc.stderr, (
+        "a missing .env must not be a silent skip"
+    )
 
 
 # --- the devspec-named aggregate oracle ---------------------------------------

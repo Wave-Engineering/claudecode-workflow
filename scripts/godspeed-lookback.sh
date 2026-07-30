@@ -867,13 +867,34 @@ _godspeed_notify() {
 	fi
 
 	# Discord via stdlib python3 (no external deps).
-	local token_file="$HOME/secrets/discord-bot-token"
-	if [[ -f "$token_file" ]]; then
+	# ~/.secrets is canonical (#1061); the undotted ~/secrets is deprecating and is
+	# not mounted into the contained workflow. Env wins, then canonical, then legacy.
+	# An EXPLICIT DISCORD_TOKEN_PATH is honored as given — never silently swapped
+	# for the deprecated path, which would hide a bad pointer behind a stale token.
+	local token_file
+	if [[ -n "${DISCORD_TOKEN_PATH:-}" ]]; then
+		token_file="$DISCORD_TOKEN_PATH"
+	else
+		token_file="$HOME/.secrets/discord-bot-token"
+		[[ -f "$token_file" ]] || token_file="$HOME/secrets/discord-bot-token"
+	fi
+	if [[ -n "${DISCORD_BOT_TOKEN:-}" ]] || [[ -f "$token_file" ]]; then
 		local token
-		token=$(tr -d '[:space:]' <"$token_file")
-		python3 -c "
+		# Env wins and must NOT fall through to a file read — the file may not exist
+		# at all in that case (it does not in a container, by design).
+		if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
+			token=$(tr -d '[:space:]' <<<"$DISCORD_BOT_TOKEN")
+		else
+			token=$(tr -d '[:space:]' <"$token_file")
+		fi
+		# Token arrives on STDIN, never argv. /proc/<pid>/cmdline is world-readable
+		# (0444) while /proc/<pid>/environ is owner-only (0400) — so an argv-passed
+		# secret is MORE exposed than the env-passing this design already rejects.
+		# The message stays in argv: it is not a credential.
+		printf '%s' "$token" | python3 -c "
 import urllib.request, json, sys
-token, channel_id, msg = sys.argv[1], '1518536836673310800', sys.argv[2]
+token = sys.stdin.read().strip()
+channel_id, msg = '1518536836673310800', sys.argv[1]
 req = urllib.request.Request(
     f'https://discord.com/api/v10/channels/{channel_id}/messages',
     data=json.dumps({'content': msg}).encode(),
@@ -881,7 +902,12 @@ req = urllib.request.Request(
     method='POST'
 )
 urllib.request.urlopen(req, timeout=5)
-" "$token" "$discord_msg" 2>/dev/null || true
+" "$discord_msg" 2>/dev/null || true
+	else
+		# Not a silent skip: with no token source the Discord half of this notify
+		# simply does not happen, and silence here is indistinguishable from a
+		# delivered message. One line, stderr, no secret material.
+		echo "godspeed: no Discord token source (\$DISCORD_BOT_TOKEN unset, $token_file absent) — skipping Discord notify" >&2
 	fi
 }
 

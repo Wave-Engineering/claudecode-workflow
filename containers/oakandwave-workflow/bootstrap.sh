@@ -25,11 +25,14 @@
 # Skills are symlink-safe artifacts (scripts/markdown, not compiled binaries), so
 # symlinking them across the host/container boundary is R-10-correct.
 #
-# Secrets (SKETCHBOOK D6, R-12/R-14): the whole ~/.secrets dir is a read-only
-# bind-mount. `.env` is the env modality (sourced here); loose files are the path
-# modality (NEVER auto-exported to env — that re-leaks via /proc/<pid>/environ).
-# A values-free manifest declares which secrets are required; any required secret
-# missing at boot fails loud.
+# Secrets (SKETCHBOOK D6 as amended by #1061, R-12/R-14): NAMED single-file
+# read-only bind-mounts under ~/.secrets — not the whole dir, which handed every
+# container both sides of the OaW/Analogic IP boundary. `.env` is the env modality
+# (sourced here) and carries POINTERS, never token values; loose files are the
+# path modality (NEVER auto-exported to env — that re-leaks via
+# /proc/<pid>/environ AND into every child process). The required-secret set is
+# declared by OAW_REQUIRED_SECRETS in that .env; any required secret missing at
+# boot fails loud. See ../secrets-env.example.
 #
 # Every path is env-injectable (defaults derived from $HOME) so the oracle
 # (tests/contained-workflow/test_bootstrap.py) drives this for real with fake
@@ -213,16 +216,57 @@ validate_secrets() {
 			. "$dir/.env"
 			set +a
 			info "secrets: sourced $dir/.env (env modality)"
+		else
+			# MUST NOT be a silent skip (#1061). Since the whole-dir mount was
+			# replaced by named file mounts, the `else` below is now unreachable —
+			# a file bind FORCES $dir into existence — so this is the only place a
+			# missing secrets provision can still be reported. It is also where
+			# Docker's create-if-missing bites: a bind whose source is absent
+			# appears as an empty DIRECTORY, which `-f` correctly rejects.
+			if [[ -e "$dir/.env" ]]; then
+				warn "secrets: $dir/.env exists but is not a regular file"
+				warn "  Docker creates a DIRECTORY when a bind-mount source is missing on the host."
+				warn "  Create ~/.secrets/.env on the HOST (see containers/oakandwave-workflow/secrets-env.example)."
+			else
+				warn "secrets: no $dir/.env — no pointers, no required-secret declaration"
+				warn "  Consumers will fall back to defaults and may find no token at all."
+				warn "  See containers/oakandwave-workflow/secrets-env.example."
+			fi
 		fi
 	else
 		warn "missing mount: secrets dir not present ($dir)"
 	fi
 
 	# Required-secrets list: the env override wins; else the values-free manifest.
+	#
+	# R-14 IS INERT WHEN BOTH ARE ABSENT (#1061). Before this guard, neither source
+	# being present left `required` empty, the validation loop ran zero times, and
+	# `validate_secrets` returned success — so the check designed to catch a missing
+	# secret at boot reported a clean run while examining nothing. That is the same
+	# empty-denominator failure as a scanner that parses zero manifests: a pass over
+	# nothing is indistinguishable from a pass over everything.
+	#
+	# Declaring "this container needs no secrets" is legitimate (the throwaway-CI
+	# ring builds without a secrets mount at all), so this WARNS rather than aborts.
+	# Set OAW_REQUIRED_SECRETS="" to declare it deliberately and silence the warning.
+	# Branch on SET-ness, not emptiness, so the documented precedence actually
+	# holds: `OAW_REQUIRED_SECRETS=""` means "deliberately none" and must beat a
+	# manifest, rather than falling through to it. `${VAR+set}` expands only when
+	# VAR is set (empty included) and is `set -u`-safe.
 	local -a required=()
-	if [[ -n "${OAW_REQUIRED_SECRETS:-}" ]]; then
-		IFS=' ' read -r -a required <<<"$OAW_REQUIRED_SECRETS"
-	elif [[ -f "$OAW_REQUIRED_SECRETS_MANIFEST" ]]; then
+	if [[ -n "${OAW_REQUIRED_SECRETS+set}" ]]; then
+		if [[ -n "$OAW_REQUIRED_SECRETS" ]]; then
+			IFS=' ' read -r -a required <<<"$OAW_REQUIRED_SECRETS"
+		else
+			info "secrets: no required secrets declared (OAW_REQUIRED_SECRETS is empty)"
+		fi
+	elif [[ ! -f "$OAW_REQUIRED_SECRETS_MANIFEST" ]]; then
+		warn "secrets: R-14 check is INERT — no \$OAW_REQUIRED_SECRETS and no manifest at $OAW_REQUIRED_SECRETS_MANIFEST"
+		warn "  Nothing was validated. A missing token will NOT fail this boot; it will"
+		warn "  surface later as an agent that polls normally and delivers nothing."
+		warn "  Declare the required set in ~/.secrets/.env (OAW_REQUIRED_SECRETS=...),"
+		warn "  or set it to \"\" if none are needed. See secrets-env.example."
+	else
 		local line
 		while IFS= read -r line || [[ -n "$line" ]]; do
 			line="${line%%#*}"         # strip comment

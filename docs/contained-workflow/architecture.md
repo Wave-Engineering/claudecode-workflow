@@ -125,7 +125,7 @@ flowchart LR
 |-------|-----------|-------------------|--------------|
 | Baked-in-image | Built by `./install` in the image; immutable per tag | *(none — in the image)* | R-06, R-09 |
 | Shared-mutable-rw | rw bind-mount, **sandbox-scoped** host source | `10-memory.toml` | R-03, R-20 |
-| Read-only secrets | ro bind-mount of the `~/.secrets` dir (§3.5) | `20-secrets.toml` | R-12, R-13, R-14 |
+| Read-only secrets | ro **named single-file** bind-mounts under `~/.secrets` (§3.5) | `20-secrets.toml` | R-12, R-13, R-14 |
 | User-environment overlay | additive / in-container / symlink, by artifact type | `30-user-overlay.toml` | R-09, R-10, R-11 |
 | Durable caches | rw bind-mount, major-partitioned | `40-durable-caches.toml` | §5.3 |
 
@@ -184,10 +184,12 @@ gate depends on (Dev Spec §5.3).
 
 ### 3.5 Secrets: the read-only mount (Story 1.5)
 
-The whole `~/.secrets` dir enters as **one read-only bind-mount**
+Secrets enter as **named, read-only, single-file bind-mounts**
 ([`20-secrets.toml`](../../containers/oakandwave-workflow/mounts.d/20-secrets.toml))
-targeting `/home/ubuntu/.secrets` — the default the bootstrap's `OAW_SECRETS_DIR`
-already resolves (Dev Spec §5.5).
+landing under `/home/ubuntu/.secrets` — the default the bootstrap's
+`OAW_SECRETS_DIR` already resolves (Dev Spec §5.5). Story 1.5 mounted the *whole*
+dir; #1061 replaced that with named files, because the host dir spans both sides
+of the OaW/Analogic IP boundary and the kit consumes one entry of ~80.
 
 - **Never baked (R-12).** The image *is* the release: it ships to every ring and
   registry, so a secret baked into any layer would leak with the digest. Secrets
@@ -195,12 +197,19 @@ already resolves (Dev Spec §5.5).
   tolerates `check-deps`' missing-token advisory rather than baking the tokens
   (Dockerfile §"Bake the kit"). The resolver enforces the ro half — a fragment
   fat-fingered to `mode = "rw"` raises `R-12 VIOLATION` (`test_secrets_rw_fragment_is_rejected`).
-- **Live mid-session (R-13).** A bind-mount *is* the host dir, so a file the host
-  adds to `~/.secrets` after the container started is visible inside the running
-  container with no restart — proven by `test_secrets_readonly` (IT-02) and MV-07.
-- **Fail-loud on a missing required secret (R-14).** A values-free
-  `required.manifest` inside the dir (mounted with it) drives the bootstrap's
-  required-secret check (Story 1.4); a missing required secret aborts the boot.
+- **Live mid-session (R-13), with one sharp limit.** A bind *is* the host file, so
+  an **in-place** rewrite is visible inside the running container with no restart.
+  An **atomic replace** (`mv`, `sops`, most editors' save-by-rename) is NOT: a file
+  bind binds the *inode*, so the container stays pinned to the old one, silently,
+  until it is recreated. Rotate in place, or recreate. Adding a *new* secret also
+  needs a new mount — deliberately, since that is what keeps an unrelated
+  credential from entering a container's reach.
+- **Fail-loud on a missing required secret (R-14).** The required set is declared
+  via `OAW_REQUIRED_SECRETS` in the mounted `.env` (template:
+  [`secrets-env.example`](../../containers/oakandwave-workflow/secrets-env.example)),
+  **not** a `required.manifest` file — with the whole-dir mount gone, a manifest in
+  `~/.secrets` would be unmounted, leaving R-14 validating nothing while appearing
+  configured. bootstrap warns loudly when neither is declared.
 
 **Consumer split (the load-bearing nuance).** The mount is live, but *how* live
 depends on how a consumer reads a secret:
@@ -214,10 +223,16 @@ So **prefer file-path consumers** where liveness matters: `.env` is convenient
 but its values are frozen at the boot source. Loose files stay path-modality and
 are **never auto-exported** (SKETCHBOOK D6), which is also why they stay live.
 
-**Blast-radius tradeoff (open item).** Mounting the *whole* dir means every ring
-— and every process in the container, across the GitLab/GitHub IP boundary — sees
-*every* secret. That is a deliberate, flagged tradeoff for the foundation: it is
-one mount, ro, with no per-secret plumbing. **Least-privilege per-secret scoping
+**Blast-radius tradeoff — CLOSED for the default case (#1061).** The whole-dir
+mount was replaced by named single-file mounts: `.env` (pointers only) plus the
+one secret the kit actually consumes. The host's `~/.secrets` holds ~80
+credentials spanning both sides of the OaW/Analogic IP boundary and the kit needs
+exactly one, so the whole-dir mount was paying full exposure for no benefit.
+`.env` carries `DISCORD_TOKEN_PATH` / `DISCORD_TOKEN_FILE` — **pointers, never
+values** — because an environment variable is inherited by every child process
+while a file must be deliberately opened, and host-durable transcripts (#1064)
+would make one stray `env` dump permanent. The historical rationale for the
+whole-dir approach is retained below. **Least-privilege per-secret scoping
 is an open design item** (Dev Spec §5.5, §5.N); the `read-only-secrets` layer is
 exactly where a future scoped-secrets mechanism slots in without disturbing the
 rest of the taxonomy. See §5 for the carried open item.
@@ -254,11 +269,13 @@ rest of the taxonomy. See §5 for the carried open item.
   observation; it is confirmed against the full manifest in MV-02 (closing story
   4.3). The resolver's R-03 guard is the *static* half of that assurance; MV-02
   is the runtime half.
-- **Secrets blast-radius** (Dev Spec §5.5, §5.N; documented in §3.5): the
-  whole-`~/.secrets`-dir mount means every ring sees every secret, including
-  across the GitLab/GitHub IP boundary. Least-privilege per-secret scoping is an
-  open design item; the manifest's `read-only-secrets` layer is where a future
-  scoped-secrets mechanism slots in without disturbing the taxonomy.
+- **Secrets blast-radius** (Dev Spec §5.5, §5.N; documented in §3.5) — **closed
+  by #1061.** The whole-dir mount is gone; the `read-only-secrets` layer now
+  carries named single-file mounts, so a container sees only the secrets it
+  declares. This was the slot the taxonomy reserved for a scoped mechanism, and
+  it needed no new machinery — with the kit consuming one secret of ~80, naming
+  it was cheaper than building a scoping engine. Revisit only if the
+  container-required set grows beyond a handful.
 - **AoE bootstrap seam** (Dev Spec §5.N#5): whether aoe respects the image
   `ENTRYPOINT` or `docker exec`s the agent directly determines where the
   bootstrap (Story 1.4) hooks the resolver in. The resolver is seam-agnostic — it

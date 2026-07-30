@@ -13,7 +13,7 @@ their agents at their own Discord server without modifying source.
 ```json
 {
   "guild_id": "1234567890",
-  "token_path": "~/secrets/discord-bot-token",
+  "token_path": "~/.secrets/discord-bot-token",
   "scream_hole_url": "http://scream-hole:3000",
   "default_channel_id": "1487288523638837268",
   "roll_call_channel_id": "1487382005036617851",
@@ -30,7 +30,7 @@ their agents at their own Discord server without modifying source.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `guild_id` | string | Yes | Discord server (guild) ID |
-| `token_path` | string | No | Path to bot token file (default: `~/secrets/discord-bot-token`) |
+| `token_path` | string | No | Path to bot token file (default: `~/.secrets/discord-bot-token`) |
 | `scream_hole_url` | string | No | Base URL of a [scream-hole](https://github.com/Wave-Engineering/scream-hole) proxy (e.g., `http://scream-hole:3000`). When set, `disc-server` MCP and `discord-watcher` route Discord REST API calls through the proxy instead of hitting Discord directly. Omit to use direct Discord API. |
 | `default_channel_id` | string | Yes | Snowflake ID of the channel playing the **default** role |
 | `roll_call_channel_id` | string | Yes | Snowflake ID of the channel playing the **roll-call** role |
@@ -60,7 +60,7 @@ Every component reads configuration using a three-level fallback:
 | `DISCORD_DEFAULT_CHANNEL` | `default_channel_id` | `1487288523638837268` |
 | `DISCORD_ROLL_CALL_CHANNEL` | `roll_call_channel_id` | `1487382005036617851` |
 | `DISCORD_WAVE_STATUS_CHANNEL` | `channels["wave-status"]` | `1487386934094462986` |
-| `DISCORD_TOKEN_PATH` | `token_path` | `~/secrets/discord-bot-token` |
+| `DISCORD_TOKEN_PATH` | `token_path` | `~/.secrets/discord-bot-token` |
 | `SCREAM_HOLE_URL` | `scream_hole_url` | *(disabled)* |
 
 ## Scream-Hole Proxy

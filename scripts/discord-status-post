@@ -12,7 +12,8 @@ Usage:
     discord-status-post [--channel-id ID] [--state-dir DIR] [--dev-team NAME]
 
 Environment:
-    DISCORD_BOT_TOKEN   Bot token (fallback: ~/secrets/discord-bot-token)
+    DISCORD_BOT_TOKEN   Bot token (fallback: ~/.secrets/discord-bot-token,
+                        then the deprecated ~/secrets/discord-bot-token)
 
 Requires Python 3.10+ stdlib only — no external dependencies [CT-01].
 """
@@ -37,7 +38,11 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 _DEFAULT_WAVE_STATUS_CHANNEL_ID = "1487386934094462986"
-_DEFAULT_TOKEN_PATH = "~/secrets/discord-bot-token"
+# ~/.secrets is canonical (#1061). The undotted ~/secrets is deprecating and is
+# NOT mounted into the contained workflow, so a container resolving it finds
+# nothing. Kept only as a trailing fallback for un-migrated hosts.
+_DEFAULT_TOKEN_PATH = "~/.secrets/discord-bot-token"
+_LEGACY_TOKEN_PATH = "~/secrets/discord-bot-token"
 API_BASE = "https://discord.com/api/v10"
 
 
@@ -149,10 +154,16 @@ def get_token() -> str:
         or _DEFAULT_TOKEN_PATH
     )
     token_file = Path(os.path.expanduser(token_path_str))
-    if token_file.exists():
+    if token_file.is_file():
         return token_file.read_text().strip()
+    # Trailing fallback for un-migrated hosts only. Never reached in a container:
+    # ~/secrets is not mounted, so this resolves to nothing there by design.
+    legacy = Path(os.path.expanduser(_LEGACY_TOKEN_PATH))
+    if legacy.is_file():
+        return legacy.read_text().strip()
     raise RuntimeError(
-        f"DISCORD_BOT_TOKEN not set and {token_file} not found"
+        f"DISCORD_BOT_TOKEN not set and {token_file} not found "
+        f"(legacy {legacy} also absent)"
     )
 
 

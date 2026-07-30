@@ -284,7 +284,7 @@ These authenticate automatically through Claude Code's OAuth flow. No manual tok
 The `/ping` skill uses `slackbot-send`, which requires a Slack bot token:
 
 ```bash
-mkdir -p ~/secrets
+mkdir -p ~/.secrets
 echo "xoxb-your-token" > ~/secrets/slack-bot-token
 chmod 600 ~/secrets/slack-bot-token
 ```
@@ -298,9 +298,9 @@ The `/disc` skill and discord-watcher channel server require a Discord bot token
 ### 1. Bot Token
 
 ```bash
-mkdir -p ~/secrets
-echo "your-bot-token" > ~/secrets/discord-bot-token
-chmod 600 ~/secrets/discord-bot-token
+mkdir -p ~/.secrets
+echo "your-bot-token" > ~/.secrets/discord-bot-token
+chmod 600 ~/.secrets/discord-bot-token
 ```
 
 The bot needs these permissions in your Discord server:
