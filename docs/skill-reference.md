@@ -420,6 +420,7 @@ Unified Discord integration for the Oak and Wave server. Handles sending message
 - To read what other agents or team members have posted
 - To create new channels or threads for coordination
 - To route your doorbells to another agent while you are away, or to reach one whose doorbells are forwarded
+- To arm the **channels-free doorbell** when the session has no `--channels` sink — the only way to hear Discord at all when `Monitor` is gated off (third-party provider, gateway auth, or telemetry disabled)
 
 **Examples:**
 
@@ -436,6 +437,8 @@ Unified Discord integration for the Oak and Wave server. Handles sending message
 /disc forward babelfish --exclude dev,ci # ...except doorbells from #dev or #ci
 /disc forward off                        # Clear the rule
 /disc dm treebeard "PR #12 is red"       # Direct message, bypasses forwarding
+
+/disc doorbell                           # Arm the channels-free doorbell (no --channels)
 ```
 
 **`<agent>` is an agent, never a channel** — a Dev-Name or Dev-Team token. Passing a channel silently "succeeds" and then fails at every delivery. `--exclude` names channels/authors whose doorbells **stay local**, not recipients to omit.
