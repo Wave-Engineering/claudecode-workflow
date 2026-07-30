@@ -219,7 +219,7 @@ class TestInstallCreatesArtifacts:
             skill_md = skills_dir / skill_name / "SKILL.md"
             assert skill_md.exists(), f"Missing skill: {skill_md}"
 
-        # --- Helper scripts from skills (e.g. job-fetch, slackbot-send) ---
+        # --- Helper scripts from skills (e.g. job-fetch) ---
         bin_dir = sandbox_home / ".local" / "bin"
         for helper in _expected_helper_scripts():
             assert (bin_dir / helper).exists(), f"Missing helper script: {helper}"
@@ -293,6 +293,42 @@ class TestInstallCreatesArtifacts:
         )
         # ...and the replacement is there in its place.
         assert (sandbox_home / ".claude" / "docs" / "operations" / "branch-protection-checklist.md").exists()
+
+    def test_removed_slack_skills_are_pruned(self, sandbox_home: Path) -> None:
+        """#1062: /ping and /pong are pruned from an already-installed host.
+
+        Deleting a skill from SOURCE does not uninstall it. `install` walks the
+        surviving `skills/*/` and prunes WITHIN each one, so a skill that vanished
+        from source is never visited — whole-skill removal is DEPRECATED_PATHS' job.
+
+        Without this, the #1062 upgrade is worse than no change: cellar_deploy wipes
+        the Cellar copy of `slackbot-send` while `~/.claude/skills/ping/SKILL.md`
+        survives, leaving /ping a live skill whose helper has just been deleted.
+
+        Plant the installed copies first — a fresh sandbox never had them, so
+        without the fixture this would assert nothing.
+        """
+        planted = []
+        for rel, body in [
+            (".claude/skills/ping/SKILL.md", "---\nname: agent-say\n---\n"),
+            (".claude/skills/pong/SKILL.md", "---\nname: pong\n---\n"),
+            (".claude/scripts/skills/ping/slackbot-send", "#!/usr/bin/env bash\n"),
+        ]:
+            f = sandbox_home / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(body)
+            planted.append(f)
+        for f in planted:
+            assert f.exists(), f"fixture failed to plant {f}"
+
+        rc, out, err = run_install([], sandbox_home)
+        assert _install_ok(rc, out, err), f"install.sh failed (rc={rc}):\nstdout: {out}\nstderr: {err}"
+
+        for f in planted:
+            assert not f.exists(), (
+                f"deprecated Slack artifact survived install: {f.relative_to(sandbox_home)} "
+                "(/ping and /pong were removed in #1062; add the path to DEPRECATED_PATHS)"
+            )
 
 
 

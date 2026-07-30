@@ -142,13 +142,13 @@ WORKDIR ${KIT_SRC}
 # code is the count of missing deps. `bun` (and node/claude) are now on PATH (the
 # runtime-exposure layer above), so the advisory no longer flags bun as it did
 # under --no-mcps — the remainder are runtime-only items check-deps can never see
-# at build time: the secret tokens (slack-bot-token, discord-bot-token; never
-# baked — R-12, provided at runtime via the ro ~/.secrets mount) and any
+# at build time: the discord bot token (never baked —
+# R-12, provided at runtime via the ro ~/.secrets mount) and any
 # host-specific hook path in settings.template.json. The tolerance FIRST greps the
 # check-deps SUMMARY sentinel (a non-zero rc that ISN'T the advisory is a genuine
 # install error → build fails), THEN pipes the advisory through
 # `assert-only-expected-deps-missing.sh`, which fails the build if ANY missing dep
-# is outside the expected-missing whitelist (the two secret tokens + the runtime-
+# is outside the expected-missing whitelist (the discord token + the runtime-
 # installed wtf-server hook). So a real regression — gh/jq/python3/curl/git going
 # missing — can no longer hide behind the content-agnostic sentinel (#1016). The
 # real guarantees: a genuine install error aborts under set -euo pipefail BEFORE

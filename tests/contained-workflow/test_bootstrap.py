@@ -227,11 +227,14 @@ def test_required_secret_from_manifest_fails_loud(tmp_path: Path) -> None:
     """The values-free manifest (D6) drives the required list; a missing one fails."""
     home = _make_home(tmp_path)
     manifest = home / ".secrets" / "required.manifest"
-    manifest.write_text("# required secrets\nDISCORD_BOT_TOKEN\n\nSLACK_BOT_TOKEN\n")
+    # Two names, so the loop is proven to report EVERY missing secret rather than
+    # short-circuiting on the first. Neutral second name: Slack was dropped in
+    # #1062, and a fixture naming a retired integration reads as live support.
+    manifest.write_text("# required secrets\nDISCORD_BOT_TOKEN\n\nSECOND_TOKEN\n")
     proc = _run(home)
     assert proc.returncode != 0
     assert "DISCORD_BOT_TOKEN" in proc.stderr
-    assert "SLACK_BOT_TOKEN" in proc.stderr
+    assert "SECOND_TOKEN" in proc.stderr
 
 
 def test_dotenv_is_sourced_for_env_modality(tmp_path: Path) -> None:

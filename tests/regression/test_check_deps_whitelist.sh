@@ -3,8 +3,8 @@
 #
 # Picked up by scripts/ci/validate.sh's "Regression tests" loop (tests/regression/*.sh).
 #
-# The image build tolerates check-deps' expected-missing items (the two secret
-# tokens + the runtime-installed wtf-server hook) but must FAIL on any OTHER
+# The image build tolerates check-deps' expected-missing items (the discord bot
+# token + the runtime-installed wtf-server hook) but must FAIL on any OTHER
 # missing required dependency. Two failure shapes are covered:
 #   - a normal missing dep prints "  [!] <item> — NOT FOUND …" (e.g. gh);
 #   - jq itself missing bails check-deps' jq-guarded scans early: NO "NOT FOUND"
@@ -28,21 +28,20 @@ check() { # <description> <expected-rc> <actual-rc>
 	fi
 }
 
-# The exact expected-missing set from a real container build (#1014 build log):
-# the wtf hook + the two secret tokens — 3 missing, all whitelisted.
+# The exact expected-missing set from a real container build (#1014 build log),
+# less slack-bot-token which went with Slack support (#1062): the wtf hook + the
+# discord token — 2 missing, all whitelisted.
 expected_only='  [✓] gh (/usr/bin/gh)
   [!] hook: /home/ubuntu/.local/share/wtf-server/hooks/wtf-post-tool-use.sh — NOT FOUND
   [!]   Referenced in settings.template.json hooks
-  [!] slack-bot-token — NOT FOUND (/home/ubuntu/secrets/slack-bot-token)
-  [!] discord-bot-token — NOT FOUND (/home/ubuntu/secrets/discord-bot-token)
-3 required dependency/dependencies missing.'
+  [!] discord-bot-token — NOT FOUND (/home/ubuntu/.secrets/discord-bot-token)
+2 required dependency/dependencies missing.'
 
-# An UNEXPECTED regression: gh has gone missing (4 missing, one not whitelisted).
+# An UNEXPECTED regression: gh has gone missing (3 missing, one not whitelisted).
 with_unexpected='  [!] hook: /home/ubuntu/.local/share/wtf-server/hooks/wtf-post-tool-use.sh — NOT FOUND
-  [!] slack-bot-token — NOT FOUND (/home/ubuntu/secrets/slack-bot-token)
-  [!] discord-bot-token — NOT FOUND (/home/ubuntu/secrets/discord-bot-token)
+  [!] discord-bot-token — NOT FOUND (/home/ubuntu/.secrets/discord-bot-token)
   [!] gh — NOT FOUND (needed for: GitHub CLI)
-4 required dependency/dependencies missing.'
+3 required dependency/dependencies missing.'
 
 # A clean build: nothing missing.
 none_missing='  [✓] gh (/usr/bin/gh)

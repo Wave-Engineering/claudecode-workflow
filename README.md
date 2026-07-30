@@ -87,8 +87,6 @@ Key features:
 | name | `/name` | Report or pick agent session identity |
 | nerf | `/nerf` | Context budget system — soft limits, doom modes, scope monitor |
 | nextwave | `/nextwave` | Execute spec-driven sub-agents per wave; reads each wave's `dispatch` hint to fan or serialize |
-| ping | `/ping` | Post to #ai-dev Slack channel |
-| pong | `/pong` | Read #ai-dev Slack channel |
 | devspec | `/devspec` | Interactive Dev Spec creation with Deliverables Manifest and finalization checklist |
 | precheck | `/precheck` | Pre-commit gate — verify compliance, run code review, present checklist |
 | prepwaves | `/prepwaves` | Analyze issues, compute dependency waves, and annotate each wave with a `dispatch` hint |
@@ -107,7 +105,6 @@ Key features:
 |--------|-------------|-------------|
 | `discord-bot` | `curl`, `jq`, Discord bot token | Discord REST API client — send, read, create channels, resolve names |
 | `discord-status-post` | `python3`, Discord bot token | Post/update wave-status embed in `#wave-status` Discord channel |
-| `slackbot-send` | `curl`, `jq`, Slack bot token | Send Slack messages as a named Claude Code agent |
 | `job-fetch` | `glab`, `python3` | Fetch GitLab CI job traces for analysis |
 | `file-opener` | `xdg-open` / `open` | Cross-platform file/URL opener for `/view` and `/edit` |
 | `vox` | audio player (`aplay`/`afplay`/`paplay`/`ffplay`); provider of your choice (see `vox --setup`) | Text-to-speech via user-supplied provider hook. Examples in `scripts/vox-providers/`; contract in that dir's README |
@@ -262,7 +259,6 @@ The settings template enables these plugins from `claude-plugins-official`:
 | `explanatory-output-style` | Educational code explanations |
 | `claude-md-management` | CLAUDE.md audit and improvement |
 | `claude-code-setup` | Automation recommendations |
-| `slack` | Slack channel integration (MCP-based) |
 | `frontend-design` | Frontend interface design |
 
 ### MCP-Based Integrations
@@ -271,25 +267,10 @@ Some plugins provide MCP (Model Context Protocol) server integrations that requi
 
 | Plugin | MCP Capability | Setup |
 |--------|---------------|-------|
-| `slack` | Read/write Slack channels | OAuth — prompted on first `/pong` or `/ping` use |
 | `gitlab` | GitLab API access | OAuth — prompted on first `glab`-based operation |
 | `github` | GitHub API access | Uses existing `gh auth` session |
 
 These authenticate automatically through Claude Code's OAuth flow. No manual token configuration is needed — just approve the OAuth prompt when it appears.
-
-**Exception:** The `slackbot-send` script uses a separate bot token (not the MCP OAuth). See Slack Setup below.
-
-## Slack Setup (for /ping)
-
-The `/ping` skill uses `slackbot-send`, which requires a Slack bot token:
-
-```bash
-mkdir -p ~/.secrets
-echo "xoxb-your-token" > ~/secrets/slack-bot-token
-chmod 600 ~/secrets/slack-bot-token
-```
-
-This is separate from the Slack MCP plugin OAuth — `slackbot-send` posts as a custom bot identity (with Dev-Name and Dev-Avatar), while the MCP plugin uses your Slack user identity.
 
 ## Discord Setup
 
@@ -374,8 +355,8 @@ DISCORD_WATCHER_VERBOSE=1 claude --dangerously-load-development-channels server:
 | `bun` | discord-watcher | [bun.sh](https://bun.sh) |
 | `gh` | GitHub skills | [cli.github.com](https://cli.github.com) |
 | `glab` | GitLab skills | [gitlab.com/gitlab-org/cli](https://gitlab.com/gitlab-org/cli) |
-| `curl` | slackbot-send, discord-bot | Usually pre-installed |
-| `jq` | slackbot-send, discord-bot, statusline | `apt install jq` / `brew install jq` |
+| `curl` | discord-bot | Usually pre-installed |
+| `jq` | discord-bot, statusline | `apt install jq` / `brew install jq` |
 | `python3` | job-fetch | Usually pre-installed |
 | `shellcheck` | Validation | `apt install shellcheck` / `brew install shellcheck` |
 | `shfmt` | Validation | `go install mvdan.cc/sh/v3/cmd/shfmt@latest` |

@@ -34,7 +34,7 @@ body:
       options:
         - CLAUDE.md template
         - Skill (specify in description)
-        - Script (slackbot-send, job-fetch)
+        - Script (job-fetch, discord-bot)
         - install.sh
         - Other
     validations:

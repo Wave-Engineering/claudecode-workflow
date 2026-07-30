@@ -85,6 +85,24 @@ DEPRECATED_PATHS=(
 	# would keep serving the exact policy #898 removes. Must be pruned, not just
 	# superseded.
 	"$HOME/.claude/docs/operations/merge-queue-checklist.md"
+	# /ping and /pong were wholly Slack-specific (#ai-dev, Slack mrkdwn); removed
+	# with Slack support (#1062). Deleting them from SOURCE is not enough: install
+	# iterates surviving `skills/*/` and calls prune_orphaned_skill_files per skill,
+	# so a skill that vanishes from source is never visited and its installed copy
+	# is never removed (whole-skill removal is DEPRECATED_PATHS' job — see the note
+	# on prune_orphaned_skill_files below).
+	#
+	# Left unpruned, the upgrade is WORSE than no change: cellar_deploy wipes
+	# ~/.claude/scripts/skills/ping/slackbot-send while ~/.claude/skills/ping/SKILL.md
+	# survives, leaving /ping a live, invocable skill whose helper no longer exists.
+	# /pong needs no helper and would simply keep working.
+	#
+	# Both the symlink-farm and Cellar copies are listed (the wavebus block above is
+	# the precedent) because `./install --skills` does not fire the Cellar wipe.
+	"$HOME/.claude/skills/ping"
+	"$HOME/.claude/skills/pong"
+	"$HOME/.claude/scripts/skills/ping"
+	"$HOME/.local/bin/slackbot-send"
 )
 # Logrotate is a tri-state: "prompt" by default, forced on/off by flag.
 LOGROTATE_MODE=prompt
@@ -500,7 +518,7 @@ cellar_install_skill_helper() {
 
 # Create or refresh a symlink at $SCRIPTS_DIR/<helper_name> pointing to
 # $CELLAR_DIR/skills/<skill_name>/<helper_name>. Bare-name target preserves
-# PATH-based skill invocation (e.g. `slackbot-send`, `file-opener`). If a
+# PATH-based skill invocation (e.g. `discord-status-post`, `file-opener`). If a
 # symlink with this name already exists pointing into a *different* skill's
 # Cellar subdir, warn loudly — this is the namespace-collision case the
 # per-skill Cellar layout was designed to surface.

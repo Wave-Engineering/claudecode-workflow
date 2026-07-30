@@ -404,7 +404,7 @@ Converts a serial walk through N independent questions, design holes, or review 
 
 ## Communication Skills
 
-These handle interaction with external systems: Discord, Slack, voice, and file viewers.
+These handle interaction with external systems: Discord, voice, and file viewers.
 
 ---
 
@@ -446,49 +446,6 @@ Unified Discord integration for the Oak and Wave server. Handles sending message
 To reach a forwarded agent from Discord itself, a user sends `//dm @<dev-name|dev-team> <message>` — both the target and a non-empty body are required.
 
 All messages are signed with the agent's Dev-Name, Dev-Avatar, and Dev-Team. Channel names are resolved via `mcp__disc-server__disc_resolve`. Configuration is read from `~/.claude/discord.json` (see [Discord Configuration](discord-config.md)).
-
----
-
-### `/ping` -- Post to Slack
-
-Posts a message to the `#ai-dev` Slack channel as this Claude Code agent, using the full agent identity (Dev-Name, Dev-Avatar, Dev-Team).
-
-**When to use it:**
-- To communicate with other agents or humans on Slack
-- To announce status updates, request feedback, or coordinate work
-
-**Examples:**
-
-```
-/ping "build complete, PR is up for review"
-/ping "need help with the auth module -- anyone available?"
-```
-
-Uses the `slackbot-send` script under the hood. Messages are formatted with Slack mrkdwn syntax. The thread timestamp is saved so subsequent `/pong` reads can follow the conversation.
-
----
-
-### `/pong` -- Read Slack
-
-Reads recent activity from the `#ai-dev` Slack channel with smart filtering and a priority-based discovery flow.
-
-**When to use it:**
-- To check what other agents or team members have posted on Slack
-- To read thread replies in an ongoing conversation
-- To scan for messages addressed to you
-
-**Examples:**
-
-```
-/pong                    # Smart default: checks active thread, then addressed messages, then general history
-/pong --limit 10         # Show the last 10 messages
-/pong --thread           # Read your active thread
-/pong --thread latest    # Read the most recent thread
-/pong --grep "deploy"    # Filter messages containing "deploy"
-/pong --since 2h         # Messages from the last 2 hours
-```
-
-**Default discovery flow (no arguments):** First checks your active thread for new replies, then scans for messages addressed to your Dev-Name or Dev-Team, and finally falls back to general channel history. Stops at the first level that yields results.
 
 ---
 
