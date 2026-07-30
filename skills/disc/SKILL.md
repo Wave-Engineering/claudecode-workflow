@@ -1,9 +1,10 @@
 ---
 name: disc
-description: Discord integration — /disc routes to disc-server MCP tools, plus discord-watcher CLI subcommands for forward/directmsg.
+description: Discord integration — /disc routes to disc-server MCP tools, plus discord-watcher CLI subcommands for forward/directmsg/doorbell. Includes the channels-free doorbell transport for sessions started WITHOUT --channels, where no MCP notification sink is wired and the agent is otherwise deaf.
 usage: |
   /disc send #ch "msg"  /disc read #ch  /disc list  /disc create #ch  /disc thread "name" in #ch
   /disc forward <agent> [--exclude a,b]  /disc forward off  /disc dm <agent> "msg"
+  /disc doorbell  — arm the channels-free doorbell (no --channels required)
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
@@ -74,7 +75,22 @@ For sessions started **without** `--channels`: the MCP notification sink is neve
 Monitor({ command: "discord-watcher doorbell", persistent: true })
 ```
 
-`Monitor` is **absent from some clients' tool surface** — check before relying on it. Where it is missing, the only background-process mechanism available notifies the agent when a task **exits**, and `doorbell` is a persistent loop that never exits. Armed that way the line is written to a file nobody reads and the agent is never woken: *silent* deafness, the exact failure the doorbell exists to prevent.
+`Monitor` is **absent under several common conditions** — see the list below; a non-Anthropic provider is only one of them. Where it is missing, the only background-process mechanism available notifies the agent when a task **exits**, and `doorbell` is a persistent loop that never exits. Armed that way the line is written to a file nobody reads and the agent is never woken: *silent* deafness, the exact failure the doorbell exists to prevent.
+
+**When `Monitor` is missing, and why.** `Monitor.isEnabled()` resolves the server-side feature flag `tengu_amber_sentinel`, which **defaults to false**, and both local override paths are compiled out of the shipped bundle — the settings override returns unconditionally, and the `process.env.CLAUDE_INTERNAL_FC_OVERRIDES` read sits *after* an unconditional `return`, so it is unreachable dead code. The flag can therefore arrive only from the feature service — and the lookup **short-circuits to `false` before it ever consults the cache** unless *all* of the following hold:
+
+| condition | `Monitor` absent when… |
+|---|---|
+| provider | the resolved provider is **not first-party** — Bedrock, Vertex / Google Cloud Agent Platform, Microsoft Foundry (overridden by `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST`) |
+| gateway | gateway auth is in use |
+| telemetry | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_TELEMETRY`, or `DO_NOT_TRACK` is set |
+| flag service | `DISABLE_GROWTHBOOK` is set |
+
+So an **Anthropic-authenticated session still loses `Monitor`** if it has telemetry disabled — do not stop at the auth path. Verified by reading the 2.1.220 bundle (2026-07-27); the minified symbol names are regenerated per build, so match on this behavior rather than on identifiers.
+
+**Relationship to `--channels` — correlation, not a shared switch.** On a third-party provider both are unavailable, so a Bedrock-backed session is precisely the case this wrapper exists for: no `Monitor` to fall back to *and* no channels. But they are **separately gated** and do not always fail together — Channels is admin-enabled on claude.ai Team/Enterprise plans and can be off while `Monitor` is fine. Diagnose them independently; do not infer one from the other.
+
+Do not patch the vendor bundle to force the flag — it self-updates and the change reverts silently.
 
 **Use the one-shot wrapper instead** — it makes the exit BE the doorbell, so the task-completion notification wakes the agent. Invoke it by **bare name** (`./install` symlinks every `scripts/*` file onto PATH); a relative `scripts/…` path only resolves inside the cc-workflow source tree, which is never where you want to be — the wrapper must run from the *target project's* root so identity resolves:
 
@@ -87,7 +103,7 @@ DEBUG=1 doorbell-oneshot.sh         # also forward the watcher's stderr
 
 Run it as a **background** task, then re-arm after handling the messages it printed (one batch → one turn). Cellar copy, for reference: `~/.claude/scripts/doorbell-oneshot.sh`.
 
-**Read the exit code — it is the whole signal.** `0` = one or more `[doorbell]` lines on stdout; `2` = precondition failure (bash < 4, watcher missing, **watcher older than v1.6.0**, malformed `TIMEOUT`/`DRAIN_SECONDS`); `3` = `TIMEOUT` elapsed with nothing delivered; `4` = the `doorbell` subcommand exists but the watcher died without emitting a valid line — bad token, baseline-init failure, crash — with its stderr printed for you. Never treat a bare exit 0 with empty stdout as a message: re-arming on that is a hot loop, and the wrapper is built so it cannot happen.
+**Read the exit code — it is the whole signal.** exit 0 = one or more `[doorbell]` lines on stdout; exit 2 = precondition failure (bash < 4, watcher missing, **watcher older than v1.6.0**, malformed `TIMEOUT`/`DRAIN_SECONDS`, temp-dir/fifo setup); exit 3 = `TIMEOUT` elapsed with nothing delivered; exit 4 = the `doorbell` subcommand exists but the watcher died without emitting a valid line — bad token, baseline-init failure, crash — with its stderr printed for you. Never treat a bare exit 0 with empty stdout as a message: re-arming on that is a hot loop, and the wrapper is built so it cannot happen.
 
 A **pre-v1.6.0 watcher does not error** — it has no unknown-subcommand handler, so `doorbell` falls through to the MCP server and the process never exits. That would hang the wrapper forever at the default `TIMEOUT=0`, so the wrapper probes `doorbell --help` up front and fails with exit 2 instead. If you see that, the fix is a watcher upgrade, not a retry.
 

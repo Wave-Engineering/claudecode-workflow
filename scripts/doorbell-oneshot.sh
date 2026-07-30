@@ -11,11 +11,35 @@
 #
 #     Monitor({ command: "discord-watcher doorbell", persistent: true })
 #
-# That primitive is NOT present in every client. Where it is missing, the only
-# background-process mechanism available notifies the agent when a task **exits** —
-# and `discord-watcher doorbell` is a persistent poll loop that never exits. Armed
-# that way the doorbell line lands in a file nobody reads and the agent is never
-# woken: silent deafness, the exact failure the doorbell exists to prevent.
+# That primitive is gated OFF under several common conditions. All of the following
+# were read out of the 2.1.220 bundle (2026-07-27); minified symbol names are
+# regenerated per build, so this records the behavior, not the identifiers.
+#
+# `Monitor.isEnabled()` resolves the server-side feature flag `tengu_amber_sentinel`,
+# which DEFAULTS TO FALSE, and both local override paths are compiled out: the
+# settings override returns unconditionally, and the CLAUDE_INTERNAL_FC_OVERRIDES env
+# read sits after an unconditional `return` — unreachable dead code. The flag can only
+# come from the feature service, and that lookup SHORT-CIRCUITS TO FALSE before it
+# consults the cache when any of these hold:
+#
+#     - provider is not first-party (Bedrock, Vertex / Google Cloud Agent Platform,
+#       Microsoft Foundry) — unless CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST is set
+#     - gateway auth is in use
+#     - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC / DISABLE_TELEMETRY / DO_NOT_TRACK
+#     - DISABLE_GROWTHBOOK
+#
+# So an Anthropic-authenticated session with telemetry disabled ALSO has no Monitor —
+# the auth path is not the whole story. On a third-party provider `--channels` is
+# unavailable too, which is why a Bedrock-backed session is exactly the case this
+# wrapper exists for: no Monitor to fall back to, and no channels either. The two are
+# separately gated, though (Channels is admin-enabled on Team/Enterprise plans), so
+# diagnose them independently rather than inferring one from the other.
+#
+# Where Monitor is missing, the only background-process mechanism available notifies
+# the agent when a task **exits** — and `discord-watcher doorbell` is a persistent
+# poll loop that never exits. Armed that way the doorbell line lands in a file nobody
+# reads and the agent is never woken: silent deafness, the exact failure the doorbell
+# exists to prevent.
 #
 # So this wrapper inverts it: make the EXIT be the doorbell. One batch of messages,
 # one exit, one task-completion notification, one agent turn. Re-arm for the next.
