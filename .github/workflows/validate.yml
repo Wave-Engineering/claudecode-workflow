@@ -34,7 +34,14 @@ jobs:
 
       - name: Compat-guard — block a silent same-major schema break (#1002)
         run: |
-          git fetch --no-tags --depth=1 origin main:refs/remotes/origin/main
+          # NO --depth=1 and NO --no-tags. A shallow fetch does not merely fetch
+          # less — it marks the whole repository shallow (.git/shallow), and that
+          # persists for every LATER step in the job. It silently un-did checkout's
+          # fetch-depth: 0 + fetch-tags: true, so `git describe --tags` in the test
+          # step could no longer walk history and scripts/ci/oaw-major.sh refused
+          # (#1067). checkout already fetched full history here, so this costs
+          # nothing extra and leaves the repo intact for what runs after it.
+          git fetch origin main:refs/remotes/origin/main
           COMPAT_GUARD_BASE_REF=origin/main ./scripts/ci/compat-guard.sh
 
       - name: Set up Python
