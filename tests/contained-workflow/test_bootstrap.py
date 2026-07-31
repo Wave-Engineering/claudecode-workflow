@@ -796,3 +796,145 @@ def test_dockerfile_wraps_every_reachable_claude_and_asserts_it() -> None:
         "the build must INVOKE the no-bypass guard, not merely mention it — "
         "assuming a PATH order is what shipped the wrapper inert the first time"
     )
+
+
+# --- onboarding state (#1079) -------------------------------------------------
+#
+# The keys below were derived EMPIRICALLY against the real image, not guessed —
+# each candidate config was run repeatedly because single runs proved
+# non-deterministic. Two results contradict the obvious guess and are the reason
+# these tests assert what they do:
+#
+#   hasCompletedOnboarding + trust(cwd)      -> reaches the prompt   (3/3)
+#   hasCompletedOnboarding alone             -> trust dialog         (2/2)
+#   theme + trust, no hasCompletedOnboarding -> theme picker
+#
+# So `theme` is NOT part of the contract, and neither is `lastOnboardingVersion`.
+# Asserting either would pin the image to a value the CLI does not require and
+# would drift on every base-image bump.
+
+
+def _read_cfg(home: Path) -> dict:
+    import json
+
+    return json.loads((home / ".claude.json").read_text())
+
+
+def _home_with_cfg(tmp_path: Path, cfg: str = "{}") -> Path:
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    (home / ".claude.json").write_text(cfg)
+    return home
+
+
+def test_onboarding_state_is_set_so_the_wizard_never_runs(tmp_path: Path) -> None:
+    """An agent parked on the first-run wizard is an agent that never starts."""
+    home = _home_with_cfg(tmp_path)
+    proc = _run(home)
+    assert proc.returncode == 0, proc.stderr
+    assert _read_cfg(home)["hasCompletedOnboarding"] is True
+
+
+def test_trust_is_recorded_for_the_ACTUAL_working_directory(tmp_path: Path) -> None:
+    """Trust is per-project and path-sensitive — it cannot be baked.
+
+    Measured: trust recorded for /home/ubuntu while the agent runs in /workspace
+    still shows the dialog. The sandbox path varies per session, so the key must
+    be the agent's real cwd. bootstrap is SOURCED by the wrapper in the agent's
+    own process, which is exactly why $PWD is the right key.
+    """
+    home = _home_with_cfg(tmp_path)
+    workspace = tmp_path / "workspace-xyz"
+    workspace.mkdir()
+    proc = subprocess.run(
+        ["bash", str(BOOTSTRAP)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "OAW_HOME": str(home)},
+        cwd=str(workspace),
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    projects = _read_cfg(home).get("projects", {})
+    assert str(workspace) in projects, (
+        f"trust must be keyed on the agent's cwd; got {list(projects)}"
+    )
+    assert projects[str(workspace)]["hasTrustDialogAccepted"] is True
+
+
+def test_onboarding_state_is_idempotent(tmp_path: Path) -> None:
+    """bootstrap runs on EVERY claude invocation — it must not churn the config."""
+    home = _home_with_cfg(tmp_path)
+    assert _run(home).returncode == 0
+    first = (home / ".claude.json").read_text()
+    proc = _run(home)
+    assert proc.returncode == 0
+    assert (home / ".claude.json").read_text() == first, "second run rewrote the config"
+    assert "already present" in proc.stderr
+
+
+def test_auto_trust_is_opt_out_but_onboarding_still_clears(tmp_path: Path) -> None:
+    """Auto-trust declares a workspace trusted without asking; keep it reversible.
+
+    Opting out must NOT also re-arm the theme/login wizard — those are a separate
+    key, and conflating them would make the escape hatch unusable.
+    """
+    home = _home_with_cfg(tmp_path)
+    proc = _run(home, OAW_NO_AUTO_TRUST="1")
+    assert proc.returncode == 0, proc.stderr
+    cfg = _read_cfg(home)
+    assert cfg["hasCompletedOnboarding"] is True
+    assert cfg.get("projects", {}) == {}, "opt-out must record no trust"
+    assert "auto-trust disabled" in proc.stderr
+
+
+def test_existing_config_keys_survive(tmp_path: Path) -> None:
+    """~/.claude.json carries the baked MCP registrations — never clobber them."""
+    home = _home_with_cfg(tmp_path, '{"mcpServers": {"disc-server": {"x": 1}}}')
+    assert _run(home).returncode == 0
+    cfg = _read_cfg(home)
+    assert cfg["mcpServers"] == {"disc-server": {"x": 1}}, "MCP registrations lost"
+    assert cfg["hasCompletedOnboarding"] is True
+
+
+def test_unreadable_config_warns_and_does_not_abort_the_boot(tmp_path: Path) -> None:
+    """A corrupt config must not become 'no agent at all'.
+
+    The wrapper sources bootstrap, so aborting here means the container comes up
+    with nothing running. A wizard is bad; no agent is worse.
+    """
+    original = "{ not json ]"
+    home = _home_with_cfg(tmp_path, original)
+    proc = _run(home)
+    assert proc.returncode == 0, "a corrupt config must not fail the boot"
+
+    # BOTH halves must discriminate. The first cut asserted
+    #   "onboarding" in stderr and "WARN" in stderr
+    # which is true whenever bootstrap merely MENTIONS onboarding: "WARN" appears
+    # in every test in this file (_make_home defaults settings_local=None, so
+    # merge_settings always warns about the missing mount), and "onboarding" is
+    # satisfied by the SUCCESS path's info line. Verified: mutate the heredoc to
+    # swallow the parse error and clobber the config with {} — destroying the
+    # baked mcpServers registrations — and the old assertions still passed.
+    assert "WARN: onboarding" in proc.stderr, (
+        "the warning must be the onboarding one, not any warning at all"
+    )
+    assert (home / ".claude.json").read_text() == original, (
+        "a config bootstrap cannot PARSE must be left byte-identical, never "
+        "rewritten — this file carries the baked mcpServers registrations"
+    )
+
+
+def test_absent_config_warns_and_does_not_abort_the_boot(tmp_path: Path) -> None:
+    """No ~/.claude.json at all: warn, keep going.
+
+    Warn-only by design — the risk this covers is a future change turning it into
+    a `fatal`, which under the sourcing wrapper means no agent at all.
+    """
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    cfg = home / ".claude.json"
+    if cfg.exists():
+        cfg.unlink()
+    proc = _run(home)
+    assert proc.returncode == 0, "an absent config must not fail the boot"
+    assert "WARN: onboarding" in proc.stderr
+    assert not cfg.exists(), "bootstrap must not conjure a config it did not find"
