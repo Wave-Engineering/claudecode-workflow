@@ -110,7 +110,7 @@ container's host-backed transcript — no `docker exec`, no kit dependency, R-15
 
 ```bash
 python3 scripts/flight-surgeon/surgeon.py --live \
-  --transcripts-root ~/.claude/projects
+  --transcripts-root ~/.oaw/state/$OAW_MAJOR/transcripts
 ```
 
 It correlates transcript growth with aoe status: `running` + flat-for-N-minutes =

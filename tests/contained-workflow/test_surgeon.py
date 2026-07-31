@@ -221,8 +221,12 @@ def test_module_is_kit_independent() -> None:
     imports ONLY the Python standard library, so a broken container cannot shape
     the verdict."""
     tree = ast.parse(SURGEON_PY.read_text())
+    # An enumeration of the stdlib modules this file uses — NOT a policy
+    # narrowing. R-15's guarantee is "nothing from the container's KIT", so a
+    # genuinely-stdlib addition (os, for $OAW_MAJOR) preserves it exactly.
+    # Anything outside the standard library still fails, which is the point.
     stdlib = {
-        "argparse", "json", "subprocess", "sys", "dataclasses",
+        "argparse", "json", "os", "subprocess", "sys", "dataclasses",
         "datetime", "pathlib", "__future__",
     }
     imported: set[str] = set()
@@ -370,3 +374,81 @@ def test_surgeon_is_executable() -> None:
     assert SURGEON_PY.exists()
     assert os.access(SURGEON_PY, os.X_OK), "surgeon.py must be executable"
     assert SURGEON_PY.read_text().startswith("#!"), "surgeon.py needs a shebang"
+
+
+# --- transcripts-root provenance (#1064) --------------------------------------
+#
+# The seam these cover produced a CONFIDENT WRONG ANSWER, not a miss. Measured on
+# the development host 2026-07-30: with --transcripts-root ~/.claude/projects, a
+# container on the cc-workflow workspace resolved to the live NATIVE session's
+# transcript (19s stale). Wrong in both directions — healthy while natives run,
+# stalled the moment the big-bang cut-over stops them.
+
+
+def test_fleet_transcripts_root_is_refused() -> None:
+    """A root inside ~/.claude is the fleet's store, not a sandbox's."""
+    with pytest.raises(fs.FleetTranscriptRootError) as exc:
+        fs.assert_sandbox_transcripts_root(Path.home() / ".claude" / "projects")
+    msg = str(exc.value)
+    assert "live-fleet" in msg, "the refusal must say WHY, not just refuse"
+    assert "--allow-fleet-transcripts" in msg, "it must name the escape hatch"
+
+
+def test_fleet_transcripts_root_allowed_with_explicit_flag() -> None:
+    """Watching the fleet itself is legitimate — but must be asked for."""
+    fs.assert_sandbox_transcripts_root(
+        Path.home() / ".claude" / "projects", allow_fleet=True
+    )
+
+
+def test_sandbox_transcripts_root_is_accepted() -> None:
+    """The host-backed sandbox root (and a major-specific path under it) pass."""
+    fs.assert_sandbox_transcripts_root(Path.home() / ".oaw" / "state")
+    fs.assert_sandbox_transcripts_root(
+        Path.home() / ".oaw" / "state" / "7" / "transcripts"
+    )
+
+
+def test_default_transcripts_root_is_not_the_fleet_tree() -> None:
+    """The DEFAULT must be safe with no flags — the bare `--live` invocation in
+    this module's own docstring must not resolve fleet transcripts."""
+    fs.assert_sandbox_transcripts_root(
+        Path(fs.DEFAULT_TRANSCRIPTS_ROOT).expanduser()
+    )
+
+
+def test_gather_live_refuses_a_fleet_root(tmp_path) -> None:
+    """The guard is wired into the live path, not merely available.
+
+    A guard that exists but is never called is the defect this whole issue is
+    about, so assert the call site rather than the function.
+    """
+    class _Args:
+        transcripts_root = str(Path.home() / ".claude" / "projects")
+        allow_fleet_transcripts = False
+
+    with pytest.raises(fs.FleetTranscriptRootError):
+        fs._gather_live(_Args(), runner=lambda *a, **k: "")
+
+
+def test_refused_root_exits_2_without_a_traceback() -> None:
+    """The refusal must reach the operator as a MESSAGE, not a stack trace.
+
+    FleetTranscriptRootError began life as a bare RuntimeError, which is in none
+    of main()'s except branches — so the carefully-worded refusal arrived as the
+    tail of a traceback and the exit code was 1, breaking the documented contract
+    (0 normal / 2 usage / 3 quarantine). The in-process tests could not see this
+    because they never cross the CLI boundary.
+    """
+    proc = subprocess.run(
+        [sys.executable, str(SURGEON_PY), "--live",
+         "--transcripts-root", str(Path.home() / ".claude" / "projects")],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 2, (
+        f"a refused root is a usage error (exit 2), got {proc.returncode}"
+    )
+    assert "Traceback" not in proc.stderr, (
+        "the refusal must be a message, not a stack trace:\n" + proc.stderr
+    )
+    assert "live-fleet" in proc.stderr

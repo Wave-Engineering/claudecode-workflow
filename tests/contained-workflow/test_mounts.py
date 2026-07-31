@@ -277,3 +277,62 @@ def test_manifest_dir_exists() -> None:
     owned = {"10-memory.toml", "30-user-overlay.toml", "40-durable-caches.toml"}
     missing = owned - fragments
     assert not missing, f"missing Story 1.3 manifest fragments: {sorted(missing)}"
+
+
+# --- transcripts mount (#1064) -------------------------------------------------
+
+
+def _resolved(major: int = 7):
+    return mr.resolve_manifest(major, home=PurePosixPath("/home/bakerb"),
+                               mounts_dir=MANIFEST_DIR)
+
+
+def test_transcripts_mount_exists_and_is_sandbox_scoped() -> None:
+    """Without this, `docker rm` destroys the session AND the flight surgeon
+    reads a transcript that was never written (#1064)."""
+    t = [m for m in _resolved() if m.name == "transcripts"]
+    assert t, "no transcripts mount — sessions cannot survive container replacement"
+    m = t[0]
+    assert m.mode == "rw", "transcripts are written by the harness"
+    assert m.source == "/home/bakerb/.oaw/state/7/transcripts", (
+        f"transcripts must be sandbox-scoped under ~/.oaw/state/<major>/, got {m.source!r}"
+    )
+    assert m.target == "/home/ubuntu/.claude/projects"
+
+
+def test_transcripts_mount_never_points_at_the_live_fleet() -> None:
+    """R-03: a broken :edge candidate must not gain write access to the fleet's
+    ~/.claude. The resolver's own guard enforces this — assert it is ARMED for
+    this mount by planting the violation, not by trusting the declaration."""
+    import tomllib
+    frag = MANIFEST_DIR / "05-transcripts.toml"
+    entry = tomllib.load(frag.open("rb"))["mount"][0]
+    assert entry.get("sandbox_scoped") is True, (
+        "transcripts must set sandbox_scoped so check_sandbox_scoped_memory runs; "
+        "without it a future edit could point this at ~/.claude and pass"
+    )
+    with pytest.raises(mr.ManifestError, match="R-03"):
+        mr.check_sandbox_scoped_memory(
+            "/home/bakerb/.claude/projects", 7, PurePosixPath("/home/bakerb")
+        )
+
+
+def test_transcripts_mounts_before_memory_nests_inside_it() -> None:
+    """05-transcripts mounts `projects`; 10-memory nests `projects/_sandbox/memory`
+    inside it. Docker sorts binds by destination depth, but matching the lexical
+    fragment order makes the nesting intentional rather than dependent on that."""
+    order = [m.name for m in _resolved()]
+    assert order.index("transcripts") < order.index("memory"), (
+        "transcripts must resolve before memory — it is the parent directory"
+    )
+
+
+def test_memory_target_nests_inside_the_transcripts_target() -> None:
+    """The ordering test asserts list order; this asserts the INVARIANT that
+    ordering exists to protect — memory's target must actually be under the
+    transcripts target, or the nesting rationale is fiction."""
+    by_name = {m.name: m for m in _resolved()}
+    t, mem = by_name["transcripts"].target, by_name["memory"].target
+    assert mem.startswith(t.rstrip("/") + "/"), (
+        f"memory target {mem!r} is not nested under transcripts target {t!r}"
+    )

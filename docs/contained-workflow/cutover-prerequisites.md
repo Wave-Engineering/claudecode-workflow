@@ -48,7 +48,7 @@ gets worse.
 | `~/.claude/discord-bot.auth-failed` | One 401 deafens the whole fleet | Per agent | **Fixed for free** |
 | `~/.claude/discord-bot.kill` | Operator brake stops every watcher | Stops **one** container | **Silently degraded** |
 | Kit / skills (Cellar) | Edit once, every agent picks it up | Baked per image | **Changed workflow** |
-| Session transcripts | Survive on the host | Destroyed with the container | **Broken** — #1064 |
+| Session transcripts | Survive on the host | Host-backed mount | **Fixed by #1064** |
 | Secrets | Whole `~/.secrets` readable by all | Named files only, per container | **Fixed by #1061** |
 
 Two rows deserve emphasis because they cut in opposite directions.
@@ -114,6 +114,15 @@ success while checking nothing:
   satisfied by an incidental parenthetical elsewhere in the file, not by the
   exit-code contract it intended to protect.
 
+- **The flight surgeon** — read `--transcripts-root ~/.claude/projects`, the
+  *native fleet's* store, while sandbox transcripts were unmounted. It did not
+  fail closed: `_newest_transcript_for` returns the newest `.jsonl` matching the
+  workspace slug, so a container resolved to a live native session's transcript
+  (measured 2026-07-30, 19s stale). Wrong in both directions — healthy while
+  natives run, stalled once the big-bang stop makes those files go cold — and
+  the promotion gate consumes that verdict. Fixed in #1064; the root is now
+  sandbox-scoped and a fleet root is refused unless explicitly asked for.
+
 The shared lesson, and the rule this doc asks future work to follow:
 **an instrument that has only ever run against a passing case has not been
 tested.** Plant a failure, confirm the guard fires, then remove it. This applies
@@ -130,7 +139,7 @@ untouched defect, not faster repair.
 |---|---|---|
 | #1061 | Secrets: `.secrets` canonical, named single-file mounts, `.env` carries pointers | Hard blocker. Consumers read `~/secrets`; the mount is `~/.secrets`. Container #1 boots with no Discord at all. |
 | #1062 | Drop Slack | `slackbot-send` is the one non-MCP secret consumer, and unused. Removing it keeps #1061 to a single pointer mechanism with no exception. |
-| #1064 | Session durability | Transcripts are unmounted; any container replacement destroys the session. |
+| #1064 | Session durability | Transcripts were unmounted: any container replacement destroyed the session, AND the flight surgeon resolved the NATIVE fleet's transcripts — a confident verdict about the wrong process. |
 | #1063 | Image cadence | Not a correctness gate — a throughput one. ~17.5 min per merge, multiplied fleet-wide. |
 
 **What actually shipped, and why it changed mid-implementation.** The design

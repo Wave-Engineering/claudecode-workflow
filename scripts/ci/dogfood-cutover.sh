@@ -39,8 +39,9 @@
 #                       ~/.oaw/soak/ledger.jsonl). This script does not write it; the
 #                       soak-accrual bridge (scripts/ci/soak-accrual-bridge.sh, #1008)
 #                       does — run it periodically alongside this cutover.
-#   SURGEON_TRANSCRIPTS_ROOT  root the surgeon resolves host-backed transcripts
-#                       under (default ~/.claude/projects).
+#   SURGEON_TRANSCRIPTS_ROOT  root the surgeon resolves host-backed SANDBOX transcripts
+#                             (default ~/.oaw/state/$OAW_MAJOR/transcripts; must NOT
+#                             be ~/.claude/projects — that is the live fleet's store)
 #   DOGFOOD_CUTOVER_APPLY  "true" ⇒ actually launch (operator go); default false ⇒
 #                       plan only, launch nothing.
 
@@ -54,7 +55,13 @@ SURGEON_PY="$REPO_DIR/scripts/flight-surgeon/surgeon.py"
 EDGE_REF="${EDGE_REF:-ghcr.io/wave-engineering/oakandwave-workflow:edge}"
 OAW_MAJOR="${OAW_MAJOR:-1}"
 OAW_SOAK_LEDGER="${OAW_SOAK_LEDGER:-$HOME/.oaw/soak/ledger.jsonl}"
-SURGEON_TRANSCRIPTS_ROOT="${SURGEON_TRANSCRIPTS_ROOT:-$HOME/.claude/projects}"
+# Sandbox transcripts are host-backed under ~/.oaw/state/<major>/transcripts
+# (mounts.d/05-transcripts.toml). This USED to default to $HOME/.claude/projects
+# — the live fleet's own store — which does not merely miss: the surgeon resolves
+# the newest .jsonl matching the workspace slug, so a container picked up a NATIVE
+# session's transcript and was classified on it (#1064). The major is known here,
+# so pass the exact root rather than the module's wider default.
+SURGEON_TRANSCRIPTS_ROOT="${SURGEON_TRANSCRIPTS_ROOT:-$HOME/.oaw/state/$OAW_MAJOR/transcripts}"
 APPLY="${DOGFOOD_CUTOVER_APPLY:-false}"
 
 # --- Fail-closed on a red config ----------------------------------------------

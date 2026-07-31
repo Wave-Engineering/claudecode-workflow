@@ -66,7 +66,7 @@ CLI::
 
     # accrue soak from the current live :edge dogfood ring
     python3 soak_accrual_bridge.py --ledger ~/.oaw/soak/ledger.jsonl \\
-        --transcripts-root ~/.claude/projects
+        --transcripts-root ~/.oaw/state/$OAW_MAJOR/transcripts
 
     # preview what WOULD accrue, writing nothing
     python3 soak_accrual_bridge.py --dry-run
@@ -110,7 +110,12 @@ sys.path.insert(0, str(SURGEON_PY.parent))
 import surgeon as sg  # noqa: E402
 
 DEFAULT_LEDGER = "~/.oaw/soak/ledger.jsonl"
-DEFAULT_TRANSCRIPTS_ROOT = "~/.claude/projects"
+# Mirror the surgeon's own default rather than re-spelling it. Spelling it
+# independently is what let this drift: the surgeon moved off ~/.claude/projects
+# (#1064) and now REFUSES that root, so a stale default here made the whole
+# accrual loop exit non-zero and accrue ZERO soak — :edge could never promote,
+# which is exactly what #1008 exists to prevent.
+DEFAULT_TRANSCRIPTS_ROOT = sg.DEFAULT_TRANSCRIPTS_ROOT
 
 # The bounded per-pass look-back (hours). Each pass credits at most this much time,
 # ending at the ``now`` it just health-verified — so a point-in-time "clean now"

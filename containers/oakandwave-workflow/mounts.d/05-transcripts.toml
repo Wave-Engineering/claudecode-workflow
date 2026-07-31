@@ -1,0 +1,70 @@
+# 05-transcripts.toml — host-backed session transcripts (#1064, R-01/R-03/R-20).
+#
+# WHY THIS EXISTS. Without it the container's `~/.claude/projects/<slug>/*.jsonl`
+# lives in the container filesystem, so `docker rm` destroys it. Two things break,
+# and the second is the dangerous one:
+#
+#   1. `--resume` is impossible in a replacement container. Any replacement —
+#      crash, OOM, host reboot, image bump, a skill update — loses the session.
+#      Skill updates are merely the most frequent trigger, not the only one.
+#
+#   2. The FLIGHT SURGEON reads a transcript that was never there. It is
+#      documented as reading "the container's host-backed .jsonl transcript
+#      directly ... without depending on the container's kit" — that independence
+#      is the whole point of a host-side probe — and resolves under
+#      `--transcripts-root ~/.claude/projects`. With no mount, that root holds the
+#      NATIVE fleet's transcripts, and `_newest_transcript_for()` returns the
+#      newest file matching the workspace slug. Measured 2026-07-30: for a
+#      container on this repo it resolved to the live native session's own
+#      transcript, 19s stale.
+#
+#      So the seam does not fail closed — it hands the classifier a confident
+#      answer about the wrong process, wrong in BOTH directions depending on
+#      timing. Natives still running: their transcripts are fresh, every container
+#      reads healthy, quarantine never fires. Natives stopped (the big-bang
+#      cut-over): host transcripts go stale at once, running containers read
+#      stalled, healthy candidates get false-quarantined. The promotion gate
+#      consumes `should_quarantine` either way.
+#
+# THIS MOUNT IS HALF THE FIX. The surgeon and dogfood-cutover.sh must also point
+# at this sandbox root instead of ~/.claude/projects — otherwise the mount ships
+# and the probe keeps resolving fleet transcripts. See #1064.
+#
+# ORDERING. This fragment is numbered BEFORE 10-memory.toml deliberately: it
+# mounts the whole `projects` dir, and 10-memory nests `projects/_sandbox/memory`
+# inside it. Docker sorts binds by destination depth so parents land first, but
+# matching the lexical fragment order makes the nesting intentional rather than
+# dependent on that behaviour.
+#
+# LIMITATION — this mount does NOT make resolution 1:1. The source carries no
+# session or container token, so every container of a given major writes into one
+# shared host directory, and `_newest_transcript_for` keys only on the WORKSPACE
+# path. Two live sessions on the same repo — a dogfood and a dev-mode container is
+# an explicitly supported pair (R-22), and this fleet routinely runs several agents
+# per repo — both resolve to whichever file has the newest mtime. One stalled agent
+# and one healthy agent on the same workspace get the healthy agent's verdict.
+#
+# That is the same "confident verdict about the wrong process" this fragment fixes,
+# relocated from native-vs-container to container-vs-container. The resolver was
+# always 1:many; this mount is what makes the collision reachable. Closing it needs
+# resolution keyed on the session/container id (or a per-session mount source) —
+# tracked, not solved here. Do not read this fragment as closing the seam entirely.
+#
+# SIDE EFFECT: because `projects` is a bind mount, Docker materialises the nested
+# `_sandbox/memory` mountpoint INSIDE the host transcripts dir, so expect a
+# `~/.oaw/state/<major>/transcripts/_sandbox/` to appear. Harmless — it holds no
+# `.jsonl`, so rglob ignores it.
+#
+# R-03 still holds. `sandbox_scoped = true`, so mount_resolver's
+# check_sandbox_scoped_memory refuses any source outside ~/.oaw/state/<major>/ —
+# a broken :edge candidate must never gain write access to the live fleet's
+# ~/.claude/projects. Transcripts are session LOGS, not durable knowledge, so a
+# sandbox-scoped path preserves the isolation intent while making resume work.
+
+[[mount]]
+name = "transcripts"
+layer = "shared-mutable-rw"
+mode = "rw"
+sandbox_scoped = true
+source = "~/.oaw/state/<major>/transcripts"
+target = "/home/ubuntu/.claude/projects"
