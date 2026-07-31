@@ -51,6 +51,13 @@
 #                                   `#` comments allowed
 #                                   (default: $OAW_SECRETS_DIR/required.manifest)
 #   OAW_REQUIRED_ENV                whitespace-separated required env vars (default: HOME)
+#   OAW_NO_AUTO_TRUST               set to ANY non-empty value to skip recording
+#                                   the workspace as trusted (#1079). Onboarding
+#                                   state is still cleared; only the per-project
+#                                   trust entry is withheld, so the CLI shows its
+#                                   trust dialog. Note `=0` and `=false` also
+#                                   disable it — non-empty is the test, matching
+#                                   OAW_SKIP_BOOTSTRAP in claude-entrypoint.sh.
 
 set -euo pipefail
 
@@ -368,6 +375,122 @@ validate_secrets() {
 	return 0
 }
 
+# --- Onboarding state (#1079) -------------------------------------------------
+#
+# WHY THIS RUNS AT BOOT RATHER THAN BEING BAKED. A fresh container reaches an
+# agent that is authenticated but still parked on the first-run wizard, which for
+# an unattended agent is the same outcome as no agent at all. Two keys clear it,
+# derived empirically against the real image rather than guessed (each config was
+# run repeatedly, because single runs proved non-deterministic):
+#
+#   hasCompletedOnboarding + trust(cwd)  -> reaches the prompt   (3/3)
+#   hasCompletedOnboarding alone         -> trust dialog         (2/2)
+#   theme + trust, no hasCompletedOnboarding -> theme picker
+#
+# Two findings shaped this, and both contradict the obvious guess:
+#   * `theme` is NOT required — hasCompletedOnboarding covers the theme step.
+#     Neither is `lastOnboardingVersion`, which is fortunate: baking a version
+#     string would drift on every base-image CLI bump.
+#   * trust is PER-PROJECT and path-sensitive. Trust recorded for /home/ubuntu
+#     while the agent runs in /workspace still shows the dialog, so this cannot
+#     be baked into the image — the sandbox path varies per session.
+#
+# `$PWD` is the right key precisely because the wrapper SOURCES this script in
+# the agent's own process, so our cwd is the agent's cwd.
+#
+# `--dangerously-skip-permissions` does NOT bypass the wizard (measured), so the
+# agent's own flags cannot be relied on here.
+ensure_onboarding_state() {
+	local cfg="$OAW_HOME/.claude.json"
+
+	if [[ ! -f "$cfg" ]]; then
+		warn "onboarding: no $cfg — the agent will run the first-run wizard and never reach a prompt"
+		return 0
+	fi
+	if ! command -v python3 >/dev/null 2>&1; then
+		warn "onboarding: python3 unavailable — cannot ensure onboarding state; expect the first-run wizard"
+		return 0
+	fi
+
+	# Auto-trust is a real decision, not a formality: it declares the workspace
+	# trusted without asking. It is correct HERE because the OPERATOR chose this
+	# mount when launching the sandbox — that is the whole of the argument.
+	#
+	# It is NOT justified by the agent already running
+	# --dangerously-skip-permissions, which an earlier version of this comment
+	# claimed. Those gate different things: skip-permissions removes tool-use
+	# approval, while folder trust governs whether the workspace's OWN
+	# project-scoped config (.mcp.json, project hooks, project settings.json) is
+	# loaded and executed. Auto-trust therefore ADDS unprompted execution of
+	# repo-supplied config; it is not subsumed by a flag the agent already carries.
+	# Same call either way for a mount the operator picked, but do not reason from
+	# the flag.
+	local trust=1
+	[[ -n "${OAW_NO_AUTO_TRUST:-}" ]] && trust=0
+
+	local out
+	if ! out="$(
+		OAW_CFG="$cfg" OAW_TRUST="$trust" python3 - <<-'PY' 2>&1
+			import fcntl, json, os
+
+			cfg, trust = os.environ["OAW_CFG"], os.environ["OAW_TRUST"] == "1"
+			# getcwd(), not $PWD: bash keeps the LOGICAL cwd, so if any ancestor
+			# exported a PWD traversing a symlink they disagree. Claude Code keys
+			# `projects` off the process cwd, so a logical path would file the trust
+			# entry under a key it never looks up — reproducing the very dialog this
+			# clears. This process already has the agent's cwd.
+			ws = os.getcwd()
+
+			try:
+			    # r+ and hold an exclusive lock across the whole read-modify-write.
+			    # bootstrap runs on EVERY `claude` invocation (it is the agent's
+			    # wrapper), so two can interleave — the same race that put -f on the
+			    # skills ln above. Unlocked, the lost update IS the bug being fixed:
+			    # A reads, B reads, A writes trust[a], B writes without it, and agent
+			    # A then parks on the trust dialog forever.
+			    with open(cfg, "r+") as fh:
+			        fcntl.flock(fh, fcntl.LOCK_EX)
+			        d = json.load(fh)
+
+			        changed = []
+			        if d.get("hasCompletedOnboarding") is not True:
+			            d["hasCompletedOnboarding"] = True
+			            changed.append("hasCompletedOnboarding")
+
+			        if trust and ws:
+			            entry = d.setdefault("projects", {}).setdefault(ws, {})
+			            if entry.get("hasTrustDialogAccepted") is not True:
+			                entry["hasTrustDialogAccepted"] = True
+			                changed.append(f"trust[{ws}]")
+
+			        if changed:
+			            # Serialize FULLY before touching the file: `open(...,"w")`
+			            # truncates at open and json.dump streams, leaving a
+			            # transient zero-length window in which a container stop or
+			            # ENOSPC destroys the baked mcpServers registrations.
+			            data = json.dumps(d, indent=2)
+			            fh.seek(0)
+			            fh.write(data)
+			            fh.truncate()
+			except Exception as exc:
+			    print(f"unusable: {exc}")
+			    raise SystemExit(1)
+
+			print(",".join(changed) if changed else "already-set")
+		PY
+	)"; then
+		warn "onboarding: could not update $cfg ($out) — expect the first-run wizard"
+		return 0
+	fi
+
+	if [[ "$out" == "already-set" ]]; then
+		info "onboarding: state already present (no wizard)"
+	else
+		info "onboarding: set $out"
+	fi
+	((trust)) || info "onboarding: auto-trust disabled (OAW_NO_AUTO_TRUST) — the trust dialog WILL appear"
+}
+
 # --- Main ---------------------------------------------------------------------
 
 main() {
@@ -376,6 +499,7 @@ main() {
 	sync_skills
 	merge_settings
 	validate_secrets
+	ensure_onboarding_state
 
 	# >&2 like every other line here. This was the ONE line on stdout, which was
 	# harmless while bootstrap was a separate process — but the wrapper SOURCES it

@@ -324,11 +324,74 @@ AUTH_OK
 with nothing else on stdout, the agent process showing as `claude-real` (proof the
 wrapper ran), and `CLAUDE_CODE_OAUTH_TOKEN` present in `/proc/<agent>/environ`.
 
-**Not solved here (#1079).** Authentication works; reaching an *interactive*
-prompt does not. A fresh container still walks the first-run onboarding wizard
-(theme → login menu → trust folder) because the image ships no onboarding state.
-That is provably not a credential problem — the token returns HTTP 200 and
-headless runs succeed — and setting the obvious flags does **not** clear it.
+### 3.7 First-run onboarding state (#1079)
+
+Authentication alone does not get an agent to a prompt. A container that has
+never run the CLI walks the first-run wizard — theme → login menu → trust folder
+— and an agent parked on a wizard is operationally identical to one parked on a
+login menu: it looks idle forever.
+
+**The contract is exactly two keys in `~/.claude.json`**, derived empirically
+against the real image rather than guessed. Each candidate was run repeatedly,
+because single runs proved non-deterministic and one early conclusion was drawn
+from a container that still carried a previous probe's mutations:
+
+| config | outcome |
+|---|---|
+| `hasCompletedOnboarding` + trust for cwd | **reaches the prompt** (3/3) |
+| `hasCompletedOnboarding` alone | trust dialog (2/2) |
+| `theme` + trust, no `hasCompletedOnboarding` | theme picker |
+
+Two results are worth stating because they contradict the obvious guess:
+
+- **`theme` is not part of the contract.** `hasCompletedOnboarding` covers the
+  theme step. Neither is `lastOnboardingVersion` — which is fortunate, since
+  baking a version string would drift on every base-image CLI bump.
+- **`--dangerously-skip-permissions` does not bypass the wizard** (measured), so
+  the agent's own flags cannot be relied on to clear it.
+
+**Why bootstrap does this at boot rather than the image baking it.** Trust is
+recorded **per project**, keyed on the working directory — trust for
+`/home/ubuntu` while the agent runs in `/workspace/<name>` still shows the
+dialog. The sandbox path varies per session, so there is no build-time value to
+bake. `bootstrap.sh` uses its own `$PWD`, which is the agent's cwd precisely
+because the wrapper **sources** it in the agent's process (§3.6).
+
+The write merges rather than replaces — the same file carries the baked MCP
+registrations — under an exclusive `flock` held across the whole
+read-modify-write, and it serialises the JSON *fully* before touching the file.
+Both matter because bootstrap now runs on **every** `claude` invocation: unlocked,
+two interleaved runs lose an update, and the lost update is precisely this bug
+(A reads, B reads, A writes `trust[a]`, B writes without it, agent A parks on the
+dialog forever). `open(..., "w")` would truncate at open and stream, leaving a
+window in which an interrupted write destroys the MCP registrations.
+
+It writes **in place** (same inode) rather than write-then-rename. Note the
+reason: it preserves ownership and mode, which protects an `ubuntu`-owned file
+when bootstrap runs as root. It is *not* because this file might become a bind
+mount — `mount_resolver.py` explicitly **rejects** any mount whose source
+basename is `.claude.json`, and `test_mounts.py` locks that in, so the
+bind-mount rationale (given in an earlier draft of this section) is void. The
+distinction matters to whoever is next tempted to "simplify" the write.
+
+**Auto-trust is a real decision, and it stays reversible.** It is correct here
+for exactly one reason: **the operator chose this mount** when launching the
+sandbox. `OAW_NO_AUTO_TRUST=1` restores the prompt, and that opt-out clears
+onboarding **without** granting trust, so it is usable rather than all-or-nothing.
+
+It is **not** justified by the agent already running
+`--dangerously-skip-permissions`, which an earlier draft claimed. Those gate
+different things: skip-permissions removes tool-use approval, whereas folder
+trust governs whether the workspace's *own* project-scoped config — `.mcp.json`,
+project hooks, project `settings.json` — is loaded and executed. Auto-trust
+therefore **adds** unprompted execution of repo-supplied config rather than being
+subsumed by a flag the agent already carries. Same call either way for an
+operator-chosen mount, but do not reason from the flag.
+
+Verified behaviourally on the built image: a fresh container with no manual
+config, in an arbitrary workspace path, reaches a prompt 3/3; setting
+`OAW_NO_AUTO_TRUST=1` brings the trust dialog back, which is the positive control
+proving the mechanism is doing the work.
 
 ## 4. Boundaries and invariants
 
