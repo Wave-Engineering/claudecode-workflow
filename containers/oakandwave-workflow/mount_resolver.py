@@ -354,7 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--home", default=None, help="override $HOME (test/dry-run)")
     parser.add_argument(
         "--format",
-        choices=("docker", "aoe", "json"),
+        choices=("docker", "aoe", "aoe-toml", "json"),
         default="docker",
         help="output shape (default: docker -v args)",
     )
@@ -391,6 +391,18 @@ def main(argv: list[str] | None = None) -> int:
     elif args.format == "aoe":
         for m in resolved:
             print(m.to_aoe_extra_volume())
+    elif args.format == "aoe-toml":
+        # Paste-ready. `aoe` emits bare lines that a human then has to wrap in TOML
+        # by hand — and that hand-copy is precisely what #1069 exists to catch, so
+        # making the REMEDY a hand-copy would leave the loop open.
+        print("# Generated: mount_resolver.py --format aoe-toml")
+        print("# Paste into the AoE profile's config.toml under [sandbox].")
+        print("# mounts.d/ is the source of truth; verify with")
+        print("#   scripts/ci/check-mount-drift.sh <profile>")
+        print("extra_volumes = [")
+        for m in resolved:
+            print(f'    "{m.to_aoe_extra_volume()}",')
+        print("]")
     else:  # docker
         for m in resolved:
             print(f"-v {m.to_docker_volume()}")

@@ -88,6 +88,16 @@ image-only — the profile the gate trusts, R-21) with the flight surgeon watchi
 Clean work accrues soak **automatically**: the soak-accrual bridge (`scripts/ci/soak-accrual-bridge.sh`, #1008) drives the flight surgeon over the live ring and feeds each running dogfood session's clean span to `soak_ledger`, so the promotion gate's `SOAK_HOURS` fills over time (run it periodically / from a cron during the cutover). A broken candidate is caught and held.
 
 ```bash
+# 0) The profile must carry the declared mounts. mounts.d/ is the source of truth,
+#    but AoE only applies what extra_volumes lists — a profile missing them comes up
+#    with no memory, no secrets and cold caches, silently (#1069). Generate + verify:
+#      python3 containers/oakandwave-workflow/mount_resolver.py \
+#          --major "$(scripts/ci/oaw-major.sh)" --format aoe-toml   # paste-ready
+#      scripts/ci/check-mount-drift.sh dogfood
+#    The cutover runs this itself: ADVISORY on plan, FATAL before a real launch.
+#    CUTOVER_CHECK_PROFILES names the profiles to check ("dogfood" by default);
+#    set it EMPTY to skip. AOE_PROFILE_ROOT relocates the profile dir (test seam).
+
 # 1) PLAN (default): prints the exact `aoe add` line per workspace + the surgeon
 #    watch command, launches NOTHING.
 EDGE_REF=oakandwave-workflow:edge \

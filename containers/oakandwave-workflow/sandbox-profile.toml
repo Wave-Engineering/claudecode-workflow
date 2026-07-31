@@ -54,3 +54,27 @@ container_runtime = "docker"
 uid = 1000
 user = "ubuntu"
 home_dir = "/home/ubuntu"
+
+# --- extra_volumes: REQUIRED, and NOT shipped here (#1069) --------------------
+#
+# This template deliberately carries no extra_volumes. The value is host-specific
+# (absolute paths, and the kit <major>), so a literal here would be wrong on every
+# machine but the one it was written on.
+#
+# It is also the single most important key in this file. mounts.d/ declares the
+# container's mounts, but AoE only applies what extra_volumes lists — so a profile
+# installed from this template as-is has NO memory, NO secrets and cold caches, and
+# nothing anywhere reports it. That silent [0 items] state is the whole reason
+# #1069 exists.
+#
+# Generate the block (paste-ready, already TOML):
+#
+#   python3 containers/oakandwave-workflow/mount_resolver.py \
+#       --major "$(scripts/ci/oaw-major.sh)" --format aoe-toml
+#
+# Then verify the profile against the manifest — do not trust the paste:
+#
+#   scripts/ci/check-mount-drift.sh <profile-name>
+#
+# dogfood-cutover.sh runs that check itself: advisory on the plan path, FATAL
+# before a real launch.
