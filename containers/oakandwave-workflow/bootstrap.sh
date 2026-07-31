@@ -95,6 +95,38 @@ OAW_SETTINGS_LOCAL="${OAW_SETTINGS_LOCAL:-$OAW_HOME/.claude/settings.local.json}
 OAW_SECRETS_DIR="${OAW_SECRETS_DIR:-$OAW_HOME/.secrets}"
 OAW_REQUIRED_SECRETS_MANIFEST="${OAW_REQUIRED_SECRETS_MANIFEST:-$OAW_SECRETS_DIR/required.manifest}"
 
+# --- The CLI's config location (#1085) ----------------------------------------
+#
+# THE AGENT DOES NOT NECESSARILY READ $HOME. aoe sets CLAUDE_CONFIG_DIR=/root/.claude
+# and mounts its own config there, so everything bootstrap wrote to
+# $OAW_HOME/.claude.json was landing in a file the CLI never opened. That single
+# mistake produced five separate symptoms in production: a Settings Error panel,
+# zero MCP servers, the onboarding wizard returning every launch, a trust prompt
+# per workspace, and a "401 token has been revoked" for a token that was valid.
+#
+# It survived three rounds of verification because every one of them used
+# `docker run` with the profile's volumes. Only `aoe` injects CLAUDE_CONFIG_DIR,
+# so the harness could not see the bug — the test was the wrong SHAPE, not the
+# config. Resolve it here, once, and let every consumer use it.
+OAW_CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$OAW_HOME/.claude}"
+# The config FILE does not simply live under the config DIR in both cases, and
+# assuming it does silently relocates the native (non-aoe) config:
+#   CLAUDE_CONFIG_DIR set   -> $CLAUDE_CONFIG_DIR/.claude.json   (verified live)
+#   unset                   -> $HOME/.claude.json                (home ROOT, not
+#                              $HOME/.claude/.claude.json)
+# The first cut collapsed these into one expression and broke every non-aoe path;
+# the pre-existing #1079 tests caught it immediately.
+if [[ -n "${CLAUDE_CONFIG_DIR:-}" ]]; then
+	OAW_CLAUDE_CONFIG_FILE="$CLAUDE_CONFIG_DIR/.claude.json"
+else
+	OAW_CLAUDE_CONFIG_FILE="$OAW_HOME/.claude.json"
+fi
+# The pre-aoe location, still the image's own baked copy: it is where `./install`
+# registers the kit's MCP servers at BUILD time, so it is the SOURCE we merge
+# FROM when the CLI reads somewhere else.
+OAW_IMAGE_CONFIG_FILE="$OAW_HOME/.claude.json"
+OAW_EFFECTIVE_SETTINGS="$OAW_CLAUDE_CONFIG_DIR/settings.json"
+
 # --- Stage 1: env validation --------------------------------------------------
 
 validate_env() {
@@ -394,6 +426,236 @@ validate_secrets() {
 	return 0
 }
 
+# --- Stored credential vs mounted token (#1085) -------------------------------
+#
+# Claude Code PREFERS a stored $CLAUDE_CONFIG_DIR/.credentials.json over
+# CLAUDE_CODE_OAUTH_TOKEN. Under aoe that store is the operator's shared sandbox
+# credential — which is exactly what they want (one login serves every agent, so a
+# rate-limit rotation costs one login instead of one per agent) — but it goes
+# stale, and when it does the agent reports:
+#
+#   API Error: 401 OAuth access token has been revoked.
+#
+# That message names the wrong credential. Observed in production against a
+# mounted token that returned HTTP 200 at that very moment; the actual culprit was
+# a .credentials.json ten days old. The operator has no way to tell those apart.
+#
+# We do NOT delete or override it — that would break the shared-login workflow.
+# We make it VISIBLE, so "revoked" has a file next to it.
+report_stored_credential() {
+	local cred="$OAW_CLAUDE_CONFIG_DIR/.credentials.json"
+	local have_token=0
+	[[ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]] && have_token=1
+
+	if [[ -f "$cred" ]]; then
+		local age="unknown"
+		if command -v stat >/dev/null 2>&1; then
+			age="$(stat -c %y "$cred" 2>/dev/null | cut -d. -f1)"
+		fi
+		info "auth: stored credential present ($cred, modified $age)"
+		info "  This OUTRANKS \$CLAUDE_CODE_OAUTH_TOKEN. If the agent reports 401"
+		info "  'token has been revoked', suspect THIS FILE before the mounted token —"
+		info "  it is shared across containers and goes stale independently (#1085)."
+	elif ((have_token)); then
+		info "auth: no stored credential — the mounted token will be used"
+	else
+		warn "auth: no stored credential AND no \$CLAUDE_CODE_OAUTH_TOKEN — the agent will prompt to log in"
+	fi
+}
+
+# --- Kit registrations into the CLI's own config (#1085) ----------------------
+#
+# `./install` registers the kit's five MCP servers at BUILD time, into the image's
+# $HOME/.claude.json. Under aoe the CLI reads $CLAUDE_CONFIG_DIR/.claude.json
+# instead, which is aoe's mounted host config — so a production container had
+# `mcpServers: []` and not one kit MCP available, while the image's own copy sat
+# there fully populated and unread.
+#
+# ADDITIVE, never clobbering: the CLI's config is SHARED across every container
+# (that is deliberate — one login serves the whole fleet, which matters because a
+# rate-limit rotation otherwise costs one interactive login per agent), so it also
+# carries the operator's own servers. We add what is missing and touch nothing else.
+sync_kit_registrations() {
+	# Same file: `./install` already wrote there, nothing to do.
+	if [[ "$OAW_CLAUDE_CONFIG_FILE" == "$OAW_IMAGE_CONFIG_FILE" ]]; then
+		info "mcp: CLI config is the image config — registrations already in place"
+		return 0
+	fi
+	if [[ ! -f "$OAW_IMAGE_CONFIG_FILE" ]]; then
+		warn "mcp: no image config at $OAW_IMAGE_CONFIG_FILE — cannot source kit registrations"
+		return 0
+	fi
+	# CREATE it rather than bail. Warning-and-returning here reproduces the exact
+	# production state: the CLI then makes the file itself, empty — zero MCP
+	# servers, wizard, trust prompt. A fresh host or a new aoe profile hits this,
+	# because .claude.json conventionally lives at $HOME root, so a config dir
+	# seeded from ~/.claude will not contain one.
+	if [[ ! -f "$OAW_CLAUDE_CONFIG_FILE" ]]; then
+		if mkdir -p "$OAW_CLAUDE_CONFIG_DIR" 2>/dev/null && printf '{}\n' >"$OAW_CLAUDE_CONFIG_FILE" 2>/dev/null; then
+			info "mcp: created empty CLI config at $OAW_CLAUDE_CONFIG_FILE"
+		else
+			warn "mcp: CLI config $OAW_CLAUDE_CONFIG_FILE absent and not creatable — kit MCP servers will be unavailable"
+			return 0
+		fi
+	fi
+	command -v python3 >/dev/null 2>&1 || {
+		warn "mcp: python3 unavailable — cannot merge kit registrations"
+		return 0
+	}
+
+	local out
+	if ! out="$(
+		OAW_SRC="$OAW_IMAGE_CONFIG_FILE" OAW_DST="$OAW_CLAUDE_CONFIG_FILE" python3 - <<-'PY' 2>&1
+			import fcntl, json, os
+
+			src, dst = os.environ["OAW_SRC"], os.environ["OAW_DST"]
+			with open(src) as fh:
+			    want = json.load(fh).get("mcpServers", {})
+			if not want:
+			    print("no-kit-servers")
+			    raise SystemExit(0)
+
+			# Locked read-modify-write: this file is shared by every container on the
+			# host, so two agents starting together WILL interleave here.
+			with open(dst, "r+") as fh:
+			    fcntl.flock(fh, fcntl.LOCK_EX)
+			    d = json.load(fh)
+			    d_before = json.loads(json.dumps(d))  # pre-image for the recovery copy
+			    have = d.setdefault("mcpServers", {})
+			    added = [k for k in want if k not in have]
+			    for k in added:
+			        have[k] = want[k]
+			    if added:
+			        # RECOVERY COPY before mutating. Review suggested tmp+os.replace for
+			        # crash-atomicity; rejected on a fact it did not have: aoe mounts this
+			        # file TWICE — via the directory bind (/root/.claude) AND as a file
+			        # bind (/root/.claude.json). A rename mints a new inode, so the
+			        # file-bind path would keep resolving to the OLD one and the two views
+			        # would silently diverge. In-place keeps them one file.
+			        # Residual risk is a torn write (kill/ENOSPC between write and
+			        # truncate) leaving invalid JSON in a config shared by EVERY container,
+			        # so leave a recoverable copy first.
+			        try:
+			            with open(dst + ".pre-bootstrap", "w") as bak:
+			                bak.write(json.dumps(d_before, indent=2))
+			        except Exception:
+			            pass
+			        data = json.dumps(d, indent=2)
+			        fh.seek(0)
+			        fh.write(data)
+			        fh.truncate()
+			print(",".join(added) if added else "already-present")
+		PY
+	)"; then
+		warn "mcp: could not merge kit registrations into $OAW_CLAUDE_CONFIG_FILE ($out)"
+		return 0
+	fi
+	case "$out" in
+	already-present) info "mcp: kit registrations already present in $OAW_CLAUDE_CONFIG_FILE" ;;
+	no-kit-servers) warn "mcp: image config declares no MCP servers — nothing to merge" ;;
+	*) info "mcp: registered into the CLI's config: $out" ;;
+	esac
+}
+
+# --- Hook paths must resolve INSIDE the container (#1085) ---------------------
+#
+# The CLI reads $CLAUDE_CONFIG_DIR/settings.json — under aoe that is the
+# OPERATOR'S HOST settings, carrying host absolute paths. Observed in production:
+#
+#   PostToolUse:Bash hook error
+#   /bin/sh: 1: /home/bakerb/.local/share/wtf-server/hooks/wtf-post-tool-use.sh: not found
+#
+# `/home/bakerb` does not exist in the container. This is a CATEGORY error, not a
+# preference conflict: a host path cannot resolve in a different filesystem
+# namespace. The image's baked settings had the correct /home/ubuntu path all along
+# and were simply not the file being read.
+#
+# We do NOT blanket-rewrite $HOME prefixes. Measured on the operator's host, only
+# 1 of 4 host paths was a hook; the rest were workspace references that do not map
+# (containers mount workspaces at /workspace/<name>), so rewriting them would
+# manufacture plausible-looking paths that do not exist — worse than leaving them
+# visibly wrong.
+#
+# Instead: VERIFY. Every configured hook command that names an absolute path must
+# resolve here, and any that does not is reported AT BOOT rather than at first tool
+# use. wtf failed loudly only because its target was absent; a hook whose path
+# exists in both namespaces would run the wrong thing silently.
+validate_hook_paths() {
+	[[ -f "$OAW_EFFECTIVE_SETTINGS" ]] || return 0
+	command -v python3 >/dev/null 2>&1 || return 0
+
+	local out
+	out="$(
+		OAW_SETTINGS="$OAW_EFFECTIVE_SETTINGS" python3 - <<-'PY' 2>&1 || true
+			import json, os, re
+
+			p = os.environ["OAW_SETTINGS"]
+			try:
+			    with open(p) as fh:
+			        d = json.load(fh)
+			except Exception as exc:
+			    print(f"__ERR__ {exc}")
+			    raise SystemExit(0)
+
+			# Absolute paths appearing in hook commands. Anything relative resolves via
+			# PATH and is not ours to judge.
+			bad = []
+			# EXPAND, do not skip. The first cut used a lookbehind to drop anything
+			# preceded by $ or ~ — which killed 13 phantom paths (matching the slash
+			# AFTER $HOME) but also made every tilde/$HOME hook unjudgeable. That is not
+			# a corner case: every hook in config/settings.template.json is ~/-prefixed,
+			# including ~/.local/share/wtf-server/hooks/wtf-post-tool-use.sh, which the
+			# image build WHITELISTS as deliberately absent. So the validator would have
+			# gone silent on the exact failure that motivated it.
+			#
+			# Expanding gets both: $HOME/x.sh resolves to a real path (no phantom), and a
+			# ~/-prefixed hook that is genuinely missing is still reported.
+			#
+			# Scan `command` VALUES only — scanning the whole JSON blob also reads
+			# `_comment` fields, where a path mentioned in prose becomes a phantom.
+			cmds = []
+
+			def collect(node):
+			    if isinstance(node, dict):
+			        for k, v in node.items():
+			            if k == "command" and isinstance(v, str):
+			                cmds.append(v)
+			            else:
+			                collect(v)
+			    elif isinstance(node, list):
+			        for i in node:
+			            collect(i)
+
+			collect(d.get("hooks", {}))
+
+			bad = []
+			for cmd in cmds:
+			    m = re.match(r"\s*([~$]?[\w{}/.\-]*/[^\s;|&]+)", cmd)
+			    if not m:
+			        continue
+			    cand = os.path.expanduser(os.path.expandvars(m.group(1)))
+			    if not cand.startswith("/"):
+			        continue
+			    if not os.path.exists(cand):
+			        bad.append(cand)
+			print("\n".join(sorted(set(bad))))
+		PY
+	)"
+	[[ -z "$out" ]] && return 0
+	if [[ "$out" == __ERR__* ]]; then
+		warn "hooks: could not parse $OAW_EFFECTIVE_SETTINGS (${out#__ERR__ })"
+		return 0
+	fi
+	local line
+	while IFS= read -r line; do
+		[[ -n "$line" ]] || continue
+		warn "hooks: configured hook does not exist in this container: $line"
+	done <<<"$out"
+	warn "  These come from \$CLAUDE_CONFIG_DIR/settings.json, which under aoe is the"
+	warn "  HOST's settings — host absolute paths cannot resolve here (#1085). The hook"
+	warn "  will fail at first use; fixing the path at the source is the durable answer."
+}
+
 # --- GitHub credential (#1082) ------------------------------------------------
 #
 # Without this a containerised agent reaches a prompt, authenticates to Anthropic,
@@ -533,7 +795,7 @@ ensure_github_auth() {
 # `--dangerously-skip-permissions` does NOT bypass the wizard (measured), so the
 # agent's own flags cannot be relied on here.
 ensure_onboarding_state() {
-	local cfg="$OAW_HOME/.claude.json"
+	local cfg="$OAW_CLAUDE_CONFIG_FILE"
 
 	if [[ ! -f "$cfg" ]]; then
 		warn "onboarding: no $cfg — the agent will run the first-run wizard and never reach a prompt"
@@ -632,7 +894,10 @@ main() {
 	merge_settings
 	validate_secrets
 	ensure_github_auth
+	sync_kit_registrations
+	report_stored_credential
 	ensure_onboarding_state
+	validate_hook_paths
 
 	# >&2 like every other line here. This was the ONE line on stdout, which was
 	# harmless while bootstrap was a separate process — but the wrapper SOURCES it

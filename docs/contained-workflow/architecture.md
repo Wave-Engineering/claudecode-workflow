@@ -324,6 +324,76 @@ AUTH_OK
 with nothing else on stdout, the agent process showing as `claude-real` (proof the
 wrapper ran), and `CLAUDE_CODE_OAUTH_TOKEN` present in `/proc/<agent>/environ`.
 
+### 3.5.1 The CLI does not necessarily read `$HOME` (#1085)
+
+**aoe launches with `CLAUDE_CONFIG_DIR=/root/.claude`** and mounts its own config
+there. The image runs as `ubuntu` (R-04/TC-2) and `/root` ships `0700`, so the
+runtime user could not *traverse* it — every path underneath was EACCES even
+though `/root/.claude` itself is ubuntu-owned and readable.
+
+One unobserved variable produced five distinct production symptoms:
+
+| symptom | mechanism |
+|---|---|
+| Settings Error at startup | `$CLAUDE_CONFIG_DIR/settings.json` unreadable — and the CLI skips files with errors **entirely**, losing every hook |
+| zero MCP servers | `./install` registers into `$HOME/.claude.json` at build time; the CLI reads `$CLAUDE_CONFIG_DIR/.claude.json` |
+| onboarding wizard every launch | §3.7's state written to `$HOME/.claude.json`, never read |
+| trust prompt per workspace | same file |
+| `401 … token has been revoked` | a stored `.credentials.json` **outranks** `CLAUDE_CODE_OAUTH_TOKEN`; the stale one was used while the mounted token returned **HTTP 200** |
+
+**The config file is not simply "under the config dir" in both cases**, and
+assuming so silently relocates the native config:
+
+```
+CLAUDE_CONFIG_DIR set   ->  $CLAUDE_CONFIG_DIR/.claude.json
+unset                   ->  $HOME/.claude.json      (home ROOT)
+```
+
+**Credential precedence is shared *by design*.** A stored `.credentials.json` in
+the shared config dir beats the mounted token, and that is what the operator
+wants: the fleet is rate-limited roughly weekly and rotates through several
+accounts, so **one login must reach every agent** — isolating credentials would
+cost one interactive login *per agent* per rotation. Bootstrap therefore does not
+override or delete it; it **reports** it, with its path and its precedence, so a
+401 arrives with a filename rather than a wrong accusation.
+
+**Hook paths must resolve in this namespace.** The effective `settings.json`
+under aoe is the operator's *host* settings, carrying host absolute paths.
+Production hit `/home/bakerb/.local/share/wtf-server/hooks/wtf-post-tool-use.sh:
+not found` — a **category error**, not a preference conflict: a host path cannot
+resolve in a different filesystem namespace. Bootstrap validates configured hook
+paths at boot rather than letting them fail at first tool use. It does **not**
+blanket-rewrite `$HOME` prefixes: measured on a real host, only 1 of 4 host paths
+was a hook; the rest were workspace references that do not map (workspaces mount
+at `/workspace/<name>`), so rewriting them would manufacture plausible-looking
+paths that do not exist.
+
+**Verification must go through aoe.** #1076, #1079 and #1082 were each verified
+green and each partially bypassed in production, because every verification used
+`docker run` with the profile's `extra_volumes` — reproducing the **mounts** but
+not the **launcher**. `scripts/ci/aoe-preflight.sh` launches through aoe and
+asserts eight behaviours from inside the container; it was proven able to fail by
+running it against the unfixed image first. **A harness that reproduces the
+inputs but not the invoker is not a rehearsal.**
+
+#### Known, deliberate gap: the settings split does not survive aoe
+
+This fix reconciles `.claude.json` (MCP registrations, onboarding, trust) into the
+effective location. It does **not** reconcile `settings.json`, and the honest
+consequence is that under aoe **the image's baked hook wiring (§3.3, R-06
+"versioned with the release") and the bind-mounted `settings.local.json` (R-03
+shared knobs) are both unread.** The CLI reads the operator's host settings
+instead.
+
+That contradicts §3.3 and is stated here rather than left to be discovered.
+`aoe-preflight.sh` asserts the effective settings are *readable* and that every
+configured hook *resolves*; nothing yet asserts the kit's own hooks are
+**present**. Resolving it means either merging the image's `hooks` block the way
+`mcpServers` is merged, or accepting that hook wiring is operator-owned under aoe
+and dropping the R-06 claim for it. Deferred deliberately: it is a contract
+change, not a bug fix, and shipping it inside a five-symptom incident fix would
+bury it.
+
 ### 3.6.1 GitHub credential — file modality, deliberately not env (#1082)
 
 Authentication to Anthropic gets an agent to a prompt; it does not let it *land

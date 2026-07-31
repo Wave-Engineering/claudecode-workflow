@@ -35,6 +35,25 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+@pytest.fixture(autouse=True)
+def _no_ambient_claude_config_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never let the host's CLAUDE_CONFIG_DIR reach these tests.
+
+    Run this suite INSIDE an aoe container — the dogfood ring is the whole point
+    of this plan — and every test that builds its env from os.environ would
+    resolve the CLI config to the real, host-mounted, FLEET-SHARED
+    /root/.claude/.claude.json: asserting against the wrong file, and MUTATING it
+    (a trust entry for the pytest cwd, plus fixture-shaped mcpServers merged in
+    permanently, since the merge is add-if-absent and nothing later corrects it).
+
+    Autouse rather than per-call-site: two helpers and several tests construct
+    their own env dicts, and patching each is how one gets missed. Tests that
+    genuinely need the variable set it explicitly AFTER this runs.
+    """
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+
 BOOTSTRAP = REPO_ROOT / "containers" / "oakandwave-workflow" / "bootstrap.sh"
 
 
@@ -93,6 +112,14 @@ def _make_home(
 def _run(home: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env["OAW_HOME"] = str(home)
+    # SCRUB the ambient value. Run this suite INSIDE an aoe container — which is
+    # the whole point of the dogfood ring — and every test here would resolve the
+    # CLI config to the real, host-mounted, FLEET-SHARED /root/.claude/.claude.json:
+    # assertions would look at the wrong file, and worse, the tests would mutate
+    # shared state (a projects[<pytest cwd>] trust entry, and fixture-shaped
+    # mcpServers merged in permanently, since the merge is add-if-absent).
+    # _run_cfgdir is the only place this may be set.
+    env.pop("CLAUDE_CONFIG_DIR", None)
     env.update(env_overrides)
     return subprocess.run(
         ["bash", str(BOOTSTRAP)],
@@ -1123,3 +1150,236 @@ def test_git_is_configured_to_push_with_the_token(tmp_path: Path) -> None:
         "no ssh->https rewrite — a git@github.com: origin never consults the helper, "
         "and the container has no ~/.ssh"
     )
+
+
+# --- CLAUDE_CONFIG_DIR (#1085) ------------------------------------------------
+#
+# The agent does not necessarily read $HOME. aoe sets CLAUDE_CONFIG_DIR=/root/.claude
+# and mounts its own config there, so everything bootstrap wrote to
+# $OAW_HOME/.claude.json landed in a file the CLI never opened. One mistake, five
+# production symptoms: Settings Error panel, zero MCP servers, onboarding wizard
+# every launch, trust prompt per workspace, and a "401 revoked" for a valid token.
+#
+# It survived three rounds of verification because every one used `docker run`.
+# Only `aoe` injects CLAUDE_CONFIG_DIR — the harness was the wrong SHAPE.
+
+
+def _home_with_cfgdir(tmp_path: Path, cli_cfg: str = "{}") -> tuple[Path, Path]:
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    (home / ".claude.json").write_text(
+        '{"mcpServers": {"disc-server": {"a": 1}, "sdlc-server": {"b": 2}}}'
+    )
+    cfgdir = tmp_path / "cfgdir"
+    cfgdir.mkdir()
+    (cfgdir / ".claude.json").write_text(cli_cfg)
+    return home, cfgdir
+
+
+def _run_cfgdir(home: Path, cfgdir: Path, cwd: Path, **env: str):
+    return subprocess.run(
+        ["bash", str(BOOTSTRAP)],
+        capture_output=True, text=True, timeout=60, cwd=str(cwd),
+        env={**os.environ, "OAW_HOME": str(home), "CLAUDE_CONFIG_DIR": str(cfgdir), **env},
+    )
+
+
+def test_onboarding_state_goes_to_the_cli_config_not_home(tmp_path: Path) -> None:
+    """Written where the CLI READS, not where $HOME says."""
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    ws = tmp_path / "ws"; ws.mkdir()
+    proc = _run_cfgdir(home, cfgdir, ws)
+    assert proc.returncode == 0, proc.stderr
+    import json as J
+    cli = J.loads((cfgdir / ".claude.json").read_text())
+    assert cli["hasCompletedOnboarding"] is True
+    assert str(ws) in cli.get("projects", {}), "trust must land in the CLI-read config"
+    home_cfg = J.loads((home / ".claude.json").read_text())
+    assert "hasCompletedOnboarding" not in home_cfg, (
+        "writing to $HOME when CLAUDE_CONFIG_DIR is set is the bug"
+    )
+
+
+def test_kit_mcp_registrations_merge_into_the_cli_config(tmp_path: Path) -> None:
+    """`./install` registers at BUILD time into $HOME; the CLI reads elsewhere.
+
+    Production had `mcpServers: []` and no kit MCP available while the image's
+    own copy sat fully populated and unread.
+    """
+    home, cfgdir = _home_with_cfgdir(tmp_path, '{"mcpServers": {"operator-own": {"z": 9}}}')
+    ws = tmp_path / "ws"; ws.mkdir()
+    assert _run_cfgdir(home, cfgdir, ws).returncode == 0
+    import json as J
+    got = J.loads((cfgdir / ".claude.json").read_text())["mcpServers"]
+    assert "disc-server" in got and "sdlc-server" in got, "kit servers not registered"
+    assert got["operator-own"] == {"z": 9}, (
+        "the CLI config is SHARED across containers and carries the operator's own "
+        "servers — the merge must be additive, never a clobber"
+    )
+
+
+def test_stored_credential_is_reported_so_401_has_a_filename(tmp_path: Path) -> None:
+    """A stale stored credential outranks the mounted token and lies about it.
+
+    Observed: `401 OAuth access token has been revoked` while the mounted token
+    returned HTTP 200. The culprit was a .credentials.json ten days old. The
+    operator cannot tell those apart without being told the file exists.
+    """
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    (cfgdir / ".credentials.json").write_text("{}")
+    ws = tmp_path / "ws"; ws.mkdir()
+    proc = _run_cfgdir(home, cfgdir, ws)
+    assert proc.returncode == 0
+    assert "stored credential present" in proc.stderr
+    assert "OUTRANKS" in proc.stderr, "the precedence must be stated, not implied"
+    assert ".credentials.json" in proc.stderr, "the message must name the file"
+
+
+def test_unresolvable_hook_path_is_reported_at_boot(tmp_path: Path) -> None:
+    """Host absolute paths cannot resolve in a container.
+
+    Production: `/home/bakerb/.local/share/wtf-server/hooks/wtf-post-tool-use.sh:
+    not found`. That is a CATEGORY error, not a preference conflict. wtf failed
+    loudly only because its target was absent; a hook whose path exists in both
+    namespaces would silently run the wrong thing.
+    """
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    (cfgdir / "settings.json").write_text(
+        '{"hooks": {"PostToolUse": [{"hooks": [{"command": "/home/nonexistent/x.sh"}]}]}}'
+    )
+    ws = tmp_path / "ws"; ws.mkdir()
+    proc = _run_cfgdir(home, cfgdir, ws)
+    assert proc.returncode == 0, "an unresolvable hook must not abort the boot"
+    assert "/home/nonexistent/x.sh" in proc.stderr, "the offending path must be named"
+    assert "does not exist in this container" in proc.stderr
+
+
+def test_resolvable_hook_path_is_not_flagged(tmp_path: Path) -> None:
+    """No false alarms — a hook that exists must stay silent."""
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    hook = tmp_path / "real-hook.sh"; hook.write_text("#!/bin/sh\n"); hook.chmod(0o755)
+    (cfgdir / "settings.json").write_text(
+        '{"hooks": {"PostToolUse": [{"hooks": [{"command": "%s"}]}]}}' % hook
+    )
+    ws = tmp_path / "ws"; ws.mkdir()
+    proc = _run_cfgdir(home, cfgdir, ws)
+    assert "does not exist in this container" not in proc.stderr
+
+
+def test_dockerfile_makes_root_traversable_not_listable() -> None:
+    """aoe mounts config to /root; the image runs as ubuntu; /root ships 0700.
+
+    711 = traverse, not list. 755 would additionally expose the listing, which is
+    not needed and widens it for no benefit.
+    """
+    body = "\n".join(
+        l for l in DOCKERFILE.read_text().splitlines() if not l.lstrip().startswith("#")
+    )
+    assert "chmod 711 /root" in body, (
+        "without this every path under /root is EACCES for the runtime user"
+    )
+    assert "chmod 755 /root" not in body, "755 exposes the listing unnecessarily"
+
+
+@pytest.mark.parametrize("prefix", ["$HOME", "${HOME}", "~"])
+def test_variable_prefixed_hook_that_EXISTS_is_not_flagged(
+    tmp_path: Path, prefix: str
+) -> None:
+    """Red-first for the 13-phantom regression.
+
+    The first validator matched the slash AFTER `$HOME` and reported
+    `/.claude/scripts/hooks/x.sh` — a path never configured — 13 times against a
+    healthy container. A plain-absolute-path test cannot see that bug; only a
+    variable-prefixed one can.
+    """
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    (home / ".claude" / "scripts").mkdir(parents=True, exist_ok=True)
+    (home / ".claude" / "scripts" / "ok.sh").write_text("#!/bin/sh\n")
+    (cfgdir / "settings.json").write_text(
+        '{"hooks": {"PostToolUse": [{"hooks": [{"command": "%s/.claude/scripts/ok.sh"}]}]}}'
+        % prefix
+    )
+    ws = tmp_path / "ws"; ws.mkdir()
+    proc = _run_cfgdir(home, cfgdir, ws, HOME=str(home))
+    assert "does not exist in this container" not in proc.stderr, (
+        f"phantom warning for an existing {prefix}-prefixed hook: {proc.stderr}"
+    )
+
+
+def test_variable_prefixed_hook_that_is_MISSING_is_still_flagged(tmp_path: Path) -> None:
+    """The over-correction case.
+
+    Fixing the phantoms with a lookbehind made every ~/ and $HOME hook
+    unjudgeable — and EVERY hook in config/settings.template.json is ~/-prefixed,
+    including one the image build whitelists as deliberately absent. So the
+    validator went silent on exactly the failure that motivated it. Expansion,
+    not exclusion, is what gets both.
+    """
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    (cfgdir / "settings.json").write_text(
+        '{"hooks": {"PostToolUse": [{"hooks": [{"command": "~/.local/share/gone/hook.sh"}]}]}}'
+    )
+    ws = tmp_path / "ws"; ws.mkdir()
+    proc = _run_cfgdir(home, cfgdir, ws, HOME=str(home))
+    assert "does not exist in this container" in proc.stderr, (
+        "a ~/-prefixed hook that is genuinely missing must still be reported"
+    )
+    assert "gone/hook.sh" in proc.stderr
+
+
+def test_paths_in_comment_fields_are_not_flagged(tmp_path: Path) -> None:
+    """Scan `command` values, not the whole JSON blob.
+
+    The settings template carries `_comment` fields; a path mentioned in prose is
+    not a configured hook, and warning about it is another way to cry wolf.
+    """
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    (cfgdir / "settings.json").write_text(
+        '{"hooks": {"_comment": "see /nowhere/doc/path.sh", "PostToolUse": []}}'
+    )
+    ws = tmp_path / "ws"; ws.mkdir()
+    proc = _run_cfgdir(home, cfgdir, ws, HOME=str(home))
+    assert "/nowhere/doc/path.sh" not in proc.stderr
+
+
+def test_run_helper_scrubs_ambient_claude_config_dir(tmp_path: Path) -> None:
+    """Running this suite INSIDE an aoe container must not touch fleet state.
+
+    Without the scrub, every `_run`-based test resolves the CLI config to the
+    real, host-mounted, fleet-SHARED /root/.claude/.claude.json — asserting
+    against the wrong file and, worse, mutating it: a trust entry for the pytest
+    cwd, plus fixture-shaped mcpServers merged in permanently (the merge is
+    add-if-absent, so nothing later corrects them).
+    """
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    (home / ".claude.json").write_text("{}")
+    decoy = tmp_path / "decoy"; decoy.mkdir()
+    (decoy / ".claude.json").write_text('{"canary": true}')
+    proc = _run(home, **{})  # ambient value injected below via os.environ
+    assert proc.returncode == 0, proc.stderr
+    import json as J
+    assert J.loads((decoy / ".claude.json").read_text()) == {"canary": True}, (
+        "the decoy config was mutated — the ambient CLAUDE_CONFIG_DIR leaked in"
+    )
+    assert J.loads((home / ".claude.json").read_text()).get("hasCompletedOnboarding") is True
+
+
+def test_absent_cli_config_is_created_not_bailed_on(tmp_path: Path) -> None:
+    """Warning-and-returning here reproduces the exact production state.
+
+    The CLI then creates the file itself, empty: zero MCP servers, wizard, trust
+    prompt. A fresh host or new aoe profile hits this, because .claude.json
+    conventionally lives at $HOME ROOT, so a config dir seeded from ~/.claude
+    will not contain one.
+    """
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    (home / ".claude.json").write_text('{"mcpServers": {"disc-server": {"a": 1}}}')
+    cfgdir = tmp_path / "empty-cfg"; cfgdir.mkdir()      # no .claude.json inside
+    ws = tmp_path / "ws"; ws.mkdir()
+    proc = _run_cfgdir(home, cfgdir, ws)
+    assert proc.returncode == 0, proc.stderr
+    created = cfgdir / ".claude.json"
+    assert created.exists(), "bootstrap must create the config, not bail"
+    import json as J
+    d = J.loads(created.read_text())
+    assert "disc-server" in d.get("mcpServers", {}), "kit servers must land in it"
+    assert d.get("hasCompletedOnboarding") is True
