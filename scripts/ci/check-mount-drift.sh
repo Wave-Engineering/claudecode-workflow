@@ -94,7 +94,7 @@ while IFS= read -r line; do
 		# mkdir -p on those creates a directory where a file belongs — reproducing
 		# exactly the failure this message warns about.
 		case "$src" in
-		*.json | */.env | */discord-bot-token)
+		*.json | */.env | */.secrets/*)
 			echo "      fix (this one is a FILE):  install -D /dev/null $src" >&2
 			;;
 		*)

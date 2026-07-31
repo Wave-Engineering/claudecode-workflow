@@ -324,6 +324,77 @@ AUTH_OK
 with nothing else on stdout, the agent process showing as `claude-real` (proof the
 wrapper ran), and `CLAUDE_CODE_OAUTH_TOKEN` present in `/proc/<agent>/environ`.
 
+### 3.6.1 GitHub credential — file modality, deliberately not env (#1082)
+
+Authentication to Anthropic gets an agent to a prompt; it does not let it *land
+work*. Without a GitHub credential a containerised agent cannot push, open a PR,
+merge, or run `/scpmmr` — it can think but not ship. Caught in cut-over
+pre-flight, where everything else passed: 39 skills present, all five MCP
+binaries executable, transcripts and memory host-visible, workspace writes
+host-owned, secrets scoped to 2 of ~80.
+
+**The host authenticates `gh` via `GH_TOKEN`, and copying that would be wrong.**
+An environment variable is inherited by **every child process**, and the only
+working GitHub credential on this host carries:
+
+```
+admin:enterprise, admin:org, admin:org_hook, delete_repo, delete:packages,
+admin:public_key, admin:ssh_signing_key, audit_log, workflow, repo, …
+```
+
+The `CLAUDE_CODE_OAUTH_TOKEN` exception in §3.6 was argued **narrowly**: that
+token *is* the agent's own identity, so a child that steals it gains nothing the
+agent does not already have. An org-admin PAT does not meet that bar, so it is
+not projected into the environment. Instead `bootstrap.sh` materialises `gh`'s
+own credential file:
+
+```
+~/.config/gh/hosts.yml   (mode 600, written under umask 077)
+```
+
+Only `gh` reads it, and nothing inherits it. Verified in a live container:
+`gh api user` returns the expected login while `GH_TOKEN` is **absent** from the
+agent's environment — both halves asserted, because the first without the second
+would be the leak this design exists to avoid.
+
+An operator-placed `hosts.yml` already containing an `oauth_token` is left alone.
+A missing or empty secret **warns and boots** — an agent without GitHub access is
+degraded but useful, and the wrapper sources bootstrap, so a fatal here would
+mean no agent at all.
+
+`github-pat` is deliberately **not** in `OAW_REQUIRED_SECRETS`. Declaring it
+required would make R-14 `fatal` one function earlier, so the documented
+degraded-but-booting mode would be unreachable for anyone using the shipped
+template — the code, the template and this paragraph have to agree, and warn is
+the one that matches the intent.
+
+**Authenticating `gh` is not enough — `git` is a separate client.** `hosts.yml`
+authenticates the CLI; `git push` never reads it, and `gh pr create` shells out
+to `git push`. The first cut of this fix verified `gh api user`, declared
+victory, and would have shipped an agent that could call the API and still not
+land a commit:
+
+```
+$ git push --dry-run origin HEAD
+Host key verification failed.
+fatal: Could not read from remote repository.
+```
+
+Repos are cloned with `git@github.com:` origins and the container has no
+`~/.ssh` — deliberately, since mounting the host's private keys is a far larger
+exposure than a scoped PAT. So bootstrap also configures, scoped to github.com:
+
+- `credential.https://github.com.helper = !gh auth git-credential`
+- `url.https://github.com/.insteadOf = git@github.com:`
+
+Only together do they work: the helper supplies the token, the rewrite makes the
+SSH remote use HTTPS so the helper is consulted at all.
+
+**Timing note:** the credential is written when *bootstrap* runs, i.e. when the
+agent starts. A bare `docker exec … gh` before any agent has run will find no
+credential — that is expected, not a defect, and it is how the first version of
+this check produced a false alarm.
+
 ### 3.7 First-run onboarding state (#1079)
 
 Authentication alone does not get an agent to a prompt. A container that has

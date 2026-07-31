@@ -43,6 +43,7 @@ set -euo pipefail
 # runtime, never baked into a layer (R-12).
 EXPECTED_MISSING=(
 	'claude-code-oauth-token'
+	'github-pat'
 	'discord-bot-token'
 	'wtf-post-tool-use.sh'
 )
