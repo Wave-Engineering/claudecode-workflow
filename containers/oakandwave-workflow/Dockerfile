@@ -241,6 +241,16 @@ LABEL org.opencontainers.image.title="oakandwave-workflow" \
 # the runtime user's home — and the agent must be able to write ~/.claude.json
 # for MCP registration. That failure would surface later as an MCP bug.
 USER root
+# /root must be TRAVERSABLE by the runtime user (#1085). aoe sets
+# CLAUDE_CONFIG_DIR=/root/.claude and mounts its config there, but this image runs
+# as `ubuntu` and /root ships 0700 — so every path under it was EACCES even though
+# /root/.claude itself is ubuntu-owned. Production symptoms: a Settings Error panel
+# at startup (and settings are skipped ENTIRELY, losing all hooks), zero MCP
+# servers, and the onboarding wizard on every launch.
+#
+# 0711 = traverse, not list: `ls /root` still fails, so this exposes nothing that
+# was not already reachable by a caller who knows the exact path. Verified live.
+RUN chmod 711 /root
 RUN set -eux; \
 	wrapper="${KIT_SRC}/containers/oakandwave-workflow/claude-entrypoint.sh"; \
 	test -x /usr/local/bin/claude; \
