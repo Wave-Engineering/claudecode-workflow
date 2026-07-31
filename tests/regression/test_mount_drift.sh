@@ -168,6 +168,22 @@ python3 - "$MAJOR" <<-PYEOF || fail "aoe-toml output does not parse or does not 
 PYEOF
 pass "aoe-toml remedy parses as TOML and matches the manifest exactly"
 
+# --- the plan path stays ADVISORY when drift is actually present -------------
+# This is the case that shipped broken. "Advisory" was only ever exercised with a
+# CLEAN check (rc 0) or with the check skipped, so nothing proved the non-zero
+# branch was survivable — and `cmd; rc=$?` under `set -e` killed the script before
+# the capture, silently making it fatal. A dry run that aborts on drift breaks its
+# own "launches NOTHING" contract and fails on any box without ~/.oaw.
+CUT="$REPO_DIR/scripts/ci/dogfood-cutover.sh"
+if [[ -x "$CUT" ]]; then
+	HOME="$SANDBOX/nohome" EDGE_REF=x CUTOVER_WORKSPACES=/tmp/ws \
+		timeout 120 "$CUT" >/dev/null 2>&1
+	rc=$?
+	[[ "$rc" -eq 0 ]] ||
+		fail "PLAN must stay advisory when drift IS present (no ~/.oaw), got $rc — 'cmd; rc=\$?' under set -e is the trap"
+	pass "plan path is advisory with drift present (the case that shipped broken)"
+fi
+
 echo ""
 if ((FAILS > 0)); then
 	echo "  $FAILS mount-drift check(s) FAILED"

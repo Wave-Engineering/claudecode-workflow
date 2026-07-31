@@ -97,9 +97,14 @@ echo "    dogfood launch args (from profiles.py): $dogfood_args"
 # and an operator whose profile is named otherwise had no way past the fatal APPLY
 # check below.
 if [[ -n "${CUTOVER_CHECK_PROFILES-dogfood}" ]]; then
+	# `cmd; rc=$?` is WRONG under `set -e`: the non-zero exit kills the script before
+	# the assignment runs, which silently turned this advisory check FATAL and broke
+	# the plan path's "launches NOTHING" contract on any box without ~/.oaw.
+	# `cmd || rc=$?` is the idiom that actually captures it.
+	drift_rc=0
 	# shellcheck disable=SC2086  # intentional split: a space-separated profile list
-	"$HERE/check-mount-drift.sh" ${CUTOVER_CHECK_PROFILES-dogfood} --major "$OAW_MAJOR"
-	drift_rc=$?
+	"$HERE/check-mount-drift.sh" ${CUTOVER_CHECK_PROFILES-dogfood} --major "$OAW_MAJOR" ||
+		drift_rc=$?
 	# Only exit 3 is drift. Exit 2 is usage / an unreadable resolver — calling that
 	# "drift" sends the operator to fix the wrong thing.
 	if ((drift_rc == 3)); then
