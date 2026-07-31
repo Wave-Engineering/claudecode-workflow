@@ -227,6 +227,10 @@ depends on how a consumer reads a secret:
 | **path** | a loose file `~/.secrets/<NAME>`, read on demand | **fully live** (R-13) — the consumer re-reads the file |
 | **env** | `~/.secrets/.env`, sourced once by `bootstrap.sh` at boot | snapshot-at-boot — a value added *after* boot reaches only path consumers until the next re-source |
 
+> This row described an *intent* until #1076: nothing invoked `bootstrap.sh`, so
+> `.env` was never sourced in a running container and no env-modality consumer
+> ever saw a value. See §3.6 for the wrapper that now makes it true.
+
 So **prefer file-path consumers** where liveness matters: `.env` is convenient
 but its values are frozen at the boot source. Loose files stay path-modality and
 are **never auto-exported** (SKETCHBOOK D6), which is also why they stay live.
@@ -244,6 +248,87 @@ whole-dir approach is retained below. **Least-privilege per-secret scoping
 is an open design item** (Dev Spec §5.5, §5.N); the `read-only-secrets` layer is
 exactly where a future scoped-secrets mechanism slots in without disturbing the
 rest of the taxonomy. See §5 for the carried open item.
+
+### 3.6 Agent authentication, and how bootstrap gets invoked at all (#1076)
+
+**Why a containerised agent needs its own credential.** aoe mounts its own
+credentials to `/root/.claude`, but this image runs as `ubuntu` by design
+(R-04/TC-2, so bind-mount writes are host-owned). `/root` is mode `700`, so the
+agent never sees them. Without a credential of its own it boots, clears the
+theme prompt, and halts on `Select login method:` — forever, with no error and no
+exit. **An unattended agent parked on a login menu is indistinguishable from an
+idle one**, which is why this failed silently for as long as it did.
+
+**The mechanism.** `claude-code-oauth-token` is mounted as a named read-only file
+(§3.5), declared in `deps.json`, and projected into the environment by
+`bootstrap.sh` via `OAW_SECRET_ENV` in the mounted `.env`:
+
+```sh
+OAW_REQUIRED_SECRETS="claude-code-oauth-token discord-bot-token"
+OAW_SECRET_ENV="CLAUDE_CODE_OAUTH_TOKEN=claude-code-oauth-token"
+```
+
+Both values **must be quoted** — `.env` is `source`d, so an unquoted value
+containing a space is not a list, it is `VAR=first` prefixed to a command named
+`second`, and the boot dies with `command not found`.
+
+**This is a deliberate exception to the pointers-never-values rule** in §3.5.
+That rule exists because an environment variable is inherited by every child
+process, which matters for the Discord bot token — a credential granting access
+to a system the agent's children have no business touching. An agent's *own* auth
+token is different in kind: a child that steals it gains exactly what the agent
+already has. **Do not project third-party credentials this way.**
+
+**How bootstrap runs — the part that was missing entirely.** aoe never executes an
+entrypoint. It starts the image with `sleep infinity` as PID 1 and then
+`docker exec`s `claude` as a **separate** process (measured: PID 1 =
+`sleep infinity`, agent = PID 13 with **PPID 0**). Nothing in that path ever
+invoked `bootstrap.sh`, so until #1076 *every* bootstrap phase — skills-sync,
+settings merge, secret projection, R-14 validation — was inert in production
+while its unit tests passed, because they drive the script directly by
+subprocess. The env-modality row in §3.5 ("sourced once by `bootstrap.sh` at
+boot") described an intent, not a behaviour.
+
+The seam is therefore
+[`claude-entrypoint.sh`](../../containers/oakandwave-workflow/claude-entrypoint.sh),
+installed over the `claude` name, which **sources** bootstrap and then `exec`s the
+real CLI (moved aside to `claude-real`):
+
+- **Sourced, not run.** Environment flows down, never up. A child process would
+  export the token into itself and exit, leaving the agent with nothing and every
+  log looking healthy — the same end state as the original bug.
+- **Fail-loud for free.** `bootstrap.sh` ends in `exit 1` when `FATAL_COUNT > 0`,
+  which aborts the wrapper before the `exec`. "Refusing to hand off to the agent"
+  is only true because the `exec` never happens.
+- **Everything on stderr.** The wrapper's fd 1 *is* the agent's fd 1, so a single
+  bootstrap line on stdout corrupts `claude -p --output-format json`.
+- **Every reachable `claude` is wrapped, and that is asserted, not assumed.**
+  `docker exec` resolves against the *image's* PATH, which reaches the base
+  image's `/root/.local/bin/claude` before `/usr/local/bin`, so wrapping one path
+  is not enough — the first cut of this fix shipped inert for exactly that reason.
+  [`assert-no-claude-bypass.sh`](../../scripts/ci/assert-no-claude-bypass.sh)
+  walks PATH at **build time** and fails the build if any reachable `claude` is
+  not the wrapper. It currently finds three.
+- **Escape hatch.** `OAW_SKIP_BOOTSTRAP=1` starts the agent unbootstrapped, loudly,
+  so a container with a broken bootstrap is still repairable.
+
+**Verification is behavioural, not declarative** — configuration existing is not
+the contract. The check is a real agent in a real container returning a real
+answer:
+
+```
+$ docker exec -u ubuntu <c> claude -p 'reply with exactly: AUTH_OK'
+AUTH_OK
+```
+
+with nothing else on stdout, the agent process showing as `claude-real` (proof the
+wrapper ran), and `CLAUDE_CODE_OAUTH_TOKEN` present in `/proc/<agent>/environ`.
+
+**Not solved here (#1079).** Authentication works; reaching an *interactive*
+prompt does not. A fresh container still walks the first-run onboarding wizard
+(theme → login menu → trust folder) because the image ships no onboarding state.
+That is provably not a credential problem — the token returns HTTP 200 and
+headless runs succeed — and setting the obvious flags does **not** clear it.
 
 ## 4. Boundaries and invariants
 
