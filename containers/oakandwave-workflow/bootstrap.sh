@@ -166,7 +166,12 @@ sync_skills() {
 
 		# Gap: host fills it. FULL target path (D5 fix — never a bare basename,
 		# which would self-reference into a dangling link).
-		ln -s "$entry" "$dest"
+		#
+		# -f: bootstrap now runs on EVERY `claude` invocation (it is the agent's
+		# wrapper), so two concurrent invocations can both pass the `-e "$dest"`
+		# check above and race here. Without -f the loser gets "File exists",
+		# `set -e` aborts, and THAT agent never starts.
+		ln -sfn "$entry" "$dest"
 		info "skills-sync: linked host skill '$name' (host-fill)"
 	done
 	shopt -u nullglob
@@ -211,6 +216,49 @@ validate_secrets() {
 		if [[ -f "$dir/.env" ]]; then
 			# Env modality: source .env so env-var consumers see the values.
 			# Loose files stay path-modality — NEVER auto-exported (D6).
+			#
+			# DRY-RUN FIRST, in a SEPARATE bash process. Sourcing runs arbitrary
+			# shell in THIS process under `set -e`, so one bad line kills bootstrap
+			# outright — and because bootstrap is the agent's exec wrapper, "kills
+			# bootstrap" means "the agent never starts". The observed failure was an
+			# unquoted list value: `OAW_REQUIRED_SECRETS=a b` is not two items, it is
+			# `a` prefixed to a command named `b`, so the boot died on
+			# `line 42: discord-bot-token: command not found` with exit 127 and no
+			# [bootstrap] prefix to say who had failed or why.
+			#
+			# THE PROBE MUST NOT BE A COMMAND SUBSTITUTION SUBSHELL. bash STRIPS
+			# `errexit` inside $( ) unless `inherit_errexit` is set, so `$( ( set -a;
+			# . file ) )` keeps sourcing past the first failure and yields the status
+			# of the LAST line. The first cut of this guard did exactly that and was
+			# INERT for the very template it ships — secrets-env.example ends with a
+			# good `OAW_SECRET_ENV=` line, so a broken OAW_REQUIRED_SECRETS above it
+			# probed "clean", the captured stderr was discarded unread, and the real
+			# source below then killed the shell with 127. Verified by hand:
+			#   probe: reported CLEAN
+			#   captured-but-discarded: .env: line 2: beta: command not found
+			#   real-source exit: 127
+			# A fresh `bash -c` has its own live errexit, so it stops at the FIRST
+			# failure — the same line the real source will die on.
+			#
+			# The probe cannot be `bash -n` — that is a SYNTAX check, and this is a
+			# runtime error on a syntactically valid line. Only executing it finds it.
+			local env_err env_rc
+			env_err="$(bash -euo pipefail -c 'set -a; . "$1"' oaw-env-probe "$dir/.env" 2>&1 >/dev/null)" &&
+				env_rc=0 || env_rc=$?
+			if ((env_rc != 0)); then
+				fatal "secrets: $dir/.env failed to execute (exit $env_rc) — refusing to boot the agent"
+				warn "  ${env_err:-(no stderr)}"
+				warn "  Most likely an UNQUOTED value containing a space. A sourced"
+				warn "  \`VAR=one two\` runs the command \`two\`; write \`VAR=\"one two\"\`."
+				warn "  Template: containers/oakandwave-workflow/secrets-env.example"
+				return 0
+			fi
+			# Sourced cleanly but wrote to stderr: not fatal (the real source will
+			# survive it too), but never discard the evidence — that is how the first
+			# cut of this guard hid its own inertness.
+			if [[ -n "$env_err" ]]; then
+				warn "secrets: $dir/.env sourced cleanly but wrote to stderr: $env_err"
+			fi
 			set -a
 			# shellcheck disable=SC1090,SC1091
 			. "$dir/.env"
@@ -275,6 +323,37 @@ validate_secrets() {
 		done <"$OAW_REQUIRED_SECRETS_MANIFEST"
 	fi
 
+	# --- secret -> env projection (OAW_SECRET_ENV) ------------------------------
+	# Declarative, not hardcoded: `.env` names the pairs, so adding a future
+	# env-consuming secret needs no bootstrap change. Format is a space-separated
+	# list of ENVVAR=secret-file-name, e.g.
+	#     OAW_SECRET_ENV="CLAUDE_CODE_OAUTH_TOKEN=claude-code-oauth-token"
+	#
+	# This is the deliberate exception to #1061's pointers-not-values rule. That
+	# rule exists because env inherits into every child process, which matters for a
+	# credential granting access to a system the agent's children have no business
+	# touching (the Discord bot token). An agent's OWN auth token is different: a
+	# child that steals it gains precisely what the agent already has. Do NOT use
+	# this to project third-party credentials.
+	local pair envname secname
+	for pair in ${OAW_SECRET_ENV:-}; do
+		envname="${pair%%=*}"
+		secname="${pair#*=}"
+		if [[ -z "$envname" || -z "$secname" || "$envname" == "$pair" ]]; then
+			warn "secrets: malformed OAW_SECRET_ENV entry '$pair' (want ENVVAR=secret-name)"
+			continue
+		fi
+		if [[ -f "$dir/$secname" ]]; then
+			export "$envname=$(tr -d '\r\n' <"$dir/$secname")"
+			info "secrets: projected '$secname' -> \$$envname"
+		else
+			# Loud: an agent with no credential does not fail fast — it boots and
+			# halts on an interactive login menu forever, which is indistinguishable
+			# from an idle agent (#1076).
+			fatal "OAW_SECRET_ENV wants '$secname' for \$$envname, but $dir/$secname is absent"
+		fi
+	done
+
 	local name
 	for name in "${required[@]:-}"; do
 		[[ -n "$name" ]] || continue
@@ -298,7 +377,15 @@ main() {
 	merge_settings
 	validate_secrets
 
-	echo "bootstrap: ${WARN_COUNT} warning(s) (${COLLISION_COUNT} collision(s), ${DANGLING_COUNT} dangling), ${FATAL_COUNT} fatal(s)"
+	# >&2 like every other line here. This was the ONE line on stdout, which was
+	# harmless while bootstrap was a separate process — but the wrapper SOURCES it
+	# and then execs the agent, so bootstrap's fd 1 IS the agent's fd 1. On stdout
+	# it prepends a non-JSON line to every headless run:
+	#   $ claude -p 'reply with exactly: AUTH_OK'
+	#   bootstrap: 1 warning(s) (0 collision(s), 0 dangling), 0 fatal(s)
+	#   AUTH_OK
+	# which breaks `--output-format json`/`stream-json` and anything piped to jq.
+	echo "bootstrap: ${WARN_COUNT} warning(s) (${COLLISION_COUNT} collision(s), ${DANGLING_COUNT} dangling), ${FATAL_COUNT} fatal(s)" >&2
 
 	if [[ "$FATAL_COUNT" -gt 0 ]]; then
 		echo "[bootstrap] FATAL: $FATAL_COUNT fatal condition(s) — refusing to hand off to the agent" >&2

@@ -35,7 +35,14 @@ set -euo pipefail
 # NOTE: slack-bot-token was removed here with Slack support (#1062). Do NOT
 # re-add a token to this list without a consumer — a whitelist entry for a
 # dependency nothing needs silently tolerates a real gap of the same name.
+#
+# claude-code-oauth-token's consumer (#1076): bootstrap.sh projects it into
+# $CLAUDE_CODE_OAUTH_TOKEN via OAW_SECRET_ENV, and the /usr/local/bin/claude
+# wrapper sources bootstrap before exec'ing the agent. It is expected-missing at
+# BUILD time for the same reason as discord-bot-token — secrets are mounted at
+# runtime, never baked into a layer (R-12).
 EXPECTED_MISSING=(
+	'claude-code-oauth-token'
 	'discord-bot-token'
 	'wtf-post-tool-use.sh'
 )

@@ -214,5 +214,47 @@ LABEL org.opencontainers.image.title="oakandwave-workflow" \
 	org.opencontainers.image.source="https://github.com/wave-engineering/claudecode-workflow" \
 	org.opencontainers.image.base.name="${BASE_IMAGE}"
 
+# --- Agent bootstrap seam (#1076) --------------------------------------------
+# MUST BE LAST. The build itself invokes /usr/local/bin/claude (the --version probe
+# above and the `claude mcp add` registrations), and once the wrapper is in place
+# every such call would run bootstrap — which, at build time, has no ~/.secrets to
+# validate. Installing it here means the build uses the real CLI throughout and only
+# the RUNTIME gets the wrapper.
+#
+# Why a wrapper at all: aoe never runs an entrypoint. It starts the image with
+# `sleep infinity` as PID 1 and `docker exec`s `claude` separately, so bootstrap.sh
+# — skills-sync, settings merge, secret projection, R-14 validation — had no process
+# path to the agent and never ran. Full rationale in claude-entrypoint.sh.
+# /usr/local/bin is root-owned and the build is running as `ubuntu` by here, so
+# this step needs root and must hand the uid back — the image's runtime user is
+# ubuntu by design (R-04/TC-2, so bind-mount writes are host-owned).
+#
+# Every reachable `claude` is replaced, not just one: `docker exec` resolves
+# against the IMAGE PATH, which reaches /root/.local/bin/claude (base-image
+# symlink) before /usr/local/bin. Wrapping only /usr/local/bin/claude left the
+# real launch path bypassing bootstrap entirely. assert-no-claude-bypass.sh turns
+# that from an assumption into a build-time assertion.
+#
+# The placement commands need root, but the --version probes run under
+# `su ubuntu` (same pattern as the toolchain probe above): ENV HOME is
+# /home/ubuntu, so probing as root would let the CLI create root-owned state in
+# the runtime user's home — and the agent must be able to write ~/.claude.json
+# for MCP registration. That failure would surface later as an MCP bug.
+USER root
+RUN set -eux; \
+	wrapper="${KIT_SRC}/containers/oakandwave-workflow/claude-entrypoint.sh"; \
+	test -x /usr/local/bin/claude; \
+	mv /usr/local/bin/claude /usr/local/bin/claude-real; \
+	install -m 0755 "$wrapper" /usr/local/bin/claude; \
+	install -m 0755 -o ubuntu -g ubuntu -D "$wrapper" /home/ubuntu/.local/bin/claude; \
+	ln -sfn /usr/local/bin/claude /root/.local/bin/claude; \
+	su ubuntu -c 'export HOME=/home/ubuntu; \
+		/usr/local/bin/claude-real --version \
+		&& OAW_SKIP_BOOTSTRAP=1 /usr/local/bin/claude --version'; \
+	"${KIT_SRC}/scripts/ci/assert-no-claude-bypass.sh"
+USER ubuntu
+
 # ENTRYPOINT/CMD inherited from the base (CMD ["sleep","infinity"]); aoe manages
 # the container lifecycle and sets the runtime uid via [sandbox] (Story 1.2).
+# The agent is bootstrapped by the /usr/local/bin/claude wrapper installed above,
+# NOT by an entrypoint — aoe execs the agent, so that is the only seam that works.
