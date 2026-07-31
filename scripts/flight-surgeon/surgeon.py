@@ -53,7 +53,7 @@ CLI::
     python3 surgeon.py --observations obs.json
 
     # best-effort live gather over aoe sessions (flags the UNPROVEN seams)
-    python3 surgeon.py --live --transcripts-root ~/.claude/projects
+    python3 surgeon.py --live --transcripts-root ~/.oaw/state/$OAW_MAJOR/transcripts
 
 Emits a JSON report on stdout (one assessment per container) and a human summary
 on stderr; exits 0 normally, or non-zero with ``--fail-on-quarantine`` if any
@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -83,6 +84,54 @@ DEFAULT_STALL_SECONDS = 15 * 60
 DEFAULT_LOOP_MIN_REPEATS = 5
 # The longest repeating cycle length considered (e.g. period 2 = A B A B ...).
 DEFAULT_LOOP_MAX_PERIOD = 4
+
+
+# --- transcript root (#1064) --------------------------------------------------
+#
+# Sandbox transcripts are host-backed at ~/.oaw/state/<major>/transcripts (mounted
+# to the container's ~/.claude/projects by mounts.d/05-transcripts.toml). This
+# default USED to be ~/.claude/projects — the live fleet's own store — which is a
+# confident wrong answer rather than a miss: `_newest_transcript_for` returns the
+# newest .jsonl matching the workspace slug, so a container resolved against that
+# root picks up a NATIVE session's transcript. Measured 2026-07-30 on this host: a
+# container on the cc-workflow workspace resolved to the live native session's
+# file, 19s stale.
+#
+# The failure is bidirectional. Natives running -> their transcripts are fresh ->
+# every container reads healthy and quarantine never fires. Natives stopped (the
+# big-bang cut-over) -> those transcripts go stale at once -> running containers
+# read stalled and healthy candidates are false-quarantined.
+#
+# The default is the state ROOT, not a <major>-specific path: this module depends
+# on the standard library only (R-15) and must not import the mount resolver to
+# interpolate <major>. Resolution rglobs, so `~/.oaw/state` finds
+# `<major>/transcripts/<slug>/*.jsonl` under any major — correct but deliberately
+# wider than R-20's per-major isolation. Callers that know the major SHOULD pass
+# the exact root (dogfood-cutover.sh does); this default only guarantees the bare
+# `surgeon.py --live` invocation stays inside the sandbox tree rather than
+# resolving fleet transcripts.
+def _default_transcripts_root() -> str:
+    """Sandbox transcript root, narrowed to $OAW_MAJOR when the fleet sets it.
+
+    Spanning majors is not merely untidy: `_newest_transcript_for` picks by mtime
+    across everything `rglob` reaches, so a freshly-launched major-8 container
+    that has not written yet resolves to the leftover major-7 file for the same
+    workspace — stale, therefore running+flat, therefore FALSE QUARANTINE. That is
+    the same mechanic this issue fixes, narrowed from cross-fleet to cross-major,
+    and R-20 exists precisely to keep majors isolated.
+
+    `os.environ` is stdlib, so this respects R-15 (no mount-resolver import).
+    """
+    major = os.environ.get("OAW_MAJOR", "").strip()
+    if major:
+        return f"~/.oaw/state/{major}/transcripts"
+    return "~/.oaw/state"
+
+
+DEFAULT_TRANSCRIPTS_ROOT = _default_transcripts_root()
+
+# Any transcripts root inside this tree is the live fleet's, not a sandbox's.
+LIVE_FLEET_TREE = ".claude"
 
 
 # --- aoe run states -----------------------------------------------------------
@@ -601,6 +650,52 @@ def _load_observations(path: str) -> list[dict]:
     return data
 
 
+class FleetTranscriptRootError(SurgeonError):
+    """The transcripts root points at the live fleet's store, not a sandbox's.
+
+    Subclasses SurgeonError deliberately: as a bare RuntimeError it escaped
+    ``main()``'s ``except`` tuple, so the carefully-worded refusal arrived as the
+    tail of a stack trace and the exit code was 1 instead of the documented 2
+    (usage error). One taxonomy, one exit contract.
+    """
+
+
+def assert_sandbox_transcripts_root(root: Path, *, allow_fleet: bool = False) -> None:
+    """Refuse a transcripts root inside the live-fleet tree (#1064).
+
+    A container resolved against ``~/.claude/projects`` does not fail to find a
+    transcript — it finds a NATIVE session's and classifies confidently on it.
+    That is why this raises instead of warning: a warning on a probe whose whole
+    job is to notice silence would itself be noise the operator learns to skip.
+
+    ``allow_fleet=True`` is the deliberate escape hatch for the pre-cut-over case
+    where the fleet IS the thing being watched.
+    """
+    if allow_fleet:
+        return
+    # Check BOTH forms. resolve() follows symlinks, so a fleet whose ~/.claude is
+    # a symlink to /mnt/data/claude-config resolves to parts containing no
+    # ".claude" and the guard would pass on the fleet's actual store — failing
+    # OPEN, the one direction this whole issue is about. mount_resolver's
+    # check_sandbox_scoped_memory reasons over normalized path TEXT and never
+    # touches the filesystem; this matches that.
+    candidates = {root.parts}
+    try:
+        candidates.add(root.resolve().parts)
+    except OSError:
+        pass
+    if any(LIVE_FLEET_TREE in parts for parts in candidates):
+        raise FleetTranscriptRootError(
+            f"transcripts root {root} is inside the live-fleet tree "
+            f"({LIVE_FLEET_TREE}). Sandbox transcripts are host-backed under "
+            f"{DEFAULT_TRANSCRIPTS_ROOT}/<major>/transcripts "
+            "(mounts.d/05-transcripts.toml). Resolving a container against the "
+            "fleet's store yields a confident verdict about the wrong process — "
+            "healthy while natives run, stalled once they stop. Pass "
+            "--allow-fleet-transcripts only if you mean to watch the fleet itself."
+        )
+
+
 def _gather_live(args, runner=_run) -> list[dict]:
     """Best-effort live gather over aoe sessions.
 
@@ -611,13 +706,20 @@ def _gather_live(args, runner=_run) -> list[dict]:
     configurable ``--transcripts-root`` (best-effort, newest ``.jsonl`` under the
     session's project) and leaves the profile ``unknown`` unless a label is wired.
     """
+    # Refuse FIRST — before spending two aoe subprocesses on a root we reject.
+    root = Path(args.transcripts_root).expanduser()
+    assert_sandbox_transcripts_root(
+        root, allow_fleet=getattr(args, "allow_fleet_transcripts", False)
+    )
     sessions = discover_sessions(runner)
     states = parse_status_table(runner(["aoe", "status", "-v"]))
-    root = Path(args.transcripts_root).expanduser()
     records: list[dict] = []
+    unresolved: list[str] = []
     for s in sessions:
         title = s.get("title", "?")
         transcript = _newest_transcript_for(root, s.get("path", ""))
+        if transcript is None:
+            unresolved.append(title)
         records.append(
             {
                 "container_id": s.get("id", "?"),
@@ -625,7 +727,21 @@ def _gather_live(args, runner=_run) -> list[dict]:
                 "status": states.get(title, STATUS_UNKNOWN),
                 "profile": s.get("profile_label", PROFILE_UNKNOWN),
                 "transcript": str(transcript) if transcript else "",
+                # Distinguish "read it, agent is fine" from "found no transcript".
+                # Without this an unresolved session yields transcript "" ->
+                # read_transcript [] -> classify_health "no timestamped activity
+                # yet" -> broken=False, and the promotion gate accrues soak for a
+                # session whose health was never measured. Silence that reads as
+                # health is the failure class this issue exists to remove.
+                "transcript_resolved": transcript is not None,
             }
+        )
+    if unresolved:
+        print(
+            f"surgeon: WARNING {len(unresolved)}/{len(sessions)} session(s) had NO "
+            f"resolvable transcript under {root} — their health was NOT measured: "
+            + ", ".join(unresolved),
+            file=sys.stderr,
         )
     return records
 
@@ -666,8 +782,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--transcripts-root",
-        default="~/.claude/projects",
-        help="root to resolve host-backed transcripts under (--live)",
+        default=DEFAULT_TRANSCRIPTS_ROOT,
+        help=(
+            "root to resolve host-backed sandbox transcripts under (--live); "
+            f"default {DEFAULT_TRANSCRIPTS_ROOT}. Pointing this at "
+            "~/.claude/projects resolves the NATIVE fleet's transcripts, not the "
+            "containers' — see --allow-fleet-transcripts"
+        ),
+    )
+    parser.add_argument(
+        "--allow-fleet-transcripts",
+        action="store_true",
+        help=(
+            "permit a --transcripts-root inside the live-fleet tree (~/.claude). "
+            "Refused by default: a container resolved against a fleet transcript "
+            "yields a confident verdict about the wrong process (#1064)"
+        ),
     )
     parser.add_argument(
         "--stall-seconds", type=float, default=DEFAULT_STALL_SECONDS,

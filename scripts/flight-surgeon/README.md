@@ -44,7 +44,7 @@ consumes this module's `should_quarantine` verdict.
 python3 scripts/flight-surgeon/surgeon.py --observations obs.json
 
 # best-effort live gather over aoe sessions (flags the UNPROVEN seams)
-python3 scripts/flight-surgeon/surgeon.py --live --transcripts-root ~/.claude/projects
+python3 scripts/flight-surgeon/surgeon.py --live --transcripts-root ~/.oaw/state/$OAW_MAJOR/transcripts
 
 # a watcher/cron signal: non-zero exit if any quarantine-eligible break
 python3 scripts/flight-surgeon/surgeon.py --observations obs.json --fail-on-quarantine

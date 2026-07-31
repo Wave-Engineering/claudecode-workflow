@@ -124,7 +124,7 @@ flowchart LR
 | Layer | Mechanism | Manifest fragment | Requirements |
 |-------|-----------|-------------------|--------------|
 | Baked-in-image | Built by `./install` in the image; immutable per tag | *(none — in the image)* | R-06, R-09 |
-| Shared-mutable-rw | rw bind-mount, **sandbox-scoped** host source | `10-memory.toml` | R-03, R-20 |
+| Shared-mutable-rw | rw bind-mount, **sandbox-scoped** host source | `05-transcripts.toml`, `10-memory.toml` | R-03, R-20 |
 | Read-only secrets | ro **named single-file** bind-mounts under `~/.secrets` (§3.5) | `20-secrets.toml` | R-12, R-13, R-14 |
 | User-environment overlay | additive / in-container / symlink, by artifact type | `30-user-overlay.toml` | R-09, R-10, R-11 |
 | Durable caches | rw bind-mount, major-partitioned | `40-durable-caches.toml` | §5.3 |

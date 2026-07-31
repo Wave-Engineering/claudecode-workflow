@@ -330,7 +330,7 @@ harness can stand up a real sandbox session in the pytest lane).
    ```bash
    # from the host, tail the session's host-backed .jsonl and look for the ping
    python3 scripts/flight-surgeon/surgeon.py --live \
-     --transcripts-root ~/.claude/projects   # locates the transcript path
+     --transcripts-root ~/.oaw/state/$OAW_MAJOR/transcripts   # locates the transcript path
    ```
 
    **EXPECT:** the sent text appears as a new user turn in the transcript (and/or
@@ -407,7 +407,7 @@ confirms it and records the boundary behaviour.
 2. **Confirm the transcript is growing** on the host (record its size/last line):
 
    ```bash
-   python3 scripts/flight-surgeon/surgeon.py --live --transcripts-root ~/.claude/projects
+   python3 scripts/flight-surgeon/surgeon.py --live --transcripts-root ~/.oaw/state/$OAW_MAJOR/transcripts
    # note the resolved transcript path P from the summary, then:
    wc -l "$P"; tail -1 "$P"
    ```
@@ -438,7 +438,7 @@ confirms it and records the boundary behaviour.
    the stall after the threshold:
 
    ```bash
-   python3 scripts/flight-surgeon/surgeon.py --live --transcripts-root ~/.claude/projects
+   python3 scripts/flight-surgeon/surgeon.py --live --transcripts-root ~/.oaw/state/$OAW_MAJOR/transcripts
    ```
 
    **EXPECT:** the container is not reported healthy-and-progressing — either a
@@ -530,7 +530,7 @@ so it cannot run in the pytest lane.
 
    ```bash
    python3 scripts/flight-surgeon/surgeon.py --live \
-     --transcripts-root ~/.claude/projects --fail-on-quarantine ; echo "exit=$?"
+     --transcripts-root ~/.oaw/state/$OAW_MAJOR/transcripts --fail-on-quarantine ; echo "exit=$?"
    ```
 
    **EXPECT:** the container is reported `should_quarantine=true` and the exit is

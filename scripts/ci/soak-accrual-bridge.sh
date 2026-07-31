@@ -38,7 +38,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BRIDGE_PY="$HERE/soak_accrual_bridge.py"
 
 OAW_SOAK_LEDGER="${OAW_SOAK_LEDGER:-$HOME/.oaw/soak/ledger.jsonl}"
-SURGEON_TRANSCRIPTS_ROOT="${SURGEON_TRANSCRIPTS_ROOT:-$HOME/.claude/projects}"
+# Sandbox transcripts, NOT the fleet's ~/.claude/projects — the surgeon refuses
+# that root (#1064) and this loop would exit non-zero and accrue ZERO soak,
+# defeating #1008. Mirrors dogfood-cutover.sh.
+SURGEON_TRANSCRIPTS_ROOT="${SURGEON_TRANSCRIPTS_ROOT:-$HOME/.oaw/state/${OAW_MAJOR:-1}/transcripts}"
 
 cmd=(python3 "$BRIDGE_PY" --ledger "$OAW_SOAK_LEDGER" --transcripts-root "$SURGEON_TRANSCRIPTS_ROOT")
 [[ "${SOAK_BRIDGE_DRY_RUN:-false}" == "true" ]] && cmd+=(--dry-run)
