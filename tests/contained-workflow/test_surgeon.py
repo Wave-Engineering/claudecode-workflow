@@ -452,3 +452,99 @@ def test_refused_root_exits_2_without_a_traceback() -> None:
         "the refusal must be a message, not a stack trace:\n" + proc.stderr
     )
     assert "live-fleet" in proc.stderr
+
+
+# --- container workspace slug (#1075) ------------------------------------------
+#
+# Found by MV-05, the first cut-over step that launches a container. aoe mounts a
+# workspace at /workspace/<name>, NOT at its host path — measured from a live
+# container: `docker inspect` gave `/tmp/mv05-ws -> /workspace/mv05-ws` with
+# WorkingDir `/workspace/mv05-ws`, and the agent's own /proc/<pid>/cwd agreed.
+# Claude Code derives its transcript dir from cwd, so the agent writes under
+# `-workspace-mv05-ws` while `aoe list` reports the HOST path. Slugging the host
+# path could never match, so NO containerised session resolved — every container
+# read healthy, quarantine never fired, and soak accrued unmeasured.
+
+
+def test_container_workspace_path_derivation() -> None:
+    assert fs.container_workspace_path("/tmp/mv05-ws") == "/workspace/mv05-ws"
+    assert fs.container_workspace_path("/home/bakerb/sandbox/github/x") == "/workspace/x"
+    assert fs.container_workspace_path("/tmp/trailing/") == "/workspace/trailing"
+
+
+def test_resolves_the_container_written_slug(tmp_path) -> None:
+    """The transcript is written INSIDE the container, so the lookup must slug the
+    container path even though aoe reports the host one."""
+    d = tmp_path / "-workspace-mv05-ws"
+    d.mkdir()
+    (d / "96304b8d-c729-4fd1-b971-90176cb53cf5.jsonl").write_text("{}\n")
+    got = fs._newest_transcript_for(tmp_path, "/tmp/mv05-ws")
+    assert got is not None, "a containerised session's transcript must resolve"
+    assert got.parent.name == "-workspace-mv05-ws"
+
+
+def test_host_slug_alone_does_not_resolve(tmp_path) -> None:
+    """Regression guard for the pre-#1075 behaviour: a transcript sitting under the
+    HOST-path slug must NOT satisfy the lookup, or the bug is back."""
+    d = tmp_path / "-tmp-mv05-ws"
+    d.mkdir()
+    (d / "s.jsonl").write_text("{}\n")
+    assert fs._newest_transcript_for(tmp_path, "/tmp/mv05-ws") is None
+
+
+def test_unresolved_transcript_is_visible_in_the_json_report() -> None:
+    """The promotion gate reads the JSON, not the stderr warning — so 'never
+    measured' has to travel with the verdict. Note broken stays False: an
+    unresolved transcript is not evidence of a break, which is exactly why it
+    would otherwise read as health."""
+    a = fs.assess_record(
+        {"container_id": "c1", "title": "t", "status": "running",
+         "profile": "dogfood", "entries": [], "transcript_resolved": False}
+    )
+    d = a.as_dict()
+    assert d["transcript_resolved"] is False
+    assert d["health"]["broken"] is False
+
+
+def test_observation_files_default_to_resolved() -> None:
+    """Hand-authored observations supply entries directly, so the pre-#1075
+    contract must be unchanged for them."""
+    a = fs.assess_record(
+        {"container_id": "c2", "title": "t", "status": "running",
+         "profile": "dogfood", "entries": []}
+    )
+    assert a.as_dict()["transcript_resolved"] is True
+
+
+def test_fleet_mode_resolves_native_host_slug(tmp_path) -> None:
+    """--allow-fleet-transcripts watches NATIVE sessions, whose cwd IS the host
+    path. Converting to /workspace/<name> there matches nothing and reports every
+    fleet session unmeasured — and fleet mode is the PRE-cut-over configuration,
+    the one usable today. #1075's fix silently killed it until this test."""
+    d = tmp_path / "-home-bakerb-sandbox-github-claudecode-workflow"
+    d.mkdir()
+    (d / "s.jsonl").write_text("{}\n")
+    host = "/home/bakerb/sandbox/github/claudecode-workflow"
+    assert fs._newest_transcript_for(tmp_path, host, allow_fleet=True) is not None
+    # …and without the flag the container derivation still applies.
+    assert fs._newest_transcript_for(tmp_path, host) is None
+
+
+def test_prefix_collision_does_not_match(tmp_path) -> None:
+    """Exact parent-dir match, not substring. `-workspace-app-2` must not satisfy
+    a lookup for `app`, or a wedged agent inherits a neighbour's transcript."""
+    d = tmp_path / "-workspace-app-2"
+    d.mkdir()
+    (d / "s.jsonl").write_text("{}\n")
+    assert fs._newest_transcript_for(tmp_path, "/x/app") is None
+
+
+def test_degenerate_path_is_unresolved_not_wildcard(tmp_path) -> None:
+    """An empty slug would disable filtering and return the newest .jsonl anywhere,
+    reported as RESOLVED — the confident-wrong-verdict this issue removes."""
+    d = tmp_path / "-workspace-anything"
+    d.mkdir()
+    (d / "s.jsonl").write_text("{}\n")
+    for degenerate in ("/", ".", ""):
+        assert fs._newest_transcript_for(tmp_path, degenerate) is None, degenerate
+    assert fs.container_workspace_path("/") == ""

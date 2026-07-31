@@ -512,7 +512,31 @@ so it cannot run in the pytest lane.
    aoe -p meful-test add --sandbox --sandbox-image oaw-mv05:edge --launch /tmp/mv05-ws
    ```
 
-2. **Do real work that lands on the host-backed mount** — write a durable artifact
+2. **Pin the container workspace path** (#1075). aoe mounts a workspace at
+   `/workspace/<name>`, **not** at its host path. This repo does not own that
+   convention and `surgeon.py` hardcodes it as `CONTAINER_WORKSPACE_ROOT`, so it
+   must be re-observed here rather than believed. A silent change means **no**
+   containerised transcript resolves: soak then fails safe (nothing accrues) but
+   quarantine fails **open** (`broken=False` forever).
+
+   Resolve the container from **this session**, not `head -1` over every sandbox —
+   picking an arbitrary container compares its `WorkingDir` against the derivation
+   for a different workspace and produces a spurious FAIL:
+
+   ```bash
+   sid=$(aoe -p meful-test list | awk '/mv05-ws/ {print $NF}')
+   cid=$(docker ps --filter "name=$sid" --format '{{.ID}}')   # aoe names it aoe-sandbox-<id-prefix>
+   docker inspect "$cid" --format '{{.Config.WorkingDir}}'
+   docker exec "$cid" sh -c 'readlink /proc/$(pgrep -n claude)/cwd'
+   python3 -c "import sys;sys.path.insert(0,'scripts/flight-surgeon');import surgeon
+   print(surgeon.container_workspace_path('/tmp/mv05-ws'))"
+   ```
+
+   **EXPECT:** all three agree. Verified 2026-07-31: `/tmp/mv05-ws` →
+   `/workspace/mv05-ws` from `WorkingDir`, from `/proc/<pid>/cwd`, and from the
+   derivation. A disagreement is a **FAIL** — fix `CONTAINER_WORKSPACE_ROOT`.
+
+3. **Do real work that lands on the host-backed mount** — write a durable artifact
    from inside the session (this is the "work" that must survive):
 
    ```bash
@@ -521,11 +545,11 @@ so it cannot run in the pytest lane.
 
    Confirm on the **host**: `cat /tmp/mv05-ws/durable-work.txt` → `zero-work-lost`.
 
-3. **Plant the break.** Wedge the agent so the surgeon classifies it broken — e.g.
+4. **Plant the break.** Wedge the agent so the surgeon classifies it broken — e.g.
    drive it into a tool loop, or hard-kill `claude` inside the container while aoe
    still reports `running` (as MV-06 step 3). The transcript stops progressing.
 
-4. **Confirm the surgeon flags it** (host-side, reading the host-backed transcript —
+5. **Confirm the surgeon flags it** (host-side, reading the host-backed transcript —
    no container access):
 
    ```bash
@@ -536,7 +560,7 @@ so it cannot run in the pytest lane.
    **EXPECT:** the container is reported `should_quarantine=true` and the exit is
    `3`. A dogfood breakage must flag; a `dev-mode` one would not (R-22).
 
-5. **Note the container id** and **run the quarantine** on the surgeon's verdict:
+6. **Note the container id** and **run the quarantine** on the surgeon's verdict:
 
    ```bash
    cid=$(docker ps --filter name=<session> --format '{{.ID}}')
@@ -549,7 +573,7 @@ so it cannot run in the pytest lane.
    stops + `docker rm`s the broken container and recreates on `:stable`. It appends
    a quarantine record to `~/.oaw/quarantine/ledger.jsonl`.
 
-6. **Confirm zero work lost** on the **host** — the durable artifact survived the
+7. **Confirm zero work lost** on the **host** — the durable artifact survived the
    `docker rm` + recreate:
 
    ```bash
@@ -559,7 +583,7 @@ so it cannot run in the pytest lane.
    **EXPECT:** `zero-work-lost` — unchanged. A missing/empty file is a **FAIL**
    (R-02 violated — the rollback was not lossless).
 
-7. **Confirm the recreate is on `:stable`** and re-attached the host source:
+8. **Confirm the recreate is on `:stable`** and re-attached the host source:
 
    ```bash
    new=$(docker ps --filter name=<session> --format '{{.ID}}')
@@ -567,7 +591,7 @@ so it cannot run in the pytest lane.
    docker inspect --format '{{json .Mounts}}' "$new"       # /tmp/mv05-ws still bind-mounted
    ```
 
-8. **Confirm the bad `:edge` digest is held from promotion** — the ledger carries
+9. **Confirm the bad `:edge` digest is held from promotion** — the ledger carries
    the quarantine so the gate's zero-quarantines condition (R-07) trips:
 
    ```bash

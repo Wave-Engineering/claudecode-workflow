@@ -280,6 +280,19 @@ def build_observations(
             )
             continue
 
+        if not a.get("transcript_resolved", True):
+            skipped.append(
+                (
+                    sid,
+                    "transcript unresolved — health was never measured, so no soak "
+                    "is credited. NOT a break: an unresolved session classifies "
+                    "'running, no timestamped activity yet' -> broken=False, i.e. it "
+                    "reads HEALTHY, which is why crediting it would accrue toward "
+                    "promotion on evidence that does not exist (#1075).",
+                )
+            )
+            continue
+
         # Session-start signal: created_at (primary), transcript-earliest (fallback).
         start = sl.parse_ts(created_at.get(sid))
         if start is None:

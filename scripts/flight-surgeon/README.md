@@ -9,6 +9,21 @@ so the probe is **fate-independent** (R-15): a wedged, looping, or OOM-killed
 agent cannot corrupt the signal, and the probe needs **nothing from inside the
 container** — no `docker exec`, no kit import, no MCP call.
 
+## `transcript_resolved` (input and output)
+
+Both an accepted observation key and an emitted report field. `false` means **no
+transcript could be resolved for this session — its health was never measured**.
+
+It matters because an unresolved session is not a neutral one: it classifies
+`running` with no timestamps, which takes the "no timestamped activity yet"
+branch and yields `broken=false`. Without this field it is indistinguishable from
+a healthy session, and `soak_accrual_bridge` would credit soak toward promotion on
+evidence that does not exist (#1075). Absent in an observation file, it defaults
+to `true` — a hand-authored observation supplies its entries directly.
+
+The live seam that produces it is pinned by **MV-05 step 2**, which re-observes
+aoe's `/workspace/<name>` mount against a running container.
+
 ## What it detects (R-16)
 
 While a container's aoe status is **`running`**:
