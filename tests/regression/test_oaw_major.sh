@@ -83,6 +83,18 @@ OAW_MAJOR=7.3.0 "$SCRIPT" >/dev/null 2>&1
 [[ "$?" -eq 2 ]] || fail "a semver \$OAW_MAJOR must be refused (exit 2)"
 pass "semver override refused (namespace-split guard)"
 
+# CI must actually FETCH tags, or the derivation resolves locally and refuses in CI.
+# `fetch-depth: 0` is NOT enough: in actions/checkout@v4 `fetch-tags` is a separate
+# input defaulting to false, and the action fetches with --no-tags without it. This
+# shipped once exactly that way — depth set, tags absent, run log printing
+# `fetch-tags: false` while the derivation failed.
+WF="$REPO_DIR/.github/workflows/validate.yml"
+if [[ -f "$WF" ]]; then
+	grep -q 'fetch-tags: true' "$WF" ||
+		fail "validate.yml must set fetch-tags: true — oaw-major.sh derives from git tags, and fetch-depth alone does not fetch them"
+	pass "CI checkout fetches tags (fetch-depth alone does not)"
+fi
+
 echo ""
 if ((FAILS > 0)); then
 	echo "  $FAILS oaw-major check(s) FAILED"

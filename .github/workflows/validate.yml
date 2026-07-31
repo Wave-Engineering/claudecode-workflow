@@ -11,10 +11,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           # Tags are REQUIRED: scripts/ci/oaw-major.sh derives the kit major from
-          # `git describe --tags` (#1067), and the default shallow checkout fetches
-          # with --no-tags. Without this the derivation cannot resolve in CI while
-          # passing locally — the classic green-here/red-there split.
+          # `git describe --tags` (#1067). Without them the derivation cannot resolve
+          # in CI while passing locally — the classic green-here/red-there split.
+          #
+          # BOTH inputs are needed. fetch-depth: 0 does NOT imply tags in
+          # actions/checkout@v4: fetch-tags is a separate input defaulting to false,
+          # and the action fetches with --no-tags unless it is set. Verified from the
+          # run log, which printed `fetch-tags: false` alongside `fetch-depth: 0`
+          # while the derivation still failed.
           fetch-depth: 0
+          fetch-tags: true
 
       - name: Install shellcheck
         run: sudo apt-get install -y shellcheck
