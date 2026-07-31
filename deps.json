@@ -12,19 +12,60 @@
     }
   },
   "commands": [
-    { "name": "curl",       "required_by": "MCP install scripts" },
-    { "name": "jq",         "required_by": "settings.json merge, MCP install" },
-    { "name": "git",        "required_by": "issue/branch/PR workflow, kit install" },
-    { "name": "bun",        "required_by": "MCP server builds" },
-    { "name": "gh",         "required_by": "GitHub CLI (issues, PRs, releases)" },
-    { "name": "glab",       "required_by": "GitLab CLI (issues, MRs)" },
-    { "name": "python3",    "required_by": "Package builds (zipapp)" },
-    { "name": "shellcheck", "required_by": "Script validation" },
-    { "name": "shfmt",      "required_by": "Script formatting" },
-    { "name": "trivy",      "required_by": "Dependency vulnerability scan (precheck)", "optional": true }
+    {
+      "name": "curl",
+      "required_by": "MCP install scripts"
+    },
+    {
+      "name": "jq",
+      "required_by": "settings.json merge, MCP install"
+    },
+    {
+      "name": "git",
+      "required_by": "issue/branch/PR workflow, kit install"
+    },
+    {
+      "name": "bun",
+      "required_by": "MCP server builds"
+    },
+    {
+      "name": "gh",
+      "required_by": "GitHub CLI (issues, PRs, releases)"
+    },
+    {
+      "name": "glab",
+      "required_by": "GitLab CLI (issues, MRs)"
+    },
+    {
+      "name": "python3",
+      "required_by": "Package builds (zipapp)"
+    },
+    {
+      "name": "shellcheck",
+      "required_by": "Script validation"
+    },
+    {
+      "name": "shfmt",
+      "required_by": "Script formatting"
+    },
+    {
+      "name": "trivy",
+      "required_by": "Dependency vulnerability scan (precheck)",
+      "optional": true
+    }
   ],
   "secrets": [
-    { "path": "~/.secrets/claude-code-oauth-token", "required_by": "containerised agent auth (#1076) — without it the agent halts on an interactive login menu" },
-    { "path": "~/.secrets/discord-bot-token", "required_by": "disc-server and discord-watcher MCPs" }
+    {
+      "path": "~/.secrets/claude-code-oauth-token",
+      "required_by": "containerised agent auth (#1076) \u2014 without it the agent halts on an interactive login menu"
+    },
+    {
+      "path": "~/.secrets/github-pat",
+      "required_by": "containerised agent auth (#1076) \u2014 without it the agent halts on an interactive login menu"
+    },
+    {
+      "path": "~/.secrets/discord-bot-token",
+      "required_by": "disc-server and discord-watcher MCPs"
+    }
   ]
 }

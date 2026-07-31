@@ -350,6 +350,16 @@ validate_secrets() {
 			warn "secrets: malformed OAW_SECRET_ENV entry '$pair' (want ENVVAR=secret-name)"
 			continue
 		fi
+		# DENY-LIST, enforced here rather than asserted in a comment. The rule
+		# "never project this credential into the environment" is only real if the
+		# projection loop refuses it — otherwise one OAW_SECRET_ENV line hands an
+		# org-admin PAT to every child process (#1082).
+		case "$secname" in
+		github-pat)
+			warn "secrets: refusing to project '$secname' into \$$envname — file modality only (#1082)"
+			continue
+			;;
+		esac
 		if [[ -f "$dir/$secname" ]]; then
 			export "$envname=$(tr -d '\r\n' <"$dir/$secname")"
 			info "secrets: projected '$secname' -> \$$envname"
@@ -361,18 +371,140 @@ validate_secrets() {
 		fi
 	done
 
-	local name
+	# Secret names are FILENAMES, not shell identifiers. `${!name}` on a name
+	# containing a hyphen is not a lookup that returns empty — bash rejects it
+	# outright ("github-pat: invalid variable name") and, under `set -e`, kills the
+	# shell AT THAT LINE: before the fatal, before the accumulate-all-fatals list,
+	# before the summary. Under the sourcing wrapper that means no agent at all,
+	# with only a bare bash error to explain it. Latent since #1061 because every
+	# declared secret happened to be present; adding a NEW required secret to a
+	# host that lacks the file is what walks straight into it.
+	local name envname
 	for name in "${required[@]:-}"; do
 		[[ -n "$name" ]] || continue
+		envname="${name//[^A-Za-z0-9_]/_}"
 		if [[ -f "$dir/$name" ]]; then
 			info "secrets: '$name' present (path modality)"
-		elif [[ -n "${!name:-}" ]]; then
-			info "secrets: '$name' present (env modality)"
+		elif [[ -n "${!envname:-}" ]]; then
+			info "secrets: '$name' present (env modality as \$$envname)"
 		else
 			fatal "required secret missing: '$name' (expected file $dir/$name or env \$$name)"
 		fi
 	done
 	return 0
+}
+
+# --- GitHub credential (#1082) ------------------------------------------------
+#
+# Without this a containerised agent reaches a prompt, authenticates to Anthropic,
+# and then cannot push, open a PR, merge, or run /scpmmr — it can think but not
+# land work, which is the whole job.
+#
+# FILE MODALITY, NOT ENV — this is the point of the function. The host
+# authenticates gh via GH_TOKEN and copying that would be one line, but an
+# environment variable is inherited by EVERY child process, and the only working
+# GitHub credential here carries admin:enterprise, admin:org, delete_repo,
+# delete:packages. The CLAUDE_CODE_OAUTH_TOKEN exception was argued narrowly: that
+# token IS the agent's own identity, so a child that steals it gains nothing the
+# agent does not already have. An org-admin PAT does not meet that bar. Writing
+# gh's own credential file means only gh reads it.
+#
+# Warn, never fatal: an agent with no GitHub access is still useful for local
+# work, and the wrapper SOURCES this script, so a fatal here means no agent at all.
+ensure_github_auth() {
+	local secret="$OAW_SECRETS_DIR/github-pat"
+	local cfg_dir="$OAW_HOME/.config/gh"
+	local hosts="$cfg_dir/hosts.yml"
+
+	if [[ ! -f "$secret" ]]; then
+		warn "github: no $secret — gh will be UNAUTHENTICATED (no push, no PR, no merge)"
+		return 0
+	fi
+
+	# Never clobber a credential the operator put there deliberately — but scope
+	# the check to github.com. A bare `grep oauth_token` matches a commented line
+	# or a token for a DIFFERENT host, and would then log "left alone" while
+	# leaving github.com unauthenticated: the #1082 failure wearing a success
+	# message, which is the shape this whole file is written against.
+	# Host-SCOPED, and deliberately not `gh auth token --hostname github.com`:
+	# that command performs a config migration which makes a NETWORK call and
+	# returns non-zero on a merely-expired token (measured: "failed to migrate
+	# config … 401 Bad credentials"). Using it would clobber an operator's
+	# credential precisely when it is stale — worse than the host-blind grep it
+	# was meant to replace. This awk scan is offline and answers exactly the
+	# question asked: is there an oauth_token under the github.com block?
+	if [[ -s "$hosts" ]] && awk '
+		/^[^[:space:]#]/ { host = $0; sub(/:.*/, "", host) }
+		/^[[:space:]]+oauth_token:/ { if (host == "github.com") found = 1 }
+		END { exit(found ? 0 : 1) }
+	' "$hosts" 2>/dev/null; then
+		info "github: $hosts already carries a github.com token — left alone"
+		return 0
+	fi
+
+	local token
+	token="$(tr -d '\r\n' <"$secret")"
+	if [[ -z "$token" ]]; then
+		warn "github: $secret is empty — gh will be UNAUTHENTICATED"
+		return 0
+	fi
+	# Shape guard. A secret file written as `GH_TOKEN=ghp_x` or `export GH_TOKEN=…`
+	# is a very common shape, and interpolating it produces VALID YAML carrying a
+	# garbage token — so the failure surfaces later as a puzzling 401 instead of
+	# here, where the cause is obvious.
+	if [[ ! "$token" =~ ^[A-Za-z0-9_]+$ ]]; then
+		warn "github: $secret does not look like a bare PAT (shell/YAML syntax in the file?) — refusing to write"
+		return 0
+	fi
+
+	mkdir -p "$cfg_dir"
+	# Remove first so `umask 077` actually governs creation. Truncating an existing
+	# file PRESERVES its mode, so a pre-existing 0644 hosts.yml would receive the
+	# token world-readable for the instant before chmod — the very window the
+	# umask is here to close.
+	rm -f "$hosts"
+	# umask before create: the token must never exist world-readable, not even for
+	# the instant between creation and chmod.
+	local old_umask
+	old_umask="$(umask)"
+	umask 077
+	{
+		echo "github.com:"
+		echo "    oauth_token: '$token'"
+		echo "    git_protocol: ${OAW_GH_PROTOCOL:-https}"
+	} >"$hosts"
+	umask "$old_umask"
+	chmod 600 "$hosts"
+	info "github: wrote $hosts (mode 600, file modality — NOT exported to env)"
+
+	# AUTHENTICATING gh IS NOT ENOUGH — git is a separate client.
+	#
+	# hosts.yml authenticates the `gh` CLI. `git push` does not read it, and
+	# `gh pr create` shells out to `git push`, so without this the agent can call
+	# the API and still not land a single commit. Measured in a container before
+	# this block existed:
+	#
+	#   $ git push --dry-run origin HEAD
+	#   Host key verification failed.
+	#   fatal: Could not read from remote repository.
+	#
+	# Two things are needed, and only together:
+	#   1. a credential helper, so HTTPS pushes use the token we just wrote;
+	#   2. an SSH->HTTPS rewrite, because repos are cloned with `git@github.com:`
+	#      origins and the container has no ~/.ssh (deliberately — mounting the
+	#      host's private keys is a far larger exposure than a scoped PAT).
+	#
+	# Scoped to github.com so no other forge's remotes are rewritten. Written to
+	# the container-local gitconfig, which dies with the container.
+	if command -v gh >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
+		git config --global --replace-all \
+			"credential.https://github.com.helper" '!gh auth git-credential' || true
+		git config --global --replace-all \
+			"url.https://github.com/.insteadOf" "git@github.com:" || true
+		info "github: git configured for HTTPS+token (ssh remotes rewritten; no keys needed)"
+	else
+		warn "github: gh or git missing — git push will NOT be authenticated"
+	fi
 }
 
 # --- Onboarding state (#1079) -------------------------------------------------
@@ -499,6 +631,7 @@ main() {
 	sync_skills
 	merge_settings
 	validate_secrets
+	ensure_github_auth
 	ensure_onboarding_state
 
 	# >&2 like every other line here. This was the ONE line on stdout, which was

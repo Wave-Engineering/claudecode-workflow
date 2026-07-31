@@ -938,3 +938,188 @@ def test_absent_config_warns_and_does_not_abort_the_boot(tmp_path: Path) -> None
     assert proc.returncode == 0, "an absent config must not fail the boot"
     assert "WARN: onboarding" in proc.stderr
     assert not cfg.exists(), "bootstrap must not conjure a config it did not find"
+
+
+# --- GitHub credential (#1082) ------------------------------------------------
+#
+# FILE modality, deliberately not env. The host authenticates gh via GH_TOKEN and
+# copying that would be one line — but an env var is inherited by every child
+# process, and the only working GitHub credential here carries admin:enterprise,
+# admin:org and delete_repo. The CLAUDE_CODE_OAUTH_TOKEN exception was argued
+# narrowly (that token IS the agent's identity); an org-admin PAT does not qualify.
+
+
+def _home_with_pat(tmp_path: Path, token: str = "ghp_TESTTOKEN") -> Path:
+    return _make_home(
+        tmp_path,
+        secrets={".env": 'OAW_REQUIRED_SECRETS=""\n', "github-pat": f"{token}\n"},
+    )
+
+
+def test_github_credential_is_written_as_a_file(tmp_path: Path) -> None:
+    home = _home_with_pat(tmp_path)
+    proc = _run(home)
+    assert proc.returncode == 0, proc.stderr
+    hosts = home / ".config" / "gh" / "hosts.yml"
+    assert hosts.is_file(), "gh credential file not written — gh stays unauthenticated"
+    body = hosts.read_text()
+    assert "oauth_token: 'ghp_TESTTOKEN'" in body, (
+        "token must be QUOTED so a mis-shaped secret file fails loud rather than "
+        "producing valid YAML with a garbage token"
+    )
+    assert "github.com:" in body
+
+
+def test_github_credential_is_not_world_readable(tmp_path: Path) -> None:
+    """A token file at 0644 is a credential leak to every user on the host."""
+    home = _home_with_pat(tmp_path)
+    assert _run(home).returncode == 0
+    mode = (home / ".config" / "gh" / "hosts.yml").stat().st_mode & 0o777
+    assert mode == 0o600, f"hosts.yml must be 0600, got {oct(mode)}"
+
+
+def test_github_token_is_never_exported_to_the_environment(tmp_path: Path) -> None:
+    """The whole point of the file modality.
+
+    bootstrap sources .env with `set -a`, so anything it defines is exported and
+    inherited by every child. The PAT must reach gh's config file and nowhere
+    else — assert no env var carries the token value.
+    """
+    home = _home_with_pat(tmp_path, token="ghp_LEAKCANARY")
+    proc = subprocess.run(
+        ["bash", "-c", f'. "{BOOTSTRAP}" >/dev/null 2>&1; env'],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "OAW_HOME": str(home)},
+        cwd=str(tmp_path),
+        timeout=60,
+    )
+    assert "ghp_LEAKCANARY" not in proc.stdout, (
+        "the GitHub PAT leaked into the environment — every child process now "
+        "inherits an org-admin credential"
+    )
+
+
+def test_absent_github_pat_warns_but_boots(tmp_path: Path) -> None:
+    """No GitHub access is degraded, not fatal — the wrapper sources this."""
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    proc = _run(home)
+    assert proc.returncode == 0, "a missing PAT must not abort the boot"
+    assert "WARN: github" in proc.stderr
+    assert not (home / ".config" / "gh" / "hosts.yml").exists()
+
+
+def test_existing_github_credential_is_not_clobbered(tmp_path: Path) -> None:
+    """An operator-placed credential wins over the mounted secret."""
+    home = _home_with_pat(tmp_path)
+    hosts = home / ".config" / "gh" / "hosts.yml"
+    hosts.parent.mkdir(parents=True, exist_ok=True)
+    original = "github.com:\n    oauth_token: ghp_OPERATOR_PUT_THIS_HERE\n"
+    hosts.write_text(original)
+    proc = _run(home)
+    assert proc.returncode == 0, proc.stderr
+    assert hosts.read_text() == original, "clobbered an operator-placed credential"
+
+
+def test_empty_github_pat_warns_and_writes_nothing(tmp_path: Path) -> None:
+    """An empty secret file must not produce a credential file with no token."""
+    home = _make_home(
+        tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n', "github-pat": "\n"}
+    )
+    proc = _run(home)
+    assert proc.returncode == 0
+    assert "WARN: github" in proc.stderr
+    assert not (home / ".config" / "gh" / "hosts.yml").exists()
+
+
+def test_hyphenated_required_secret_does_not_kill_the_shell(tmp_path: Path) -> None:
+    """`${!name}` on a hyphenated name is a bash ERROR, not an empty lookup.
+
+    Secret names are FILENAMES. Bash rejects indirect expansion on a name that is
+    not a legal identifier — `github-pat: invalid variable name` — and under
+    `set -e` that kills the shell AT THAT LINE: before the fatal, before the
+    accumulate-all-fatals list, before the summary. Under the sourcing wrapper it
+    means no agent at all, explained only by a bare bash error.
+
+    Latent since #1061 because every declared secret happened to exist; declaring
+    a NEW one on a host that lacks the file walks straight into it. The existing
+    R-14 tests could not see it — they assert only `returncode != 0` plus the
+    secret name in stderr, and bash's own error satisfies both.
+    """
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS="some-hyphenated-token"\n'})
+    proc = _run(home)
+    assert "invalid variable name" not in proc.stderr, (
+        "bash indirect-expansion error leaked — the boot died before reporting why"
+    )
+    assert "required secret missing: 'some-hyphenated-token'" in proc.stderr, (
+        "the real R-14 diagnosis must be reached and printed"
+    )
+    assert "bootstrap:" in proc.stderr, "the summary line must still be emitted"
+
+
+def test_github_pat_cannot_be_projected_into_the_environment(tmp_path: Path) -> None:
+    """The 'never project this' rule must be ENFORCED, not merely documented.
+
+    Servers enforce; docs suggest. Without this the rule is three comment blocks
+    that one OAW_SECRET_ENV line silently overrides, handing an org-admin PAT to
+    every child process.
+    """
+    home = _make_home(
+        tmp_path,
+        secrets={
+            ".env": 'OAW_REQUIRED_SECRETS=""\nOAW_SECRET_ENV="GH_TOKEN=github-pat"\n',
+            "github-pat": "ghp_MUSTNOTLEAK\n",
+        },
+    )
+    proc = subprocess.run(
+        ["bash", "-c", f'. "{BOOTSTRAP}" >/dev/null 2>&1; env'],
+        capture_output=True, text=True,
+        env={**os.environ, "OAW_HOME": str(home)}, cwd=str(tmp_path), timeout=60,
+    )
+    assert "ghp_MUSTNOTLEAK" not in proc.stdout, "deny-list bypassed — PAT reached the env"
+
+    warn_run = _run(home)
+    assert "refusing to project" in warn_run.stderr, "the refusal must be loud, not silent"
+
+
+def test_malformed_pat_file_is_refused(tmp_path: Path) -> None:
+    """`GH_TOKEN=ghp_x` in the secret file is a common shape.
+
+    Interpolated, it yields VALID YAML carrying a garbage token, so the failure
+    surfaces later as a puzzling 401 instead of here where the cause is obvious.
+    """
+    home = _make_home(
+        tmp_path,
+        secrets={".env": 'OAW_REQUIRED_SECRETS=""\n', "github-pat": "export GH_TOKEN=ghp_x\n"},
+    )
+    proc = _run(home)
+    assert proc.returncode == 0
+    assert "does not look like a bare PAT" in proc.stderr
+    assert not (home / ".config" / "gh" / "hosts.yml").exists()
+
+
+def test_git_is_configured_to_push_with_the_token(tmp_path: Path) -> None:
+    """Authenticating gh is NOT enough — git is a separate client.
+
+    `hosts.yml` authenticates the CLI; `git push` never reads it, and
+    `gh pr create` shells out to `git push`. The first cut of this fix verified
+    `gh api user` and would have shipped an agent that could call the API and
+    still not land a commit (measured: `Host key verification failed`).
+    """
+    home = _home_with_pat(tmp_path)
+    gitconfig = home / ".gitconfig"
+    proc = subprocess.run(
+        ["bash", str(BOOTSTRAP)],
+        capture_output=True, text=True, timeout=60,
+        env={**os.environ, "OAW_HOME": str(home), "HOME": str(home)},
+        cwd=str(tmp_path),
+    )
+    assert proc.returncode == 0, proc.stderr
+    cfg = gitconfig.read_text() if gitconfig.exists() else ""
+    assert "gh auth git-credential" in cfg, (
+        "no credential helper — HTTPS pushes will not use the token"
+    )
+    assert "insteadOf" in cfg and "git@github.com:" in cfg, (
+        "no ssh->https rewrite — a git@github.com: origin never consults the helper, "
+        "and the container has no ~/.ssh"
+    )
