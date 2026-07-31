@@ -46,6 +46,14 @@ fragment deterministically. Each file holds one or more `[[mount]]` tables.
 | `30-user-overlay.toml` | user-overlay (MCP fragment, toolbox, user scripts) | 1.3 (#963) |
 | `40-durable-caches.toml` | durable-cache (cargo, go-mod, uv, ms-playwright) | 1.3 (#963) |
 
+> **These fragments are INERT until copied into an AoE profile.** `extra_volumes`
+> is a manual copy of `mount_resolver.py --format aoe`, so the container runs on
+> whatever was last pasted — a fresh profile has `[0 items]` and every mount here
+> applies to nothing, silently. `scripts/ci/check-mount-drift.sh <profile>` diffs
+> the two and also stats every host source (an absent one is materialised by
+> Docker as an empty directory rather than erroring). It runs from
+> `dogfood-cutover.sh` — advisory on the plan path, fatal on apply (#1069).
+
 `20-secrets.toml` was a drop-in for Story 1.3's resolver: the
 `read-only-secrets` layer and its `mode = "ro"` enforcement (R-12) already
 existed, so Story 1.5 added only the fragment (no resolver change). #1061 then

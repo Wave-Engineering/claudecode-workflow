@@ -123,6 +123,11 @@ success while checking nothing:
   the promotion gate consumes that verdict. Fixed in #1064; the root is now
   sandbox-scoped and a fleet root is refused unless explicitly asked for.
 
+- **The mount manifest itself** — `mounts.d/` is the declared source of truth, but
+  `extra_volumes` is a hand-copy of it. A freshly created profile carried
+  `[0 items]`, so memory, secrets and caches were all declared and applied to
+  nothing. Nothing compared the two until #1069.
+
 The shared lesson, and the rule this doc asks future work to follow:
 **an instrument that has only ever run against a passing case has not been
 tested.** Plant a failure, confirm the guard fires, then remove it. This applies
