@@ -21,6 +21,8 @@ Two verification altitudes, mirroring test_ownership.py:
 
 from __future__ import annotations
 
+import pathlib
+
 import os
 import shutil
 import subprocess
@@ -76,15 +78,18 @@ def test_secrets_mount_is_readonly() -> None:
     mounts = _secrets_mounts()
     for m in mounts:
         assert m.mode == "ro", f"{m.name}: secrets mount must be ro (R-12), got {m.mode!r}"
-        # Compare against the path WITH its separator: a bare prefix test would
-        # also accept ~/.secrets-analogic/..., which is precisely the blast-radius
-        # this guard exists to bound.
-        assert m.source.startswith("/home/bakerb/.secrets/"), (
-            f"{m.name}: source must be a file under ~/.secrets/, got {m.source!r}"
-        )
-        assert m.target.startswith(SECRETS_TARGET + "/"), (
-            f"{m.name}: target must be under the bootstrap OAW_SECRETS_DIR "
-            f"({SECRETS_TARGET}/), got {m.target!r}"
+        # The dir ITSELF is now a legitimate source (#1090 whole-dir mount), but
+        # the separator check must survive: a bare `startswith` would also accept
+        # ~/.secrets-analogic/..., which is exactly the blast radius this guard
+        # bounds. So: equal to the dir, or under it with the separator present.
+        assert m.source == "/home/bakerb/.secrets" or m.source.startswith(
+            "/home/bakerb/.secrets/"
+        ), f"{m.name}: source must be ~/.secrets or a file under it, got {m.source!r}"
+        assert m.target == SECRETS_TARGET or m.target.startswith(
+            SECRETS_TARGET + "/"
+        ), (
+            f"{m.name}: target must be the bootstrap OAW_SECRETS_DIR "
+            f"({SECRETS_TARGET}) or under it, got {m.target!r}"
         )
         # The docker -v rendering carries the :ro suffix — ro at runtime.
         assert m.to_docker_volume().endswith(":ro"), (
@@ -92,22 +97,64 @@ def test_secrets_mount_is_readonly() -> None:
         )
 
 
-def test_secrets_mounts_are_scoped_not_whole_dir() -> None:
-    """#1061: no mount may be the whole ~/.secrets directory.
+def test_secrets_mount_is_whole_dir_and_read_only() -> None:
+    """#1090 REPLACES #1061's scoping guard — it does not simply delete it.
 
-    The host dir spans both sides of the OaW/Analogic IP boundary (~80 entries);
-    the kit consumes one. A whole-dir mount hands every container every credential
-    on both sides of that line. This is the guard that keeps a future edit from
-    quietly restoring it — the failure it prevents is silent, since a wider mount
-    breaks nothing and looks like it works.
+    #1061 forbade a whole-dir mount, citing the OaW/Analogic IP boundary. That
+    rationale was retired on an operator decision (#1090) after two corrections:
+    mounted is not baked (R-12 keeps secrets out of every image layer; these are
+    runtime binds), and the trust model is unchanged, since every HOST agent
+    already reads all ~80 entries. Curating per agent bought no security the fleet
+    does not already grant, and #1089 showed it just moves the blocker to whoever
+    needs the next credential.
+
+    The old test guarded against a silent WIDENING. Widening is now intended, so
+    this guards the invariant that still matters: it must be read-only. A mount
+    that quietly became rw would let a container corrupt the operator's whole
+    credential store.
     """
-    whole_dir = "/home/bakerb/.secrets"
-    for m in _secrets_mounts():
-        assert m.source != whole_dir, (
-            f"{m.name}: mounts the WHOLE secrets dir ({whole_dir}). Mount named "
-            f"files instead — see mounts.d/20-secrets.toml and #1061."
+    mounts = _secrets_mounts()
+    assert mounts, "no read-only-secrets mount declared at all"
+    whole = [m for m in mounts if m.source.rstrip("/").endswith("/.secrets")]
+    assert whole, (
+        "expected a whole-dir ~/.secrets mount (#1090). If this is being scoped "
+        "back to named files, do it deliberately — read #1090 first, the #1061 "
+        "rationale it would rest on has been retired."
+    )
+    for m in mounts:
+        assert m.to_docker_volume().endswith(":ro"), (
+            f"{m.name}: secrets mount must be read-only (R-12), got "
+            f"{m.to_docker_volume()!r}"
         )
 
+
+def test_no_third_party_secret_is_projected_into_the_environment() -> None:
+    """The risk that widening actually creates.
+
+    With ~80 credentials now reachable as files, the failure worth guarding is no
+    longer "too many mounted" — it is one of them being exported. An environment
+    variable is inherited by EVERY child process; a file must be deliberately
+    opened. OAW_SECRET_ENV is limited to CLAUDE_CODE_OAUTH_TOKEN, the exception
+    argued narrowly in #1076: that token IS the agent's identity, so a child
+    stealing it gains nothing the agent already lacks. An org-admin PAT, a GitLab
+    token or an ANALOGIC key does not meet that bar.
+    """
+    example = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "containers/oakandwave-workflow/secrets-env.example"
+    )
+    body = example.read_text()
+    pairs: list[str] = []
+    for line in body.splitlines():
+        line = line.strip()
+        if line.startswith("OAW_SECRET_ENV="):
+            pairs = line.split("=", 1)[1].strip().strip('"').split()
+    assert pairs, "OAW_SECRET_ENV not declared in the shipped template"
+    assert pairs == ["CLAUDE_CODE_OAUTH_TOKEN=claude-code-oauth-token"], (
+        "only the agent's OWN credential may be projected into the environment "
+        f"(#1076/#1090); found {pairs}. Add a file consumer instead — see "
+        "ensure_github_auth for the pattern."
+    )
 
 def test_secrets_env_declares_no_literal_token() -> None:
     """#1061: no manifest-declared env may carry a literal credential.
