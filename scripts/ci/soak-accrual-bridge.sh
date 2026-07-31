@@ -22,8 +22,13 @@
 #
 # Inputs (env):
 #   OAW_SOAK_LEDGER           soak .jsonl ledger to append (default ~/.oaw/soak/ledger.jsonl).
-#   SURGEON_TRANSCRIPTS_ROOT  root the surgeon resolves host-backed transcripts under
-#                             (default ~/.claude/projects).
+#   OAW_MAJOR                 kit major partitioning sandbox state. DERIVED from the
+#                             repo tag via scripts/ci/oaw-major.sh (#1067); no literal
+#                             default — a hardcoded major fails silently as empty state.
+#   SURGEON_TRANSCRIPTS_ROOT  root the surgeon resolves host-backed SANDBOX transcripts
+#                             under (default ~/.oaw/state/$OAW_MAJOR/transcripts). It
+#                             must NOT be ~/.claude/projects — that is the live fleet's
+#                             store, and the surgeon refuses it (#1064).
 #   OAW_SOAK_LOOKBACK_HOURS   bounded per-pass look-back in hours (default 1). SET THIS
 #                             TO YOUR CRON CADENCE: it must be >= the interval between
 #                             runs (else clean time between passes is under-credited),
@@ -41,7 +46,9 @@ OAW_SOAK_LEDGER="${OAW_SOAK_LEDGER:-$HOME/.oaw/soak/ledger.jsonl}"
 # Sandbox transcripts, NOT the fleet's ~/.claude/projects — the surgeon refuses
 # that root (#1064) and this loop would exit non-zero and accrue ZERO soak,
 # defeating #1008. Mirrors dogfood-cutover.sh.
-SURGEON_TRANSCRIPTS_ROOT="${SURGEON_TRANSCRIPTS_ROOT:-$HOME/.oaw/state/${OAW_MAJOR:-1}/transcripts}"
+OAW_MAJOR="${OAW_MAJOR:-$("$(dirname "${BASH_SOURCE[0]}")/oaw-major.sh")}"
+export OAW_MAJOR # surgeon.py narrows DEFAULT_TRANSCRIPTS_ROOT from this
+SURGEON_TRANSCRIPTS_ROOT="${SURGEON_TRANSCRIPTS_ROOT:-$HOME/.oaw/state/$OAW_MAJOR/transcripts}"
 
 cmd=(python3 "$BRIDGE_PY" --ledger "$OAW_SOAK_LEDGER" --transcripts-root "$SURGEON_TRANSCRIPTS_ROOT")
 [[ "${SOAK_BRIDGE_DRY_RUN:-false}" == "true" ]] && cmd+=(--dry-run)

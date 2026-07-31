@@ -56,7 +56,7 @@ CLI — the gate-signal emitter plugs straight into ``promote-oakandwave-image.s
     # -> SOAK_HOURS=<candidate soak sum>
     #    QUARANTINE_COUNT=<candidate quarantine count>
 
-    python3 profiles.py --emit launch --profile dev-mode
+    python3 profiles.py --emit launch --profile dev-mode --major "$(scripts/ci/oaw-major.sh)"
     # -> the docker/aoe launch args: the oaw.profile label + the skills overlay -v
 """
 
@@ -202,11 +202,49 @@ def skills_overlay_mount(
     return f"{src}:{IMAGE_SKILLS_TARGET}{suffix}"
 
 
+class EmptySkillsOverlayError(ProfileError):
+    """dev-mode's overlay source is empty — binding it would BLANK the skills."""
+
+
+def assert_overlay_populated(mount: str) -> None:
+    """Refuse a dev-mode launch whose overlay source is empty or absent (#1067).
+
+    The overlay is a WHOLE-DIRECTORY bind over the image's skills dir, so the
+    container sees exactly what the host source contains — it REPLACES, it does not
+    merge. `architecture.md` calls it "the developer's working skills bind over the
+    baked skills", which reads as an overlay; a whole-dir bind is a replacement.
+
+    The source is empty by default (nothing populates it), so an unguarded dev-mode
+    launch comes up with NO SKILLS AT ALL rather than with the developer's layered
+    over the baked ones. That is silent — the container starts fine and the agent
+    simply has no skills — which is why this raises rather than warns.
+    """
+    src = Path(mount.split(":", 1)[0]).expanduser()
+    try:
+        empty = not src.is_dir() or not any(src.iterdir())
+    except OSError as exc:
+        # An unreadable dir is "not usable as an overlay" just as surely as an
+        # empty one — surface it as the same legible refusal rather than letting a
+        # raw PermissionError escape as a traceback.
+        raise EmptySkillsOverlayError(
+            f"dev-mode skills overlay source {src} is not readable: {exc}"
+        ) from exc
+    if empty:
+        raise EmptySkillsOverlayError(
+            f"dev-mode skills overlay source {src} is empty or absent. The overlay "
+            f"is a whole-directory bind over {IMAGE_SKILLS_TARGET}, so launching "
+            "would leave the container with NO skills, not with yours layered over "
+            "the baked ones. Populate it (e.g. symlink your working skills into it) "
+            "or use the dogfood profile, which is image-only by design."
+        )
+
+
 def launch_spec(
     profile: object,
     *,
     major: int | str,
     skills_overlay_source: str = DEFAULT_SKILLS_OVERLAY_SOURCE,
+    require_populated_overlay: bool = True,
 ) -> list[str]:
     """Render the concrete launch args for a profile (R-21).
 
@@ -219,6 +257,10 @@ def launch_spec(
     args = ["--label", f"{PROFILE_LABEL_KEY}={prof.label}"]
     mount = skills_overlay_mount(prof.name, major=major, source=skills_overlay_source)
     if mount is not None:
+        # Guarded by default: an empty overlay blanks the skill surface silently.
+        # Callers rendering a spec for inspection (tests, docs) pass False.
+        if require_populated_overlay:
+            assert_overlay_populated(mount)
         args += ["-v", mount]
     return args
 
@@ -347,12 +389,28 @@ def main(argv: list[str] | None = None) -> int:
         "--profile", default=None, help="profile name for --emit launch (dev-mode|dogfood)"
     )
     parser.add_argument(
-        "--major", default="1", help="the state/image major for <major> substitution"
+        # NO literal default. A default here is the #1067 defect relocated from
+        # shell to the CLI — it resolves silently to the wrong state namespace.
+        # Not argparse-`required` though: --major is only consumed where <major> is
+        # actually substituted (a dev-mode overlay), so demanding it for
+        # --emit gate-signals or a dogfood launch would be noise. Enforced below,
+        # where it is used.
+        "--major", default=None,
+        help="the state/image major for <major> substitution (derive: scripts/ci/oaw-major.sh)",
     )
     parser.add_argument(
         "--skills-overlay-source",
         default=DEFAULT_SKILLS_OVERLAY_SOURCE,
         help="host source for the dev-mode skills overlay (--emit launch)",
+    )
+    parser.add_argument(
+        "--allow-empty-overlay",
+        action="store_true",
+        help=(
+            "render a dev-mode spec even when the overlay source is empty. For "
+            "INSPECTION only — launching with an empty overlay leaves the "
+            "container with no skills at all (#1067)"
+        ),
     )
     args = parser.parse_args(argv)
 
@@ -368,11 +426,30 @@ def main(argv: list[str] | None = None) -> int:
     if not args.profile:
         print("--profile is required for --emit launch", file=sys.stderr)
         return 2
+    # Demand --major only when the rendered spec actually substitutes <major> —
+    # i.e. an overlay-ON profile. Guessing a literal is the #1067 defect.
+    if args.major is None and "<major>" in args.skills_overlay_source:
+        if skills_overlay_on(args.profile):
+            print(
+                "--major is required for an overlay-ON profile (its source contains "
+                "<major>). Derive it: --major \"$(scripts/ci/oaw-major.sh)\". There is "
+                "no default on purpose — a literal silently picks the wrong state "
+                "namespace (#1067).",
+                file=sys.stderr,
+            )
+            return 2
+        args.major = ""  # unused: overlay OFF renders no <major>
     try:
         args_out = launch_spec(
-            args.profile, major=args.major, skills_overlay_source=args.skills_overlay_source
+            args.profile,
+            major=args.major,
+            skills_overlay_source=args.skills_overlay_source,
+            require_populated_overlay=not args.allow_empty_overlay,
         )
     except ProfileError as exc:
+        print(f"profile error: {exc}", file=sys.stderr)
+        return 2
+    except EmptySkillsOverlayError as exc:
         print(f"profile error: {exc}", file=sys.stderr)
         return 2
     print(" ".join(args_out))

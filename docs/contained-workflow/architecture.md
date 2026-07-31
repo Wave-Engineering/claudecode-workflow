@@ -73,7 +73,15 @@ docker label the surgeon and the promotion gate both read:
 | Profile | Skills overlay | `oaw.profile` | Candidate? | Role |
 |---------|----------------|---------------|------------|------|
 | **dogfood** | OFF — image-only | `dogfood` | yes | The real dogfood ring: its runs accrue soak and its breakages trip quarantine — it is what the gate measures. |
-| **dev-mode** | ON — the developer's working skills bind over the baked skills (the R-06 non-promotable exception) | `dev-mode` | **no** | Skill iteration without a rebuild. **Excluded from promotion telemetry** — dev-mode runs/breakages never count toward soak nor trip quarantine. |
+| **dev-mode** | ON — a whole-directory bind of the developer's working skills **over** the image skills dir (the R-06 non-promotable exception) | `dev-mode` | **no** | Skill iteration without a rebuild. **Excluded from promotion telemetry** — dev-mode runs/breakages never count toward soak nor trip quarantine. |
+
+> **The overlay REPLACES, it does not merge (#1067).** The bind covers the whole
+> image skills dir, so the container sees exactly what the host source contains.
+> An empty source therefore yields a container with **no skills at all**, silently —
+> `profiles.py` refuses that launch rather than rendering it. Note this is a
+> *different* mechanism from `bootstrap.sh`'s skills-sync, which is **image-wins /
+> host-fills** from `~/.oaw/.claude/skills`. Two overlay paths with two semantics;
+> reconciling them is open work.
 
 `containers/oakandwave-workflow/profiles.py` is the canonical owner of the label
 and the candidacy rule. It renders each profile's launch (`launch_spec` — the

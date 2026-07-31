@@ -33,8 +33,11 @@
 #                       ghcr.io/wave-engineering/oakandwave-workflow:edge).
 #   CUTOVER_WORKSPACES  whitespace/newline-separated workspace paths to cut over
 #                       (required — the OaW dev team's working trees).
-#   OAW_MAJOR           the kit major for the dogfood profile's <major> mounts
-#                       (default 1).
+#   OAW_MAJOR           the kit major for the dogfood profile's <major> mounts.
+#                       DERIVED from the repo tag via scripts/ci/oaw-major.sh; set
+#                       explicitly to override. There is no literal default — a
+#                       hardcoded major is the #1067 defect, and it fails silently
+#                       as empty state rather than loudly.
 #   OAW_SOAK_LEDGER     the FlightDeck soak ledger the gate reads (default
 #                       ~/.oaw/soak/ledger.jsonl). This script does not write it; the
 #                       soak-accrual bridge (scripts/ci/soak-accrual-bridge.sh, #1008)
@@ -53,7 +56,11 @@ PROFILES_PY="$REPO_DIR/containers/oakandwave-workflow/profiles.py"
 SURGEON_PY="$REPO_DIR/scripts/flight-surgeon/surgeon.py"
 
 EDGE_REF="${EDGE_REF:-ghcr.io/wave-engineering/oakandwave-workflow:edge}"
-OAW_MAJOR="${OAW_MAJOR:-1}"
+# Derived, never a literal (#1067). A hardcoded major shares one state namespace
+# across kit generations (defeating R-20) and, when wrong, fails SILENTLY as
+# empty state rather than loudly. --check also refuses an unprovisioned major.
+OAW_MAJOR="$("$HERE/oaw-major.sh")"
+export OAW_MAJOR # surgeon.py narrows its default transcripts root from this
 OAW_SOAK_LEDGER="${OAW_SOAK_LEDGER:-$HOME/.oaw/soak/ledger.jsonl}"
 # Sandbox transcripts are host-backed under ~/.oaw/state/<major>/transcripts
 # (mounts.d/05-transcripts.toml). This USED to default to $HOME/.claude/projects
@@ -78,6 +85,15 @@ echo "    dogfood launch args (from profiles.py): $dogfood_args"
 # Each workspace becomes one dogfood-profile sandbox on :edge. `aoe add --sandbox`
 # is the one-container-per-session seam (TC-1); the profile args stamp
 # oaw.profile=dogfood so the surgeon and the gate both filter on it (R-22).
+# Refuse an unprovisioned major before the FIRST real launch — not on the plan
+# path. A wrong/absent major is silent (docker materialises each missing bind
+# source as an empty dir, so memory and caches come up blank), so the guard has to
+# fire; but gating the documented dry run on host provisioning would break its
+# "launches NOTHING" contract and make it fail on any checkout without ~/.oaw.
+if [[ "$APPLY" == "true" ]]; then
+	"$HERE/oaw-major.sh" --check >/dev/null
+fi
+
 launched=0
 for ws in $CUTOVER_WORKSPACES; do
 	launch_cmd=(aoe add --sandbox --sandbox-image "$EDGE_REF")
