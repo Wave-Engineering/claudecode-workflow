@@ -67,9 +67,9 @@ import json
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 # --- tunable thresholds (all overridable at the CLI) --------------------------
 
@@ -475,6 +475,13 @@ class Assessment:
     quarantine_eligible: bool
     should_quarantine: bool
     reasons: tuple[str, ...]
+    # False when no transcript could be resolved for this session. A container with
+    # no transcript classifies "running, no timestamped activity yet" -> broken=False,
+    # i.e. it reads HEALTHY. The promotion gate consumes this JSON (not the stderr
+    # warning), so the distinction between "measured and fine" and "never measured"
+    # has to travel with the verdict (#1075). Defaults True so the observation-file
+    # path — where the caller supplied entries directly — is unaffected.
+    transcript_resolved: bool = True
 
     def as_dict(self) -> dict:
         return {
@@ -483,6 +490,7 @@ class Assessment:
             "profile": self.profile,
             "quarantine_eligible": self.quarantine_eligible,
             "should_quarantine": self.should_quarantine,
+            "transcript_resolved": self.transcript_resolved,
             "health": self.health.as_dict(),
             "reasons": list(self.reasons),
         }
@@ -545,7 +553,7 @@ def assess_record(rec: dict, *, now: datetime | None = None, **params) -> Assess
         entries = rec["entries"] if isinstance(rec["entries"], list) else []
     else:
         entries = read_transcript(rec.get("transcript", ""))
-    return assess(
+    a = assess(
         container_id=rec.get("container_id", rec.get("id", "?")),
         title=rec.get("title", "?"),
         status=rec.get("status"),
@@ -555,6 +563,9 @@ def assess_record(rec: dict, *, now: datetime | None = None, **params) -> Assess
         last_growth=parse_timestamp(rec.get("last_growth")),
         **params,
     )
+    # _gather_live stamps this; an observation file that omits it is treated as
+    # resolved, preserving the pre-#1075 contract for hand-authored observations.
+    return replace(a, transcript_resolved=bool(rec.get("transcript_resolved", True)))
 
 
 class SurgeonError(ValueError):
@@ -628,7 +639,18 @@ def discover_sessions(runner=_run) -> list[dict]:
 def report_summary(assessments: list[Assessment]) -> str:
     lines = ["flight surgeon — health report:"]
     for a in assessments:
-        mark = "QUARANTINE" if a.should_quarantine else ("BROKEN(excluded)" if a.health.broken else "ok")
+        # UNMEASURED outranks "ok": a session with no resolvable transcript
+        # classifies broken=False and would print [ok], which is the human summary
+        # disagreeing with the machine verdict about the one thing that matters —
+        # whether anything was actually checked (#1075).
+        if a.should_quarantine:
+            mark = "QUARANTINE"
+        elif a.health.broken:
+            mark = "BROKEN(excluded)"
+        elif not a.transcript_resolved:
+            mark = "UNMEASURED"
+        else:
+            mark = "ok"
         lines.append(
             f"  [{mark}] {a.title} ({a.container_id}) "
             f"status={a.health.status} profile={a.profile} state={a.health.state}"
@@ -636,7 +658,11 @@ def report_summary(assessments: list[Assessment]) -> str:
         for r in a.reasons:
             lines.append(f"      - {r}")
     n_q = sum(1 for a in assessments if a.should_quarantine)
-    lines.append(f"  => {len(assessments)} watched, {n_q} quarantine-eligible break(s)")
+    n_u = sum(1 for a in assessments if not a.transcript_resolved)
+    tail = f", {n_u} UNMEASURED (no transcript resolved)" if n_u else ""
+    lines.append(
+        f"  => {len(assessments)} watched, {n_q} quarantine-eligible break(s){tail}"
+    )
     return "\n".join(lines)
 
 
@@ -717,7 +743,10 @@ def _gather_live(args, runner=_run) -> list[dict]:
     unresolved: list[str] = []
     for s in sessions:
         title = s.get("title", "?")
-        transcript = _newest_transcript_for(root, s.get("path", ""))
+        transcript = _newest_transcript_for(
+            root, s.get("path", ""),
+            allow_fleet=getattr(args, "allow_fleet_transcripts", False),
+        )
         if transcript is None:
             unresolved.append(title)
         records.append(
@@ -746,17 +775,82 @@ def _gather_live(args, runner=_run) -> list[dict]:
     return records
 
 
-def _newest_transcript_for(root: Path, project_path: str) -> Path | None:
-    """Best-effort: the newest ``.jsonl`` under ``root`` whose name encodes
-    ``project_path`` (Claude Code escapes the project path into the dir name).
-    Returns None if nothing matches — the seam MV-04/MV-06 nail down."""
+# aoe mounts a session's workspace at /workspace/<name> inside the sandbox, NOT at
+# its host path. Measured from a live container during MV-05 (2026-07-31):
+#
+#   docker inspect  ->  /tmp/mv05-ws -> /workspace/mv05-ws,  WorkingDir /workspace/mv05-ws
+#   /proc/<claude>/cwd (in-container)  ->  /workspace/mv05-ws
+#
+# Claude Code derives its transcript dir from CWD, so a containerised agent writes
+# under `-workspace-<name>` while `aoe list` reports the HOST path (`/tmp/mv05-ws`).
+# Slugging the host path yields `-tmp-mv05-ws`, which can never match — so before
+# #1075 the surgeon resolved NOTHING for any containerised session, every container
+# read healthy, quarantine never fired, and soak accrued on unmeasured sessions.
+#
+# Nothing in the repo documents this mapping (mounts.d targets /home/ubuntu/..., the
+# docs say "host-backed" without a container-side path, and aoe is a compiled
+# binary), which is why static verification could not catch it and MV-05 did.
+CONTAINER_WORKSPACE_ROOT = "/workspace"
+
+
+def container_workspace_path(host_path: str) -> str:
+    """The in-container path aoe mounts ``host_path`` at.
+
+    Convention, not contract — this repo does not own aoe's mount layout, so it is
+    pinned by MV-05 reading a real container rather than by belief. If aoe changes
+    it, the manual-verification cross-check is what catches it; a silent mismatch
+    here is exactly the failure #1075 fixes.
+    """
+    name = PurePosixPath(host_path.rstrip("/")).name
+    # No basename ("/", "", ".") -> return empty so the caller treats it as
+    # unresolved. Falling back to host_path would be the one path this function
+    # exists to avoid.
+    return f"{CONTAINER_WORKSPACE_ROOT}/{name}" if name else ""
+
+
+def _slug(path: str) -> str:
+    """The inner part of Claude Code's project-dir name: `/` -> `-`, ends stripped.
+
+    NOT the full directory name — CC keeps a LEADING dash (`/workspace/x` ->
+    `-workspace-x`). Callers add it. An earlier docstring claimed this produced the
+    whole name, which was only harmless because the match was a loose substring.
+    """
+    return path.strip("/").replace("/", "-")
+
+
+def _newest_transcript_for(
+    root: Path, project_path: str, *, allow_fleet: bool = False
+) -> Path | None:
+    """The newest ``.jsonl`` under ``root`` for ``project_path``.
+
+    ``project_path`` is the HOST path (what ``aoe list`` reports). The transcript is
+    written by the agent INSIDE the container, so the lookup slugs the *container*
+    workspace path — see CONTAINER_WORKSPACE_ROOT above. Returns None if nothing
+    matches, which callers must surface (``transcript_resolved``) rather than treat
+    as health.
+    """
     if not root.is_dir() or not project_path:
         return None
-    slug = project_path.strip("/").replace("/", "-")
+    # Fleet mode watches NATIVE sessions, whose cwd IS the host path — converting
+    # to /workspace/<name> would match nothing and report every fleet session
+    # unmeasured. That is the pre-cut-over configuration, i.e. the one usable
+    # today, so the escape hatch has to reach here and not stop at _gather_live.
+    lookup = project_path if allow_fleet else container_workspace_path(project_path)
+    slug = _slug(lookup)
+    if not slug or slug == ".":
+        # An empty slug would disable filtering entirely (`if slug and ...` below),
+        # returning the newest .jsonl ANYWHERE under the root and calling it
+        # resolved — precisely the confident-wrong-verdict this issue removes.
+        return None
     best: Path | None = None
     best_mtime = -1.0
+    # EXACT parent-directory match, not a substring of the full path. Claude Code
+    # names the dir with a LEADING dash (`-workspace-mv05-ws`), and a substring test
+    # let `workspace-app` match `-workspace-app-2/...` — a wedged agent inheriting a
+    # neighbour's transcript is the same wrong-process verdict, one level down.
+    want = f"-{slug}"
     for jsonl in root.rglob("*.jsonl"):
-        if slug and slug not in str(jsonl):
+        if jsonl.parent.name != want:
             continue
         try:
             m = jsonl.stat().st_mtime

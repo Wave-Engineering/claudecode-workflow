@@ -180,12 +180,17 @@ def test_active_since_falls_back_to_transcript_earliest(tmp_path):
     entry timestamp (≈ session start), resolved with the surgeon's own transcript
     resolver under --transcripts-root."""
     # surgeon's _newest_transcript_for matches a .jsonl whose path contains the slug
-    # of the session path ("/work/agent-x" -> "work-agent-x").
+    # of the CONTAINER workspace path, not the host one (#1075): aoe mounts
+    # /work/agent-x at /workspace/agent-x, so the agent writes under
+    # "workspace-agent-x". The old fixture used the host slug ("work-agent-x") and
+    # therefore encoded the bug — it passed only because the resolver was wrong in
+    # the same direction.
     root = tmp_path / "projects"
     root.mkdir()
     earliest = (NOW - timedelta(hours=12)).replace(microsecond=0)
     later = (NOW - timedelta(hours=1)).replace(microsecond=0)
-    transcript = root / "work-agent-x.jsonl"
+    transcript = root / "-workspace-agent-x" / "sess.jsonl"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
     transcript.write_text(
         json.dumps({"timestamp": later.isoformat()})
         + "\n"
@@ -455,3 +460,37 @@ def test_bridge_wrapper_is_executable():
     (repo convention, cf. #948/#953)."""
     assert BRIDGE_WRAPPER.exists(), f"wrapper missing: {BRIDGE_WRAPPER}"
     assert os.access(BRIDGE_WRAPPER, os.X_OK), "soak-accrual-bridge.sh must be executable"
+
+
+def test_unresolved_transcript_is_skipped_not_credited(tmp_path):
+    """#1075: a session whose transcript never resolved was never health-checked.
+
+    It classifies `running` with no timestamps -> broken=False -> it reads HEALTHY,
+    so crediting it accrues soak toward promotion on evidence that does not exist.
+    This is the half of #1075 that protects the gate, and it shipped untested —
+    deleting the guard left the whole suite green.
+    """
+    a = _assessment("u", "dogfood", "running")
+    a["transcript_resolved"] = False
+    obs, skipped = bridge.build_observations(
+        [a], [_session("u", path="/work/agent-u")],
+        now=NOW, transcripts_root=tmp_path, lookback_hours=10,
+    )
+    assert obs == [], "an unmeasured session must not produce a creditable observation"
+    reasons = " ".join(r for _, r in skipped)
+    assert "never measured" in reasons, "the skip must say WHY, not drop silently"
+    assert "NOT a break" in reasons, (
+        "it must not assert a break that was never observed — soak_ledger's "
+        "broken-path reason would claim the surgeon found one"
+    )
+
+
+def test_resolved_transcript_is_still_credited(tmp_path):
+    """The guard must not swallow healthy measured sessions."""
+    a = _assessment("r", "dogfood", "running")
+    a["transcript_resolved"] = True
+    obs, _ = bridge.build_observations(
+        [a], [_session("r", path="/work/agent-r")],
+        now=NOW, transcripts_root=tmp_path, lookback_hours=10,
+    )
+    assert len(obs) == 1 and obs[0]["broken"] is False
