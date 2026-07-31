@@ -72,7 +72,9 @@ def test_launch_spec_labels_and_overlay():
     assert dog == ["--label", "oaw.profile=dogfood"]
     assert "-v" not in dog  # image-only
 
-    dev = pf.launch_spec("dev-mode", major=1)
+    # Rendering, not launch safety — the overlay-populated guard (#1067) is a
+    # separate question, covered by test_dev_mode_refuses_an_empty_overlay.
+    dev = pf.launch_spec("dev-mode", major=1, require_populated_overlay=False)
     assert dev[:2] == ["--label", "oaw.profile=dev-mode"]
     assert "-v" in dev
     mount = dev[dev.index("-v") + 1]
@@ -225,7 +227,10 @@ def test_cli_gate_signals(tmp_path):
 def test_cli_launch_emit():
     """The --emit launch CLI renders a profile's docker/aoe args."""
     dev = subprocess.run(
-        [sys.executable, str(PROFILES_PY), "--emit", "launch", "--profile", "dev-mode", "--major", "1"],
+        # --allow-empty-overlay: this asserts RENDERING. Production callers get
+        # the guard by default; see test_cli_refuses_empty_overlay.
+        [sys.executable, str(PROFILES_PY), "--emit", "launch", "--profile", "dev-mode",
+         "--major", "1", "--allow-empty-overlay"],
         capture_output=True,
         text=True,
         check=True,
@@ -240,3 +245,60 @@ def test_cli_launch_emit():
         check=True,
     ).stdout.strip()
     assert dog == "--label oaw.profile=dogfood"
+
+
+# --- dev-mode overlay must not blank the skill surface (#1067) ----------------
+
+
+def test_dev_mode_refuses_an_empty_overlay(tmp_path) -> None:
+    """The overlay is a whole-dir bind over the image skills dir — it REPLACES.
+    An empty source therefore yields a container with NO skills, silently, rather
+    than the developer's layered over the baked ones."""
+    empty = tmp_path / "skills"
+    empty.mkdir()
+    with pytest.raises(pf.EmptySkillsOverlayError) as exc:
+        pf.launch_spec("dev-mode", major=7, skills_overlay_source=str(empty))
+    msg = str(exc.value)
+    assert "NO skills" in msg, "the refusal must say what would actually happen"
+    assert "dogfood" in msg, "it must name the image-only alternative"
+
+
+def test_dev_mode_accepts_a_populated_overlay(tmp_path) -> None:
+    populated = tmp_path / "skills"
+    (populated / "myskill").mkdir(parents=True)
+    (populated / "myskill" / "SKILL.md").write_text("---\nname: myskill\n---\n")
+    args = pf.launch_spec("dev-mode", major=7, skills_overlay_source=str(populated))
+    assert "-v" in args and str(populated) in " ".join(args)
+
+
+def test_dogfood_is_unaffected_by_the_overlay_guard(tmp_path) -> None:
+    """dogfood is image-only: no overlay, so an empty source is irrelevant."""
+    empty = tmp_path / "nothing"
+    empty.mkdir()
+    assert pf.launch_spec("dogfood", major=7, skills_overlay_source=str(empty)) == [
+        "--label", "oaw.profile=dogfood",
+    ]
+
+
+def test_spec_still_renderable_for_inspection(tmp_path) -> None:
+    """Docs/tests must be able to render the spec without a populated host dir."""
+    args = pf.launch_spec(
+        "dev-mode", major=7, skills_overlay_source=str(tmp_path / "absent"),
+        require_populated_overlay=False,
+    )
+    assert "-v" in args
+
+
+def test_cli_refuses_empty_overlay_by_default(tmp_path) -> None:
+    """Production callers are guarded without opting in — the inspection escape
+    must be explicit, or the guard is one forgotten flag from being inert."""
+    empty = tmp_path / "skills"
+    empty.mkdir()
+    proc = subprocess.run(
+        [sys.executable, str(PROFILES_PY), "--emit", "launch", "--profile", "dev-mode",
+         "--major", "7", "--skills-overlay-source", str(empty)],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode == 2, f"expected refusal (exit 2), got {proc.returncode}"
+    assert "no skills" in proc.stderr.lower()
+    assert "Traceback" not in proc.stderr, "must be a message, not a stack trace"

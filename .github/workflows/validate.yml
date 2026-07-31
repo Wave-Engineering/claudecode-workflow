@@ -9,6 +9,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Tags are REQUIRED: scripts/ci/oaw-major.sh derives the kit major from
+          # `git describe --tags` (#1067), and the default shallow checkout fetches
+          # with --no-tags. Without this the derivation cannot resolve in CI while
+          # passing locally — the classic green-here/red-there split.
+          fetch-depth: 0
 
       - name: Install shellcheck
         run: sudo apt-get install -y shellcheck
