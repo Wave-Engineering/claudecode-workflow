@@ -27,7 +27,10 @@ __pycache__/
 
 # Node/Bun dependencies
 node_modules/
-bun.lock
+# bun.lock is COMMITTED, not ignored (#1073). Trivy parses lockfiles rather
+# than manifests, because a manifest carries ranges (`^5.7.0`) and a lockfile
+# carries the resolved version. Ignoring it meant the dependency gate had
+# nothing to scan and said so on every run for eleven days.
 .install-stamp
 .buildinfo
 

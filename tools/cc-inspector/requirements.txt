@@ -1,3 +1,10 @@
-mitmproxy
-flask
-requests
+# PINNED, not ranged (#1073). Trivy matches CVEs against VERSIONS — an unpinned
+# entry resolves to no version, so the file parses to zero packages and the whole
+# repo reports "0 manifests scanned". That is not a trivy limitation: there is
+# genuinely nothing to compare against a vulnerability database.
+#
+# `==` specifically. `>=` and `~=` are ranges, and a range is not an installed
+# version, so they parse to nothing for the same reason.
+mitmproxy==12.2.3
+flask==3.1.3
+requests==2.34.2
