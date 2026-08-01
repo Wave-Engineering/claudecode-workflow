@@ -463,6 +463,122 @@ report_stored_credential() {
 	fi
 }
 
+# --- SSH parity with a host session (#1089) -----------------------------------
+#
+# aoe mounts the operator's ~/.ssh to /root/.ssh — keys, and a config mapping
+# hosts to identities. Agents use these constantly: git over SSH for both forges,
+# and troubleshooting remote installs (blueshift-prod, perkollate-*, agent-smith-ca).
+#
+# THEY WERE MOUNTED AND INVISIBLE. The agent runs as `ubuntu` with HOME=/home/ubuntu,
+# so ssh looks in /home/ubuntu/.ssh, finds nothing, falls back to default identity
+# names, and fails `Permission denied (publickey)`. Before #1085 made /root
+# traversable it could not have worked at all.
+#
+# An earlier draft of this file recorded "the container has no ~/.ssh
+# (deliberately — mounting host private keys is a larger exposure than a scoped
+# PAT)". That was WRONG: it inferred design intent from a permissions bug. The
+# keys are provided ON PURPOSE. The goal here is not a reduced-privilege
+# container — it is doing exactly what a host session does, so agents keep working
+# while the kit is in flux.
+#
+# One symlink restores it. Measured after: ssh reads the config, offers the mapped
+# key, `Welcome to GitLab, @brbaker-alog!`, and `git ls-remote git@…` succeeds for
+# BOTH forges. No URL rewriting, no credential helper, no token in git — the host
+# uses SSH for git, so the container does too.
+ensure_ssh_parity() {
+	local src="${OAW_SSH_SOURCE:-/root/.ssh}" dst="$OAW_HOME/.ssh"
+
+	[[ -d "$src" ]] || {
+		# WARN, not info: this file's header codifies "missing mount -> WARN". As info,
+		# WARN_COUNT stayed 0 and the summary reported a clean boot for a container with
+		# no git-over-SSH and no reachable remote hosts.
+		warn "missing mount: no $src — git over SSH and remote hosts (blueshift, perkollate) unavailable"
+		return 0
+	}
+	# Already correct?
+	if [[ -L "$dst" && "$(readlink -f "$dst" 2>/dev/null)" == "$(readlink -f "$src" 2>/dev/null)" ]]; then
+		info "ssh: ~/.ssh already resolves to $src"
+		return 0
+	fi
+	# A REAL dir here is not necessarily the operator's — ssh silently creates one
+	# the first time it writes known_hosts, and then `ln -s` lands INSIDE it rather
+	# than replacing it (which is exactly how the first attempt at this failed).
+	# Only clear it when it holds nothing but ssh's own scratch.
+	if [[ -L "$dst" ]]; then
+		warn "ssh: $dst is a symlink to $(readlink "$dst" 2>/dev/null) — replacing it with $src"
+	fi
+	if [[ -e "$dst" && ! -L "$dst" ]]; then
+		local stray
+		# `|| true`: under set -e a find failure would abort bootstrap — and the
+		# wrapper SOURCES this, so that means no agent at all.
+		stray="$(find "$dst" -mindepth 1 -maxdepth 1 ! -name known_hosts ! -name 'known_hosts.old' -print -quit 2>/dev/null || true)"
+		if [[ -n "$stray" ]]; then
+			warn "ssh: $dst exists with real content ($stray) — leaving it alone; mounted keys at $src are NOT in use"
+			return 0
+		fi
+		rm -rf "$dst" || {
+			warn "ssh: could not clear $dst — mounted keys at $src are NOT in use"
+			return 0
+		}
+	fi
+	if ln -sfn "$src" "$dst" 2>/dev/null; then
+		info "ssh: linked ~/.ssh -> $src (keys + host config now visible to the agent)"
+	else
+		warn "ssh: could not link ~/.ssh -> $src; git over SSH and remote hosts will fail"
+	fi
+}
+
+# --- GitLab API credential (#1089) --------------------------------------------
+#
+# glab needs its own config; git does NOT (SSH covers git, see ensure_ssh_parity).
+# Token choice: every valid gitlab.com token on the host carries effectively the
+# same broad scopes, so there is no least-privilege pick — gitlab-cli-pat is named
+# for this use. Override with OAW_GITLAB_SECRET.
+ensure_gitlab_auth() {
+	local secret="$OAW_SECRETS_DIR/${OAW_GITLAB_SECRET:-gitlab-cli-pat}"
+	local cfg_dir="${GLAB_CONFIG_DIR:-$OAW_HOME/.config/glab-cli}"
+	local cfg="$cfg_dir/config.yml"
+
+	[[ -f "$secret" ]] || {
+		warn "gitlab: no $secret — glab UNAUTHENTICATED (no MR/CI API work)"
+		return 0
+	}
+	local token
+	token="$(tr -d '\r\n' <"$secret")"
+	[[ -n "$token" ]] || {
+		warn "gitlab: $secret is empty — glab UNAUTHENTICATED"
+		return 0
+	}
+	# [A-Za-z0-9._-]: real glpat- tokens contain DOTS. Omitting `.` rejected the
+	# operator's actual token while a dot-free fixture passed — a fixture that
+	# could not fail. The guard's job is refusing shell/YAML syntax, which it still does.
+	if [[ ! "$token" =~ ^[A-Za-z0-9._-]+$ ]]; then
+		warn "gitlab: $secret does not look like a bare token (shell/YAML syntax in the file?) — refusing to write"
+		return 0
+	fi
+	if [[ -s "$cfg" ]] && grep -qE '^[[:space:]]+token:[[:space:]]*[^[:space:]]' "$cfg" 2>/dev/null; then
+		info "gitlab: $cfg already carries a token — left alone"
+		return 0
+	fi
+	mkdir -p "$cfg_dir"
+	rm -f "$cfg"
+	local old_umask
+	old_umask="$(umask)"
+	umask 077
+	{
+		echo "git_protocol: ssh"
+		echo "host: gitlab.com"
+		echo "hosts:"
+		echo "    gitlab.com:"
+		echo "        api_protocol: https"
+		echo "        api_host: gitlab.com"
+		echo "        token: $token"
+	} >"$cfg"
+	umask "$old_umask"
+	chmod 600 "$cfg"
+	info "gitlab: wrote $cfg (mode 600; git_protocol ssh, matching the host)"
+}
+
 # --- Kit registrations into the CLI's own config (#1085) ----------------------
 #
 # `./install` registers the kit's five MCP servers at BUILD time, into the image's
@@ -733,40 +849,33 @@ ensure_github_auth() {
 	{
 		echo "github.com:"
 		echo "    oauth_token: '$token'"
-		echo "    git_protocol: ${OAW_GH_PROTOCOL:-https}"
+		echo "    git_protocol: ${OAW_GH_PROTOCOL:-ssh}"
 	} >"$hosts"
 	umask "$old_umask"
 	chmod 600 "$hosts"
 	info "github: wrote $hosts (mode 600, file modality — NOT exported to env)"
 
-	# AUTHENTICATING gh IS NOT ENOUGH — git is a separate client.
+	# RESTORED after being wrongly removed (#1089). The host's own ~/.gitconfig has
+	# exactly this, verified:
 	#
-	# hosts.yml authenticates the `gh` CLI. `git push` does not read it, and
-	# `gh pr create` shells out to `git push`, so without this the agent can call
-	# the API and still not land a single commit. Measured in a container before
-	# this block existed:
+	#   url.https://github.com/.insteadof      git@github.com:
+	#   credential.https://github.com.helper   !gh auth git-credential
 	#
-	#   $ git push --dry-run origin HEAD
-	#   Host key verification failed.
-	#   fatal: Could not read from remote repository.
-	#
-	# Two things are needed, and only together:
-	#   1. a credential helper, so HTTPS pushes use the token we just wrote;
-	#   2. an SSH->HTTPS rewrite, because repos are cloned with `git@github.com:`
-	#      origins and the container has no ~/.ssh (deliberately — mounting the
-	#      host's private keys is a far larger exposure than a scoped PAT).
-	#
-	# Scoped to github.com so no other forge's remotes are rewritten. Written to
-	# the container-local gitconfig, which dies with the container.
-	if command -v gh >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
+	# so HTTPS+PAT *is* what a host session uses for github git — #1082 was right.
+	# An earlier draft removed it on the premise "the host uses SSH for git". That is
+	# true for GITLAB (the host has no gitlab rewrite) and FALSE for github; it was
+	# generalised from one forge to both. Removing it made the container authenticate
+	# github git as the SSH key identity while the host uses the PAT identity — a
+	# different credential, audit trail and permission set. Under the parity
+	# principle that is a regression, not a simplification.
+	if command -v git >/dev/null 2>&1; then
 		git config --global --replace-all \
 			"credential.https://github.com.helper" '!gh auth git-credential' || true
 		git config --global --replace-all \
 			"url.https://github.com/.insteadOf" "git@github.com:" || true
-		info "github: git configured for HTTPS+token (ssh remotes rewritten; no keys needed)"
-	else
-		warn "github: gh or git missing — git push will NOT be authenticated"
+		info "github: git configured HTTPS+PAT for github.com (matching the host's ~/.gitconfig)"
 	fi
+
 }
 
 # --- Onboarding state (#1079) -------------------------------------------------
@@ -893,7 +1002,9 @@ main() {
 	sync_skills
 	merge_settings
 	validate_secrets
+	ensure_ssh_parity
 	ensure_github_auth
+	ensure_gitlab_auth
 	sync_kit_registrations
 	report_stored_credential
 	ensure_onboarding_state

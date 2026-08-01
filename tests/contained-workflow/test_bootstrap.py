@@ -1125,45 +1125,6 @@ def test_malformed_pat_file_is_refused(tmp_path: Path) -> None:
     assert not (home / ".config" / "gh" / "hosts.yml").exists()
 
 
-def test_git_is_configured_to_push_with_the_token(tmp_path: Path) -> None:
-    """Authenticating gh is NOT enough — git is a separate client.
-
-    `hosts.yml` authenticates the CLI; `git push` never reads it, and
-    `gh pr create` shells out to `git push`. The first cut of this fix verified
-    `gh api user` and would have shipped an agent that could call the API and
-    still not land a commit (measured: `Host key verification failed`).
-    """
-    home = _home_with_pat(tmp_path)
-    gitconfig = home / ".gitconfig"
-    proc = subprocess.run(
-        ["bash", str(BOOTSTRAP)],
-        capture_output=True, text=True, timeout=60,
-        env={**os.environ, "OAW_HOME": str(home), "HOME": str(home)},
-        cwd=str(tmp_path),
-    )
-    assert proc.returncode == 0, proc.stderr
-    cfg = gitconfig.read_text() if gitconfig.exists() else ""
-    assert "gh auth git-credential" in cfg, (
-        "no credential helper — HTTPS pushes will not use the token"
-    )
-    assert "insteadOf" in cfg and "git@github.com:" in cfg, (
-        "no ssh->https rewrite — a git@github.com: origin never consults the helper, "
-        "and the container has no ~/.ssh"
-    )
-
-
-# --- CLAUDE_CONFIG_DIR (#1085) ------------------------------------------------
-#
-# The agent does not necessarily read $HOME. aoe sets CLAUDE_CONFIG_DIR=/root/.claude
-# and mounts its own config there, so everything bootstrap wrote to
-# $OAW_HOME/.claude.json landed in a file the CLI never opened. One mistake, five
-# production symptoms: Settings Error panel, zero MCP servers, onboarding wizard
-# every launch, trust prompt per workspace, and a "401 revoked" for a valid token.
-#
-# It survived three rounds of verification because every one used `docker run`.
-# Only `aoe` injects CLAUDE_CONFIG_DIR — the harness was the wrong SHAPE.
-
-
 def _home_with_cfgdir(tmp_path: Path, cli_cfg: str = "{}") -> tuple[Path, Path]:
     home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
     (home / ".claude.json").write_text(
@@ -1383,3 +1344,234 @@ def test_absent_cli_config_is_created_not_bailed_on(tmp_path: Path) -> None:
     d = J.loads(created.read_text())
     assert "disc-server" in d.get("mcpServers", {}), "kit servers must land in it"
     assert d.get("hasCompletedOnboarding") is True
+
+
+# --- SSH parity (#1089) -------------------------------------------------------
+#
+# aoe mounts the operator's ~/.ssh to /root/.ssh — keys plus a host->identity
+# config. Agents use these constantly: git over SSH for both forges, and
+# troubleshooting remote installs (blueshift-prod, perkollate-*, agent-smith-ca).
+#
+# They were mounted and INVISIBLE: the agent runs as ubuntu with HOME=/home/ubuntu,
+# so ssh looked in /home/ubuntu/.ssh, found nothing, fell back to default identity
+# names and failed `Permission denied (publickey)`.
+#
+# An earlier draft recorded "the container has no ~/.ssh (deliberately)". That was
+# WRONG — it inferred design intent from a permissions bug. The keys are provided
+# on purpose, and the goal is doing exactly what a host session does.
+
+
+def _home_with_ssh(tmp_path: Path) -> tuple[Path, Path]:
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    (home / ".claude.json").write_text("{}")
+    src = tmp_path / "mounted-ssh"
+    src.mkdir()
+    (src / "config").write_text("Host gitlab.com\n  IdentityFile ~/.ssh/gitlab.id_ed25519\n")
+    (src / "gitlab.id_ed25519").write_text("KEY\n")
+    return home, src
+
+
+def test_mounted_ssh_keys_are_made_visible_to_the_agent(tmp_path: Path) -> None:
+    home, src = _home_with_ssh(tmp_path)
+    proc = _run(home, OAW_SSH_SOURCE=str(src))
+    assert proc.returncode == 0, proc.stderr
+    link = home / ".ssh"
+    assert link.is_symlink(), "~/.ssh must resolve to the mounted keys"
+    assert link.resolve() == src.resolve()
+    assert (link / "config").exists(), "the host->identity config must be reachable"
+
+
+def test_ssh_link_is_idempotent(tmp_path: Path) -> None:
+    home, src = _home_with_ssh(tmp_path)
+    assert _run(home, OAW_SSH_SOURCE=str(src)).returncode == 0
+    proc = _run(home, OAW_SSH_SOURCE=str(src))
+    assert "already resolves" in proc.stderr
+
+
+def test_sshs_own_known_hosts_scratch_dir_is_replaced(tmp_path: Path) -> None:
+    """ssh silently creates ~/.ssh the first time it writes known_hosts.
+
+    That is how the first attempt at this failed: `ln -s` landed INSIDE the
+    freshly-created directory instead of replacing it, so the keys stayed
+    invisible while the command reported success.
+    """
+    home, src = _home_with_ssh(tmp_path)
+    scratch = home / ".ssh"
+    scratch.mkdir()
+    (scratch / "known_hosts").write_text("gitlab.com ssh-ed25519 AAAA\n")
+    proc = _run(home, OAW_SSH_SOURCE=str(src))
+    assert proc.returncode == 0
+    assert (home / ".ssh").is_symlink(), "a known_hosts-only dir must not block the link"
+
+
+def test_a_real_ssh_dir_is_never_clobbered(tmp_path: Path) -> None:
+    """Destroying an operator's private keys would be unrecoverable."""
+    home, src = _home_with_ssh(tmp_path)
+    real = home / ".ssh"
+    real.mkdir()
+    (real / "id_ed25519").write_text("OPERATOR KEY\n")
+    proc = _run(home, OAW_SSH_SOURCE=str(src))
+    assert proc.returncode == 0
+    assert not (home / ".ssh").is_symlink(), "must not replace a real ~/.ssh"
+    assert (real / "id_ed25519").read_text() == "OPERATOR KEY\n"
+    assert "leaving it alone" in proc.stderr, "the skip must be loud, not silent"
+
+
+def test_gitlab_api_credential_is_written_as_a_file(tmp_path: Path) -> None:
+    home = _make_home(
+        tmp_path,
+        secrets={
+            ".env": 'OAW_REQUIRED_SECRETS=""\n',
+            "gitlab-cli-pat": "glpat-AbCd1234.EfGh5678_iJkL-90\n",
+        },
+    )
+    (home / ".claude.json").write_text("{}")
+    proc = _run(home)
+    assert proc.returncode == 0, proc.stderr
+    cfg = home / ".config" / "glab-cli" / "config.yml"
+    assert cfg.is_file()
+    assert (cfg.stat().st_mode & 0o777) == 0o600
+    body = cfg.read_text()
+    assert "glpat-AbCd1234.EfGh5678_iJkL-90" in body, (
+        "real glpat- tokens contain DOTS; a guard omitting `.` rejected the "
+        "operator's actual token while a dot-free fixture passed"
+    )
+    assert "git_protocol: ssh" in body, "git protocol must match the host's (ssh)"
+
+
+def test_gitlab_token_is_never_exported_to_the_environment(tmp_path: Path) -> None:
+    home = _make_home(
+        tmp_path,
+        secrets={
+            ".env": 'OAW_REQUIRED_SECRETS=""\n',
+            "gitlab-cli-pat": "glpat-LEAKCANARY.123_abc-XYZ\n",
+        },
+    )
+    (home / ".claude.json").write_text("{}")
+    proc = subprocess.run(
+        ["bash", "-c", f'. "{BOOTSTRAP}" >/dev/null 2>&1; env'],
+        capture_output=True, text=True, timeout=60,
+        env={**os.environ, "OAW_HOME": str(home)}, cwd=str(tmp_path),
+    )
+    assert "glpat-LEAKCANARY" not in proc.stdout
+
+
+def test_architecture_doc_retains_every_documented_section() -> None:
+    """Guard against silent documentation destruction.
+
+    #1090 replaced a paragraph in architecture.md using a RANGE replace:
+
+        start = s.index("**Blast-radius tradeoff …**")
+        end   = s.index("## 4. Boundaries and invariants")
+        s = s[:start] + new + s[end:]
+
+    Everything between those anchors went with it — 262 lines covering §3.5.1,
+    §3.6, §3.6.1 and §3.7, the documentation from #1076/#1079/#1082/#1085. It
+    merged. Nothing failed, because no test asserted the doc's shape and prose
+    deletion breaks no code. It surfaced only when a later anchor lookup failed.
+
+    Cheap insurance: name the sections that must exist. A future range-replace
+    that eats one fails here instead of on main.
+    """
+    doc = (
+        REPO_ROOT / "docs" / "contained-workflow" / "architecture.md"
+    ).read_text()
+    required = [
+        "### 3.5 Secrets: the read-only mount",
+        "### 3.5.1 The CLI does not necessarily read",   # #1085
+        "### 3.6 Agent authentication",                   # #1076
+        "### 3.6.1 GitHub credential",                    # #1082
+        "### 3.6.2 SSH parity",                           # #1089
+        "### 3.7 First-run onboarding state",             # #1079
+        "## 4. Boundaries and invariants",
+    ]
+    missing = [h for h in required if h not in doc]
+    assert not missing, (
+        f"architecture.md lost documented section(s): {missing}. If a section was "
+        "renamed deliberately, update this list in the same commit — do NOT delete "
+        "the entry, or the guard stops guarding."
+    )
+
+
+def test_operator_local_bin_never_shadows_the_kit() -> None:
+    """The kit's own bin holds the claude wrapper and the MCP binaries.
+
+    Mounting the operator's ~/.local/bin OVER /home/ubuntu/.local/bin would
+    replace the #1076 wrapper with the host's claude and silently un-bootstrap
+    every agent — the exact failure #1076 exists to prevent, reintroduced by a
+    convenience mount. It must land beside the kit's bin and be APPENDED to PATH.
+    """
+    frag = (
+        REPO_ROOT / "containers" / "oakandwave-workflow" / "mounts.d" / "30-user-overlay.toml"
+    ).read_text()
+    assert 'source = "~/.local/bin"' in frag, "operator utilities not mounted"
+    assert 'target = "/home/ubuntu/.oaw/overlay/local-bin"' in frag
+    assert 'target = "/home/ubuntu/.local/bin"' not in frag, (
+        "mounting over the kit's bin would shadow the claude wrapper (#1076)"
+    )
+
+    dockerfile = (
+        REPO_ROOT / "containers" / "oakandwave-workflow" / "Dockerfile"
+    ).read_text()
+    path_lines = [l for l in dockerfile.splitlines() if l.startswith("ENV PATH=")]
+    assert path_lines, "no ENV PATH in the Dockerfile"
+    final = path_lines[-1]
+    assert "/home/ubuntu/.oaw/overlay/local-bin" in final, (
+        "the overlay must be on PATH or the utilities are invisible"
+    )
+    kit = final.index("/home/ubuntu/.local/bin")
+    overlay = final.index("/home/ubuntu/.oaw/overlay/local-bin")
+    assert kit < overlay, (
+        "the kit's bin must precede the operator overlay on PATH — otherwise a "
+        "host utility named `claude` shadows the bootstrap wrapper"
+    )
+
+
+def test_operator_local_bin_is_read_only() -> None:
+    """The container must not write into the operator's real ~/.local/bin."""
+    frag = (
+        REPO_ROOT / "containers" / "oakandwave-workflow" / "mounts.d" / "30-user-overlay.toml"
+    ).read_text()
+    block = frag[frag.index('name = "user-local-bin"'):]
+    block = block[: block.find("[[mount]]") if "[[mount]]" in block else len(block)]
+    assert 'mode = "ro"' in block, "operator bin mount must be read-only"
+
+
+def test_git_transport_matches_the_host_per_forge() -> None:
+    """Parity is PER FORGE — the host does not treat them alike.
+
+    Verified against the operator's real ~/.gitconfig:
+
+        url.https://github.com/.insteadof       git@github.com:
+        credential.https://github.com.helper    !gh auth git-credential
+        (no gitlab rewrite at all)
+
+    So a host session uses **HTTPS+PAT for github** and **SSH for gitlab**.
+
+    An earlier draft of #1089 removed the github rewrite on the premise "the host
+    uses SSH for git" — true for gitlab, false for github, generalised from one
+    forge to both. That made the container authenticate github git as the SSH key
+    identity while the host uses the PAT identity: different credential, different
+    audit trail, different effective permissions. Under the parity principle that
+    is a regression, not a simplification.
+
+    This test pins BOTH halves, because pinning either alone is what went wrong.
+    """
+    body = (
+        REPO_ROOT / "containers" / "oakandwave-workflow" / "bootstrap.sh"
+    ).read_text()
+    assert 'url.https://github.com/.insteadOf' in body, (
+        "github rewrite missing — the host HAS it; removing it diverges from parity"
+    )
+    assert "gh auth git-credential" in body, "github credential helper missing"
+    assert "url.https://gitlab.com/.insteadOf" not in body, (
+        "gitlab rewrite added — the host has NO gitlab rewrite; gitlab git is SSH"
+    )
+    # Assert the CALL, not the definition. `"ensure_ssh_parity" in body` is
+    # satisfied by the function existing while main never invokes it — the
+    # declared-but-not-wired shape this repo keeps producing (#1076 most of all).
+    # Caught by mutation: removing the call from main left that assertion green.
+    assert re.search(r"^\tensure_ssh_parity$", body, re.M), (
+        "ensure_ssh_parity is defined but not CALLED from main: gitlab git and "
+        "every remote host (blueshift, perkollate, agent-smith-ca) depend on it"
+    )

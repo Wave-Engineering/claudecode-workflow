@@ -37,15 +37,28 @@ mode = "rw"
 source = "~/.oaw/toolbox/<major>"
 target = "/home/ubuntu/.oaw/toolbox"
 
-# --- User's non-kit shebang scripts (symlink-safe config) --------------------
-# ~/.local/bin is ~154 shebang scripts (symlink-safe) + ~26 ELF (hazard). This
-# mount carries the SCRIPT half; the bootstrap (Story 1.4) routes each entry with
-# mount_resolver.is_compiled_binary — ELF go in-container, shebangs symlink.
+# --- The operator's own utilities (#1089) ------------------------------------
+# Mount ~/.local/bin DIRECTLY, read-only, mirroring the whole-dir secrets decision
+# (#1090): the operator uses these constantly and curating which agent gets which
+# utility is overhead that buys nothing. Measured: 139 files (113 scripts, 26 ELF).
+#
+# The staging-dir + classifier design this replaces (~/.oaw/overlay/<major>/local-bin,
+# with mount_resolver.is_compiled_binary routing ELF in-container and shebangs by
+# symlink) was declared, unit-tested, and NEVER WIRED — the source dir sat empty and
+# nothing consumed it. Host ELF binaries simply run here (verified: lychee, ruff,
+# rage). AppImages do not (no FUSE), which fails visibly at invocation.
+#
+# TARGET IS DELIBERATELY *NOT* /home/ubuntu/.local/bin. That is the KIT's bin — it
+# holds the claude wrapper (#1076) and the MCP server binaries. Mounting over it
+# would shadow the wrapper and silently un-bootstrap every agent. This lands beside
+# it and is APPENDED to PATH (Dockerfile), so the kit wins every collision.
+#
+# ro: the container must not write into the operator's real bin.
 [[mount]]
-name = "user-scripts"
+name = "user-local-bin"
 layer = "user-overlay"
 artifact = "script"
 install = "symlink"
-mode = "rw"
-source = "~/.oaw/overlay/<major>/local-bin"
+mode = "ro"
+source = "~/.local/bin"
 target = "/home/ubuntu/.oaw/overlay/local-bin"

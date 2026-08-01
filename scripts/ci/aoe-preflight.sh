@@ -170,10 +170,42 @@ if x sh -c 'command -v gh >/dev/null && gh api user --jq .login >/dev/null 2>&1'
 else
 	fail "gh not authenticated" "no push, no PR, no merge, no /scpmmr"
 fi
-if x sh -c 'git config --global --get-regexp "credential.*github" >/dev/null 2>&1'; then
-	pass "git credential helper configured (gh auth alone does NOT let git push)"
+# ASSERT THE BEHAVIOUR, NOT THE MECHANISM. The first cut asserted a git
+# credential helper existed — machinery #1082 added and #1089 removed, because
+# git transport is SSH here exactly as on the host. A check pinned to one
+# implementation fails when the implementation is corrected, which is what it did.
+# What matters is that git can reach a forge at all.
+GITREACH="$(x sh -c 'timeout 40 git ls-remote git@github.com:Wave-Engineering/claudecode-workflow.git HEAD 2>&1 | head -1')"
+if printf '%s' "$GITREACH" | grep -qE '^[0-9a-f]{40}'; then
+	pass "git transport works (github: HTTPS+PAT, as on the host)"
 else
-	fail "git has no credential helper" "gh pr create shells out to git push and will fail"
+	fail "git cannot reach the forge: ${GITREACH:-no output}" \
+		"an agent that cannot fetch cannot verify an MR before merging it"
+fi
+
+# gitlab uses a DIFFERENT transport (SSH — the host has no gitlab rewrite), so
+# testing github alone proves only half the parity claim.
+GLREACH="$(x sh -c 'timeout 40 git ls-remote git@gitlab.com:gitlab-org/cli.git HEAD 2>&1 | head -1')"
+if printf '%s' "$GLREACH" | grep -qE '^[0-9a-f]{40}'; then
+	pass "gitlab git transport works (SSH, as on the host)"
+else
+	fail "gitlab git unreachable: ${GLREACH:-no output}" \
+		"gitlab git is SSH here — check ensure_ssh_parity linked ~/.ssh"
+fi
+
+# The operator's own utilities must be reachable AND must not shadow the kit.
+UTIL="$(x sh -c 'ls -1 /home/ubuntu/.oaw/overlay/local-bin 2>/dev/null | wc -l' | tr -d '\r')"
+CLAUDEP="$(x sh -c 'command -v claude' | tr -d '\r')"
+if [[ "$UTIL" =~ ^[0-9]+$ ]] && ((UTIL > 0)); then
+	pass "operator utilities mounted ($UTIL entries)"
+else
+	fail "operator ~/.local/bin not mounted (got: $UTIL)"
+fi
+if x sh -c "grep -qF OAW-CLAUDE-BOOTSTRAP-WRAPPER '$CLAUDEP'"; then
+	pass "kit wrapper not shadowed by operator utilities ($CLAUDEP)"
+else
+	fail "claude resolves to $CLAUDEP, which is NOT the bootstrap wrapper" \
+		"an operator utility has shadowed the kit — every agent boots unbootstrapped"
 fi
 
 # --- 6. reaches a usable prompt with ZERO keystrokes ---------------------------
