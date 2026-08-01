@@ -72,8 +72,20 @@ prompt: "Run: trivy fs --scanners vuln --severity HIGH,CRITICAL --format json --
 
          THEN return one of:
            PASS — one or more manifests parsed, zero findings
-           NO MANIFESTS — trivy ran and parsed ZERO manifests. This is NOT a pass.
-                          Nothing was scanned. Say so; do not report PASS.
+           NO MANIFESTS — trivy ran and parsed ZERO manifests. This is NOT a pass
+                          and, as of #1073, NOT a deferral either: it FAILS the
+                          checklist item. Nothing was scanned. Say so; do not
+                          report PASS.
+                          The enforcing half lives in scripts/ci/check-scannable.sh
+                          (run by validate.sh), which exits 1 when nothing is
+                          scannable and absence is not declared — because an
+                          honest report that changes no outcome is
+                          indistinguishable from no report at all. cc-workflow
+                          emitted this verdict on every precheck for ELEVEN DAYS
+                          across FIVE filings before anyone acted on it.
+                          A repo with genuinely nothing to scan declares it in
+                          .no-scannable-dependencies with a reason; omitting the
+                          declaration is the failure, not having no dependencies.
            SKIP — trivy not installed
            FINDINGS — list each as: package | CVE | severity | fixed_version (or 'no fix available')
          Do not auto-upgrade anything. Just report."

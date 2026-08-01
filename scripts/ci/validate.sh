@@ -290,6 +290,29 @@ for test_script in "$REPO_DIR"/tests/regression/*.sh; do
 	fi
 done
 
+# --- Dependency scannability (#1073) ------------------------------------------
+#
+# Asks one question — "would a dependency scan have anything to look at?" — and
+# FAILS if the answer is no. It does not run trivy and does not judge
+# vulnerabilities; keeping measurement separate from grading is the point, because
+# a gate that does both can hide an empty denominator inside a pass.
+#
+# It lives HERE, in the lane CI runs, rather than in /precheck's prose. This repo
+# reported "0 manifests" on every precheck for eleven days across five filings
+# (#922, #941, #944, #1053, #1056) — reported accurately every time, and waved
+# through every time. An honest report that changes no outcome is indistinguishable
+# from no report at all, so the denominator now decides the exit code.
+echo ""
+echo "Dependency scannability"
+echo "──────────────────────────────────────────"
+if bash "$REPO_DIR/scripts/ci/check-scannable.sh" "$REPO_DIR"; then
+	info "scripts/ci/check-scannable.sh"
+	PASS=$((PASS + 1))
+else
+	err "scripts/ci/check-scannable.sh — nothing scannable and absence not declared"
+	FAIL=$((FAIL + 1))
+fi
+
 # --- Summary ------------------------------------------------------------------
 echo ""
 echo "──────────────────────────────────────────"
