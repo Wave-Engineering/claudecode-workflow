@@ -13,14 +13,37 @@
 # All build/sign logic lives in scripts/ci/*.sh (project rule: No Procedural Logic
 # in CI/CD YAML); the steps below only wire installer actions to those scripts.
 #
-# Trigger: merge to main and version tags rebuild the candidate; workflow_dispatch
-# allows a manual rebuild. It does NOT run on the kahuna integration branches, so
-# a wave never triggers a heavy push to ghcr.
+# TRIGGER: a candidate is cut DELIBERATELY, not on every merge (#1063).
+#
+# This used to include `push: branches: [main]`. Every merge — docs-only ones
+# included — ran build -> cosign -> syft -> GHCR push against a ~9.9 GB base.
+# Measured on a markdown-only merge (cc57a75, PR #1060): 1049 s / 17.5 min. Two
+# costs, and the first is the expensive one:
+#
+#   1. THROUGHPUT. /scpmmr waits on the main-branch pipeline, so every agent in
+#      the fleet paid ~17.5 min per merge — the inner loop for every kit change.
+#   2. REGISTRY CLUTTER. Every merge since this workflow landed minted an :edge
+#      that nothing would ever pull.
+#
+# NOT a `paths:` filter, deliberately. The kit is BAKED into the image, so
+# `skills/**` and `scripts/**` genuinely do change it — a filter would either be
+# so broad it saved little, or would silently ship a stale :stable. "Did we
+# decide to release?" is the correct axis, not "which files moved".
+#
+# The bless-and-promote path already existed end to end and is untouched:
+# scripts/ci/promote-oakandwave-image.sh retags the EXACT digest :edge -> :stable
+# with no rebuild (same bytes, R-23), and the mirror workflow only ever mirrors an
+# already-promoted :stable. The only defect was minting candidates on merge rather
+# than on a release decision — which also matches R-05 ("the image digest IS the
+# release") more honestly than minting a release artifact for a typo fix.
+#
+# Merging to main is NOT a release. See docs/operations/image-release-cadence.md.
+# It does NOT run on the kahuna integration branches either, so a wave never
+# triggers a heavy push to ghcr.
 name: oakandwave-workflow image
 
 on:
   push:
-    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
