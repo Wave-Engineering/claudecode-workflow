@@ -231,10 +231,23 @@ class TestDefaultDenyDoesNotBecomeATotalBlock:
         assert re.search(
             r"[Ee]very other status STOPs, including ones not listed here", mmr_text
         ), "the pr_wait_ci escalation must be phrased as an allowlist"
-        assert re.search(r"`?no_checks_required`?\s*→\s*\*\*STOP", mmr_text), (
-            "`no_checks_required` must be named as an explicit STOP — it is a "
-            "definite, successful verdict whose plain-English name reads as "
-            "permission, so it is the value most likely to be mis-read"
+        # The no-checks family, whatever it is currently called. `no_checks_required`
+        # (mcp-server-sdlc#416) was retired in v4.0.0 and split into two values
+        # (#508) because it meant two different facts and only one was safe.
+        # Both successors must be named — this assertion is about the
+        # COMPLETENESS of the enumeration, so it tracks the vocabulary rather
+        # than pinning one historical spelling.
+        for status in ("no_checks_configured", "no_checks_yet"):
+            assert re.search(rf"`?{status}`?\s*→\s*\*\*STOP", mmr_text), (
+                f"`{status}` must be named as an explicit STOP — a no-checks "
+                f"verdict is definite and successful-sounding, which makes this "
+                f"family the one most likely to be mis-read as permission"
+            )
+        # And the retired name must NOT come back as a live entry. If a future
+        # server reintroduces it, it lands here as an explicit STOP first.
+        assert not re.search(r"`?no_checks_required`?\s*→\s*\*\*STOP\.\*\*", mmr_text), (
+            "`no_checks_required` is retired (mcp-server-sdlc v4.0.0) — it must "
+            "not be listed as a live status. Keep it only as history."
         )
         assert re.search(r"`\{ok: false\}` or any error envelope\s*→\s*\*\*STOP", mmr_text), (
             "an {ok:false} envelope must STOP explicitly; 'report and suggest' "
