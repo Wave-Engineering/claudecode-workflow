@@ -250,6 +250,36 @@ else
 	pass "all configured hook paths resolve ($BOOTLINES bootstrap lines seen)"
 fi
 
+# --- 8. a KIT hook actually EXECUTED (#1086) ----------------------------------
+# Check 7 asks whether configured hooks RESOLVE. That is a different question from
+# whether the RELEASE's hooks are the ones configured, and #1086 is exactly the gap
+# between them: under aoe the CLI reads $CLAUDE_CONFIG_DIR/settings.json — a shared,
+# host-backed file — and never the image's own. It looked healthy because that file
+# had been seeded from a host carrying the same kit, so an equivalent hook set was
+# already there. Every settings-shaped check would have reported R-06 in perfect
+# health while the image's wiring sat unread and version skew went undetected.
+#
+# So do not read settings. kit-hooks-alive.sh writes its marker ONLY by running.
+BEACON=/home/ubuntu/.claude/.kit-hooks-alive
+# Clear it first — and PROVE the clear worked. The marker lives in the image's own
+# $HOME (not the shared config dir), but an earlier `claude` in THIS container has
+# already written one, and a leftover would let this pass on a container running
+# none of the kit's wiring. An undeletable marker is an instrument failure, not a pass.
+x rm -f "$BEACON" >/dev/null 2>&1
+if x test -e "$BEACON"; then
+	fail "could not clear the beacon at $BEACON" \
+		"a stale marker makes the assertion below meaningless — refusing to read it"
+else
+	x claude -p ok >/dev/null 2>&1
+	FIRED="$(x sh -c "cat '$BEACON' 2>/dev/null" | tr -d '\r')"
+	if [[ -n "$FIRED" ]]; then
+		pass "a kit hook EXECUTED (SessionStart beacon: $FIRED)"
+	else
+		fail "no kit hook fired — the release's own hook wiring is not running" \
+			"the CLI reads \$CLAUDE_CONFIG_DIR/settings.json; bootstrap's sync_kit_hooks must merge the image's hooks into it"
+	fi
+fi
+
 echo
 if ((FAILED)); then
 	echo "aoe-preflight: $FAILED check(s) FAILED" >&2

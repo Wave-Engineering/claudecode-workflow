@@ -3,7 +3,7 @@
 # bootstrap.sh — the container bootstrap (Story 1.4, #964, Plan #959).
 #
 # Runs before the agent (via the aoe-hooks seam — open probe Dev Spec §5.N#5) and
-# performs, in order: env validation, skills symlink-sync, settings.local merge,
+# performs, in order: env validation, skills symlink-sync, kit hook-wiring merge,
 # and secret sourcing + required-secret validation. It is the load-bearing
 # instrument the whole container leans on (SKETCHBOOK D7), so it is written to the
 # **assertion-liveness** discipline from line one:
@@ -42,9 +42,8 @@
 #   OAW_SKILLS_IMAGE                baked skills, image-wins (default: $HOME/.claude/skills)
 #   OAW_SKILLS_HOST                 host skills overlay, fills gaps
 #                                   (default: $HOME/.oaw/.claude/skills)
-#   OAW_SETTINGS_JSON               baked hook wiring (default: $HOME/.claude/settings.json)
-#   OAW_SETTINGS_LOCAL              shared knobs mount
-#                                   (default: $HOME/.claude/settings.local.json)
+#   OAW_SETTINGS_JSON               baked hook wiring, the merge SOURCE
+#                                   (default: $HOME/.claude/settings.json)
 #   OAW_SECRETS_DIR                 ro secrets mount (default: $HOME/.secrets)
 #   OAW_REQUIRED_SECRETS            whitespace-separated required secret names (wins)
 #   OAW_REQUIRED_SECRETS_MANIFEST   values-free manifest file, one name per line,
@@ -91,7 +90,6 @@ fi
 OAW_SKILLS_IMAGE="${OAW_SKILLS_IMAGE:-$OAW_HOME/.claude/skills}"
 OAW_SKILLS_HOST="${OAW_SKILLS_HOST:-$OAW_HOME/.oaw/.claude/skills}"
 OAW_SETTINGS_JSON="${OAW_SETTINGS_JSON:-$OAW_HOME/.claude/settings.json}"
-OAW_SETTINGS_LOCAL="${OAW_SETTINGS_LOCAL:-$OAW_HOME/.claude/settings.local.json}"
 OAW_SECRETS_DIR="${OAW_SECRETS_DIR:-$OAW_HOME/.secrets}"
 OAW_REQUIRED_SECRETS_MANIFEST="${OAW_REQUIRED_SECRETS_MANIFEST:-$OAW_SECRETS_DIR/required.manifest}"
 
@@ -219,30 +217,182 @@ sync_skills() {
 	return 0
 }
 
-# --- Stage 3: settings.local merge --------------------------------------------
-
-# Claude Code itself merges settings.json (baked hook wiring) with the mounted
-# settings.local.json (shared knobs) at runtime (architecture.md §3.3). The
-# bootstrap's job is to make the two silent-skip paths loud: a missing
-# settings.local mount, and a malformed settings.local that CC's merge would
-# silently ignore.
-merge_settings() {
-	if [[ -f "$OAW_SETTINGS_JSON" ]]; then
-		info "settings: image settings.json present"
-	else
-		warn "settings: image settings.json not found ($OAW_SETTINGS_JSON) — expected baked in the image"
-	fi
-
-	if [[ ! -f "$OAW_SETTINGS_LOCAL" ]]; then
-		warn "missing mount: settings.local.json not present ($OAW_SETTINGS_LOCAL); Claude Code will use image settings only"
+# --- Stage 3: the kit's hook wiring, where the CLI reads it (#1086) -----------
+#
+# R-06 says hook wiring is VERSIONED WITH THE RELEASE — the image digest IS the
+# release, so the hooks baked into it are the hooks that run. Under aoe that was
+# false: the CLI reads $CLAUDE_CONFIG_DIR/settings.json (aoe's own config, host-
+# backed and SHARED by every container) and never opens the image's copy.
+#
+# It looked healthy, which is why it survived: that shared file had been seeded
+# from a host carrying the same kit, so an EQUIVALENT hook set was already sitting
+# there and kit hooks did fire. What could not happen was version MOVEMENT. A hook
+# the image added, renamed or repointed stayed on the operator's host timetable
+# instead of the release's, and nothing reported the gap. R-06 held by coincidence,
+# which is not the same as holding — and a coincidence is exactly what a promotion
+# gate must not depend on.
+#
+# MERGE, the same way sync_kit_registrations merges mcpServers, and for the same
+# reason: the destination is SHARED and legitimately carries things that are the
+# operator's — aoe's own AOE_INSTANCE_ID status hooks, theme, model, permissions.
+# So ADD what the image ships and touch nothing else. Image-authoritative for
+# hooks; the operator keeps their preferences. (`./install`'s merge_settings applies
+# this identical rule for a native install; this is that rule reapplied where aoe
+# moved the file out from under it.)
+#
+# What this deliberately does NOT do is delete host-only hooks. The strong reading
+# of "image-authoritative" would clobber aoe's own wiring and break its TUI. Stale
+# host-only entries are already covered by validate_hook_paths, which reports any
+# configured hook that cannot resolve in this namespace.
+#
+# NOTE ON settings.local.json — there is no such thing at user level. The R-03
+# mount that used to land one at ~/.claude/settings.local.json was removed with
+# this change: measured against the real CLI, `localSettings` is PROJECT-scoped
+# (<project>/.claude/settings.local.json) and a settings.local.json beside the user
+# settings.json is never read, aoe or not. The old Stage 3 warned when that mount
+# was missing — an assertion about a file the CLI would have ignored anyway.
+sync_kit_hooks() {
+	if [[ ! -f "$OAW_SETTINGS_JSON" ]]; then
+		warn "hooks: image settings.json not found ($OAW_SETTINGS_JSON) — the release ships no hook wiring to merge"
 		return 0
 	fi
-
-	if python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$OAW_SETTINGS_LOCAL" 2>/dev/null; then
-		info "settings: settings.local.json present and valid JSON (Claude Code merges it)"
-	else
-		warn "settings: settings.local.json is not valid JSON ($OAW_SETTINGS_LOCAL) — Claude Code's merge will ignore/error on it"
+	if [[ "$OAW_SETTINGS_JSON" == "$OAW_EFFECTIVE_SETTINGS" ]]; then
+		info "hooks: the CLI reads the image settings directly — kit wiring already in place"
+		return 0
 	fi
+	command -v python3 >/dev/null 2>&1 || {
+		warn "hooks: python3 unavailable — cannot merge kit hook wiring into $OAW_EFFECTIVE_SETTINGS"
+		return 0
+	}
+	# CREATE rather than bail, for the same reason sync_kit_registrations does: a
+	# fresh aoe profile has a config dir with no settings.json in it, and warning-
+	# and-returning there reproduces the very state this fixes — a container running
+	# none of the release's hooks.
+	if [[ ! -f "$OAW_EFFECTIVE_SETTINGS" ]]; then
+		if mkdir -p "$OAW_CLAUDE_CONFIG_DIR" 2>/dev/null && printf '{}\n' >"$OAW_EFFECTIVE_SETTINGS" 2>/dev/null; then
+			info "hooks: created $OAW_EFFECTIVE_SETTINGS (the CLI had no settings there)"
+		else
+			warn "hooks: $OAW_EFFECTIVE_SETTINGS absent and not creatable — the kit's hooks will not run"
+			return 0
+		fi
+	fi
+
+	local out
+	if ! out="$(
+		OAW_SRC="$OAW_SETTINGS_JSON" OAW_DST="$OAW_EFFECTIVE_SETTINGS" python3 - <<-'PY' 2>&1
+			import fcntl, json, os
+
+			src, dst = os.environ["OAW_SRC"], os.environ["OAW_DST"]
+			with open(src) as fh:
+			    want = json.load(fh).get("hooks", {})
+			if not want:
+			    print("no-kit-hooks")
+			    raise SystemExit(0)
+
+			def key(matcher, cmd):
+			    """Dedup key: two commands that RESOLVE to the same script are one hook.
+
+			    Keying on the raw string is not enough. The image bakes
+			    wtf-post-tool-use.sh under BOTH `~/.local/share/...` (from
+			    settings.template.json) and `/home/ubuntu/.local/share/...` (added at
+			    build time), and the shared settings already carried the absolute form.
+			    A string key called those two different hooks and registered the second,
+			    so the hook fired TWICE on every tool use — a merge that introduces
+			    duplicate execution is not preserving the release's wiring, it is
+			    corrupting it. Measured live before this guard existed.
+
+			    Expansion is for the KEY only; what gets written is always the image's
+			    own string, byte for byte.
+			    """
+			    head, sep, tail = cmd.strip().partition(" ")
+			    return matcher, os.path.expanduser(os.path.expandvars(head)) + sep + tail
+
+			def commands(group):
+			    """(matcher, hook) pairs in one hook group, skipping junk entries."""
+			    if not isinstance(group, dict):
+			        return
+			    matcher = group.get("matcher") or ""
+			    for h in group.get("hooks") or []:
+			        if isinstance(h, dict) and isinstance(h.get("command"), str):
+			            yield matcher, h
+
+			# Locked read-modify-write: this file is shared by every container on the
+			# host, so two agents starting together WILL interleave here.
+			with open(dst, "r+") as fh:
+			    fcntl.flock(fh, fcntl.LOCK_EX)
+			    d = json.loads(fh.read() or "{}")
+			    if not isinstance(d, dict):
+			        raise SystemExit("__ERR__ effective settings is not a JSON object")
+			    before = json.loads(json.dumps(d))  # pre-image for the recovery copy
+			    have = d.setdefault("hooks", {})
+			    if not isinstance(have, dict):
+			        raise SystemExit("__ERR__ effective settings has a non-object 'hooks'")
+
+			    added = []
+			    for event, groups in want.items():
+			        dst_groups = have.setdefault(event, [])
+			        if not isinstance(dst_groups, list):
+			            continue
+			        # Keyed per MATCHER, never by command alone: the kit legitimately
+			        # registers one script under several matchers — context-freshness-warn
+			        # ships under BOTH `startup` and `resume` — and a command-only key
+			        # would silently drop the second registration, which is this bug
+			        # wearing a merge's clothes. See key() for the other half (two
+			        # spellings of one path are one hook).
+			        present = {key(m, h["command"]) for g in dst_groups for m, h in commands(g)}
+			        for g in groups or []:
+			            missing = []
+			            for m, h in commands(g):
+			                k = key(m, h["command"])
+			                if k in present:
+			                    continue
+			                # Add to `present` as we go, so a source group that ships the
+			                # same script twice under one matcher registers it once.
+			                present.add(k)
+			                missing.append(h)
+			            if not missing:
+			                continue
+			            # NOT `k` — `k` is the dedup key three lines up. The comprehension
+			            # has its own scope so reusing it is harmless, and unreadable.
+			            group = {gk: gv for gk, gv in g.items() if gk != "hooks"}
+			            group["hooks"] = missing
+			            dst_groups.append(group)
+			            # (… or ["?"]) — a hook whose command is the empty string is
+			            # junk, but IndexError here would abort the whole merge and
+			            # take every other event's wiring down with it.
+			            added += [f"{event}:{(h['command'].split() or ['?'])[0]}" for h in missing]
+
+			    if added:
+			        # RECOVERY COPY before mutating, and an IN-PLACE write after — both
+			        # inherited from sync_kit_registrations deliberately. A tmp+rename would
+			        # be atomic against a torn write, but it mints a new inode, and this
+			        # config directory is bind-mounted; keeping one inode keeps every view of
+			        # the file the same file. The residual torn-write risk (kill/ENOSPC
+			        # between write and truncate) is what the copy is for, in a file EVERY
+			        # container reads.
+			        try:
+			            with open(dst + ".pre-bootstrap", "w") as bak:
+			                bak.write(json.dumps(before, indent=2))
+			        except Exception:
+			            pass
+			        data = json.dumps(d, indent=2)
+			        fh.seek(0)
+			        fh.write(data)
+			        fh.truncate()
+			print(",".join(added) if added else "already-present")
+		PY
+	)"; then
+		warn "hooks: could not merge kit hook wiring into $OAW_EFFECTIVE_SETTINGS ($out)"
+		return 0
+	fi
+	case "$out" in
+	already-present) info "hooks: kit wiring already present in $OAW_EFFECTIVE_SETTINGS" ;;
+	no-kit-hooks) warn "hooks: image settings.json declares no hooks — nothing to merge" ;;
+	# No __ERR__ arm: `raise SystemExit("__ERR__ …")` exits 1, so those land in the
+	# `if ! out=` branch above with the message already in $out. An arm here would
+	# be unreachable — the kind of handler that reads as coverage and is never run.
+	*) info "hooks: merged kit wiring into the CLI's settings: $out" ;;
+	esac
 	return 0
 }
 
@@ -1000,7 +1150,7 @@ main() {
 	info "starting (home=$OAW_HOME)"
 	validate_env
 	sync_skills
-	merge_settings
+	sync_kit_hooks
 	validate_secrets
 	ensure_ssh_parity
 	ensure_github_auth

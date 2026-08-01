@@ -87,12 +87,12 @@ def test_sandbox_scoped_flag_applies_guard_to_any_layer() -> None:
     """The R-03 guard fires on any mount flagged ``sandbox_scoped``, not only the
     memory layer — a durable-cache mislabeled into the live tree is still caught."""
     entry = {
-        "name": "settings-local",
+        "name": "stray-shared-file",
         "layer": "shared-mutable-rw",
         "mode": "rw",
         "sandbox_scoped": True,
-        "source": "~/.claude/settings.local.json",
-        "target": "/home/ubuntu/.claude/settings.local.json",
+        "source": "~/.claude/some-shared-file.json",
+        "target": "/home/ubuntu/.claude/some-shared-file.json",
     }
     with pytest.raises(mr.ManifestError, match="R-03"):
         _resolve_one(entry)
@@ -265,6 +265,26 @@ def test_manifest_resolves() -> None:
     # docker -v rendering round-trips (ro suffix only on ro mounts).
     assert mcp.to_docker_volume().endswith(":ro")
     assert not by_name["memory"].to_docker_volume().endswith(":ro")
+
+
+def test_manifest_declares_no_user_level_settings_local(tmp_path: Path) -> None:
+    """No mount may target a user-level ``settings.local.json`` (#1086).
+
+    There is no such file. ``localSettings`` is PROJECT-scoped — the CLI reads
+    ``<project>/.claude/settings.local.json`` — and a settings.local.json beside
+    the USER settings.json is never read, under aoe or natively. The removed
+    mount carried ``{}`` on every profile for its whole life, so nothing noticed.
+
+    Pinned as a test rather than trusted to memory: it resolves cleanly, looks
+    exactly like the memory mount beside it, and would be re-added by anyone
+    reading Dev Spec §5.3's "settings.json is split" in good faith.
+    """
+    resolved = mr.resolve_manifest(MAJOR, home=FAKE_HOME, mounts_dir=MANIFEST_DIR)
+    offenders = [m.name for m in resolved if m.target.endswith("/settings.local.json")]
+    assert not offenders, (
+        f"mount(s) {offenders} target a user-level settings.local.json, which the "
+        f"CLI never reads — dead weight that reads as a working shared-knobs seam"
+    )
 
 
 def test_manifest_dir_exists() -> None:

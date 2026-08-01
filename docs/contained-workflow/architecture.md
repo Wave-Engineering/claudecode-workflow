@@ -34,7 +34,7 @@ flowchart TB
       kit["baked kit: skills / hooks /<br/>scripts / kit MCPs / toolchain"]
     end
     subgraph hoststate["host-backed durable state"]
-      mem["~/.oaw/state/&lt;major&gt;/<br/>memory + settings.local"]
+      mem["~/.oaw/state/&lt;major&gt;/<br/>memory"]
       sec["~/.secrets (ro)"]
       overlay["~/.oaw/overlay, ~/.oaw/toolbox<br/>user MCPs / tools"]
       caches["~/.oaw/cache/&lt;major&gt;/<br/>cargo / go / uv / playwright"]
@@ -114,7 +114,7 @@ flowchart LR
     s1["skills / hook scripts<br/>kit MCP registrations"]
   end
   subgraph rw["2 · shared-mutable-rw"]
-    s2["memory + settings.local<br/>~/.oaw/state/&lt;major&gt;/  (R-03)"]
+    s2["memory<br/>~/.oaw/state/&lt;major&gt;/  (R-03)"]
   end
   subgraph ro["3 · read-only-secrets"]
     s3["~/.secrets (ro)  ·  §3.5"]
@@ -176,13 +176,49 @@ degrades silently (the D7 assertion-liveness discipline):
   The discretionary-tool toolbox (R-11) is a durable, in-container-materialized
   mount decoupled from the kit release.
 
-### 3.3 settings.json split
+### 3.3 settings.json: one file, merged by us (#1086)
 
-`settings.json` straddles versioned and shared, so it is **split** (Dev Spec
-§5.3): the image ships `settings.json` (hook wiring — versioned, because hook
-registrations point at script paths that live in the image), and the
-`10-memory.toml` fragment bind-mounts `settings.local.json` (permissions / env /
-identity — the genuinely shared knobs). Claude Code merges the two.
+`settings.json` straddles versioned and shared. The original design (Dev Spec
+§5.3) **split** it across two files — the image ships `settings.json` (hook
+wiring, versioned, because hook registrations point at script paths that live in
+the image) and `10-memory.toml` bind-mounts `settings.local.json` (permissions /
+env / identity, the genuinely shared knobs) — on the understanding that Claude
+Code merges the two.
+
+**It does not, because the second file does not exist.** `localSettings` is
+*project*-scoped: the CLI reads `<project>/.claude/settings.local.json` and
+nothing else by that name. A `settings.local.json` sitting beside the *user*
+`settings.json` is never read — not "unread under aoe", unread everywhere,
+native installs included. Measured in a single run with three such files planted
+at once: the project copy's hook **fired**, the user config dir's copy's hook did
+**not**, and the user `settings.json`'s hook did. `claude doctor` names a
+malformed *project* `settings.local.json` and stays silent on a malformed one
+beside the user settings, so the instrument can see that file class and still
+reports nothing there. The mount carried `{}` on every profile for its entire
+life, which is why the gap never announced itself.
+
+So the split is gone. There is **one** settings file — the one the CLI actually
+reads — and the kit merges into it:
+
+| | where | who owns it |
+|---|---|---|
+| merge source | image `~/.claude/settings.json` (baked, R-06) | the release |
+| merge target | `$CLAUDE_CONFIG_DIR/settings.json` (under aoe: host-backed `~/.claude/sandbox`, shared by every container) | the operator |
+
+`bootstrap.sh::sync_kit_hooks` merges the image's `hooks` block into the target
+**additively**, keyed on `(matcher, command)` — precisely how `sync_kit_registrations`
+merges `mcpServers`, and for the same reason: the target is shared and legitimately
+carries aoe's own `AOE_INSTANCE_ID` status hooks plus the operator's theme, model
+and permissions. Image-authoritative for hooks; the operator keeps their preferences.
+`./install`'s own `merge_settings` applies this identical rule to a native install;
+this is that rule reapplied where aoe moved the file out from under it.
+
+It deliberately does **not** delete host-only hooks. The strong reading of
+"image-authoritative" would clobber aoe's wiring and break its TUI; stale
+host-only entries are instead reported by `validate_hook_paths` (§3.5.1).
+
+The shared-knob seam R-03 wanted still exists — it is simply this same file,
+rather than a second one beside it.
 
 ### 3.4 PATH precedence
 
@@ -385,27 +421,42 @@ paths that do not exist.
 green and each partially bypassed in production, because every verification used
 `docker run` with the profile's `extra_volumes` — reproducing the **mounts** but
 not the **launcher**. `scripts/ci/aoe-preflight.sh` launches through aoe and
-asserts ten behaviours from inside the container; it was proven able to fail by
+asserts twelve behaviours from inside the container; it was proven able to fail by
 running it against the unfixed image first. **A harness that reproduces the
 inputs but not the invoker is not a rehearsal.**
 
-#### Known, deliberate gap: the settings split does not survive aoe
+#### Closed: the settings split did not survive aoe, and R-06 held by coincidence (#1086)
 
-This fix reconciles `.claude.json` (MCP registrations, onboarding, trust) into the
-effective location. It does **not** reconcile `settings.json`, and the honest
-consequence is that under aoe **the image's baked hook wiring (§3.3, R-06
-"versioned with the release") and the bind-mounted `settings.local.json` (R-03
-shared knobs) are both unread.** The CLI reads the operator's host settings
-instead.
+#1085 reconciled `.claude.json` (MCP registrations, onboarding, trust) into the
+effective location and deliberately left `settings.json` alone, recording the
+consequence here as a known gap: under aoe the image's baked hook wiring was
+unread, because the CLI reads `$CLAUDE_CONFIG_DIR/settings.json` instead.
 
-That contradicts §3.3 and is stated here rather than left to be discovered.
-`aoe-preflight.sh` asserts the effective settings are *readable* and that every
-configured hook *resolves*; nothing yet asserts the kit's own hooks are
-**present**. Resolving it means either merging the image's `hooks` block the way
-`mcpServers` is merged, or accepting that hook wiring is operator-owned under aoe
-and dropping the R-06 claim for it. Deferred deliberately: it is a contract
-change, not a bug fix, and shipping it inside a five-symptom incident fix would
-bury it.
+That was true, and its **stated consequence — that the kit's hooks therefore do
+not run — was not.** They ran. `$CLAUDE_CONFIG_DIR` resolves to
+`~/.claude/sandbox`, a sandbox-dedicated host directory (not the operator's own
+`~/.claude`), and it had been seeded from a host carrying the same kit. So an
+equivalent hook set was already sitting in it, and `~/`-prefixed entries resolve
+in-container because `~` is `/home/ubuntu`. Everything worked.
+
+**The real defect was version skew, and it was invisible by construction.** What
+could not happen was hook wiring MOVING: a hook the image added, renamed or
+repointed stayed on the operator's host timetable rather than the release's, and
+nothing anywhere reported the divergence. R-06 — "versioned with the release" —
+was true by coincidence, which is not the same as true, and a promotion gate must
+not rest on a coincidence.
+
+It is closed by §3.3's merge. Two things follow, and both are the point:
+
+- **No settings-shaped check could have caught this.** A settings file that
+  *mentions* a hook proves nothing about whether that hook ran, and here the file
+  named all the right hooks for the wrong reason. `aoe-preflight.sh` therefore
+  asserts a kit hook **executed**: `kit-hooks-alive.sh` is a SessionStart beacon
+  whose marker exists only as a side effect of running, cleared (and proven
+  cleared) before the assertion.
+- **The beacon is its own red-first proof.** It is new in this release, so it is
+  absent from any host-seeded settings file — run the new preflight against the
+  pre-#1086 image and check 8 fails, for exactly the reason the fix exists.
 
 ### 3.6.1 GitHub credential — file modality, deliberately not env (#1082)
 

@@ -81,6 +81,16 @@
     ],
     "SessionStart": [
       {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "_comment": "Kit hook-wiring liveness beacon (cc-workflow#1086). Its OWN group, like the context-freshness pair, so merge_settings' group-signature union cannot append-and-duplicate a neighbouring hook. Writes ~/.claude/.kit-hooks-alive by EXECUTING — the one assertion that a settings file cannot fake. Silent (no additionalContext), always exits 0.",
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/kit-hooks-alive.sh"
+          }
+        ]
+      },
+      {
         "matcher": "compact",
         "hooks": [
           {
