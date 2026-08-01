@@ -15,13 +15,25 @@ sandbox_scoped = true
 source = "~/.oaw/state/<major>/memory"
 target = "/home/ubuntu/.claude/projects/_sandbox/memory"
 
-# settings.local.json — the genuinely-shared knobs (permissions / env / identity).
-# settings.json (hook wiring) is BAKED in the image (versioned); Claude Code
-# merges the two. This half is host-backed and sandbox-scoped like memory.
-[[mount]]
-name = "settings-local"
-layer = "shared-mutable-rw"
-mode = "rw"
-sandbox_scoped = true
-source = "~/.oaw/state/<major>/settings.local.json"
-target = "/home/ubuntu/.claude/settings.local.json"
+# REMOVED: the "settings-local" mount (#1086). It landed
+# ~/.oaw/state/<major>/settings.local.json at /home/ubuntu/.claude/settings.local.json
+# on the premise that settings.json is SPLIT — image ships hook wiring, this mount
+# supplies the shared knobs, Claude Code merges the two.
+#
+# There is no such file. `localSettings` is PROJECT-scoped: the CLI reads
+# <project>/.claude/settings.local.json and nothing else by that name. Measured
+# against the shipped CLI in one run, three settings.local.json files planted at
+# once — a hook in the project copy FIRED, a hook in the user config dir's copy did
+# NOT, and a hook in the user settings.json did. `claude doctor` names a malformed
+# project settings.local.json and stays silent on a malformed one beside the user
+# settings, so the instrument can see the file class and still reports nothing there.
+#
+# So this mount was never read — not "unread under aoe", unread everywhere,
+# native installs included. It carried `{}` on every profile for its whole life,
+# which is why nothing ever noticed. The shared-knob seam R-03 wanted does exist,
+# but it is the settings.json the CLI actually reads (under aoe: the host-backed,
+# fleet-shared $CLAUDE_CONFIG_DIR copy) — and bootstrap's sync_kit_hooks now merges
+# the image's hook wiring INTO it rather than expecting the CLI to merge two files.
+#
+# Removing the mount changes the resolved volume set, so profile config.toml
+# extra_volumes need regenerating; check-mount-drift.sh is what reports the gap.

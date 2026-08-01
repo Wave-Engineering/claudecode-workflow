@@ -15,8 +15,7 @@ Each of the four enumerated silent-skip paths (Dev Spec §5.4 / SKETCHBOOK D7) i
 exercised **red-first** — the broken condition is constructed and the guard's
 logged/failing signal is asserted — before the guard is trusted:
 
-* missing mount   — ``test_missing_host_skills_mount_is_logged_no_dangling``,
-  ``test_missing_settings_local_is_logged`` `[R-14]`
+* missing mount   — ``test_missing_host_skills_mount_is_logged_no_dangling`` `[R-14]`
 * shadowed skill  — ``test_skills_sync_image_wins_and_logs_collision`` `[R-06, R-10]`
 * dangling link   — ``test_dangling_symlink_is_logged`` `[R-14]`
 * missing secret  — ``test_missing_required_secret_fails_loud`` `[R-14]`
@@ -69,7 +68,6 @@ def _make_home(
     image_skills: list[str] | None = None,
     host_skills: list[str] | None = None,
     settings_json: bool = True,
-    settings_local: str | None = None,
     secrets: dict[str, str] | None = None,
     dangling: list[str] | None = None,
 ) -> Path:
@@ -100,9 +98,15 @@ def _make_home(
         (image / name).symlink_to(home / "does-not-exist" / name)
 
     if settings_json:
-        (home / ".claude" / "settings.json").write_text('{"hooks": {}}\n')
-    if settings_local is not None:
-        (home / ".claude" / "settings.local.json").write_text(settings_local)
+        # A REAL hook, not `{"hooks": {}}`. This file is the merge SOURCE for
+        # sync_kit_hooks (#1086), and an empty block would make every cfgdir test
+        # exercise the "nothing to merge" branch — a fixture that cannot detect the
+        # bug it is fixture for. /bin/true is used so validate_hook_paths, which
+        # runs later over the merged result, finds a path that genuinely resolves.
+        (home / ".claude" / "settings.json").write_text(
+            '{"hooks": {"SessionStart": [{"matcher": "startup", "hooks":'
+            ' [{"type": "command", "command": "/bin/true"}]}]}}\n'
+        )
     for fname, content in (secrets or {}).items():
         (secrets_dir / fname).write_text(content)
 
@@ -194,20 +198,15 @@ def test_missing_host_skills_mount_is_logged_no_dangling(tmp_path: Path) -> None
     assert not any(p.is_symlink() and not p.exists() for p in image.iterdir())
 
 
-def test_missing_settings_local_is_logged(tmp_path: Path) -> None:
-    """Absent settings.local mount → logged (silent-skip made loud), non-fatal."""
-    home = _make_home(tmp_path)  # no settings_local
-    proc = _run(home)
-    assert proc.returncode == 0, proc.stderr
-    assert "missing mount: settings.local.json" in proc.stderr
-
-
-def test_malformed_settings_local_is_logged(tmp_path: Path) -> None:
-    """Malformed settings.local → loud warning (CC's merge would silently drop it)."""
-    home = _make_home(tmp_path, settings_local="{ this is not json ]")
-    proc = _run(home)
-    assert proc.returncode == 0, proc.stderr
-    assert "not valid JSON" in proc.stderr
+# NOTE (#1086) — two tests were REMOVED here, not relocated:
+# ``test_missing_settings_local_is_logged`` and
+# ``test_malformed_settings_local_is_logged``. Both asserted that bootstrap warns
+# about ~/.claude/settings.local.json, on the premise that Claude Code merges it
+# with the user settings.json. It does not: ``localSettings`` is PROJECT-scoped
+# and a settings.local.json beside the USER settings is never read, aoe or not.
+# They were well-formed assertions about a file the CLI ignores — green forever,
+# guarding nothing. The mount they policed is gone (mounts.d/10-memory.toml), and
+# what replaced the whole idea is sync_kit_hooks, covered below.
 
 
 # --- dangling link ------------------------------------------------------------
@@ -299,7 +298,6 @@ def test_all_clean_exits_zero(tmp_path: Path) -> None:
         tmp_path,
         image_skills=["alpha"],
         host_skills=["beta"],
-        settings_local='{"permissions": {}}\n',
         secrets={
             ".env": "OAW_REQUIRED_SECRETS=discord-bot-token\n"
                     "DISCORD_TOKEN_PATH=/home/ubuntu/.secrets/discord-bot-token\n",
@@ -400,11 +398,19 @@ def test_bootstrap_failloud(tmp_path: Path) -> None:
         host_skills=["alpha"],
         dangling=["ghost"],
     )
+    # 2) missing mount: the secrets dir. This leg used to be settings.local.json,
+    # until #1086 established the CLI never reads a user-level one and the mount
+    # was removed — an oracle leg that had been asserting a warning about a file
+    # nothing would have opened. The secrets dir is the honest replacement: it is
+    # a real mount, and its absence is the R-14 silent-skip this oracle is for.
+    import shutil
+    shutil.rmtree(home / ".secrets")
+
     logged = _run(home)
     assert logged.returncode == 0, logged.stderr
     assert "skills-sync collision" in logged.stderr  # shadowed skill
     assert "dangling symlink" in logged.stderr  # dangling link
-    assert "missing mount: settings.local.json" in logged.stderr  # 2) missing mount
+    assert "missing mount: secrets dir not present" in logged.stderr  # 2) missing mount
 
     # 4) missing secret FAILS LOUD (the same layout, plus a required secret).
     failed = _run(home, OAW_REQUIRED_SECRETS="MUST_HAVE_TOKEN")
@@ -670,7 +676,6 @@ def test_bootstrap_writes_nothing_to_stdout(tmp_path: Path) -> None:
     home = _make_home(
         tmp_path,
         image_skills=["alpha"],
-        settings_local="{}",
         secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'},
     )
     proc = _run(home)
@@ -1575,3 +1580,252 @@ def test_git_transport_matches_the_host_per_forge() -> None:
         "ensure_ssh_parity is defined but not CALLED from main: gitlab git and "
         "every remote host (blueshift, perkollate, agent-smith-ca) depend on it"
     )
+
+
+# --- kit hook wiring into the settings the CLI reads (#1086) ------------------
+#
+# R-06 says hook wiring is versioned with the release. Under aoe it was not: the
+# CLI reads $CLAUDE_CONFIG_DIR/settings.json and never the image's own copy. That
+# went unnoticed because the shared file had been seeded from a host carrying the
+# same kit, so an equivalent hook set was already sitting in it and hooks DID fire.
+# What could not happen was version movement — and nothing reported that.
+
+
+def _hook_commands(settings: dict, event: str) -> list[tuple[str, str]]:
+    """(matcher, command) pairs registered under one event."""
+    return [
+        (g.get("matcher") or "", h["command"])
+        for g in settings.get("hooks", {}).get(event, [])
+        for h in g.get("hooks", [])
+        if isinstance(h.get("command"), str)
+    ]
+
+
+def test_kit_hooks_merge_into_the_settings_the_cli_reads(tmp_path: Path) -> None:
+    """The image's hooks reach $CLAUDE_CONFIG_DIR/settings.json, additively.
+
+    The destination is SHARED by every container and carries aoe's own status
+    hooks and the operator's preferences, so this must add and never clobber.
+    """
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    (cfgdir / "settings.json").write_text(J.dumps({
+        "theme": "dark",
+        "hooks": {"SessionStart": [
+            {"matcher": "startup", "hooks": [
+                {"type": "command", "command": "/bin/echo operator-own"}]}]},
+    }))
+    ws = tmp_path / "ws"; ws.mkdir()
+    proc = _run_cfgdir(home, cfgdir, ws)
+    assert proc.returncode == 0, proc.stderr
+
+    got = J.loads((cfgdir / "settings.json").read_text())
+    pairs = _hook_commands(got, "SessionStart")
+    assert ("startup", "/bin/true") in pairs, "the image's hook never arrived"
+    assert ("startup", "/bin/echo operator-own") in pairs, (
+        "the operator's own hook was dropped — the merge must be additive"
+    )
+    assert got["theme"] == "dark", "non-hook operator settings must be untouched"
+
+
+def test_kit_hook_merge_is_idempotent(tmp_path: Path) -> None:
+    """A second boot registers nothing twice — a hook that runs twice per event
+    is its own bug, and every container boots this code path on every launch."""
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    ws = tmp_path / "ws"; ws.mkdir()
+    assert _run_cfgdir(home, cfgdir, ws).returncode == 0
+    first = _hook_commands(J.loads((cfgdir / "settings.json").read_text()), "SessionStart")
+    proc = _run_cfgdir(home, cfgdir, ws)
+    assert proc.returncode == 0
+    second = _hook_commands(J.loads((cfgdir / "settings.json").read_text()), "SessionStart")
+    assert first == second, f"second boot changed the hook set: {first} -> {second}"
+    assert "already present" in proc.stderr
+
+
+def test_same_command_under_a_different_matcher_is_not_dropped(tmp_path: Path) -> None:
+    """Dedup is on (matcher, command), not command alone.
+
+    The kit legitimately registers one script under several matchers —
+    context-freshness-warn.sh ships under BOTH `startup` and `resume`. A
+    command-only key silently drops the second registration, which is the very
+    bug this merge exists to fix, wearing a merge's clothes.
+    """
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    (home / ".claude" / "settings.json").write_text(J.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [{"type": "command", "command": "/bin/true"}]},
+        {"matcher": "resume", "hooks": [{"type": "command", "command": "/bin/true"}]},
+    ]}}))
+    ws = tmp_path / "ws"; ws.mkdir()
+    assert _run_cfgdir(home, cfgdir, ws).returncode == 0
+    pairs = _hook_commands(J.loads((cfgdir / "settings.json").read_text()), "SessionStart")
+    assert ("startup", "/bin/true") in pairs
+    assert ("resume", "/bin/true") in pairs, (
+        "the resume registration was swallowed by a command-only dedup"
+    )
+
+
+def test_absent_effective_settings_is_created_not_bailed_on(tmp_path: Path) -> None:
+    """A fresh aoe profile has a config dir with no settings.json in it.
+
+    Warning-and-returning there reproduces the exact production state this fixes:
+    a container running none of the release's hooks.
+    """
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    ws = tmp_path / "ws"; ws.mkdir()
+    assert not (cfgdir / "settings.json").exists()
+    proc = _run_cfgdir(home, cfgdir, ws)
+    assert proc.returncode == 0, proc.stderr
+    assert (cfgdir / "settings.json").is_file(), "bootstrap must create it"
+    pairs = _hook_commands(J.loads((cfgdir / "settings.json").read_text()), "SessionStart")
+    assert ("startup", "/bin/true") in pairs
+
+
+def test_malformed_effective_settings_is_not_clobbered(tmp_path: Path) -> None:
+    """Unparseable destination → warn and leave it ALONE.
+
+    This file is shared by every container on the host. Overwriting one the
+    operator is mid-edit, to 'fix' it, would be a worse failure than the one being
+    reported — and the CLI is already showing them a Settings Error.
+    """
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    (cfgdir / "settings.json").write_text("{ not json at all")
+    ws = tmp_path / "ws"; ws.mkdir()
+    proc = _run_cfgdir(home, cfgdir, ws)
+    assert proc.returncode == 0, "a malformed shared file must not abort the boot"
+    assert (cfgdir / "settings.json").read_text() == "{ not json at all"
+    # Name the MERGE's own message. A bare "hooks:" match is satisfied by
+    # validate_hook_paths, which also chokes on this file and reports it later —
+    # so the assertion passed under a mutation that removed the merge entirely.
+    # An instrument that reads another function's output is not measuring this one.
+    assert "could not merge kit hook wiring" in proc.stderr, (
+        "the merge must report its own refusal, not leave it to a later stage"
+    )
+
+
+def test_native_install_does_not_merge_a_file_into_itself(tmp_path: Path) -> None:
+    """With no CLAUDE_CONFIG_DIR, source and destination ARE the same file.
+
+    #1085's first cut collapsed the two config locations into one expression and
+    broke every non-aoe path; this is the same hazard one function over.
+    """
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    before = (home / ".claude" / "settings.json").read_text()
+    proc = _run(home)
+    assert proc.returncode == 0, proc.stderr
+    assert (home / ".claude" / "settings.json").read_text() == before
+    assert "reads the image settings directly" in proc.stderr
+
+
+# --- the beacon that makes "a hook FIRED" assertable (#1086) ------------------
+
+
+BEACON = REPO_ROOT / "scripts" / "hooks" / "workflow" / "kit-hooks-alive.sh"
+
+
+def test_beacon_hook_exists_and_is_executable() -> None:
+    assert BEACON.is_file(), f"missing beacon hook: {BEACON}"
+    assert os.access(BEACON, os.X_OK), f"beacon hook is not executable: {BEACON}"
+
+
+def test_beacon_writes_its_marker_by_running(tmp_path: Path) -> None:
+    """The marker must be a side effect of EXECUTION.
+
+    That is the entire point: a settings file naming a hook proves nothing, and
+    in #1086 the file named every right hook for the wrong reason.
+    """
+    home = tmp_path / "beaconhome"
+    (home / ".claude").mkdir(parents=True)
+    proc = subprocess.run(
+        ["bash", str(BEACON)], capture_output=True, text=True, timeout=30,
+        env={**os.environ, "HOME": str(home)},
+    )
+    assert proc.returncode == 0
+    marker = home / ".claude" / ".kit-hooks-alive"
+    assert marker.is_file(), "the beacon did not write its marker"
+    assert marker.read_text().strip(), "the marker is empty — no timestamp recorded"
+
+
+def test_beacon_is_silent_on_stdout() -> None:
+    """SessionStart stdout becomes additionalContext in the agent's window. A
+    beacon that spends context would tax every session for the life of the kit."""
+    home = os.environ.get("HOME", "/tmp")
+    proc = subprocess.run(
+        ["bash", str(BEACON)], capture_output=True, text=True, timeout=30,
+        env={**os.environ, "HOME": home},
+    )
+    assert proc.stdout == "", f"beacon wrote to stdout: {proc.stdout!r}"
+
+
+def test_beacon_is_wired_into_the_settings_template() -> None:
+    """Shipping the script without registering it is the declared-but-not-wired
+    shape this repo keeps producing (#1076 above all)."""
+    import json as J
+
+    tmpl = J.loads((REPO_ROOT / "config" / "settings.template.json").read_text())
+    cmds = [
+        h.get("command", "")
+        for g in tmpl["hooks"]["SessionStart"]
+        for h in g.get("hooks", [])
+    ]
+    assert any("kit-hooks-alive.sh" in c for c in cmds), (
+        "the beacon is not registered in settings.template.json — it would ship inert"
+    )
+
+
+def test_tilde_and_absolute_forms_of_one_hook_register_once(tmp_path: Path) -> None:
+    """Two commands that RESOLVE to the same script are one hook.
+
+    Not hypothetical — measured live. The image bakes wtf-post-tool-use.sh under
+    BOTH ``~/.local/share/...`` (settings.template.json) and
+    ``/home/ubuntu/.local/share/...`` (added at build time), and the shared
+    settings already carried the absolute form. A string-keyed dedup called those
+    two different hooks and registered the second, so it fired TWICE on every
+    tool use. A merge that introduces duplicate execution is not preserving the
+    release's wiring — it is corrupting it.
+    """
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    # The image ships both spellings, exactly as the real one does.
+    (home / ".claude" / "settings.json").write_text(J.dumps({"hooks": {"PostToolUse": [
+        {"matcher": "", "hooks": [{"type": "command", "command": "~/hook.sh"}]},
+        {"matcher": "", "hooks": [
+            {"type": "command", "command": str(home) + "/hook.sh"}]},
+    ]}}))
+    (home / "hook.sh").write_text("#!/bin/sh\nexit 0\n")
+    ws = tmp_path / "ws"; ws.mkdir()
+    proc = _run_cfgdir(home, cfgdir, ws, HOME=str(home))
+    assert proc.returncode == 0, proc.stderr
+
+    got = _hook_commands(J.loads((cfgdir / "settings.json").read_text()), "PostToolUse")
+    assert len(got) == 1, f"the same hook registered {len(got)} times: {got}"
+
+
+def test_absolute_form_already_present_blocks_the_tilde_form(tmp_path: Path) -> None:
+    """The destination's spelling wins when both name the same script.
+
+    This is the live case: the shared settings carried the absolute path (a
+    by-hand #1085 fix) and the image ships the tilde form. Adding the tilde form
+    on top is what doubled the hook.
+    """
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    (home / ".claude" / "settings.json").write_text(J.dumps({"hooks": {"PostToolUse": [
+        {"matcher": "", "hooks": [{"type": "command", "command": "~/hook.sh"}]}]}}))
+    (home / "hook.sh").write_text("#!/bin/sh\nexit 0\n")
+    (cfgdir / "settings.json").write_text(J.dumps({"hooks": {"PostToolUse": [
+        {"matcher": "", "hooks": [
+            {"type": "command", "command": str(home) + "/hook.sh"}]}]}}))
+    ws = tmp_path / "ws"; ws.mkdir()
+    assert _run_cfgdir(home, cfgdir, ws, HOME=str(home)).returncode == 0
+
+    got = _hook_commands(J.loads((cfgdir / "settings.json").read_text()), "PostToolUse")
+    assert got == [("", str(home) + "/hook.sh")], f"tilde form was added on top: {got}"

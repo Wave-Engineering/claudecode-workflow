@@ -41,7 +41,7 @@ fragment deterministically. Each file holds one or more `[[mount]]` tables.
 | file | layer | owner story |
 |------|-------|-------------|
 | `05-transcripts.toml` | shared-mutable-rw (session transcripts) | #1064 |
-| `10-memory.toml` | shared-mutable-rw (memory + `settings.local.json`) | 1.3 (#963) |
+| `10-memory.toml` | shared-mutable-rw (memory) | 1.3 (#963), #1086 |
 | `20-secrets.toml` | read-only-secrets (ro named single-file mounts) | 1.5 (#965), #1061 |
 | `30-user-overlay.toml` | user-overlay (MCP fragment, toolbox, user scripts) | 1.3 (#963) |
 | `40-durable-caches.toml` | durable-cache (cargo, go-mod, uv, ms-playwright) | 1.3 (#963) |
