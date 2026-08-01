@@ -136,7 +136,10 @@ COPY --chown=ubuntu:ubuntu . ${KIT_SRC}
 USER ubuntu
 ENV HOME=/home/ubuntu
 # Kit scripts install to ~/.local/bin; put it (and go) ahead on PATH.
-ENV PATH="/home/ubuntu/.local/bin:/usr/local/go/bin:${PATH}"
+# The operator's own ~/.local/bin is mounted at .oaw/overlay/local-bin (#1089)
+# and APPENDED — never prepended. The kit's own bin holds the claude wrapper
+# (#1076) and the MCP binaries; a host utility must never shadow those.
+ENV PATH="/home/ubuntu/.local/bin:/usr/local/go/bin:${PATH}:/home/ubuntu/.oaw/overlay/local-bin"
 WORKDIR ${KIT_SRC}
 # install's final step is a runtime-readiness advisory (check-deps.sh) whose exit
 # code is the count of missing deps. `bun` (and node/claude) are now on PATH (the
