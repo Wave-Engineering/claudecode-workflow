@@ -29,6 +29,11 @@ ARG GLAB_VERSION=1.53.0
 ARG TRIVY_VERSION=0.72.0
 ARG BAO_VERSION=2.6.0
 ARG AWSCLI_VERSION=2.24.0
+ARG MISE_VERSION=2026.8.0
+# mise publishes `linux-x64`, NOT Go's `amd64`. Reusing ${GOARCH} here 404'd the
+# build (curl exit 22) — the naming conventions genuinely differ per project, so
+# this gets its own arg rather than an assumption that they agree.
+ARG MISE_ARCH=x64
 # The base is linux/amd64; the fetch URLs below are arch-specific. Rebuild with
 # matching ARGs if a multi-arch base is ever introduced.
 ARG GOARCH=amd64
@@ -50,6 +55,23 @@ RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz" -o /tm
 	&& ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt \
 	&& rm -f /tmp/go.tar.gz
 ENV PATH="/usr/local/go/bin:${PATH}"
+
+# --- mise (R-11 toolbox installer) --------------------------------------------
+# THE INSTALLER IS BAKED; THE TOOLCHAINS ARE NOT. That distinction is the whole
+# of R-11 (#1092). Baking a JDK would put a Java toolchain in every agent whether
+# or not it touches Java, and would make bumping Maven a KIT RELEASE. mise is one
+# ~30 MB static binary that can materialise JDK / Maven / Node / Go / Python on
+# demand into the durable toolbox mount, where they survive container recreation
+# and are decoupled from the kit's release cadence.
+#
+# Pinned tarball, not the piped installer script (`curl … | sh`) — same rule as
+# trivy and bao above: a build step that executes whatever a URL serves today is
+# not reproducible, and it is the supply-chain surface we are here to avoid.
+RUN curl -fsSL "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-linux-${MISE_ARCH}.tar.gz" -o /tmp/mise.tar.gz \
+	&& tar -C /tmp -xzf /tmp/mise.tar.gz \
+	&& install -m 0755 /tmp/mise/bin/mise /usr/local/bin/mise \
+	&& rm -rf /tmp/mise.tar.gz /tmp/mise \
+	&& mise --version
 
 # --- shellcheck ---------------------------------------------------------------
 RUN curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" -o /tmp/shellcheck.tar.xz \
@@ -139,7 +161,27 @@ ENV HOME=/home/ubuntu
 # The operator's own ~/.local/bin is mounted at .oaw/overlay/local-bin (#1089)
 # and APPENDED — never prepended. The kit's own bin holds the claude wrapper
 # (#1076) and the MCP binaries; a host utility must never shadow those.
-ENV PATH="/home/ubuntu/.local/bin:/usr/local/go/bin:${PATH}:/home/ubuntu/.oaw/overlay/local-bin"
+# mise keeps its installs on the DURABLE toolbox mount, so a materialised
+# toolchain survives container recreation instead of being re-downloaded (R-11).
+ENV MISE_DATA_DIR=/home/ubuntu/.oaw/toolbox/mise
+# The operator manifest IS mise's global config. Without this the shims are on
+# PATH but cannot resolve a version — measured: `command -v java` returned the
+# shim while `java -version` said "No version is set for shim: java". A shim that
+# exists and cannot run is not a toolchain; it is a more confusing absence.
+# bootstrap re-exports this to whatever manifest it actually finds, which also
+# covers a non-default toolbox path; this ENV is the floor for a bare docker exec.
+ENV MISE_GLOBAL_CONFIG_FILE=/home/ubuntu/.oaw/toolbox/mise.toml
+
+# Toolbox shims sit AFTER the kit's own bin dir and BEFORE the system dirs:
+#   * after ~/.local/bin so a toolchain can never shadow a kit binary — §3.4's
+#     "kit wins over the overlay" keeps the RTE authoritative;
+#   * before ${PATH} so a mise-managed JDK does beat a stray system one.
+#
+# It goes in the IMAGE's ENV deliberately. `docker exec` resolves against the
+# image's configured PATH, not a shell's — non-interactive shells never read
+# ~/.bashrc, which is exactly why bifrost had to hand-source an env file. A hook
+# or an agent-run command must find `mvn` with no shell cooperation at all.
+ENV PATH="/home/ubuntu/.local/bin:/usr/local/go/bin:/home/ubuntu/.oaw/toolbox/mise/shims:${PATH}:/home/ubuntu/.oaw/overlay/local-bin"
 WORKDIR ${KIT_SRC}
 # install's final step is a runtime-readiness advisory (check-deps.sh) whose exit
 # code is the count of missing deps. `bun` (and node/claude) are now on PATH (the

@@ -1829,3 +1829,229 @@ def test_absolute_form_already_present_blocks_the_tilde_form(tmp_path: Path) -> 
 
     got = _hook_commands(J.loads((cfgdir / "settings.json").read_text()), "PostToolUse")
     assert got == [("", str(home) + "/hook.sh")], f"tilde form was added on top: {got}"
+
+
+# --- R-11 toolbox materialisation (#1092) ------------------------------------
+#
+# The mount has been declared since Story 1.3 and nothing ever materialised into
+# it. bifrost hit the consequence head-on: `java`, `mvn`, `docker` all
+# command-not-found on a Java repo, so every session started by bootstrapping the
+# world. Same declared-but-not-wired shape as #1076, #1061 and #1056.
+#
+# `mise` is stubbed here rather than really installing a JDK: these assert the
+# BOOTSTRAP's contract (when does it invoke, what does it tolerate, does it
+# reshim), not mise's. A test that downloaded a real toolchain would be slow
+# enough to get deleted, and would be testing someone else's software.
+
+
+def _stub_mise(binroot: Path, *, exit_code: int = 0, message: str = "") -> Path:
+    """A fake `mise` that records its argv so we can assert what bootstrap asked."""
+    binroot.mkdir(parents=True, exist_ok=True)
+    stub = binroot / "mise"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "$@" >> "{binroot}/calls.log"\n'
+        f'[[ -n "{message}" ]] && echo "{message}" >&2\n'
+        f"exit {exit_code}\n"
+    )
+    stub.chmod(0o755)
+    return stub
+
+
+def _run_toolbox(home: Path, toolbox: Path, binroot: Path | None = None, **env: str):
+    e = {**os.environ, "OAW_HOME": str(home), "OAW_TOOLBOX_DIR": str(toolbox)}
+    e.pop("CLAUDE_CONFIG_DIR", None)
+    if binroot is not None:
+        e["PATH"] = f"{binroot}:{e['PATH']}"
+    e.update(env)
+    return subprocess.run(
+        ["bash", str(BOOTSTRAP)], capture_output=True, text=True, timeout=60, env=e
+    )
+
+
+def test_declared_toolchain_is_materialised(tmp_path: Path) -> None:
+    """The defect itself: a declared manifest must actually be installed."""
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    toolbox = tmp_path / "toolbox"
+    toolbox.mkdir()
+    (toolbox / "mise.toml").write_text('[tools]\njava = "17"\nmaven = "3.9"\n')
+    binroot = tmp_path / "bin"
+    proc = _run_toolbox(home, toolbox, binroot=_stub_mise(binroot).parent)
+
+    assert proc.returncode == 0, proc.stderr
+    calls = (binroot / "calls.log").read_text()
+    assert "install" in calls, f"bootstrap never ran `mise install` (calls: {calls!r})"
+    assert "materialised" in proc.stderr
+
+
+def test_reshim_runs_after_install(tmp_path: Path) -> None:
+    """Without a reshim, a freshly-installed tool has no PATH entry.
+
+    The install would "succeed" while `mvn` stays command-not-found — a pass that
+    leaves the reported problem exactly where it was.
+    """
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    toolbox = tmp_path / "toolbox"
+    toolbox.mkdir()
+    (toolbox / "mise.toml").write_text('[tools]\njava = "17"\n')
+    binroot = tmp_path / "bin"
+    _run_toolbox(home, toolbox, binroot=_stub_mise(binroot).parent)
+    assert "reshim" in (binroot / "calls.log").read_text(), "install without reshim"
+
+
+def test_absent_manifest_is_info_not_a_warning(tmp_path: Path) -> None:
+    """Most agents never touch a toolchain, so no manifest is the COMMON case.
+
+    A warning on every healthy boot is how a fleet learns to stop reading
+    warnings — the same erosion this file's assertion-liveness discipline exists
+    to prevent, arriving from the opposite direction.
+    """
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    toolbox = tmp_path / "toolbox"
+    toolbox.mkdir()
+    proc = _run_toolbox(home, toolbox)
+    assert proc.returncode == 0
+    assert "toolbox: no manifest" in proc.stderr
+    assert "WARN: toolbox: no manifest" not in proc.stderr
+
+
+def test_missing_toolbox_mount_is_logged(tmp_path: Path) -> None:
+    """An absent mount is the enumerated silent-skip — it must be loud."""
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    proc = _run_toolbox(home, tmp_path / "does-not-exist")
+    assert proc.returncode == 0
+    assert "missing mount: toolbox dir not present" in proc.stderr
+
+
+def test_offline_install_warns_but_the_agent_still_starts(tmp_path: Path) -> None:
+    """A container with no Maven is bad; a container with no AGENT is worse.
+
+    The wrapper SOURCES bootstrap and then execs the CLI, so a fatal here means
+    no agent at all.
+    """
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    toolbox = tmp_path / "toolbox"
+    toolbox.mkdir()
+    (toolbox / "mise.toml").write_text('[tools]\njava = "17"\n')
+    binroot = tmp_path / "bin"
+    _stub_mise(binroot, exit_code=1, message="failed to resolve host mise-versions.jdx.dev")
+    proc = _run_toolbox(home, toolbox, binroot=binroot)
+
+    assert proc.returncode == 0, "an offline toolbox must never fail the boot"
+    assert "mise install failed" in proc.stderr
+    assert "mise-versions" in proc.stderr, "mise's own diagnosis must be surfaced, not swallowed"
+
+
+def test_manifest_without_mise_is_reported(tmp_path: Path) -> None:
+    """A declared toolchain and no installer is exactly #1092 in miniature."""
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    toolbox = tmp_path / "toolbox"
+    toolbox.mkdir()
+    (toolbox / "mise.toml").write_text('[tools]\njava = "17"\n')
+    empty = tmp_path / "emptybin"
+    empty.mkdir()
+    # PATH with no mise on it at all.
+    proc = _run_toolbox(home, toolbox, PATH=f"{empty}:/usr/bin:/bin")
+    assert proc.returncode == 0
+    assert "mise is not installed" in proc.stderr
+
+
+# --- the image half: installer baked, toolchain NOT ---------------------------
+
+DOCKERFILE = REPO_ROOT / "containers" / "oakandwave-workflow" / "Dockerfile"
+
+
+def _dockerfile_instructions() -> str:
+    """The Dockerfile with comments stripped.
+
+    Scanning the raw text asks the COMMENTARY, not the config. The block
+    explaining mise necessarily names the toolchains it can materialise ("JDK /
+    Maven / Node …"), so a raw-text check for "maven" matches the sentence that
+    says we do NOT bake Maven — and reports the defect present while the image is
+    correct. That is the same instrument-reads-its-own-advice failure as
+    bootstrap's hook validator matching its own warning text and #1063's trigger
+    test matching its own rationale; it was caught here by this very assertion
+    failing against a correct Dockerfile.
+    """
+    return "\n".join(
+        ln for ln in DOCKERFILE.read_text().splitlines() if not ln.lstrip().startswith("#")
+    )
+
+
+def test_image_bakes_the_installer_not_the_toolchain() -> None:
+    """R-11's whole point. A baked JDK rides along in every agent that never
+    touches Java, and bumping Maven becomes a kit release."""
+    instructions = _dockerfile_instructions()
+    assert "mise" in instructions, "the toolbox installer must be baked"
+    lowered = instructions.lower()
+    for forbidden in ("openjdk", "temurin", "adoptium", "maven-3", "apt-get install -y maven"):
+        assert forbidden not in lowered, (
+            f"{forbidden!r} is baked into the base image — R-11 exists to keep "
+            f"per-repo toolchains OUT of the image"
+        )
+
+
+def test_toolbox_shims_are_on_the_image_path_not_a_shell_rc() -> None:
+    """`docker exec` resolves against the IMAGE's PATH, not a shell's.
+
+    Non-interactive shells never read ~/.bashrc, which is why bifrost had to
+    hand-source an env file. A hook or an agent-run command must find `mvn` with
+    no shell cooperation at all — so the shims live in ENV PATH.
+    """
+    path_lines = [
+        ln for ln in _dockerfile_instructions().splitlines() if ln.startswith("ENV PATH=")
+    ]
+    assert path_lines, "no ENV PATH in the Dockerfile"
+    final = path_lines[-1]
+    assert "toolbox/mise/shims" in final, f"shims not on the image PATH: {final}"
+
+    entries = final.split("PATH=", 1)[1].strip('"').split(":")
+    shims = next(i for i, e in enumerate(entries) if "mise/shims" in e)
+    kit = next(i for i, e in enumerate(entries) if e.endswith("/.local/bin"))
+    assert kit < shims, (
+        "toolbox shims precede the kit's own bin dir — a user toolchain could "
+        "shadow a kit binary and §3.4 keeps the RTE authoritative"
+    )
+
+
+def test_mise_is_pinned_not_piped() -> None:
+    """A build step that executes whatever a URL serves today is not
+    reproducible; it is the supply-chain surface the pinned-tarball rule exists
+    to avoid (same rule as trivy and bao)."""
+    instructions = _dockerfile_instructions()
+    assert "ARG MISE_VERSION=" in instructions, "mise must be version-pinned"
+    assert "mise.run" not in instructions, (
+        "mise must be installed from a pinned tarball, never a piped installer"
+    )
+
+
+def test_toolbox_exports_the_global_config_so_shims_can_resolve(tmp_path: Path) -> None:
+    """A shim on PATH that cannot resolve a version is not a toolchain.
+
+    Measured live before this existed: `command -v java` returned the shim while
+    `java -version` said "No version is set for shim: java". The shims resolve
+    their version from mise's GLOBAL config, and nothing pointed at the operator
+    manifest — so the install succeeded and the tool still would not run.
+
+    The wrapper SOURCES bootstrap and then execs the agent, so exporting here is
+    what carries it to the agent and every hook — the same mechanism
+    CLAUDE_CODE_OAUTH_TOKEN depends on.
+    """
+    body = BOOTSTRAP.read_text()
+    assert re.search(r'^\texport MISE_GLOBAL_CONFIG_FILE="\$manifest"$', body, re.M), (
+        "sync_toolbox must EXPORT MISE_GLOBAL_CONFIG_FILE to the manifest it found; "
+        "a non-exported assignment dies with this shell and the agent sees nothing"
+    )
+
+
+def test_image_sets_a_global_config_floor_for_bare_docker_exec() -> None:
+    """bootstrap's export covers a non-default toolbox path, but a bare
+    `docker exec` that never ran bootstrap still needs the default to resolve."""
+    instructions = _dockerfile_instructions()
+    assert "ENV MISE_GLOBAL_CONFIG_FILE=" in instructions, (
+        "the image must name the operator manifest as mise's global config"
+    )
+    assert "ENV MISE_DATA_DIR=/home/ubuntu/.oaw/toolbox/mise" in instructions, (
+        "mise's data dir must be the DURABLE toolbox mount, or every container "
+        "re-downloads the toolchain it already had"
+    )

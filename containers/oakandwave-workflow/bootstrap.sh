@@ -4,8 +4,8 @@
 #
 # Runs before the agent (via the aoe-hooks seam — open probe Dev Spec §5.N#5) and
 # performs, in order: env validation, skills symlink-sync, kit hook-wiring merge,
-# and secret sourcing + required-secret validation. It is the load-bearing
-# instrument the whole container leans on (SKETCHBOOK D7), so it is written to the
+# R-11 toolbox materialisation, and secret sourcing + required-secret validation.
+# It is the load-bearing instrument the whole container leans on (SKETCHBOOK D7), so it is written to the
 # **assertion-liveness** discipline from line one:
 #
 #   Every silent-skip path becomes a LOGGED or FAILING condition — never a check
@@ -44,6 +44,9 @@
 #                                   (default: $HOME/.oaw/.claude/skills)
 #   OAW_SETTINGS_JSON               baked hook wiring, the merge SOURCE
 #                                   (default: $HOME/.claude/settings.json)
+#   OAW_TOOLBOX_DIR                 R-11 durable toolbox mount, where mise
+#                                   materialises declared toolchains
+#                                   (default: $HOME/.oaw/toolbox)
 #   OAW_SECRETS_DIR                 ro secrets mount (default: $HOME/.secrets)
 #   OAW_REQUIRED_SECRETS            whitespace-separated required secret names (wins)
 #   OAW_REQUIRED_SECRETS_MANIFEST   values-free manifest file, one name per line,
@@ -393,6 +396,101 @@ sync_kit_hooks() {
 	# be unreachable — the kind of handler that reads as coverage and is never run.
 	*) info "hooks: merged kit wiring into the CLI's settings: $out" ;;
 	esac
+	return 0
+}
+
+# --- Stage 3b: R-11 toolbox — materialise declared toolchains (#1092) ---------
+#
+# THE MECHANISM WAS DECLARED AND INERT. mounts.d/30-user-overlay.toml has wired
+# the toolbox mount since Story 1.3 and described exactly this behaviour; nothing
+# ever materialised anything into it. bifrost hit it head-on: `java`, `mvn`,
+# `docker` all command-not-found on a Java repo, so every session began by
+# bootstrapping the world. Same shape as #1076 (bootstrap never invoked), #1061
+# (inert R-14) and #1056 (trivy parsing zero manifests) — the manifest promises
+# it, the runtime does not have it, and nothing says so.
+#
+# The image bakes `mise` (the INSTALLER) and never a toolchain: a baked JDK would
+# ride along in every agent that never touches Java, and bumping Maven would
+# become a kit release. R-11 exists precisely to avoid that.
+#
+# Two manifest sources, both honoured, because they answer different questions:
+#
+#   operator-level  $TOOLBOX/mise.toml     "every agent on this profile needs X"
+#   per-repo        <workspace>/mise.toml  "this project needs Java 17 + Maven"
+#
+# The per-repo case needs nothing from us at boot — mise's shims resolve the
+# version from the cwd's config at exec time, which is why shims are on the
+# image PATH rather than a toolchain being pinned into it.
+#
+# NEVER FATAL. The wrapper sources this and then execs the agent, so a fatal here
+# means no agent at all: a container with no Maven is bad, a container with no
+# agent is worse. Offline, unreadable manifest, mise itself missing — all warn.
+sync_toolbox() {
+	local toolbox="${OAW_TOOLBOX_DIR:-$OAW_HOME/.oaw/toolbox}"
+
+	if [[ ! -d "$toolbox" ]]; then
+		warn "missing mount: toolbox dir not present ($toolbox); declared toolchains cannot be materialised"
+		return 0
+	fi
+
+	# A manifest is OPTIONAL and its absence is the common case — most agents
+	# never touch a toolchain. info, not warn: a warning that fires on every
+	# healthy boot is how a fleet learns to stop reading warnings.
+	local manifest=""
+	local candidate
+	for candidate in "$toolbox/mise.toml" "$toolbox/.mise.toml" "$toolbox/config.toml"; do
+		[[ -f "$candidate" ]] && {
+			manifest="$candidate"
+			break
+		}
+	done
+	if [[ -z "$manifest" ]]; then
+		info "toolbox: no manifest in $toolbox — per-repo mise.toml still resolves via shims"
+		return 0
+	fi
+
+	if ! command -v mise >/dev/null 2>&1; then
+		warn "toolbox: $manifest declares toolchains but mise is not installed — expected baked in the image"
+		return 0
+	fi
+
+	# `mise install` is idempotent: a satisfied manifest is a fast no-op, which
+	# matters because this runs on EVERY agent start, not once per container.
+	# `if ! out=$(...)` — NOT `out=$(...); rc=$?`. This file runs under `set -e`,
+	# where a failing command substitution in an assignment aborts the script
+	# immediately and the `rc=$?` line never executes. The offline path would then
+	# have killed the boot, which is the precise thing the comment above forbids:
+	# a container with no agent is worse than one with no Maven. Caught by
+	# test_offline_install_warns_but_the_agent_still_starts, not by reading it.
+	# EXPORT, so the agent and every hook inherit it. The wrapper SOURCES this
+	# script and then execs the agent, so an export here flows down — the same
+	# mechanism CLAUDE_CODE_OAUTH_TOKEN relies on. Without it the shims resolve on
+	# PATH and then fail with "No version is set for shim", because nothing tells
+	# mise which manifest is the global one. Measured in a live container.
+	export MISE_GLOBAL_CONFIG_FILE="$manifest"
+
+	local out rc=0
+	if ! out="$(mise install --yes 2>&1)"; then
+		rc=1
+	fi
+	if ((rc != 0)); then
+		# Offline is the expected non-fatal failure. Report what mise said rather
+		# than guessing which of network / bad manifest / disk it was — this
+		# script's job is to name the condition, not to diagnose it.
+		warn "toolbox: mise install failed (rc=$rc) — the agent still starts, toolchains may be missing"
+		while IFS= read -r line; do
+			[[ -n "$line" ]] && warn "  mise: $line"
+		done <<<"$(printf '%s' "$out" | tail -5)"
+		return 0
+	fi
+
+	# Regenerate shims, or a freshly-installed tool has no entry on PATH and the
+	# install "succeeded" while `mvn` is still command-not-found — a pass that
+	# leaves the reported problem exactly where it was.
+	mise reshim >/dev/null 2>&1 ||
+		warn "toolbox: mise reshim failed — installed tools may not be on PATH"
+
+	info "toolbox: materialised from $manifest"
 	return 0
 }
 
@@ -1151,6 +1249,7 @@ main() {
 	validate_env
 	sync_skills
 	sync_kit_hooks
+	sync_toolbox
 	validate_secrets
 	ensure_ssh_parity
 	ensure_github_auth

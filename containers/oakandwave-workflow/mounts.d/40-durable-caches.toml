@@ -37,3 +37,15 @@ layer = "durable-cache"
 mode = "rw"
 source = "~/.oaw/cache/<major>/ms-playwright"
 target = "/home/ubuntu/.cache/ms-playwright"
+
+# Maven local repository (#1092). Same pattern as cargo/go/uv above and the same
+# reason: a cold `mvn` re-downloads the entire dependency tree every session
+# (~30s vs ~3s warm), and a container that pays that on every start is a
+# container people stop using. It belongs in THIS layer, not the toolbox layer —
+# the toolbox holds the toolchain, this holds what the toolchain downloads.
+[[mount]]
+name = "maven-m2"
+layer = "durable-cache"
+mode = "rw"
+source = "~/.oaw/cache/<major>/m2"
+target = "/home/ubuntu/.m2"
