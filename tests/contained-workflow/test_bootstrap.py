@@ -2055,3 +2055,59 @@ def test_image_sets_a_global_config_floor_for_bare_docker_exec() -> None:
         "mise's data dir must be the DURABLE toolbox mount, or every container "
         "re-downloads the toolchain it already had"
     )
+
+
+# --- skills host-fill: the mount exists now (#1078) ---------------------------
+#
+# The host-fill path was declared from the start and NOTHING EVER MOUNTED TO IT.
+# It stayed invisible until #1076 made bootstrap actually run, and then every
+# agent boot warned. A warning that is always true is one operators learn to
+# skip — the same erosion as #1061's inert R-14 and #1056's zero manifests.
+#
+# The fix is NOT to silence it. #1078 says so explicitly ("an unconditional
+# demote reproduces the inert-guard shape one layer down"), so the two states are
+# made distinguishable instead: empty-and-mounted is info, declared-and-absent
+# stays a WARN.
+
+
+def test_present_but_empty_host_overlay_is_info_not_a_warning(tmp_path: Path) -> None:
+    """The common, healthy case. Most operators ship no extra skills."""
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    proc = _run(home)  # _make_home creates the host skills dir, empty
+    assert proc.returncode == 0, proc.stderr
+    assert "INFO: skills-sync: host overlay present and empty" in proc.stderr
+    assert "missing mount: host skills overlay" not in proc.stderr, (
+        "an empty mounted overlay must not warn — that WARN fired on every boot "
+        "of every agent and is what taught the fleet to skip bootstrap output"
+    )
+
+
+def test_absent_host_overlay_still_warns(tmp_path: Path) -> None:
+    """Now that a mount is declared, absence means it did not happen.
+
+    This must NOT be demoted along with the empty case, or the guard becomes
+    inert exactly where it finally has something real to catch.
+    """
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    (home / ".oaw" / ".claude" / "skills").rmdir()
+    (home / ".oaw" / ".claude").rmdir()
+    proc = _run(home)
+    assert proc.returncode == 0
+    # Assert the LEVEL, not just the text. The first cut matched only the
+    # message, which is byte-identical between `warn` and `info` — so a mutation
+    # that demoted this exact guard passed all three tests. Asserting a string
+    # that survives the change you are guarding against is not a guard.
+    assert "WARN: missing mount: host skills overlay not present" in proc.stderr, (
+        "declared-and-absent must stay a WARN; demoting it alongside the empty "
+        "case is the inert-guard shape #1078 explicitly forbids"
+    )
+
+
+def test_host_fill_still_fills_when_the_overlay_has_skills(tmp_path: Path) -> None:
+    """The behaviour the quiet path must not have broken."""
+    home = _make_home(tmp_path, image_skills=["alpha"], host_skills=["beta"])
+    proc = _run(home)
+    assert proc.returncode == 0, proc.stderr
+    beta = home / ".claude" / "skills" / "beta"
+    assert beta.is_symlink() and beta.exists(), "host-fill stopped filling gaps"
+    assert "host overlay present and empty" not in proc.stderr

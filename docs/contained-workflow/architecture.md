@@ -174,7 +174,12 @@ degrades silently (the D7 assertion-liveness discipline):
   `discord-watcher` — see `mcps.json`) are **baked at stable image paths**;
   baking kills the dangling-registration bug (a stale path to a moved binary).
   The discretionary-tool toolbox (R-11) is a durable, in-container-materialized
-  mount decoupled from the kit release.
+  mount decoupled from the kit release. The operator's **skills overlay** is the
+  host-fill source for bootstrap's skills-sync (#1078) — declared from the start
+  and mounted by nothing until then, so every agent boot warned once #1076 made
+  bootstrap actually run. It lands **beside** the image skills dir, never over
+  it: mounting over it is the dev-mode overlay (§2.1), a different mechanism that
+  *replaces* rather than fills gaps.
 
 #### R-11 in practice: the toolbox is materialized, not baked (#1092)
 

@@ -171,7 +171,28 @@ sync_skills() {
 	if [[ ! -d "$host" ]]; then
 		# Missing mount: tolerate it, but say so — and do NOT create dangling
 		# links (SKETCHBOOK D5: "tolerate an absent mount without dangling links").
+		#
+		# This is now a GENUINE misconfiguration rather than the default state
+		# (#1078). The host-fill path had no mount at all until 30-user-overlay.toml
+		# gained `skills-overlay`, so this WARN fired on every boot of every agent —
+		# and a warning that is always true is one an operator learns to skip, which
+		# is the same erosion as #1061's inert R-14 and #1056's zero manifests. With
+		# the mount declared, reaching here means it was declared and did not happen,
+		# and check-mount-drift.sh polices that like every other mount.
 		warn "missing mount: host skills overlay not present ($host); skills-sync host-fill skipped"
+		scan_dangling "$image"
+		return 0
+	fi
+
+	# Mount present and EMPTY is the common, healthy case — most operators ship no
+	# extra skills, and the image already carries the kit's. Report it as info.
+	#
+	# NOT an unconditional demote of the warning above: #1078 calls that out
+	# specifically, because silencing a check without wiring the thing it checks
+	# reproduces the inert-guard shape one layer down. The two states are now
+	# distinguishable, so they get different levels — that is the whole fix.
+	if [[ -z "$(ls -A "$host" 2>/dev/null)" ]]; then
+		info "skills-sync: host overlay present and empty ($host) — nothing to fill"
 		scan_dangling "$image"
 		return 0
 	fi

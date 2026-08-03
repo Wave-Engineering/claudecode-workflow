@@ -62,3 +62,27 @@ install = "symlink"
 mode = "ro"
 source = "~/.local/bin"
 target = "/home/ubuntu/.oaw/overlay/local-bin"
+
+# --- Operator skills overlay, the host-fill source (#1078) -------------------
+# bootstrap's skills-sync has always had a host-fill path — for each host skill
+# with no same-named image skill, symlink it in — and NOTHING EVER MOUNTED TO IT.
+# It was invisible until #1076 made bootstrap actually run, at which point every
+# agent boot emitted "missing mount: host skills overlay not present". A WARN on
+# every single boot is how an operator learns that bootstrap output is noise,
+# which is the same erosion as #1061's inert R-14 and #1056's zero manifests.
+#
+# DISTINCT FROM THE DEV-MODE OVERLAY, deliberately (architecture.md §2.1):
+#   dev-mode  binds a working copy OVER /home/ubuntu/.claude/skills — REPLACES
+#   host-fill lands beside it and only fills GAPS — image always wins a collision
+# Two mechanisms answering different questions; this is the second one's mount.
+#
+# ro: the container reads these to symlink them in. It must never write into the
+# operator's skill sources, and the image copy wins every name collision anyway.
+[[mount]]
+name = "skills-overlay"
+layer = "user-overlay"
+artifact = "script"
+install = "symlink"
+mode = "ro"
+source = "~/.oaw/overlay/<major>/skills"
+target = "/home/ubuntu/.oaw/.claude/skills"
