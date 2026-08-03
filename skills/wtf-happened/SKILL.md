@@ -42,7 +42,7 @@ followed by a numbered timeline of classified events.
 
 If a runbook was generated, note the file path:
 
-> Runbook written to `.wtf/runbook.md`
+> Runbook written to `.claude/wtf/runbook.md`
 
 ### 3. Offer next steps
 
@@ -50,4 +50,4 @@ After presenting the timeline, briefly suggest:
 
 - `/wtf now "<observation>"` to keep recording
 - `wtf_freshell` to archive and start a new incident
-- `/view .wtf/runbook.md` to review the generated runbook
+- `/view .claude/wtf/runbook.md` to review the generated runbook
