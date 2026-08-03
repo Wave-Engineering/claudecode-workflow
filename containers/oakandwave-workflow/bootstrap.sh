@@ -764,37 +764,66 @@ ensure_ssh_parity() {
 		warn "missing mount: no $src — git over SSH and remote hosts (blueshift, perkollate) unavailable"
 		return 0
 	}
-	# Already correct?
-	if [[ -L "$dst" && "$(readlink -f "$dst" 2>/dev/null)" == "$(readlink -f "$src" 2>/dev/null)" ]]; then
-		info "ssh: ~/.ssh already resolves to $src"
-		return 0
-	fi
-	# A REAL dir here is not necessarily the operator's — ssh silently creates one
-	# the first time it writes known_hosts, and then `ln -s` lands INSIDE it rather
-	# than replacing it (which is exactly how the first attempt at this failed).
-	# Only clear it when it holds nothing but ssh's own scratch.
+	# PER-FILE LINKS, not a directory symlink (#1111). Two reasons, both learned
+	# the hard way:
+	#
+	# 1. SELF-HEALING. The old form linked the whole dir and refused whenever
+	#    $dst already held anything but known_hosts — so the moment an agent
+	#    wrote ANY file there (ssh's own scratch, or a keypair it generated
+	#    because it thought it had no keys), parity was declined forever, with
+	#    nothing but a warning nobody reads at boot. Observed live: an agent
+	#    reported itself blocked on host access, generated its own keypair, and
+	#    escalated for a privilege it already had — while the operator's full
+	#    keyring sat mounted at $src the whole time. A silent parity gap does not
+	#    just block work, it generates pressure to solve the wrong problem.
+	#
+	# 2. $src IS READ-ONLY. Linking the directory means ssh cannot write
+	#    known_hosts, so every new host is either a prompt or a failure. Linking
+	#    the keys individually leaves $dst a real, writable dir that owns its own
+	#    known_hosts while every key resolves to the mount.
+	#
+	# Idempotent by construction: it adds what is missing and never removes. A
+	# second boot relinks nothing; a key added to the host keyring appears on the
+	# next boot without intervention.
 	if [[ -L "$dst" ]]; then
-		warn "ssh: $dst is a symlink to $(readlink "$dst" 2>/dev/null) — replacing it with $src"
+		# A whole-dir link from the pre-#1111 behaviour: correct for keys, but it
+		# makes known_hosts unwritable. Convert it rather than leaving it.
+		info "ssh: converting the legacy ~/.ssh symlink to per-file links (known_hosts must stay writable)"
+		rm -f "$dst" || warn "ssh: could not replace the legacy $dst symlink"
 	fi
-	if [[ -e "$dst" && ! -L "$dst" ]]; then
-		local stray
-		# `|| true`: under set -e a find failure would abort bootstrap — and the
-		# wrapper SOURCES this, so that means no agent at all.
-		stray="$(find "$dst" -mindepth 1 -maxdepth 1 ! -name known_hosts ! -name 'known_hosts.old' -print -quit 2>/dev/null || true)"
-		if [[ -n "$stray" ]]; then
-			warn "ssh: $dst exists with real content ($stray) — leaving it alone; mounted keys at $src are NOT in use"
-			return 0
-		fi
-		rm -rf "$dst" || {
-			warn "ssh: could not clear $dst — mounted keys at $src are NOT in use"
-			return 0
-		}
-	fi
-	if ln -sfn "$src" "$dst" 2>/dev/null; then
-		info "ssh: linked ~/.ssh -> $src (keys + host config now visible to the agent)"
+	mkdir -p "$dst" 2>/dev/null || {
+		warn "ssh: could not create $dst — mounted keys at $src are NOT in use"
+		return 0
+	}
+	# ssh refuses to use a group/world-readable ~/.ssh, and would then look like
+	# "no keys" all over again.
+	chmod 700 "$dst" 2>/dev/null || true
+
+	local linked=0 f base
+	for f in "$src"/*; do
+		[[ -e "$f" ]] || continue # nullglob is not set; an empty dir yields the literal
+		base="$(basename "$f")"
+		# known_hosts is the ONE thing the agent must own: it is written on every
+		# first contact with a new host, and $src is read-only.
+		[[ "$base" == known_hosts || "$base" == known_hosts.old ]] && continue
+		[[ -e "$dst/$base" || -L "$dst/$base" ]] && continue
+		ln -s "$f" "$dst/$base" 2>/dev/null && linked=$((linked + 1))
+	done
+
+	if ((linked > 0)); then
+		info "ssh: linked $linked key/config file(s) from $src into ~/.ssh (known_hosts stays writable)"
 	else
-		warn "ssh: could not link ~/.ssh -> $src; git over SSH and remote hosts will fail"
+		info "ssh: ~/.ssh already carries the mounted keyring"
 	fi
+
+	# ASSERT THE OUTCOME, not the mechanism. Counting symlinks proves we ran; it
+	# does not prove the agent has a usable identity. If nothing resembling a
+	# private key landed, say so loudly at boot — the alternative is an agent
+	# discovering it much later, at a git push, with no path back to the cause.
+	if ! find "$dst" -maxdepth 1 \( -name 'id_*' ! -name '*.pub' \) -print -quit 2>/dev/null | grep -q .; then
+		warn "ssh: no private key visible in ~/.ssh after parity — git over SSH and remote hosts will fail"
+	fi
+	return 0
 }
 
 # --- GitLab API credential (#1089) --------------------------------------------

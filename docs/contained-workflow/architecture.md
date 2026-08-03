@@ -590,6 +590,35 @@ this check produced a false alarm.
 
 ### 3.6.2 SSH parity — the keys are provided on purpose (#1089)
 
+**The keyring is mounted WHOLE, and that is a decision (2026-08-01).** The
+operator uses every key at different times and there is no reliable way to slice
+them per agent, so `~/.ssh` is bind-mounted entire — the same call as the
+whole-directory secrets mount (#1090). Agents are inside the trust boundary
+already; the container exists so a `./install` cannot rewrite shared hooks and
+settings underneath a live session, **not** to limit what an agent can reach.
+
+**Parity is per-file, not a directory symlink (#1111).** Two failures forced it:
+
+- The mount is **read-only**, so linking the directory leaves ssh unable to write
+  `known_hosts` — every first contact with a new host becomes a prompt or a
+  failure in a non-interactive session.
+- The old form declined whenever `~/.ssh` already held anything but
+  `known_hosts`. The moment an agent wrote a single file there, parity was
+  refused **permanently**, with only a boot warning. Observed live: an agent
+  found no `~/.ssh`, concluded it had no host access, generated its own keypair,
+  and escalated for a privilege it already had — while the operator's full
+  keyring sat mounted the whole time.
+
+That second one is the lesson worth keeping: **a silent parity gap does not just
+block work, it generates pressure to solve the wrong problem.** The agent's
+proposal — authorise a container-minted key on the host — would have widened
+privileges to obtain something already granted.
+
+Parity therefore *adds what is missing and never removes*, and `aoe-preflight.sh`
+asserts the **outcome** (a usable key on the path ssh searches, and a writable
+`~/.ssh`) rather than the mechanism. Every structural check passed throughout the
+incident; only a behavioural one would have caught it.
+
 aoe mounts the operator's `~/.ssh` to `/root/.ssh`: keys **and** a host→identity
 config. Agents use them constantly — git over SSH for both forges, and
 troubleshooting remote installs (blueshift, perkollate, `agent-smith-ca`), where

@@ -1377,49 +1377,113 @@ def _home_with_ssh(tmp_path: Path) -> tuple[Path, Path]:
 
 
 def test_mounted_ssh_keys_are_made_visible_to_the_agent(tmp_path: Path) -> None:
+    """The keys land in ~/.ssh as links, and ~/.ssh stays a REAL, writable dir.
+
+    Per-file rather than a directory symlink (#1111): the mount is READ-ONLY, so
+    a whole-dir link leaves ssh unable to write known_hosts — every new host then
+    becomes a prompt or a failure.
+    """
     home, src = _home_with_ssh(tmp_path)
     proc = _run(home, OAW_SSH_SOURCE=str(src))
     assert proc.returncode == 0, proc.stderr
-    link = home / ".ssh"
-    assert link.is_symlink(), "~/.ssh must resolve to the mounted keys"
-    assert link.resolve() == src.resolve()
-    assert (link / "config").exists(), "the host->identity config must be reachable"
+    dst = home / ".ssh"
+    assert dst.is_dir() and not dst.is_symlink(), (
+        "~/.ssh must stay a real dir so known_hosts remains writable"
+    )
+    assert (dst / "config").is_symlink(), "the host->identity config must be reachable"
+    assert (dst / "gitlab.id_ed25519").resolve() == (src / "gitlab.id_ed25519").resolve()
+    assert oct(dst.stat().st_mode)[-3:] == "700", "ssh refuses a loose ~/.ssh"
 
 
-def test_ssh_link_is_idempotent(tmp_path: Path) -> None:
+def test_ssh_parity_is_idempotent(tmp_path: Path) -> None:
+    """Runs on every agent start, so a satisfied state must relink nothing."""
     home, src = _home_with_ssh(tmp_path)
     assert _run(home, OAW_SSH_SOURCE=str(src)).returncode == 0
     proc = _run(home, OAW_SSH_SOURCE=str(src))
-    assert "already resolves" in proc.stderr
+    assert "already carries the mounted keyring" in proc.stderr
 
 
-def test_sshs_own_known_hosts_scratch_dir_is_replaced(tmp_path: Path) -> None:
-    """ssh silently creates ~/.ssh the first time it writes known_hosts.
+def test_known_hosts_stays_writable_and_local(tmp_path: Path) -> None:
+    """known_hosts is the ONE file the agent must own — the mount is read-only."""
+    home, src = _home_with_ssh(tmp_path)
+    (src / "known_hosts").write_text("host-from-the-operator\n")
+    assert _run(home, OAW_SSH_SOURCE=str(src)).returncode == 0
+    kh = home / ".ssh" / "known_hosts"
+    assert not kh.is_symlink(), "known_hosts must never link into the read-only mount"
+    kh.write_text("agent-learned-this-host\n")  # must not raise
 
-    That is how the first attempt at this failed: `ln -s` landed INSIDE the
-    freshly-created directory instead of replacing it, so the keys stayed
-    invisible while the command reported success.
+
+def test_an_agent_created_ssh_dir_still_gets_the_keys(tmp_path: Path) -> None:
+    """THE LIVE FAILURE (#1111), red-first.
+
+    The old guard declined whenever ~/.ssh held anything but known_hosts. So the
+    instant an agent wrote a file there — ssh scratch, or a keypair it generated
+    because it believed it had no keys — parity was refused forever, with only a
+    boot warning nobody reads.
+
+    Observed: an agent reported itself blocked on host access, generated its own
+    keypair, and escalated for a privilege it already had, while the operator's
+    full keyring sat mounted the whole time. A silent parity gap does not just
+    block work — it generates pressure to solve the wrong problem.
     """
     home, src = _home_with_ssh(tmp_path)
-    scratch = home / ".ssh"
-    scratch.mkdir()
-    (scratch / "known_hosts").write_text("gitlab.com ssh-ed25519 AAAA\n")
+    dst = home / ".ssh"
+    dst.mkdir()
+    (dst / "id_agent_generated").write_text("SELF-MINTED\n")
+    (dst / "known_hosts").write_text("somehost\n")
+
     proc = _run(home, OAW_SSH_SOURCE=str(src))
-    assert proc.returncode == 0
-    assert (home / ".ssh").is_symlink(), "a known_hosts-only dir must not block the link"
+    assert proc.returncode == 0, proc.stderr
+    assert (dst / "gitlab.id_ed25519").is_symlink(), (
+        "an agent-created ~/.ssh must NOT block the operator's keys — this is the bug"
+    )
+    assert (dst / "id_agent_generated").read_text() == "SELF-MINTED\n", (
+        "parity adds what is missing and never destroys what is there"
+    )
 
 
-def test_a_real_ssh_dir_is_never_clobbered(tmp_path: Path) -> None:
-    """Destroying an operator's private keys would be unrecoverable."""
+def test_operator_keys_in_a_real_ssh_dir_are_never_destroyed(tmp_path: Path) -> None:
+    """Destroying a private key would be unrecoverable. Add, never remove."""
     home, src = _home_with_ssh(tmp_path)
     real = home / ".ssh"
     real.mkdir()
     (real / "id_ed25519").write_text("OPERATOR KEY\n")
+    assert _run(home, OAW_SSH_SOURCE=str(src)).returncode == 0
+    assert (real / "id_ed25519").read_text() == "OPERATOR KEY\n"
+    assert not (real / "id_ed25519").is_symlink(), "an existing file is never replaced"
+    assert (real / "config").is_symlink(), "…but missing ones are still supplied"
+
+
+def test_a_legacy_whole_dir_symlink_is_converted(tmp_path: Path) -> None:
+    """Containers provisioned by the pre-#1111 code have ~/.ssh as a dir symlink.
+
+    Correct for keys, but it makes known_hosts unwritable, so it is migrated
+    rather than left in place.
+    """
+    home, src = _home_with_ssh(tmp_path)
+    (home / ".ssh").symlink_to(src)
+    proc = _run(home, OAW_SSH_SOURCE=str(src))
+    assert proc.returncode == 0, proc.stderr
+    dst = home / ".ssh"
+    assert dst.is_dir() and not dst.is_symlink(), "the legacy dir-symlink must be converted"
+    assert (dst / "gitlab.id_ed25519").is_symlink()
+    assert "converting the legacy" in proc.stderr
+
+
+def test_parity_without_a_usable_key_is_loud(tmp_path: Path) -> None:
+    """Assert the OUTCOME, not the mechanism.
+
+    Counting symlinks proves the function ran; it does not prove the agent has a
+    usable identity. Without this, an agent discovers the gap much later at a git
+    push, with no path back to the cause.
+    """
+    home = _make_home(tmp_path, secrets={".env": 'OAW_REQUIRED_SECRETS=""\n'})
+    src = tmp_path / "ssh-src"
+    src.mkdir()
+    (src / "config").write_text("Host *\n")  # config but NO private key
     proc = _run(home, OAW_SSH_SOURCE=str(src))
     assert proc.returncode == 0
-    assert not (home / ".ssh").is_symlink(), "must not replace a real ~/.ssh"
-    assert (real / "id_ed25519").read_text() == "OPERATOR KEY\n"
-    assert "leaving it alone" in proc.stderr, "the skip must be loud, not silent"
+    assert "no private key visible" in proc.stderr
 
 
 def test_gitlab_api_credential_is_written_as_a_file(tmp_path: Path) -> None:

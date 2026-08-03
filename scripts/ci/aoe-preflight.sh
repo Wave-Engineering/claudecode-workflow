@@ -183,6 +183,36 @@ else
 		"an agent that cannot fetch cannot verify an MR before merging it"
 fi
 
+# --- SSH parity: the agent's OWN ~/.ssh, not just the mount (#1111) -----------
+# The mount being present proves nothing about whether the AGENT can see it. In
+# the live failure the keyring was correctly mounted at /root/.ssh the entire
+# time while ~/.ssh held one file the agent had created — so it reported itself
+# blocked on host access, generated a keypair, and escalated for a privilege it
+# already had. Every structural check passed throughout.
+#
+# So ask the question the agent asks: is there a usable private key on the path
+# ssh will actually search? A count, not an exit status — an exec failure would
+# otherwise read as "absent" and pass, the opposite polarity to every other check.
+SSHKEYS="$(x sh -c 'ls -1 ~/.ssh/ 2>/dev/null | grep -cE "^id_|\.id_|_ed25519$|_rsa$" || true' | tr -d '\r')"
+if [[ ! "$SSHKEYS" =~ ^[0-9]+$ ]]; then
+	fail "could not read the agent's ssh dir (got: $SSHKEYS)"
+elif ((SSHKEYS == 0)); then
+	fail "no ssh key visible in the agent's own ssh dir" \
+		"the mount can be perfect and the agent still blind — that is #1111"
+else
+	pass "operator keyring reaches the agent's own ssh dir ($SSHKEYS key(s))"
+fi
+
+# known_hosts must be WRITABLE — the mount is read-only, so a whole-dir symlink
+# leaves ssh unable to record a new host, and every first contact becomes a
+# prompt or a failure in a non-interactive session.
+if x sh -c 'touch ~/.ssh/.preflight-probe 2>/dev/null && rm -f ~/.ssh/.preflight-probe'; then
+	pass "the agent's ssh dir is writable (ssh can record known_hosts)"
+else
+	fail "the agent's ssh dir is not writable — ssh cannot record known_hosts" \
+		"a directory symlink onto the read-only mount does this"
+fi
+
 # gitlab uses a DIFFERENT transport (SSH — the host has no gitlab rewrite), so
 # testing github alone proves only half the parity claim.
 GLREACH="$(x sh -c 'timeout 40 git ls-remote git@gitlab.com:gitlab-org/cli.git HEAD 2>&1 | head -1')"
