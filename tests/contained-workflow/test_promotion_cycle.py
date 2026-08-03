@@ -95,15 +95,19 @@ def test_full_promotion_cycle_end_to_end(tmp_path):
     )
     assert signals["soak_hours"] == 30
     assert signals["quarantine_count"] == 0
+    # NOTE (#1106): soak_hours is still ACCRUED and still filtered — the ledger and
+    # the profile filter are unchanged and remain useful telemetry. It is no longer
+    # a GATE CONDITION: it credited only sessions running at the instant of a pass,
+    # so a missed cron window discarded real runtime, and the only way to promote
+    # became injecting a number nobody measured.
 
     # 3. THE MECHANICAL GATE goes green on the real signals and promotes the EXACT
     #    tested digest — no rebuild, and the ACK only confirms an already-green gate.
+    #    Soak is deliberately not among the conditions (#1106).
     report = pg.evaluate_gate(
         target_digest=DIGEST,
         ci_passed=True,
         ci_digest=DIGEST,
-        soak_hours=signals["soak_hours"],
-        soak_required_hours=24.0,
         quarantine_count=signals["quarantine_count"],
         open_sev1_count=0,
     )
@@ -124,32 +128,67 @@ def test_full_promotion_cycle_end_to_end(tmp_path):
     assert plan.launch_ref == promoted, "the agent adopts the exact promoted digest"
 
 
-def test_gate_red_when_soak_unmet_blocks_the_cycle(tmp_path):
-    """Under-soaked dogfood work cannot promote — even with the operator ACK (R-07).
+def test_undeclared_missing_telemetry_blocks_the_cycle(tmp_path):
+    """Missing telemetry that nobody declared is RED — and the ACK never substitutes.
 
-    The 4.2-lens red-first assertion: if the accrued soak is below the requirement,
-    the mechanical gate is RED and promotion refuses; the ACK never substitutes.
+    Retargeted from the soak case when soak left the gate (#1106). The assertion
+    that mattered was never about soak: it is that a condition the system cannot
+    evidence must refuse, and that an operator ACK confirms an already-green gate
+    rather than creating one (R-07 / PC-6).
+
+    Absence must be a DECISION. Undeclared absence stays red; see
+    test_declared_absence_is_green_and_visible for the other half.
     """
-    ledger = tmp_path / "ledger.jsonl"
-    sl.accrue(observations=[_obs("agent-a", "dogfood", 5)], ledger_path=ledger)  # 5h << 24h
-    signals = pf.aggregate_gate_signals(soak_records=sl.read_ledger(ledger), quarantine_records=[])
-
     report = pg.evaluate_gate(
         target_digest=DIGEST,
         ci_passed=True,
         ci_digest=DIGEST,
-        soak_hours=signals["soak_hours"],
-        soak_required_hours=24.0,
-        quarantine_count=0,
+        quarantine_count=None,  # telemetry simply missing — nobody said so
         open_sev1_count=0,
     )
-    assert not report.green
-    with pytest.raises(pg.GateError):
-        pg.promote(report, operator_ack=True)  # ACK cannot rescue a red soak condition
+    assert not report.green, report.summary()
+    with pytest.raises(Exception):
+        pg.promote(report, operator_ack=True)
 
 
-# --- Soak accrual (the new FlightDeck writer) — R-21/R-22 + §4.3 --------------
+def test_declared_absence_is_green_and_visible(tmp_path):
+    """Declaring "no telemetry here" passes — and SAYS SO in the report.
 
+    A silent green would rebuild the defect: the reader could not tell an
+    evidenced condition from a waived one. Same discipline as
+    OAW_REQUIRED_SECRETS="" (#1061) and .no-scannable-dependencies (#1073).
+    """
+    report = pg.evaluate_gate(
+        target_digest=DIGEST,
+        ci_passed=True,
+        ci_digest=DIGEST,
+        quarantine_count=None,
+        open_sev1_count=None,
+        quarantine_declared_absent=True,
+        sev1_declared_absent=True,
+    )
+    assert report.green, report.summary()
+    assert "DECLARED absent" in report.summary(), (
+        "a waived condition must be distinguishable from an evidenced one"
+    )
+    assert pg.promote(report, operator_ack=True) == DIGEST
+
+
+def test_a_declaration_cannot_hide_a_real_failure(tmp_path):
+    """Declaring absence must not override a signal that IS present and bad.
+
+    Otherwise the declaration becomes a blanket override — the ACK-substitutes
+    hole reintroduced under a different name.
+    """
+    report = pg.evaluate_gate(
+        target_digest=DIGEST,
+        ci_passed=True,
+        ci_digest=DIGEST,
+        quarantine_count=3,  # present AND bad
+        open_sev1_count=0,
+        quarantine_declared_absent=True,  # must not rescue it
+    )
+    assert not report.green, report.summary()
 
 def test_soak_excludes_dev_mode(tmp_path):
     """A dev-mode session accrues NO soak record (R-22) — its span never reaches the

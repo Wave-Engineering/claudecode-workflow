@@ -5,7 +5,8 @@
 # Promotion is a two-part contract:
 #
 #   1. A mechanical conjunction over FlightDeck + CI must be green — throwaway-CI
-#      E2E-01 pass, dogfood soak met, zero quarantines, zero open Sev-1 (R-07).
+#      E2E-01 pass (digest-bound), zero quarantines, zero open Sev-1 (R-07).
+#      Soak was removed in #1106 — see the gate_args block below.
 #   2. The operator ACK confirms the green gate; promotion then retags the EXACT
 #      digest E2E-01 tested `:edge → :stable` — no rebuild, same bytes (R-23).
 #
@@ -46,9 +47,10 @@
 #   THROWAWAY_CI_PASSED E2E-01 smoke result for DIGEST_REF (true/false).
 #   THROWAWAY_CI_DIGEST the digest E2E-01 tested (defaults to DIGEST_REF; the gate
 #                       still requires it to equal the promotion target — R-23).
-#   SOAK_HOURS          accrued dogfood soak hours.
-#   SOAK_REQUIRED_HOURS soak hours required (default 24).
-#   QUARANTINE_COUNT    quarantines during soak (0 to pass).
+#   QUARANTINE_COUNT    quarantines observed (0 to pass).
+#   QUARANTINE_TELEMETRY_ABSENT  "true" ⇒ declare quarantine telemetry not
+#                       deployed (#1106). Absent + UNdeclared still reads red.
+#   SEV1_TELEMETRY_ABSENT        "true" ⇒ same, for Sev-1.
 #   OPEN_SEV1_COUNT     open Sev-1 (0 to pass).
 #   STABLE_TAG          moving tag to publish (default: stable).
 #   PROMOTE_DRY_RUN     "true" ⇒ evaluate the gate + print the retag, do NOT push.
@@ -91,10 +93,20 @@ gate_args=(--target-digest "$DIGEST_REF")
 # The digest E2E-01 tested defaults to the promotion target; the gate still
 # enforces they are equal (R-23), so a caller cannot silently widen this.
 gate_args+=(--ci-digest "${THROWAWAY_CI_DIGEST:-$DIGEST_REF}")
-[[ -n "${SOAK_HOURS:-}" ]] && gate_args+=(--soak-hours "$SOAK_HOURS")
-gate_args+=(--soak-required-hours "${SOAK_REQUIRED_HOURS:-24}")
+# Soak was REMOVED from the gate (#1106). It credited only sessions running at
+# the instant of a bridge pass, so a missed cron window silently discarded real
+# runtime — a proxy for "was the recorder running", not "did this soak". Measured:
+# the fleet ran containers well over 24h and a 48h look-back credited ZERO. That
+# left injecting an unmeasured number as the only route to promotion, and a gate
+# passable only by lying to it manufactures the habit of lying to it.
 [[ -n "${QUARANTINE_COUNT:-}" ]] && gate_args+=(--quarantines "$QUARANTINE_COUNT")
 [[ -n "${OPEN_SEV1_COUNT:-}" ]] && gate_args+=(--open-sev1 "$OPEN_SEV1_COUNT")
+# Declaring "this telemetry is not deployed" is a DECISION and must be made
+# explicitly (#1106). Absent + undeclared still reads red — the declaration is
+# what separates a considered gap from an accident nobody noticed, exactly like
+# OAW_REQUIRED_SECRETS="" (#1061) and .no-scannable-dependencies (#1073).
+[[ "${QUARANTINE_TELEMETRY_ABSENT:-false}" == "true" ]] && gate_args+=(--quarantines-declared-absent)
+[[ "${SEV1_TELEMETRY_ABSENT:-false}" == "true" ]] && gate_args+=(--sev1-declared-absent)
 [[ "${OPERATOR_ACK:-false}" == "true" ]] && gate_args+=(--ack)
 
 echo "==> evaluating the mechanical promotion gate for $DIGEST_REF"
