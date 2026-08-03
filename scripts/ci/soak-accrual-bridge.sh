@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 # soak-accrual-bridge.sh — accrue dogfood soak from the LIVE :edge ring (#1008).
 #
+# NO LONGER GATES PROMOTION (#1106). Soak was removed from the mechanical gate:
+# this bridge credits only sessions running at the instant of a pass, so a missed
+# cron window silently discarded real runtime — the metric measured "was the
+# recorder running", not "did this soak". Measured live: the fleet ran containers
+# for well over 24h and a 48h look-back credited ZERO, because the bridge had
+# never been scheduled and cannot backfill.
+#
+# The ledger it writes is retained as TELEMETRY (FlightDeck, #854) and the
+# profile filter (R-22) still applies. Nothing refuses a promotion on it. If you
+# are reading this while trying to make a promotion go green, you are in the
+# wrong file — see containers/oakandwave-workflow/promotion_gate.py.
+#
 # The operator/cron entrypoint that closes the FlightDeck soak loop: it drives the
 # flight surgeon over the live aoe sessions and feeds each running dogfood session's
 # clean span to the soak ledger the promotion gate reads. Run it periodically during

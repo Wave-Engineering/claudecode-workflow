@@ -49,8 +49,6 @@ GREEN_SIGNALS = dict(
     target_digest=DIGEST_A,
     ci_passed=True,
     ci_digest=DIGEST_A,
-    soak_hours=48.0,
-    soak_required_hours=24.0,
     quarantine_count=0,
     open_sev1_count=0,
 )
@@ -64,10 +62,6 @@ RED_OVERRIDES: dict[str, list[dict]] = {
         {"ci_digest": DIGEST_B},  # green, but for a DIFFERENT digest (R-23)
         {"ci_digest": None},  # green, but no digest attested (fail-closed)
         {"ci_digest": MOVING_TAG},  # green, but attested a moving tag (R-23)
-    ],
-    "soak": [
-        {"soak_hours": 12.0},  # under the required soak
-        {"soak_hours": None},  # soak telemetry unavailable (fail-closed)
     ],
     "quarantines": [
         {"quarantine_count": 1},  # a quarantine tripped
@@ -119,10 +113,9 @@ def test_gate_conjunction() -> None:
 
 def test_multiple_red_conditions_still_refused() -> None:
     """Every non-all-green combination refuses, ACK or not (exhaustive over the
-    2^4 truth table of the four conditions)."""
+    2^3 truth table of the three conditions)."""
     knobs = {
         "throwaway_ci": {"ci_passed": False},
-        "soak": {"soak_hours": 1.0},
         "quarantines": {"quarantine_count": 2},
         "sev1": {"open_sev1_count": 1},
     }
@@ -175,7 +168,7 @@ def test_gate_refuses_a_moving_tag_target() -> None:
 
 def test_ack_cannot_promote_a_red_gate() -> None:
     """The ACK confirms a green gate; it can never rescue a red one (R-07)."""
-    report = _report(soak_hours=0.0)
+    report = _report(ci_passed=False)
     assert not report.green
     with pytest.raises(pg.GateError):
         pg.promote(report, operator_ack=True)
@@ -208,7 +201,6 @@ def test_cli_promotes_only_on_green_plus_ack() -> None:
     base = [
         "--target-digest", DIGEST_A,
         "--ci-passed", "true", "--ci-digest", DIGEST_A,
-        "--soak-hours", "48", "--soak-required-hours", "24",
         "--quarantines", "0", "--open-sev1", "0",
     ]
     # Green but no ACK → refuse (non-zero), print nothing promotable on stdout.
@@ -239,7 +231,7 @@ def test_cli_refuses_ci_green_for_a_different_digest() -> None:
     proc = _run_gate_cli(
         "--target-digest", DIGEST_A,
         "--ci-passed", "true", "--ci-digest", DIGEST_B,
-        "--soak-hours", "48", "--quarantines", "0", "--open-sev1", "0",
+        "--quarantines", "0", "--open-sev1", "0",
         "--ack",
     )
     assert proc.returncode != 0

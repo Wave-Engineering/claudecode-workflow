@@ -3,7 +3,7 @@
 
 The gate that decides whether a candidate `:edge` digest may be promoted to
 `:stable`. It is a **conjunctive query over FlightDeck + CI** (§5.6): the four
-mechanical conditions — throwaway-CI E2E-01 green, dogfood soak met, zero
+mechanical conditions — throwaway-CI E2E-01 green (digest-bound), zero
 quarantines, zero open Sev-1 — must **all** be green before promotion is
 permitted, and promotion retags the **exact digest E2E-01 tested**.
 
@@ -33,7 +33,7 @@ Design — **one green path, fail-closed** (assertion-liveness, D7):
   moving tag — so the caller retags precisely the bytes E2E-01 tested (R-23).
 
 The module never touches the network or a registry; it reasons purely over the
-signals handed to it. Sourcing those signals (a FlightDeck query for soak /
+signals handed to it. Sourcing those signals (a FlightDeck query for
 quarantines / Sev-1, the CI result for the throwaway-CI ring) and performing the
 exact-digest retag live in ``scripts/ci/promote-oakandwave-image.sh``.
 
@@ -41,7 +41,6 @@ CLI::
 
     python3 promotion_gate.py --target-digest ghcr.io/o/w@sha256:… \\
         --ci-passed true --ci-digest ghcr.io/o/w@sha256:… \\
-        --soak-hours 48 --soak-required-hours 24 \\
         --quarantines 0 --open-sev1 0 --ack
 
 Prints the digest to promote on stdout and exits 0 only when the gate is green
@@ -56,11 +55,10 @@ import sys
 from dataclasses import dataclass
 
 # The four mechanical conditions of the promotion gate (§5.6), in report order.
-CONDITION_ORDER = ("throwaway_ci", "soak", "quarantines", "sev1")
+CONDITION_ORDER = ("throwaway_ci", "quarantines", "sev1")
 
 CONDITION_LABELS = {
     "throwaway_ci": "throwaway-CI E2E-01 smoke green for the tested digest",
-    "soak": "dogfood soak requirement met",
     "quarantines": "zero quarantines",
     "sev1": "zero open Sev-1",
 }
@@ -149,17 +147,44 @@ def evaluate_gate(
     target_digest: str,
     ci_passed: bool | None,
     ci_digest: str | None,
-    soak_hours: float | None,
-    soak_required_hours: float,
     quarantine_count: int | None,
     open_sev1_count: int | None,
+    quarantine_declared_absent: bool = False,
+    sev1_declared_absent: bool = False,
 ) -> GateReport:
-    """Evaluate the four mechanical conditions for ``target_digest``.
+    """Evaluate the mechanical conditions for ``target_digest``.
 
-    Every condition is **fail-closed**: it is green only on an explicit, correct
+    Every condition is **fail-closed**: green only on an explicit, correct
     signal; ``None`` / missing / malformed ⇒ red. The throwaway-CI condition
     additionally requires the CI result to be *for this digest* (R-23), so a
     green for a different digest cannot carry this one.
+
+    **Soak was removed (#1106).** It could not measure what it claimed: soak
+    accrued only from sessions running at the instant of a bridge pass, so a
+    missed cron window silently discarded real runtime — the metric was a proxy
+    for "was the recorder running", not "did this soak". Measured live: the fleet
+    ran containers for well over 24 hours and a 48h look-back credited ZERO,
+    because the bridge had never been scheduled and cannot backfill.
+
+    That left injecting an unmeasured number as the only way to promote, which is
+    worse than having no condition: a gate passable only by lying to it
+    manufactures the habit of lying to it, on the control guarding what the whole
+    fleet runs. The artifact is tested by throwaway-CI (R-23) and by
+    scripts/ci/aoe-preflight.sh, which are behavioural and found every defect in
+    the cut-over; none was ever found by soaking.
+
+    **Declared absence (#1106).** Quarantine and Sev-1 come from FlightDeck
+    (#854). Where it is not deployed, reading RED forever is the same defect one
+    condition over — an assertion about something nothing was built to measure.
+    An explicit declaration turns that into a decision someone made:
+
+        signal present            -> evaluated normally (non-zero is still RED)
+        declared absent           -> green, and the declaration is ECHOED
+        simply missing            -> RED, unchanged
+
+    Declaring "no telemetry here, deliberately" is legitimate; omitting the
+    declaration is not. Same shape as OAW_REQUIRED_SECRETS="" (#1061) and
+    .no-scannable-dependencies (#1073).
     """
     _require_digest(target_digest)
 
@@ -178,28 +203,23 @@ def evaluate_gate(
     else:
         ci_green, ci_detail = True, f"E2E-01 green for {target_digest}"
 
-    # 2. dogfood soak met.
-    if not isinstance(soak_hours, (int, float)) or isinstance(soak_hours, bool):
-        soak_green = False
-        soak_detail = "soak telemetry unavailable"
-    elif soak_hours >= soak_required_hours:
-        soak_green = True
-        soak_detail = f"{soak_hours:g}h ≥ {soak_required_hours:g}h required"
-    else:
-        soak_green = False
-        soak_detail = f"{soak_hours:g}h < {soak_required_hours:g}h required"
-
-    # 3. zero quarantines.
-    if not isinstance(quarantine_count, int) or isinstance(quarantine_count, bool):
-        quar_green, quar_detail = False, "quarantine telemetry unavailable"
+    # 2. zero quarantines.
+    if quarantine_declared_absent and quarantine_count is None:
+        quar_green = True
+        quar_detail = "no quarantine telemetry — DECLARED absent, not assumed"
+    elif not isinstance(quarantine_count, int) or isinstance(quarantine_count, bool):
+        quar_green, quar_detail = False, "quarantine telemetry unavailable (declare it absent to proceed)"
     elif quarantine_count == 0:
         quar_green, quar_detail = True, "0 quarantines"
     else:
-        quar_green, quar_detail = False, f"{quarantine_count} quarantine(s) during soak"
+        quar_green, quar_detail = False, f"{quarantine_count} quarantine(s)"
 
-    # 4. zero open Sev-1.
-    if not isinstance(open_sev1_count, int) or isinstance(open_sev1_count, bool):
-        sev_green, sev_detail = False, "Sev-1 telemetry unavailable"
+    # 3. zero open Sev-1.
+    if sev1_declared_absent and open_sev1_count is None:
+        sev_green = True
+        sev_detail = "no Sev-1 telemetry — DECLARED absent, not assumed"
+    elif not isinstance(open_sev1_count, int) or isinstance(open_sev1_count, bool):
+        sev_green, sev_detail = False, "Sev-1 telemetry unavailable (declare it absent to proceed)"
     elif open_sev1_count == 0:
         sev_green, sev_detail = True, "0 open Sev-1"
     else:
@@ -209,7 +229,6 @@ def evaluate_gate(
         target_digest=target_digest.strip(),
         conditions=(
             Condition("throwaway_ci", ci_green, ci_detail),
-            Condition("soak", soak_green, soak_detail),
             Condition("quarantines", quar_green, quar_detail),
             Condition("sev1", sev_green, sev_detail),
         ),
@@ -279,11 +298,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--ci-passed", default=None, help="E2E-01 smoke result (true/false)")
     parser.add_argument("--ci-digest", default=None, help="the digest E2E-01 tested")
-    parser.add_argument("--soak-hours", default=None, help="accrued dogfood soak hours")
+    # Declaring "no telemetry here" is a DECISION and must look like one in the
+    # argv. A default-on flag would make absence the accident it replaces (#1106).
     parser.add_argument(
-        "--soak-required-hours", default="24", help="soak hours required (default 24)"
-    )
-    parser.add_argument("--quarantines", default=None, help="quarantine count during soak")
+        "--quarantines-declared-absent", action="store_true",
+        help="no quarantine telemetry deployed — declare it absent (#1106)")
+    parser.add_argument(
+        "--sev1-declared-absent", action="store_true",
+        help="no Sev-1 telemetry deployed — declare it absent (#1106)")
+    parser.add_argument("--quarantines", default=None, help="quarantine count")
     parser.add_argument("--open-sev1", default=None, help="open Sev-1 count")
     parser.add_argument(
         "--ack",
@@ -297,10 +320,10 @@ def main(argv: list[str] | None = None) -> int:
             target_digest=args.target_digest,
             ci_passed=_tri_bool(args.ci_passed),
             ci_digest=args.ci_digest,
-            soak_hours=_opt_number(args.soak_hours, float),
-            soak_required_hours=float(args.soak_required_hours),
             quarantine_count=_opt_number(args.quarantines, int),
             open_sev1_count=_opt_number(args.open_sev1, int),
+            quarantine_declared_absent=args.quarantines_declared_absent,
+            sev1_declared_absent=args.sev1_declared_absent,
         )
     except GateError as exc:
         print(f"promotion-gate error: {exc}", file=sys.stderr)
