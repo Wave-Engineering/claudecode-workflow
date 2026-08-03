@@ -176,6 +176,58 @@ degrades silently (the D7 assertion-liveness discipline):
   The discretionary-tool toolbox (R-11) is a durable, in-container-materialized
   mount decoupled from the kit release.
 
+#### R-11 in practice: the toolbox is materialized, not baked (#1092)
+
+The mount was wired from Story 1.3 and **nothing ever materialized into it**.
+bifrost hit the consequence on a Java repo: `java`, `mvn` and `docker` all
+`command not found`, so every session began by bootstrapping the world. Same
+declared-but-not-wired shape as #1076 (bootstrap never invoked), #1061 (inert
+R-14) and #1056 (trivy parsing zero manifests) — the manifest promises it, the
+runtime does not have it, and nothing says so.
+
+**The image bakes the installer and never the toolchain.** `mise` is one pinned
+static binary; a baked JDK would ride along in every agent that never touches
+Java, and bumping Maven would become a *kit release*. Avoiding exactly that is
+what R-11 is for.
+
+| | where | who owns it |
+|---|---|---|
+| installer | `mise`, baked at a pinned version | the release |
+| toolchains | `$MISE_DATA_DIR` = `~/.oaw/toolbox/mise` (durable mount) | the operator / the repo |
+| operator manifest | `~/.oaw/toolbox/mise.toml` | "every agent on this profile needs X" |
+| per-repo manifest | `<workspace>/mise.toml` | "this project needs Java 17 + Maven" |
+
+`bootstrap.sh::sync_toolbox` installs the operator manifest at boot — idempotent,
+so a satisfied manifest is a fast no-op on every agent start. The per-repo case
+needs nothing at boot: **mise's shims resolve the version from the cwd's config
+at exec time**, which is why shims are on `PATH` rather than a toolchain being
+pinned into it.
+
+Three properties are load-bearing, and each was a reported failure before it was
+a requirement:
+
+- **Shims sit on the IMAGE's `PATH`, not in a shell rc.** `docker exec` resolves
+  against the image's configured `PATH`, and non-interactive shells never read
+  `~/.bashrc` — which is why bifrost had to hand-source an env file. A hook or an
+  agent-run command must find `mvn` with no shell cooperation at all.
+- **After the kit's own bin dir, before the system dirs.** A user toolchain must
+  never shadow a kit binary (§3.4 keeps the RTE authoritative), but a
+  mise-managed JDK should beat a stray system one.
+- **Never fatal.** The wrapper *sources* bootstrap and then execs the agent, so a
+  fatal here means no agent at all. Offline, unreadable manifest, missing mise —
+  all warn and continue: a container with no Maven is bad, a container with no
+  agent is worse.
+
+`~/.m2` is handled by the **durable-cache** layer alongside cargo/go/uv, not by
+this one — the toolbox holds the toolchain, the cache holds what the toolchain
+downloads. A cold `mvn` otherwise re-fetches the whole dependency tree every
+session.
+
+**Still out of scope, deliberately: a container builder.** Docker/Podman inside
+the container is a *privilege* decision (socket mount vs rootless podman vs
+"Dockerfile work happens on the host") with a real security surface, and it must
+not be solved as a side effect of a toolchain fix.
+
 ### 3.3 settings.json: one file, merged by us (#1086)
 
 `settings.json` straddles versioned and shared. The original design (Dev Spec
