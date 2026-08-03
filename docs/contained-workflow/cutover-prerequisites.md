@@ -12,7 +12,7 @@ own canary.
 
 Derived 2026-07-30. Tracking issues: #1061 (secrets), #1062 (drop Slack),
 #1063 (image cadence), #1064 (session durability),
-`mcp-server-wtf`#29 (`.wtf/` relocation).
+`mcp-server-wtf`#29 (recorder store relocated into `.claude/` — **landed**, `733a3fa`).
 
 ---
 
