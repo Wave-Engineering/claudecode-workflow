@@ -287,6 +287,33 @@ def test_manifest_declares_no_user_level_settings_local(tmp_path: Path) -> None:
     )
 
 
+def test_skills_overlay_mount_exists_for_host_fill() -> None:
+    """bootstrap's host-fill had NO mount behind it (#1078).
+
+    Declared from the start, mounted by nothing — invisible until #1076 made
+    bootstrap actually run, at which point every agent boot warned. A warning
+    that is always true is one operators learn to skip.
+
+    Asserted against the RESOLVED manifest, not the fragment text: a fragment
+    that parses but does not resolve would satisfy a text check and still leave
+    bootstrap warning on every boot.
+    """
+    resolved = mr.resolve_manifest(MAJOR, home=FAKE_HOME, mounts_dir=MANIFEST_DIR)
+    by_target = {m.target: m for m in resolved}
+    overlay = by_target.get("/home/ubuntu/.oaw/.claude/skills")
+    assert overlay is not None, (
+        "nothing targets the host-fill source — bootstrap warns on every boot"
+    )
+    assert overlay.to_docker_volume().endswith(":ro"), (
+        "the container must never write into the operator's skill sources"
+    )
+    assert overlay.target != "/home/ubuntu/.claude/skills", (
+        "host-fill must land BESIDE the image skills dir, never over it — "
+        "mounting over it is the dev-mode overlay, a different mechanism that "
+        "REPLACES rather than fills gaps"
+    )
+
+
 def test_manifest_dir_exists() -> None:
     """DM sanity: the manifest directory and the fragments Story 1.3 owns are
     checked in. A superset check (not exact equality) so a sibling wave story —
