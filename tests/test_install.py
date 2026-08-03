@@ -83,6 +83,41 @@ def _make_env(home: Path) -> dict[str, str]:
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _with_no_mcps(args: list[str]) -> list[str]:
+    """Prepend ``--no-mcps`` unless the caller already opted out of MCP install.
+
+    WHY (#1070). Each real ``./install`` here fetched FIVE MCP server binaries
+    over the network — measured at ~84% of install wall-clock — and **not one
+    assertion in this file examines them**. Grep for `disc-server`/`sdlc-server`:
+    the only hits are a documentation path and a comment. Ten tests were paying
+    the dominant cost of the suite for coverage that does not exist.
+
+    That cost was not merely slow. On a hosted runner it pushed ``install`` past
+    the 120s per-invocation timeout and took CI red on PR #1112 — five failures
+    on a changeset that touched nothing install-related. A gate that fails for
+    reasons unrelated to the diff teaches people to disbelieve it.
+
+    **Nothing tested today stops being tested.** The coverage this skips is held
+    somewhere strictly better: the image build runs a real, complete ``./install``
+    and fails unless every one of the five servers is registered in
+    ``~/.claude.json`` **and** its binary is executable. That is the artifact that
+    actually ships, so the division is: the image proves a full install works,
+    this file proves the BEHAVIOURS around install — prune, drift, uninstall,
+    dry-run, exclusions.
+
+    Deliberately NOT the shared-fixture approach: every test still performs its
+    own real install, so the 39-of-47-absolute-symlinks hazard that makes a naive
+    ``cp -a`` of an installed tree unsafe simply never arises.
+
+    ``--local`` already implies ``--no-mcps`` (install:219); passing both is
+    harmless, but leaving it to the implication would couple this helper to that
+    detail, so it is skipped explicitly.
+    """
+    if "--no-mcps" in args or "--local" in args:
+        return args
+    return ["--no-mcps"] + args
+
+
 def run_install(
     args: list[str],
     home: Path,
@@ -92,7 +127,7 @@ def run_install(
     Returns ``(returncode, stdout, stderr)``.
     """
     result = subprocess.run(
-        ["bash", _INSTALL_SCRIPT] + args,
+        ["bash", _INSTALL_SCRIPT] + _with_no_mcps(args),
         capture_output=True,
         text=True,
         env=_make_env(home),
@@ -776,7 +811,7 @@ def run_install_cwd(
     subprocess cwd must be set to the project directory under test.
     """
     result = subprocess.run(
-        ["bash", _INSTALL_SCRIPT] + args,
+        ["bash", _INSTALL_SCRIPT] + _with_no_mcps(args),
         capture_output=True,
         text=True,
         env=_make_env(home),
