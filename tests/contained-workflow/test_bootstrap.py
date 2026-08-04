@@ -1403,14 +1403,42 @@ def test_ssh_parity_is_idempotent(tmp_path: Path) -> None:
     assert "already carries the mounted keyring" in proc.stderr
 
 
-def test_known_hosts_stays_writable_and_local(tmp_path: Path) -> None:
-    """known_hosts is the ONE file the agent must own — the mount is read-only."""
+def test_known_hosts_is_seeded_as_a_writable_copy(tmp_path: Path) -> None:
+    """known_hosts must be BOTH the agent's own AND carry the operator's hosts.
+
+    #1115: the first cut skipped it entirely so it would stay writable, which
+    left the agent with an EMPTY known_hosts — and a non-interactive `git` cannot
+    answer a host-key prompt. `git ls-remote git@gitlab.com:…` died with "Host
+    key verification failed" in a fresh container. Writable but empty is its own
+    outage, and every structural assertion passed while it happened.
+    """
     home, src = _home_with_ssh(tmp_path)
-    (src / "known_hosts").write_text("host-from-the-operator\n")
-    assert _run(home, OAW_SSH_SOURCE=str(src)).returncode == 0
+    (src / "known_hosts").write_text("gitlab.com ssh-ed25519 AAAAOPERATOR\n")
+    proc = _run(home, OAW_SSH_SOURCE=str(src))
+    assert proc.returncode == 0, proc.stderr
+
     kh = home / ".ssh" / "known_hosts"
-    assert not kh.is_symlink(), "known_hosts must never link into the read-only mount"
-    kh.write_text("agent-learned-this-host\n")  # must not raise
+    assert not kh.is_symlink(), "must never link into the read-only mount"
+    assert "AAAAOPERATOR" in kh.read_text(), (
+        "the operator's host keys must be carried over, or a fresh container "
+        "cannot verify any host it has not met"
+    )
+    kh.write_text(kh.read_text() + "learned.example ssh-ed25519 AAAANEW\n")  # must not raise
+
+
+def test_an_agents_own_known_hosts_is_not_overwritten(tmp_path: Path) -> None:
+    """Copy-if-absent, not copy-always — hosts the agent learned must survive.
+
+    This runs on every agent start, so copying unconditionally would discard
+    everything learned since the container came up.
+    """
+    home, src = _home_with_ssh(tmp_path)
+    (src / "known_hosts").write_text("gitlab.com ssh-ed25519 AAAAOPERATOR\n")
+    dst = home / ".ssh"
+    dst.mkdir()
+    (dst / "known_hosts").write_text("learned.example ssh-ed25519 AAAALEARNED\n")
+    assert _run(home, OAW_SSH_SOURCE=str(src)).returncode == 0
+    assert (dst / "known_hosts").read_text() == "learned.example ssh-ed25519 AAAALEARNED\n"
 
 
 def test_an_agent_created_ssh_dir_still_gets_the_keys(tmp_path: Path) -> None:

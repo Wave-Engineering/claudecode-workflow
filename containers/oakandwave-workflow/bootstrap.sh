@@ -804,8 +804,23 @@ ensure_ssh_parity() {
 		[[ -e "$f" ]] || continue # nullglob is not set; an empty dir yields the literal
 		base="$(basename "$f")"
 		# known_hosts is the ONE thing the agent must own: it is written on every
-		# first contact with a new host, and $src is read-only.
-		[[ "$base" == known_hosts || "$base" == known_hosts.old ]] && continue
+		# first contact with a new host, and $src is read-only. So it is COPIED,
+		# never linked (#1115).
+		#
+		# Skipping it entirely — the first cut — left the agent with an EMPTY
+		# known_hosts and no way to answer a host-key prompt non-interactively:
+		# `git ls-remote git@gitlab.com:…` died with "Host key verification
+		# failed" in a fresh container. Writable but empty is its own outage.
+		#
+		# Copy-if-absent, not copy-always: once the agent has learned hosts of its
+		# own, replacing the file every boot would discard them.
+		if [[ "$base" == known_hosts || "$base" == known_hosts.old ]]; then
+			if [[ ! -e "$dst/$base" ]] && cp "$f" "$dst/$base" 2>/dev/null; then
+				chmod u+w "$dst/$base" 2>/dev/null || true
+				info "ssh: seeded ~/.ssh/$base from the mount (writable copy, not a link)"
+			fi
+			continue
+		fi
 		[[ -e "$dst/$base" || -L "$dst/$base" ]] && continue
 		ln -s "$f" "$dst/$base" 2>/dev/null && linked=$((linked + 1))
 	done
