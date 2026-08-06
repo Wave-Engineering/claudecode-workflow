@@ -1,0 +1,28 @@
+[Unit]
+Description=oaw-vox-spool: speak messages forwarded from containerised agents (#1084)
+Documentation=https://github.com/Wave-Engineering/claudecode-workflow/issues/1084
+
+# NO START RATE LIMIT. A DirectoryNotEmpty path unit produces one service start
+# per drain cycle, so a wave of agents announcing at a boundary trips systemd's
+# default DefaultStartLimitBurst=5 / DefaultStartLimitIntervalSec=10s — and when
+# the limiter refuses the job, systemd fails the PATH unit as well. It then stops
+# watching entirely until someone runs `systemctl --user reset-failed`, which is
+# a silent death for the one channel that exists to be loud. Measured: a single
+# undrained file fired this 5 times in 2 seconds.
+#
+# The drain is a bounded oneshot that always leaves the spool free of triggering
+# entries, so "start it as often as the directory says" is the correct policy;
+# the loop it could spin on is closed on the drain side, not by throttling here.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+# Drains whatever is queued and exits. Triggered by oaw-vox-spool.path, which
+# re-fires while the directory is non-empty, so a message arriving mid-drain is
+# picked up on the next trigger rather than stranded.
+ExecStart=%h/.local/bin/oaw-vox-drain
+# The drain runs the operator's own vox, which needs the user session's audio.
+# A user unit already has it; this is here so a failure to reach the sink shows
+# up in the journal instead of vanishing.
+StandardOutput=journal
+StandardError=journal

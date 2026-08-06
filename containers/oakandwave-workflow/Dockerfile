@@ -302,6 +302,43 @@ RUN set +e; \
 		echo "MCP baked: $m (registered + binary executable)"; \
 	done
 
+# --- A voice for containerised agents (#1084) ---------------------------------
+# `vox` cannot work in here: no provider config, and no player AT ALL — none of
+# afplay/paplay/aplay/ffplay, no libpulse. So every agent moved into a container
+# lost the audible interrupt, the thing that gets the operator's attention when
+# nobody is watching a Discord channel.
+#
+# Audio is NOT forwarded. Mounting the host's PipeWire socket was considered and
+# rejected: with no client libraries and no player in here it would mean adding a
+# whole audio stack to every image to play one sentence, and coupling containers
+# to the host's audio devices. The TEXT is forwarded instead, to a spool on a
+# host-visible mount, where the operator's already-configured vox synthesises and
+# plays it (scripts/oaw-vox-drain + the systemd path unit beside it).
+#
+# vox resolves `~/.config/vox/{provider,player}` before its bundled defaults, so
+# this is pure configuration — no change to vox itself. The PAIR is the trick:
+# the provider forwards text and writes an empty $VOX_OUTPUT_FILE, and the player
+# is a no-op because playback happens on the far side of the mount.
+#
+# Emphatically NOT silent.sh. Pointing the provider there would also stop the
+# error, by making the agent mute and *believing* it had spoken — converting a
+# visible gap into an invisible one, which #1084 explicitly refused. host-forward
+# is loud when the spool is not being drained.
+# OAW_VOX_SPOOL is declared in the mount fragment's `env`, but NOTHING consumes
+# manifest env — the resolver emits `source:target` only. Without this ENV the
+# provider silently falls back to its own literal default, so the container and
+# the mount agree by two independent constants that nobody checks. Set it here so
+# the declared variable is real.
+ENV OAW_VOX_SPOOL=/home/ubuntu/.oaw/vox-spool
+RUN set -eux; \
+	install -d -m 0755 "$HOME/.config/vox"; \
+	ln -sfn "$HOME/.claude/scripts/vox-providers/host-forward.sh" "$HOME/.config/vox/provider"; \
+	ln -sfn "$HOME/.claude/scripts/vox-spool/no-op-player.sh" "$HOME/.config/vox/player"; \
+	test -x "$HOME/.config/vox/provider"; \
+	test -x "$HOME/.config/vox/player"; \
+	OAW_VOX_SPOOL="$(mktemp -d)" vox "image build smoke test" >/dev/null; \
+	echo "vox: forwarding provider wired (config-exists is not config-works — that just spoke)"
+
 # --- Bake sdlc-server's commutativity-probe CLI (R-09 residual — #1014) --------
 # sdlc-server shells out to a `commutativity-probe` CLI to service its
 # `commutativity_verify` tool; with the CLI absent the handler degrades to a

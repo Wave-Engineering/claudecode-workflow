@@ -45,6 +45,7 @@ fragment deterministically. Each file holds one or more `[[mount]]` tables.
 | `20-secrets.toml` | read-only-secrets (ro named single-file mounts) | 1.5 (#965), #1061 |
 | `30-user-overlay.toml` | user-overlay (MCP fragment, toolbox, user scripts) | 1.3 (#963) |
 | `40-durable-caches.toml` | durable-cache (cargo, go-mod, uv, ms-playwright) | 1.3 (#963) |
+| `50-vox-spool.toml` | shared-mutable-rw (text forwarded to the host's `vox`) | #1084 |
 
 > **These fragments are INERT until copied into an AoE profile.** `extra_volumes`
 > is a manual copy of `mount_resolver.py --format aoe`, so the container runs on

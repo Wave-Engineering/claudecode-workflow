@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Containerised agents have a voice again (#1084).** `vox` could not work inside a container — no provider config, and no player at all (none of `afplay`/`paplay`/`aplay`/`ffplay`, no `libpulse`) — so every agent moved into a container lost the audible interrupt, the thing that gets attention when nobody is watching a Discord channel.
+
+  **Text is forwarded, not audio.** The container's provider spools the message onto a host-visible mount and a `systemd --user` path unit runs the operator's own already-configured `vox` on it. Mounting the host's PipeWire socket was considered and rejected: with no client libraries and no player in the image it would mean adding an entire audio stack to play one sentence, and coupling containers to the host's audio devices.
+
+  No change to `vox` itself — it already resolves `~/.config/vox/{provider,player}` ahead of its bundled defaults, so this is configuration. The **pair** is the mechanism: the provider forwards text and writes an empty `$VOX_OUTPUT_FILE`; the player is a no-op because playback happens on the far side of the mount.
+
+  **Emphatically not `silent.sh`.** Pointing the provider there would also stop the error — by making the agent mute while it believes it has spoken, converting a visible gap into an invisible one. So the provider is **loud when nothing is draining the spool**, which is the assertion that keeps the feature from rotting: that failure is otherwise invisible from inside the container. The drain drops messages older than 15 minutes rather than speaking a stale backlog, and deletes before speaking so a message `vox` rejects cannot be re-spoken forever by a `DirectoryNotEmpty` path unit.
+
+  The host side is one explicit operator command, `oaw-vox-drain --install-units`. `./install` deliberately does not touch systemd: installing units from the kit installer would mutate the operator's running session state under live sibling agents, the exact side effect the contained-workflow campaign exists to eliminate. Runbook: `docs/operations/containerised-vox.md`.
+
+  Adds a `vox-spool` mount (`shared-mutable-rw`, sandbox-scoped and major-partitioned under `~/.oaw/state/<major>/`), so **aoe profiles must be regenerated** — it takes effect on container recreation, leaving running agents untouched.
+
+
+- **Containerised agents can build, run and scan container images (#1108).** `podman` is baked into the image, closing the gap that blocked `blueshift-kb#8` (swap a runtime image to distroless, shedding 23 unfixable CVEs, 4 CRITICAL) — a containerised agent could not verify it at all. The near-miss is the reason this is `Added` and not deferred again: the agent that hit the gap proposed putting a container-generated key in the operator's `authorized_keys` so it could build on the host. **A missing capability does not just block work, it generates pressure to solve the wrong problem.**
+
+  **⚠️ Host prerequisite — without it the capability reports absent.** Docker's `default-runtime` must be `sysbox-runc`. Under stock `runc` podman cannot create its nested user namespace at all, and `aoe` cannot pass `--runtime` per container (its `[sandbox]` schema has no such key, and `container_runtime` selects the *engine*, not the OCI runtime — agent-of-empires#3218), so this is a daemon-level setting made once per host:
+
+  ```json
+  {
+      "live-restore": true,
+      "default-runtime": "sysbox-runc",
+      "runtimes": { "sysbox-runc": { "path": "/usr/bin/sysbox-runc" } }
+  }
+  ```
+
+  Set `live-restore` in the *same* edit — without it every future daemon restart kills every running container, including live agent sessions. Note also that sysbox rejects `--privileged` and `--network host`; nothing in the fleet uses either, and the opt-out for another workload on the same host is one explicit `--runtime=runc`. Before installing sysbox, pin `bip` and `default-address-pools` to the host's **current** values: its installer otherwise sets `bip` to `172.20.0.1/16` (already occupied by an unrelated project's network on malory) and replaces docker's built-in pools with a single `172.25.0.0/16`. Its precondition check is purely textual, so declaring the existing values both satisfies it and makes it a no-op.
+
+  **Not a docker socket mount**, and the reason is capability rather than trust: over a socket `docker build` runs on the *host* daemon, so the build context and bind-mount paths resolve to host paths the agent cannot see, and concurrent agents collide in one image namespace. **Podman runs as root inside the container** — the mode sysbox is built for, since container-root maps to an unprivileged host uid. Rootless was tried first and is structurally impossible: the kernel refuses an unprivileged procfs mount unless the parent `/proc` is fully visible, and sysbox-fs overlays it, so any Dockerfile with a `RUN` step dies on `mount proc to proc: Operation not permitted`. Elevation is scoped to `/usr/bin/podman` alone via `sudoers.d` plus a PATH wrapper — deliberately not blanket sudo, because a root-written file on a bind mount surfaces as **uid 0 on the host**, which would let agents strand root-owned files in the operator's workspaces. Storage is `vfs`: podman falls back to fuse-overlayfs, which under sysbox dies on `/proc/sys/kernel/overflowuid` (readable at the container's top level, `EIO` from the nested userns), and `mount_program = ""` does not force kernel overlayfs.
+
+  `aoe-preflight.sh` gains a behavioural check backed by `scripts/ci/container-builder-probe.sh`, which **insists on a Dockerfile with a `RUN` step** — a `COPY`-only build succeeds even where nesting is impossible, so a build-only probe reports health on a host that cannot run anything. Its exit codes keep three outcomes apart that a single red/green would merge: broken in our image (fails), host cannot nest (reported as a declared absence with the reason, since the kit's contract is the image digest and this depends on host config outside it), and probe unavailable (no verdict — the base image is pulled from ECR Public rather than Docker Hub after the first real run hit an anonymous rate limit).
+
 ### Fixed
 
 - **`wtf-post-tool-use.sh` was baked into the image twice, and now cannot be (#1094).** The image's `settings.json` registered it under both `~/.local/share/…` (from `settings.template.json`) and `/home/ubuntu/.local/share/…` (added afterwards by wtf-server's installer, whose idempotency check compared raw strings). Same file, so the hook **ran twice on every tool use** — for weeks, because nothing ever asked the question.
@@ -25,26 +58,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `validate_hook_paths` unwraps the guard rather than skipping it — going blind would trade a noisy failure for a silent one — and stays loud for **unguarded** misses while treating a guarded miss as the declared-inert case it is. The cases a guard could hide are caught in `sync_kit_hooks` against the image that claims the hook: one it never shipped, and one shipped without its exec bit (the guard tests `-x`, so that is skipped exactly like a missing file, where it previously failed loudly with `Permission denied`). That check runs over the image's declared hook set on **every** boot rather than inside the add-if-absent loop, where it would have fired once against a virgin config dir and stayed silent forever after.
 
   Caught by the operator on a live restart and by no test: the #1086 suite drove the merge against fake homes where the script always existed, so the cross-version case was not representable. It is now — the tests delete the script after merging, which is precisely what an older container sees.
-
-### Added
-
-- **Containerised agents can build, run and scan container images (#1108).** `podman` is baked into the image, closing the gap that blocked `blueshift-kb#8` (swap a runtime image to distroless, shedding 23 unfixable CVEs, 4 CRITICAL) — a containerised agent could not verify it at all. The near-miss is the reason this is `Added` and not deferred again: the agent that hit the gap proposed putting a container-generated key in the operator's `authorized_keys` so it could build on the host. **A missing capability does not just block work, it generates pressure to solve the wrong problem.**
-
-  **⚠️ Host prerequisite — without it the capability reports absent.** Docker's `default-runtime` must be `sysbox-runc`. Under stock `runc` podman cannot create its nested user namespace at all, and `aoe` cannot pass `--runtime` per container (its `[sandbox]` schema has no such key, and `container_runtime` selects the *engine*, not the OCI runtime — agent-of-empires#3218), so this is a daemon-level setting made once per host:
-
-  ```json
-  {
-      "live-restore": true,
-      "default-runtime": "sysbox-runc",
-      "runtimes": { "sysbox-runc": { "path": "/usr/bin/sysbox-runc" } }
-  }
-  ```
-
-  Set `live-restore` in the *same* edit — without it every future daemon restart kills every running container, including live agent sessions. Note also that sysbox rejects `--privileged` and `--network host`; nothing in the fleet uses either, and the opt-out for another workload on the same host is one explicit `--runtime=runc`. Before installing sysbox, pin `bip` and `default-address-pools` to the host's **current** values: its installer otherwise sets `bip` to `172.20.0.1/16` (already occupied by an unrelated project's network on malory) and replaces docker's built-in pools with a single `172.25.0.0/16`. Its precondition check is purely textual, so declaring the existing values both satisfies it and makes it a no-op.
-
-  **Not a docker socket mount**, and the reason is capability rather than trust: over a socket `docker build` runs on the *host* daemon, so the build context and bind-mount paths resolve to host paths the agent cannot see, and concurrent agents collide in one image namespace. **Podman runs as root inside the container** — the mode sysbox is built for, since container-root maps to an unprivileged host uid. Rootless was tried first and is structurally impossible: the kernel refuses an unprivileged procfs mount unless the parent `/proc` is fully visible, and sysbox-fs overlays it, so any Dockerfile with a `RUN` step dies on `mount proc to proc: Operation not permitted`. Elevation is scoped to `/usr/bin/podman` alone via `sudoers.d` plus a PATH wrapper — deliberately not blanket sudo, because a root-written file on a bind mount surfaces as **uid 0 on the host**, which would let agents strand root-owned files in the operator's workspaces. Storage is `vfs`: podman falls back to fuse-overlayfs, which under sysbox dies on `/proc/sys/kernel/overflowuid` (readable at the container's top level, `EIO` from the nested userns), and `mount_program = ""` does not force kernel overlayfs.
-
-  `aoe-preflight.sh` gains a behavioural check backed by `scripts/ci/container-builder-probe.sh`, which **insists on a Dockerfile with a `RUN` step** — a `COPY`-only build succeeds even where nesting is impossible, so a build-only probe reports health on a host that cannot run anything. Its exit codes keep three outcomes apart that a single red/green would merge: broken in our image (fails), host cannot nest (reported as a declared absence with the reason, since the kit's contract is the image digest and this depends on host config outside it), and probe unavailable (no verdict — the base image is pulled from ECR Public rather than Docker Hub after the first real run hit an anonymous rate limit).
 
 ### Removed
 
