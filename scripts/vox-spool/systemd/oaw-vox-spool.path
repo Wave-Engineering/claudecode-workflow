@@ -1,0 +1,24 @@
+[Unit]
+Description=oaw-vox-spool: watch for speech forwarded from containerised agents (#1084)
+Documentation=https://github.com/Wave-Engineering/claudecode-workflow/issues/1084
+
+[Path]
+# A path unit rather than a polling loop or a custom daemon: no process running
+# when nothing is speaking, reboot-durable via the standard mechanism, and
+# nothing bespoke to maintain.
+#
+# DirectoryNotEmpty rather than PathChanged: PathChanged fires on the *event*, so
+# anything spooled while the service was already running for a previous message
+# can be missed. DirectoryNotEmpty re-triggers as long as work remains, which
+# makes the drain converge instead of leaving stragglers to age into the
+# provider's staleness warning.
+#
+# @SPOOL@ is substituted by `oaw-vox-drain --install-units`, which resolves the
+# kit major and then VERIFIES this line matches the directory it will drain. A
+# hardcoded `state/8/` here is the #1067 defect: at the next major the container
+# writes to state/9 while this watches state/8, and agents go silently mute.
+DirectoryNotEmpty=@SPOOL@
+Unit=oaw-vox-spool.service
+
+[Install]
+WantedBy=default.target

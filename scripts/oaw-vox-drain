@@ -1,0 +1,233 @@
+#!/usr/bin/env bash
+# oaw-vox-drain — speak whatever containerised agents have spooled (#1084).
+#
+# The host half of the containerised-vox pair. Containers cannot play audio, so
+# their `vox` provider (host-forward.sh) writes the TEXT here; this runs the
+# operator's own already-configured `vox` on each message and removes it.
+#
+# Invoked by oaw-vox-spool.service, triggered by oaw-vox-spool.path. Safe to run
+# by hand — that is also how you test it without waiting for a container.
+#
+# THE SPOOL MUST END FREE OF TRIGGERING ENTRIES. The path unit watches
+# DirectoryNotEmpty, so anything left behind re-triggers the service immediately
+# and forever; enough of that in 10s and systemd's start limiter refuses the job
+# and fails the PATH unit too, which then stops watching until someone runs
+# `systemctl --user reset-failed`. Measured: a single undrained file fired the
+# service 5 times in 2 seconds. So nothing here may exit leaving a visible file —
+# anything undrainable is moved into .quarantine/ instead. systemd ignores
+# dot-entries (verified, both dotfiles and hidden dirs), which is also why the
+# provider's in-flight `.tmp.*` names do not trigger.
+#
+# DELETE-THEN-SPEAK, deliberately. Speaking first and deleting after looks safer
+# but is not: `vox` detaches playback by default (#952), so a message that makes
+# vox exit non-zero — or a drain killed mid-run — would be re-spoken on every
+# subsequent trigger. A message heard once and lost beats one repeated forever.
+set -uo pipefail
+
+VOX="${OAW_VOX_BIN:-$HOME/.local/bin/vox}"
+# Anything older than this was almost certainly spooled while nothing was
+# draining. Speaking a backlog of stale status updates is worse than dropping it.
+MAX_AGE_SECONDS="${OAW_VOX_MAX_AGE_SECONDS:-900}"
+
+# --- Which kit major? ---------------------------------------------------------
+# NO LITERAL FALLBACK. `OAW_MAJOR="${OAW_MAJOR:-1}"` in two other scripts is
+# exactly the #1067 defect — a constant under a comment calling it "the kit
+# major" while the kit was at 7.3.0 — and scripts/ci/oaw-major.sh exists because
+# of it: "guessing silently is worse than refusing". A wrong major here is the
+# same silent failure in a new place: the container writes ~/.oaw/state/9/… while
+# this watches …/8/, and agents go mute.
+#
+# oaw-major.sh derives from git tags and this runs from ~/.local/bin on a host
+# that may be nowhere near the repo, so derive from observable state instead:
+# whichever spool directories actually exist. One is unambiguous; anything else
+# is a question only the operator can answer.
+resolve_major() {
+	if [[ -n "${OAW_MAJOR:-}" ]]; then
+		printf '%s' "$OAW_MAJOR"
+		return 0
+	fi
+	local -a found=()
+	local d
+	for d in "$HOME"/.oaw/state/*/vox-spool; do
+		[[ -d "$d" ]] || continue
+		d="${d%/vox-spool}"
+		found+=("${d##*/}")
+	done
+	if ((${#found[@]} == 1)); then
+		printf '%s' "${found[0]}"
+		return 0
+	fi
+	if ((${#found[@]} == 0)); then
+		echo "oaw-vox-drain: no ~/.oaw/state/<major>/vox-spool exists — set OAW_MAJOR or run --install-units" >&2
+	else
+		echo "oaw-vox-drain: several spools exist (${found[*]}) — set OAW_MAJOR to pick one" >&2
+	fi
+	return 2
+}
+
+if [[ -n "${OAW_VOX_SPOOL_HOST:-}" ]]; then
+	SPOOL="$OAW_VOX_SPOOL_HOST"
+else
+	MAJOR="$(resolve_major)" || exit 2
+	SPOOL="$HOME/.oaw/state/$MAJOR/vox-spool"
+fi
+
+# --- Unit management ----------------------------------------------------------
+# `./install` deliberately does NOT touch systemd. Installing units from the kit
+# installer would mutate the operator's running session state — the exact class of
+# side effect the contained-workflow campaign exists to eliminate — and it would
+# do it under live sibling agents. So this is an explicit operator step, kept to
+# one command so it does not drift into a hand-copied file nobody can audit.
+UNIT_SRC="${OAW_VOX_UNIT_SRC:-$HOME/.claude/scripts/vox-spool/systemd}"
+UNIT_DST="${OAW_VOX_UNIT_DST:-$HOME/.config/systemd/user}"
+
+case "${1:-}" in
+--install-units)
+	[[ -d "$UNIT_SRC" ]] || {
+		echo "no units at $UNIT_SRC" >&2
+		exit 1
+	}
+	mkdir -p "$UNIT_DST" "$SPOOL"
+	# TEMPLATE the spool path in rather than shipping a literal major. The unit
+	# and this script must agree on one directory; a unit watching a path nobody
+	# writes to is silent in exactly the way this feature must never be.
+	sed "s|@SPOOL@|$SPOOL|g" "$UNIT_SRC/oaw-vox-spool.path" >"$UNIT_DST/oaw-vox-spool.path"
+	install -m 0644 "$UNIT_SRC/oaw-vox-spool.service" "$UNIT_DST/oaw-vox-spool.service"
+	chmod 0644 "$UNIT_DST/oaw-vox-spool.path"
+	# Pin the major for the service too, so the unit and a hand-run drain cannot
+	# disagree once a second major appears.
+	mkdir -p "$UNIT_DST/oaw-vox-spool.service.d"
+	printf '[Service]\nEnvironment=OAW_VOX_SPOOL_HOST=%s\n' "$SPOOL" \
+		>"$UNIT_DST/oaw-vox-spool.service.d/spool.conf"
+
+	# VERIFY, do not assume: the whole failure mode is a watcher pointed at a
+	# directory nobody writes to, which looks identical to "nobody is speaking".
+	if ! grep -qF "DirectoryNotEmpty=$SPOOL" "$UNIT_DST/oaw-vox-spool.path"; then
+		echo "oaw-vox-drain: the installed unit does not watch $SPOOL — refusing to enable" >&2
+		exit 1
+	fi
+	systemctl --user daemon-reload
+	systemctl --user reset-failed oaw-vox-spool.path oaw-vox-spool.service 2>/dev/null || true
+	systemctl --user enable --now oaw-vox-spool.path
+	echo "oaw-vox-drain: installed and enabled; watching $SPOOL"
+	exit 0
+	;;
+--uninstall-units)
+	systemctl --user disable --now oaw-vox-spool.path 2>/dev/null || true
+	rm -f "$UNIT_DST/oaw-vox-spool.path" "$UNIT_DST/oaw-vox-spool.service"
+	rm -rf "$UNIT_DST/oaw-vox-spool.service.d"
+	systemctl --user daemon-reload 2>/dev/null || true
+	echo "oaw-vox-drain: units removed"
+	exit 0
+	;;
+--status)
+	echo "spool:      $SPOOL"
+	echo "queued:     $(find "$SPOOL" -maxdepth 1 -name '*.msg' 2>/dev/null | wc -l)"
+	echo "quarantine: $(find "$SPOOL/.quarantine" -type f 2>/dev/null | wc -l)"
+	systemctl --user status oaw-vox-spool.path --no-pager 2>&1 | head -5
+	exit 0
+	;;
+-h | --help)
+	echo "usage: oaw-vox-drain [--install-units|--uninstall-units|--status]"
+	echo "  no args: drain the spool once (what the systemd service runs)"
+	exit 0
+	;;
+esac
+
+[[ -d "$SPOOL" ]] || exit 0
+
+QUARANTINE="$SPOOL/.quarantine"
+
+# Move anything we cannot drain OUT of the watched set rather than leaving it to
+# re-trigger. Hidden, so systemd's DirectoryNotEmpty ignores it.
+quarantine() {
+	mkdir -p "$QUARANTINE" 2>/dev/null || return 0
+	mv -f "$1" "$QUARANTINE/" 2>/dev/null || rm -f "$1" 2>/dev/null || true
+}
+
+if [[ ! -x "$VOX" ]]; then
+	echo "oaw-vox-drain: no vox at $VOX — containerised agents are spooling into a void" >&2
+	# Clear the spool anyway. Exiting non-zero while leaving files is what latches
+	# the path unit into a permanent failure, turning a fixable "install vox" into
+	# a watcher that has stopped watching.
+	shopt -s nullglob
+	# Directories too, not just files: systemd's DirectoryNotEmpty counts ANY
+	# visible entry, so a leftover subdirectory latches the unit exactly as a
+	# leftover file does.
+	for f in "$SPOOL"/*; do
+		quarantine "$f"
+	done
+	exit 1
+fi
+
+shopt -s nullglob
+spoken=0
+dropped=0
+
+for f in "$SPOOL"/*; do
+	# VANISHED is not UNDRAINABLE. Under concurrent drains the glob is a snapshot,
+	# so an entry another drain already claimed is simply gone — treating that as
+	# "cannot drain this" sent every loser down the quarantine path and created a
+	# stray .quarantine directory on every race.
+	[[ -e "$f" ]] || continue
+
+	# Anything that exists but is not a plain .msg cannot be drained — a
+	# subdirectory, a stray file — and would re-trigger the path unit forever if
+	# left in the watched set.
+	if [[ ! -f "$f" || "$f" != *.msg ]]; then
+		quarantine "$f"
+		continue
+	fi
+
+	# CLAIM IT FIRST, with a rename. The glob is evaluated once at loop start, so
+	# two drains racing — the path unit's instance and an operator running this by
+	# hand, which the runbook tells them to do — can both enumerate the same file
+	# and both speak it. `mv` is atomic and fails when the source is already gone,
+	# so exactly one drain wins and the loser moves on. `rm -f` would not do this:
+	# it succeeds for both.
+	claim="$SPOOL/.claimed.$$.${RANDOM}"
+	mv "$f" "$claim" 2>/dev/null || continue
+
+	dev_name="$(sed -n 's/^dev_name: //p' "$claim" | head -1)"
+	# Body is everything after the first blank line — the header is metadata for
+	# triage, not something to read aloud.
+	text="$(awk 'BEGIN{h=1} h&&/^$/{h=0;next} !h' "$claim")"
+
+	age=0
+	if mtime="$(stat -c %Y "$claim" 2>/dev/null)"; then
+		age=$(($(date +%s) - mtime))
+	fi
+
+	rm -f "$claim" 2>/dev/null || true
+
+	if [[ -z "$text" ]]; then
+		continue
+	fi
+
+	if ((age > MAX_AGE_SECONDS)); then
+		echo "oaw-vox-drain: dropping a ${age}s-old message from ${dev_name:-unknown} (stale backlog)" >&2
+		dropped=$((dropped + 1))
+		continue
+	fi
+
+	# VOX_NO_SIGNOFF because the text ALREADY carries one. The container's vox
+	# appended `. This is <agent>.` before handing the text to the forwarding
+	# provider, and this vox would append a second — resolved from a systemd unit
+	# with no agent identity in its cwd or process tree, so `resolve_speaker`
+	# falls through to its `pid N` last resort. The operator would hear
+	# "…promoted. This is babelfish. This is pid 4711."
+	#
+	# `--` because a message beginning with `-` would otherwise be parsed as an
+	# unknown option and rejected outright.
+	if VOX_NO_SIGNOFF=1 "$VOX" -- "$text" >/dev/null 2>&1; then
+		spoken=$((spoken + 1))
+	else
+		# Do NOT re-queue. See the delete-then-speak note above.
+		echo "oaw-vox-drain: vox failed on a message from ${dev_name:-unknown}; dropped" >&2
+	fi
+done
+
+if ((spoken || dropped)); then
+	echo "oaw-vox-drain: spoke $spoken, dropped $dropped"
+fi
+exit 0

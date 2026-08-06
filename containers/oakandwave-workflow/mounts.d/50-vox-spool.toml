@@ -1,0 +1,27 @@
+# 50-vox-spool.toml — the text seam that gives a containerised agent a voice (#1084).
+#
+# `vox` does not work in a container: no provider, and no player at all (none of
+# afplay/paplay/aplay/ffplay, no libpulse). Discord still reaches the operator,
+# but the audible interrupt — the thing that gets attention when nobody is
+# watching a channel — was gone for every agent moved into a container.
+#
+# AUDIO IS NOT FORWARDED; TEXT IS. Passing the host's PipeWire socket through was
+# considered and rejected: the container has no client libraries and no player,
+# so it would mean adding a whole audio stack to every image to play one
+# sentence, and coupling containers to the host's audio devices. Forwarding the
+# text costs one directory and reuses the host's already-configured vox for both
+# synthesis and playback.
+#
+# Layer is shared-mutable-rw, and that is the honest classification rather than a
+# convenience: this is a directory the container WRITES and the host CONSUMES, so
+# it is a genuine mutable seam and is held to the R-03 guard like any other —
+# sandbox-scoped under ~/.oaw/state/<major>/, never inside the live-fleet tree.
+# Major-partitioned for the same reason state is: a v9 agent must not spool into
+# a v8 host unit's queue.
+[[mount]]
+name = "vox-spool"
+layer = "shared-mutable-rw"
+mode = "rw"
+source = "~/.oaw/state/<major>/vox-spool"
+target = "/home/ubuntu/.oaw/vox-spool"
+env = { OAW_VOX_SPOOL = "/home/ubuntu/.oaw/vox-spool" }

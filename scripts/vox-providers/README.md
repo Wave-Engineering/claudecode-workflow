@@ -34,6 +34,14 @@ Each is a copy-and-adapt template. They ship executable so `vox --setup --pick=<
 | `piper-local.sh` | local [piper](https://github.com/rhasspy/piper) binary | `VOX_PIPER_MODEL` (path to `.onnx`) |
 | `espeak.sh` | `espeak` / `espeak-ng` (zero-deps fallback) | — |
 | `macos-say.sh` | macOS `say(1)` + `afconvert` for WAV | — |
+| `host-forward.sh` | **containers only** — synthesises nothing; spools the TEXT to a host-visible mount where the host's own `vox` speaks it (#1084) | `OAW_VOX_SPOOL`, optional `OAW_VOX_STALE_SECONDS` |
+
+> `host-forward.sh` is only half of a pair. It must be wired alongside
+> `../vox-spool/no-op-player.sh` as the **player**, because there is no audio to
+> play on this side — the image does that (see
+> `docs/operations/containerised-vox.md`). The player deliberately does *not*
+> live in this directory: everything here is offered by `vox --setup --pick`, and
+> a player picked as a provider makes the agent mute while it believes it spoke.
 
 ## Setup
 
