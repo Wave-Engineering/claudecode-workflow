@@ -1683,14 +1683,33 @@ def test_git_transport_matches_the_host_per_forge() -> None:
 # What could not happen was version movement — and nothing reported that.
 
 
-def _hook_commands(settings: dict, event: str) -> list[tuple[str, str]]:
-    """(matcher, command) pairs registered under one event."""
+_GUARD_RE = re.compile(r"^\[ -x (?P<path>\S+) \] \|\| exit 0; (?P<cmd>.*)$", re.S)
+
+
+def _unguard(cmd: str) -> str:
+    """Strip the #1107 `[ -x … ] || exit 0;` prefix, if present."""
+    m = _GUARD_RE.match(cmd.strip())
+    return m.group("cmd") if m else cmd
+
+
+def _hook_commands_raw(settings: dict, event: str) -> list[tuple[str, str]]:
+    """(matcher, command) pairs exactly as stored — guard and all."""
     return [
         (g.get("matcher") or "", h["command"])
         for g in settings.get("hooks", {}).get(event, [])
         for h in g.get("hooks", [])
         if isinstance(h.get("command"), str)
     ]
+
+
+def _hook_commands(settings: dict, event: str) -> list[tuple[str, str]]:
+    """(matcher, command) pairs under one event, with any #1107 guard removed.
+
+    Tests about WHICH hooks are registered should not have to spell the wrapper;
+    the guard is a delivery detail. Tests about the wrapper itself use
+    ``_hook_commands_raw``.
+    """
+    return [(m, _unguard(c)) for m, c in _hook_commands_raw(settings, event)]
 
 
 def test_kit_hooks_merge_into_the_settings_the_cli_reads(tmp_path: Path) -> None:
@@ -1735,6 +1754,328 @@ def test_kit_hook_merge_is_idempotent(tmp_path: Path) -> None:
     second = _hook_commands(J.loads((cfgdir / "settings.json").read_text()), "SessionStart")
     assert first == second, f"second boot changed the hook set: {first} -> {second}"
     assert "already present" in proc.stderr
+
+
+# --- #1107: the merge target is SHARED ACROSS IMAGE VERSIONS ------------------
+# sync_kit_hooks writes into a file every container on the host reads, while the
+# hook scripts are image-versioned. So a hook new in release N is registered for
+# containers running N-1, which do not have the script, and every SessionStart
+# there fails with a missing-hook error. Caught by the operator on a live restart
+# and by no test, because the #1086 suite drove the merge against fake homes where
+# the script ALWAYS existed — the cross-version case was not representable.
+#
+# These tests represent it: the hook script is deleted from the image after the
+# merge, which is exactly what an older container sees.
+
+
+def _run_hook_command(cmd: str) -> subprocess.CompletedProcess[str]:
+    """Execute a stored hook command the way the CLI does — through a shell."""
+    return subprocess.run(["sh", "-c", cmd], capture_output=True, text=True, timeout=30)
+
+
+def test_merged_hook_is_inert_when_the_script_is_absent(tmp_path: Path) -> None:
+    """THE #1107 REGRESSION. A hook registered by a newer image must not error on
+    a container whose image lacks the script."""
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    hook = home / ".claude" / "scripts" / "hooks" / "workflow" / "new-in-this-release.sh"
+    hook.parent.mkdir(parents=True)
+    hook.write_text("#!/bin/sh\nexit 0\n")
+    hook.chmod(0o755)
+    (home / ".claude" / "settings.json").write_text(J.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [{"type": "command", "command": str(hook)}]}]}}))
+
+    ws = tmp_path / "ws"; ws.mkdir()
+    assert _run_cfgdir(home, cfgdir, ws).returncode == 0
+
+    stored = dict(_hook_commands_raw(J.loads((cfgdir / "settings.json").read_text()),
+                                     "SessionStart"))["startup"]
+
+    # Now BE the older container: same shared settings, script not in this image.
+    hook.unlink()
+    proc = _run_hook_command(stored)
+    assert proc.returncode == 0, (
+        "a hook the running image does not ship must be inert, not an error: "
+        f"rc={proc.returncode} stderr={proc.stderr!r}"
+    )
+    assert "not found" not in (proc.stderr or "").lower(), proc.stderr
+
+
+def test_the_guard_does_not_disable_the_hook_where_it_exists(tmp_path: Path) -> None:
+    """The other half, and the one that makes the guard worth having rather than
+    merely quiet: where the script IS present it must still run. A guard that
+    silenced the beacon everywhere would pass the test above and gut #1086."""
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    marker = tmp_path / "fired"
+    hook = home / ".claude" / "scripts" / "hooks" / "workflow" / "beacon.sh"
+    hook.parent.mkdir(parents=True)
+    hook.write_text(f"#!/bin/sh\ntouch {marker}\nexit 0\n")
+    hook.chmod(0o755)
+    (home / ".claude" / "settings.json").write_text(J.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [{"type": "command", "command": str(hook)}]}]}}))
+
+    ws = tmp_path / "ws"; ws.mkdir()
+    assert _run_cfgdir(home, cfgdir, ws).returncode == 0
+    stored = dict(_hook_commands_raw(J.loads((cfgdir / "settings.json").read_text()),
+                                     "SessionStart"))["startup"]
+    assert _run_hook_command(stored).returncode == 0
+    assert marker.exists(), "the guard swallowed a hook whose script is present"
+
+
+def test_an_existing_bare_entry_is_upgraded_in_place(tmp_path: Path) -> None:
+    """Guarding only NEW writes would leave the entry that caused #1107 sitting
+    bare in the shared file, still breaking every older container. The fix has to
+    reach the state that is already broken."""
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    (cfgdir / "settings.json").write_text(J.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [{"type": "command", "command": "/bin/true"}]}]}}))
+
+    ws = tmp_path / "ws"; ws.mkdir()
+    proc = _run_cfgdir(home, cfgdir, ws)
+    assert proc.returncode == 0, proc.stderr
+
+    raw = _hook_commands_raw(J.loads((cfgdir / "settings.json").read_text()), "SessionStart")
+    assert len(raw) == 1, f"the upgrade duplicated the entry instead of rewriting it: {raw}"
+    assert raw[0][1].startswith("[ -x /bin/true ]"), (
+        f"the pre-existing bare entry was left unguarded: {raw[0][1]!r}"
+    )
+
+
+def test_a_bare_entry_does_not_get_a_guarded_duplicate(tmp_path: Path) -> None:
+    """Dedup must see through the guard. The destination now holds guarded
+    spellings while the image ships bare ones; a key that did not unguard would
+    call them different hooks and register both — the duplicate-execution bug
+    #1094 is about, one layer out."""
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    ws = tmp_path / "ws"; ws.mkdir()
+    assert _run_cfgdir(home, cfgdir, ws).returncode == 0
+    first = _hook_commands_raw(J.loads((cfgdir / "settings.json").read_text()), "SessionStart")
+    assert _run_cfgdir(home, cfgdir, ws).returncode == 0
+    second = _hook_commands_raw(J.loads((cfgdir / "settings.json").read_text()), "SessionStart")
+    assert first == second, f"a second boot changed the stored wiring: {first} -> {second}"
+    assert len([c for _, c in second if "/bin/true" in c]) == 1, (
+        f"the bare and guarded spellings were registered as two hooks: {second}"
+    )
+
+
+def test_non_path_commands_are_left_alone(tmp_path: Path) -> None:
+    """The shared file also carries inline shell and bare builtins. A `-x` test on
+    those would be wrong, not merely useless."""
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    (home / ".claude" / "settings.json").write_text(J.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [{"type": "command", "command": "echo hi"}]}]}}))
+    ws = tmp_path / "ws"; ws.mkdir()
+    assert _run_cfgdir(home, cfgdir, ws).returncode == 0
+    raw = dict(_hook_commands_raw(J.loads((cfgdir / "settings.json").read_text()),
+                                  "SessionStart"))
+    assert raw["startup"] == "echo hi", f"a non-path command was wrapped: {raw['startup']!r}"
+
+
+def _append_like_an_older_image(cfgdir: Path, event: str, matcher: str, cmd: str) -> None:
+    """Reproduce what an N-1 image's sync_kit_hooks does to this file.
+
+    Its ``key()`` predates the guard, so a guarded entry keys on head ``[``, its own
+    bare spelling looks absent, and it appends it. That is not a hypothetical: every
+    image built between #1086 and #1107 behaves this way, and #1107 exists because
+    the fleet runs several digests at once.
+    """
+    import json as J
+
+    d = J.loads((cfgdir / "settings.json").read_text())
+    d.setdefault("hooks", {}).setdefault(event, []).append(
+        {"matcher": matcher, "hooks": [{"type": "command", "command": cmd}]})
+    (cfgdir / "settings.json").write_text(J.dumps(d))
+
+
+def test_an_older_image_readding_the_bare_form_converges(tmp_path: Path) -> None:
+    """THE CONVERGENCE PROPERTY. Alternating boots between image versions must not
+    grow the hook list.
+
+    Without a prune: N writes [G]; N-1 appends bare -> [G, B]; N rewrites B in
+    place -> [G, G]; N-1 appends again -> [G, G, B]. Unbounded, and #1094 measured
+    that duplicate registrations really do double-fire.
+    """
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    ws = tmp_path / "ws"; ws.mkdir()
+
+    assert _run_cfgdir(home, cfgdir, ws).returncode == 0
+    for _ in range(3):
+        _append_like_an_older_image(cfgdir, "SessionStart", "startup", "/bin/true")
+        assert _run_cfgdir(home, cfgdir, ws).returncode == 0
+
+    raw = _hook_commands_raw(J.loads((cfgdir / "settings.json").read_text()), "SessionStart")
+    hits = [c for _, c in raw if "/bin/true" in c]
+    assert len(hits) == 1, f"the hook accumulated {len(hits)} registrations: {raw}"
+    assert hits[0].startswith("[ -x /bin/true ]"), hits[0]
+
+
+def test_the_prune_leaves_host_only_hooks_alone(tmp_path: Path) -> None:
+    """The prune must be scoped to hooks THIS image ships. Collapsing entries the
+    merge does not own would clobber aoe's own wiring and break its TUI — the
+    thing this function has always refused to do."""
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    (cfgdir / "settings.json").write_text(J.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [
+            {"type": "command", "command": "/bin/echo aoe-own"},
+            {"type": "command", "command": "/bin/echo aoe-own"},
+        ]}]}}))
+    ws = tmp_path / "ws"; ws.mkdir()
+    assert _run_cfgdir(home, cfgdir, ws).returncode == 0
+    raw = _hook_commands_raw(J.loads((cfgdir / "settings.json").read_text()), "SessionStart")
+    assert len([c for _, c in raw if "aoe-own" in c]) == 2, (
+        f"the prune reached host-only entries it does not own: {raw}"
+    )
+
+
+def test_the_build_defect_check_is_live_on_every_boot(tmp_path: Path) -> None:
+    """It is the ONE compensating assertion for making absence inert, so it cannot
+    be a one-shot. Computed inside the add-if-absent loop it would fire only
+    against a virgin config dir and go silent forever after — on every real host
+    the kit's hooks are already registered in this long-lived shared file."""
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    ghost = home / ".claude" / "scripts" / "hooks" / "workflow" / "never-built.sh"
+    (home / ".claude" / "settings.json").write_text(J.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [{"type": "command", "command": str(ghost)}]}]}}))
+    ws = tmp_path / "ws"; ws.mkdir()
+
+    assert "declares a hook it does not ship" in _run_cfgdir(home, cfgdir, ws).stderr
+    second = _run_cfgdir(home, cfgdir, ws)
+    assert second.returncode == 0, second.stderr
+    assert "declares a hook it does not ship" in second.stderr, (
+        "the build-defect check went silent on the second boot — which is every "
+        f"boot on a real host: {second.stderr}"
+    )
+
+
+def test_a_shipped_but_non_executable_hook_is_reported(tmp_path: Path) -> None:
+    """The guard tests `-x`, so a hook that ships without its exec bit is skipped
+    at runtime exactly like a missing one. Before #1107 it failed loudly with
+    'Permission denied'; checking only existence would trade that for silence."""
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    hook = home / ".claude" / "scripts" / "hooks" / "workflow" / "not-executable.sh"
+    hook.parent.mkdir(parents=True)
+    hook.write_text("#!/bin/sh\nexit 0\n")
+    hook.chmod(0o644)
+    (home / ".claude" / "settings.json").write_text(J.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [{"type": "command", "command": str(hook)}]}]}}))
+    ws = tmp_path / "ws"; ws.mkdir()
+    proc = _run_cfgdir(home, cfgdir, ws)
+    assert proc.returncode == 0, proc.stderr
+    assert "not executable" in proc.stderr, (
+        f"a shipped-but-non-executable hook was silently inert: {proc.stderr}"
+    )
+
+
+def test_a_head_with_a_shell_metacharacter_is_not_guarded(tmp_path: Path) -> None:
+    """The head is spliced RAW into the test, so `[ -x /p/x.sh;` loses its `]`,
+    the shell errors, and the trailing `|| exit 0` swallows a hook whose script is
+    present. Refusing to wrap costs the #1107 protection for one odd hook;
+    wrapping something unparseable silently disables a working one."""
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    cmd = "/bin/true;echo x"
+    (home / ".claude" / "settings.json").write_text(J.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [{"type": "command", "command": cmd}]}]}}))
+    ws = tmp_path / "ws"; ws.mkdir()
+    assert _run_cfgdir(home, cfgdir, ws).returncode == 0
+    raw = dict(_hook_commands_raw(J.loads((cfgdir / "settings.json").read_text()),
+                                  "SessionStart"))
+    assert raw["startup"] == cmd, f"a metacharacter head was wrapped: {raw['startup']!r}"
+
+
+def test_a_quoted_path_is_not_guarded(tmp_path: Path) -> None:
+    """A quoted command head is not a bare path, so it must be left alone.
+
+    The guard picks its test target by splitting on the first space — which is
+    exactly how the shell that runs the hook parses it, so an UNQUOTED path with a
+    space is already broken identically with or without the guard. A QUOTED one is
+    not broken, and guessing a target from it would produce `[ -x "/path ]` and
+    silently disable a hook that works. Left verbatim instead.
+    """
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    cmd = '"/opt/dir with space/hook.sh"'
+    (home / ".claude" / "settings.json").write_text(J.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [{"type": "command", "command": cmd}]}]}}))
+    ws = tmp_path / "ws"; ws.mkdir()
+    assert _run_cfgdir(home, cfgdir, ws).returncode == 0
+    raw = dict(_hook_commands_raw(J.loads((cfgdir / "settings.json").read_text()),
+                                  "SessionStart"))
+    assert raw["startup"] == cmd, f"a quoted path was wrapped: {raw['startup']!r}"
+
+
+def test_an_image_declaring_a_hook_it_does_not_ship_is_reported(tmp_path: Path) -> None:
+    """The one case the guard could hide. Absence becomes inert EVERYWHERE, so a
+    build defect — this image declaring a hook it never shipped — would be
+    absorbed silently. It is caught against the image that claims the hook."""
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    ghost = home / ".claude" / "scripts" / "hooks" / "workflow" / "never-built.sh"
+    (home / ".claude" / "settings.json").write_text(J.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [{"type": "command", "command": str(ghost)}]}]}}))
+    ws = tmp_path / "ws"; ws.mkdir()
+    proc = _run_cfgdir(home, cfgdir, ws)
+    assert proc.returncode == 0, proc.stderr
+    assert "declares a hook it does not ship" in proc.stderr, (
+        f"a hook the image declares but does not ship went unreported: {proc.stderr}"
+    )
+
+
+def test_validate_still_flags_an_unguarded_missing_hook(tmp_path: Path) -> None:
+    """The guard must not make the validator blind. An UNGUARDED hook that cannot
+    resolve is still a real defect — trading a noisy failure for a silent one is
+    the worse of the two, and preflight check 7 greps for exactly this line."""
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    # Host-only entry: not something this image ships, so the merge leaves it bare.
+    (cfgdir / "settings.json").write_text(J.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [
+            {"type": "command", "command": "/nonexistent/host/only/hook.sh"}]}]}}))
+    ws = tmp_path / "ws"; ws.mkdir()
+    proc = _run_cfgdir(home, cfgdir, ws)
+    assert proc.returncode == 0, proc.stderr
+    assert "does not exist in this container" in proc.stderr, (
+        f"an unresolvable unguarded hook went unreported: {proc.stderr}"
+    )
+
+
+def test_validate_is_quiet_about_a_guarded_missing_hook(tmp_path: Path) -> None:
+    """A guarded path is inert by construction, so reporting it would put a
+    warning on every boot of every older container — the 'warning on every boot'
+    erosion #1078 closed, reintroduced one layer out."""
+    import json as J
+
+    home, cfgdir = _home_with_cfgdir(tmp_path)
+    (cfgdir / "settings.json").write_text(J.dumps({"hooks": {"SessionStart": [
+        {"matcher": "startup", "hooks": [{"type": "command", "command":
+            "[ -x /nonexistent/newer/image/hook.sh ] || exit 0; /nonexistent/newer/image/hook.sh"}]}]}}))
+    ws = tmp_path / "ws"; ws.mkdir()
+    proc = _run_cfgdir(home, cfgdir, ws)
+    assert proc.returncode == 0, proc.stderr
+    assert "/nonexistent/newer/image/hook.sh" not in proc.stderr, (
+        f"a deliberately-inert guarded hook was warned about: {proc.stderr}"
+    )
 
 
 def test_same_command_under_a_different_matcher_is_not_dropped(tmp_path: Path) -> None:

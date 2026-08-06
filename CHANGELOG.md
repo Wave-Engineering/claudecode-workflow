@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Merged kit hooks no longer break older-image containers (#1107).** `sync_kit_hooks` (#1086) merges the image's hook wiring into `$CLAUDE_CONFIG_DIR/settings.json` — one file shared by every container on the host, **across image versions** — while the hook scripts are image-versioned. A hook new in release N was therefore registered for containers running N-1, and every SessionStart there failed with a missing-hook error. Measured live: 5 of 7 running agents were on older digests referencing `kit-hooks-alive.sh`, which their images do not contain.
+
+  The beacon is *designed* to be absent from older images — that is how #1086's preflight was proven able to fail red-first — so writing it into shared state guaranteed the exact failure it exists to detect, in the wrong place.
+
+  Path-rooted commands are now stored self-guarding, `[ -x <path> ] || exit 0; <path>`, the same convention aoe already uses for its own hooks in that file. Absence becomes inert instead of fatal, and **the hook still runs wherever the script is present** — both halves verified against live containers, not just fixtures. Dedup keys on the *unguarded* command, so the guarded and bare spellings of one hook do not register as two (the #1094 duplicate-execution shape, one layer out). Only conservatively-shaped heads are wrapped: the head is spliced raw into the test, so a metacharacter in it would produce `[ -x /p/x.sh` with no closing `]`, and the trailing `|| exit 0` would then silently swallow a hook whose script is present.
+
+  **Pre-existing bare entries are upgraded in place and duplicates are pruned**, which is what makes the shared file *converge* rather than merely improve. An older image's `sync_kit_hooks` has no notion of the wrapper: it sees head `[`, judges its own bare spelling absent, and appends it — so without a prune the next new-image boot rewrites that copy into a second guarded one and never removes it, and alternating boots between digests grow the list without bound. Mixed digests is the premise of this bug, not an edge case. The prune is scoped to hooks the image ships, so aoe's own wiring is never touched.
+
+  `validate_hook_paths` unwraps the guard rather than skipping it — going blind would trade a noisy failure for a silent one — and stays loud for **unguarded** misses while treating a guarded miss as the declared-inert case it is. The cases a guard could hide are caught in `sync_kit_hooks` against the image that claims the hook: one it never shipped, and one shipped without its exec bit (the guard tests `-x`, so that is skipped exactly like a missing file, where it previously failed loudly with `Permission denied`). That check runs over the image's declared hook set on **every** boot rather than inside the add-if-absent loop, where it would have fired once against a virgin config dir and stayed silent forever after.
+
+  Caught by the operator on a live restart and by no test: the #1086 suite drove the merge against fake homes where the script always existed, so the cross-version case was not representable. It is now — the tests delete the script after merging, which is precisely what an older container sees.
+
 ### Added
 
 - **Containerised agents can build, run and scan container images (#1108).** `podman` is baked into the image, closing the gap that blocked `blueshift-kb#8` (swap a runtime image to distroless, shedding 23 unfixable CVEs, 4 CRITICAL) — a containerised agent could not verify it at all. The near-miss is the reason this is `Added` and not deferred again: the agent that hit the gap proposed putting a container-generated key in the operator's `authorized_keys` so it could build on the host. **A missing capability does not just block work, it generates pressure to solve the wrong problem.**

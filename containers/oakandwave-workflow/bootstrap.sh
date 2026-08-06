@@ -304,7 +304,7 @@ sync_kit_hooks() {
 	local out
 	if ! out="$(
 		OAW_SRC="$OAW_SETTINGS_JSON" OAW_DST="$OAW_EFFECTIVE_SETTINGS" python3 - <<-'PY' 2>&1
-			import fcntl, json, os
+			import fcntl, json, os, re
 
 			src, dst = os.environ["OAW_SRC"], os.environ["OAW_DST"]
 			with open(src) as fh:
@@ -312,6 +312,63 @@ sync_kit_hooks() {
 			if not want:
 			    print("no-kit-hooks")
 			    raise SystemExit(0)
+
+			# The destination is shared by every container on the host, ACROSS IMAGE
+			# VERSIONS, while the hook scripts are image-versioned. So a hook that is
+			# new in release N gets registered for containers running N-1, which do not
+			# have the script, and every SessionStart there fails with a missing-hook
+			# error (#1107). Observed live: kit-hooks-alive.sh, new in #1086, broke
+			# restarts on older-digest containers — and the beacon is *designed* to be
+			# absent from older images, so writing it into shared state guaranteed the
+			# very failure it exists to detect, in the wrong place.
+			#
+			# So what we write must be inert where the script is absent. Same convention
+			# aoe already uses for its own hooks in this same file
+			# (`[ -n "$AOE_INSTANCE_ID" ] || exit 0`).
+			GUARD_RE = re.compile(r"^\[ -x (?P<path>\S+) \] \|\| exit 0; (?P<cmd>.*)$", re.S)
+
+			def unguard(cmd):
+			    """The underlying command, with any guard this function added removed.
+
+			    Everything keys and validates on THIS, never the wrapped string — a
+			    guarded and an unguarded spelling of one hook are one hook, which is what
+			    keeps a re-merge from registering a second copy.
+			    """
+			    m = GUARD_RE.match(cmd.strip())
+			    return m.group("cmd") if m else cmd
+
+			# Only heads of this shape are wrapped. The head is spliced RAW into the
+			# test, so anything carrying a shell metacharacter would produce a broken
+			# test — `[ -x /p/x.sh;` is missing its `]`, the shell errors, and the
+			# trailing `|| exit 0` then swallows a hook whose script is present. And a
+			# head containing whitespace would not round-trip through GUARD_RE's `\S+`,
+			# so unguard() would stop recognising this function's own output and every
+			# boot would re-append the same command as new. Conservative by intent:
+			# refusing to wrap costs the #1107 protection for one odd hook, while
+			# wrapping something unparseable silently disables a working one.
+			SAFE_HEAD = re.compile(r"^[~$]?[\w{}$./:+-]+$")
+
+			def guard(cmd):
+			    """Wrap so a missing script is a silent no-op instead of a startup error.
+
+			    Only path-rooted commands are wrapped. The shared file also carries inline
+			    shell (`state="${CLAUDE_PROJECT_DIR:-.}/…"`), bare builtins (`echo`) and
+			    PATH-resolved names — none of which are ours to judge, and a `-x` test on
+			    them would be wrong rather than merely useless.
+			    """
+			    bare = unguard(cmd).strip()
+			    head = bare.partition(" ")[0]
+			    if not head.startswith(("/", "~", "$")) or not SAFE_HEAD.match(head):
+			        return bare
+			    return f"[ -x {head} ] || exit 0; {bare}"
+
+			def script_of(cmd):
+			    """Expanded absolute path the command runs, or None if it is not a path."""
+			    head = unguard(cmd).strip().partition(" ")[0]
+			    if not head.startswith(("/", "~", "$")) or not SAFE_HEAD.match(head):
+			        return None
+			    cand = os.path.expanduser(os.path.expandvars(head))
+			    return cand if cand.startswith("/") else None
 
 			def key(matcher, cmd):
 			    """Dedup key: two commands that RESOLVE to the same script are one hook.
@@ -325,10 +382,14 @@ sync_kit_hooks() {
 			    duplicate execution is not preserving the release's wiring, it is
 			    corrupting it. Measured live before this guard existed.
 
-			    Expansion is for the KEY only; what gets written is always the image's
-			    own string, byte for byte.
+			    Unguarding first is the same rule one layer out: after #1107 the
+			    destination holds guarded spellings while the image ships bare ones, and
+			    keying on the wrapper would call them different hooks and register the
+			    bare form alongside the guarded one — the duplicate-execution bug again.
+
+			    Expansion is for the KEY only.
 			    """
-			    head, sep, tail = cmd.strip().partition(" ")
+			    head, sep, tail = unguard(cmd).strip().partition(" ")
 			    return matcher, os.path.expanduser(os.path.expandvars(head)) + sep + tail
 
 			def commands(group):
@@ -353,6 +414,84 @@ sync_kit_hooks() {
 			        raise SystemExit("__ERR__ effective settings has a non-object 'hooks'")
 
 			    added = []
+			    upgraded = 0
+			    unresolved = []
+
+			    # DOES THIS IMAGE SHIP WHAT IT DECLARES? Computed over `want` in its own
+			    # pass, deliberately NOT inside the add-if-absent loop below. Placed
+			    # there it would only ever run for hooks being newly registered — and on
+			    # any real host the kit's hooks are already in this long-lived shared
+			    # file, so it would fire once against a virgin config dir and stay silent
+			    # forever after. This is the ONE compensating assertion for making
+			    # absence inert everywhere, so it has to be live on every boot.
+			    #
+			    # Tests X_OK, not existence, because the guard tests `-x`: a hook that
+			    # ships but lost its exec bit is skipped at runtime by the guard, and
+			    # before #1107 it failed loudly with "Permission denied". Checking only
+			    # existence would trade that loud failure for total silence.
+			    for groups in want.values():
+			        for g in groups or []:
+			            for m, h in commands(g):
+			                s = script_of(h["command"])
+			                if s is None:
+			                    continue
+			                if not os.path.exists(s):
+			                    unresolved.append(("missing", s))
+			                elif not os.access(s, os.X_OK):
+			                    unresolved.append(("noexec", s))
+
+			    # UPGRADE WHAT IS ALREADY THERE, AND COLLAPSE DUPLICATES. Guarding only
+			    # newly-added hooks would leave the entry that caused #1107 sitting bare
+			    # in the shared file, still breaking every older container — the fix has
+			    # to reach the state that is already broken, not just future writes.
+			    #
+			    # The prune is not tidiness, it is required for convergence. This file is
+			    # shared across image VERSIONS, and an N-1 image's key() has no notion of
+			    # the wrapper: it sees head `[`, decides its own bare spelling is absent,
+			    # and appends it. Without a prune the next N boot rewrites that bare copy
+			    # into a SECOND guarded one and never removes it, so alternating boots
+			    # grow the list without bound — and #1094 measured that duplicated
+			    # registrations really do double-fire. Keep the first entry per
+			    # (event, key); drop the rest.
+			    #
+			    # Scoped to hooks THIS image ships: those are the ones the merge owns.
+			    # Host-only entries (aoe's own) are left alone, exactly as this function
+			    # has always done.
+			    ours = {key(m, h["command"])
+			            for groups in want.values()
+			            for g in (groups or [])
+			            for m, h in commands(g)}
+			    for event, dst_groups in list(have.items()):
+			        if not isinstance(dst_groups, list):
+			            continue
+			        seen = set()
+			        for g in dst_groups:
+			            if not isinstance(g, dict) or not isinstance(g.get("hooks"), list):
+			                continue
+			            matcher = g.get("matcher") or ""
+			            keep = []
+			            for h in g["hooks"]:
+			                if not (isinstance(h, dict) and isinstance(h.get("command"), str)):
+			                    keep.append(h)          # junk entry, not ours to judge
+			                    continue
+			                k = key(matcher, h["command"])
+			                if k not in ours:
+			                    keep.append(h)          # host-only — never touched
+			                    continue
+			                if k in seen:
+			                    upgraded += 1           # a duplicate collapsed
+			                    continue
+			                seen.add(k)
+			                guarded = guard(h["command"])
+			                if guarded != h["command"]:
+			                    h["command"] = guarded
+			                    upgraded += 1
+			                keep.append(h)
+			            g["hooks"] = keep
+			        # A group emptied by the prune would otherwise linger as {"hooks": []}
+			        have[event] = [g for g in dst_groups
+			                       if not (isinstance(g, dict) and g.get("hooks") == [])]
+
 			    for event, groups in want.items():
 			        dst_groups = have.setdefault(event, [])
 			        if not isinstance(dst_groups, list):
@@ -373,6 +512,7 @@ sync_kit_hooks() {
 			                # Add to `present` as we go, so a source group that ships the
 			                # same script twice under one matcher registers it once.
 			                present.add(k)
+			                h = dict(h, command=guard(h["command"]))
 			                missing.append(h)
 			            if not missing:
 			                continue
@@ -384,9 +524,15 @@ sync_kit_hooks() {
 			            # (… or ["?"]) — a hook whose command is the empty string is
 			            # junk, but IndexError here would abort the whole merge and
 			            # take every other event's wiring down with it.
-			            added += [f"{event}:{(h['command'].split() or ['?'])[0]}" for h in missing]
+			            # UNGUARD for the label: the stored command now starts with the
+			            # `[` of the guard, so reporting the raw head would name every
+			            # single hook "[".
+			            added += [f"{event}:{(unguard(h['command']).split() or ['?'])[0]}" for h in missing]
 
-			    if added:
+			    # `upgraded` counts rewrites of entries that were ALREADY present, which
+			    # add nothing to `added` — gating the write on `added` alone would compute
+			    # the #1107 fix and then not save it.
+			    if added or upgraded:
 			        # RECOVERY COPY before mutating, and an IN-PLACE write after — both
 			        # inherited from sync_kit_registrations deliberately. A tmp+rename would
 			        # be atomic against a torn write, but it mints a new inode, and this
@@ -403,19 +549,45 @@ sync_kit_hooks() {
 			        fh.seek(0)
 			        fh.write(data)
 			        fh.truncate()
-			print(",".join(added) if added else "already-present")
+			# Status on the FIRST line; anything after it is detail the shell greps.
+			# Keeping status first means the `case` below still matches on one token.
+			status = ",".join(added) if added else (
+			    f"guarded-{upgraded}" if upgraded else "already-present")
+			print(status)
+			for kind, s in sorted(set(unresolved)):
+			    print(f"__UNRESOLVED__ {kind} {s}")
 		PY
 	)"; then
 		warn "hooks: could not merge kit hook wiring into $OAW_EFFECTIVE_SETTINGS ($out)"
 		return 0
 	fi
-	case "$out" in
+	# THIS image declaring a hook it does not ship — or shipping one it forgot to
+	# make executable — is a build defect, and the #1107 guard would otherwise
+	# absorb it silently: the guard makes absence inert EVERYWHERE, so the cases
+	# where absence is genuinely wrong have to be said out loud here, against the
+	# image that claims the hook. Both are reported because the guard tests `-x`,
+	# so a present-but-non-executable script is skipped exactly like a missing one
+	# (before #1107 it failed loudly with "Permission denied").
+	local u rest
+	while IFS= read -r u; do
+		[[ "$u" == __UNRESOLVED__* ]] || continue
+		rest="${u#__UNRESOLVED__ }"
+		case "$rest" in
+		missing\ *) warn "hooks: this image declares a hook it does not ship: ${rest#missing }" ;;
+		noexec\ *) warn "hooks: this image ships a hook that is not executable (the guard will skip it): ${rest#noexec }" ;;
+		esac
+	done <<<"$out"
+	# First line only — `$out` may carry __UNRESOLVED__ detail lines after it, and
+	# matching against the whole blob would send every status to the `*` arm.
+	local status="${out%%$'\n'*}"
+	case "$status" in
 	already-present) info "hooks: kit wiring already present in $OAW_EFFECTIVE_SETTINGS" ;;
 	no-kit-hooks) warn "hooks: image settings.json declares no hooks — nothing to merge" ;;
+	guarded-*) info "hooks: kit wiring already present; guarded ${status#guarded-} existing entry/entries against older-image containers (#1107)" ;;
 	# No __ERR__ arm: `raise SystemExit("__ERR__ …")` exits 1, so those land in the
 	# `if ! out=` branch above with the message already in $out. An arm here would
 	# be unreachable — the kind of handler that reads as coverage and is never run.
-	*) info "hooks: merged kit wiring into the CLI's settings: $out" ;;
+	*) info "hooks: merged kit wiring into the CLI's settings: $status" ;;
 	esac
 	return 0
 }
@@ -1057,15 +1229,35 @@ validate_hook_paths() {
 
 			collect(d.get("hooks", {}))
 
+			# A `[ -x <path> ] || exit 0;` prefix means "absence is EXPECTED here"
+			# (#1107): the shared settings file is read by containers on several image
+			# versions, and a hook new in release N is absent from N-1 by construction.
+			# Two things follow, and both matter:
+			#
+			#   1. UNWRAP rather than skip. The leading-token regex below does not match
+			#      a guarded command at all, so leaving the wrapper on would make every
+			#      guarded hook unjudgeable — trading a noisy failure for a silent one,
+			#      which is the worse of the two.
+			#   2. Do not report a guarded path that is missing. It is inert by
+			#      construction, so warning would put a line on every boot of every
+			#      older container — the "warning on every boot" erosion #1078 closed.
+			#      An UNGUARDED hook that cannot resolve is still a real defect and is
+			#      still reported, which is what keeps this validator honest.
+			#
+			# The case a guard could hide — an image declaring a hook it does not ship —
+			# is caught in sync_kit_hooks, against the image that claims it.
+			GUARD_RE = re.compile(r"^\[ -x (?P<path>\S+) \] \|\| exit 0; (?P<cmd>.*)$", re.S)
+
 			bad = []
 			for cmd in cmds:
-			    m = re.match(r"\s*([~$]?[\w{}/.\-]*/[^\s;|&]+)", cmd)
+			    g = GUARD_RE.match(cmd.strip())
+			    m = re.match(r"\s*([~$]?[\w{}/.\-]*/[^\s;|&]+)", g.group("cmd") if g else cmd)
 			    if not m:
 			        continue
 			    cand = os.path.expanduser(os.path.expandvars(m.group(1)))
 			    if not cand.startswith("/"):
 			        continue
-			    if not os.path.exists(cand):
+			    if not os.path.exists(cand) and not g:
 			        bad.append(cand)
 			print("\n".join(sorted(set(bad))))
 		PY
