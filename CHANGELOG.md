@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`wtf-post-tool-use.sh` was baked into the image twice, and now cannot be (#1094).** The image's `settings.json` registered it under both `~/.local/share/…` (from `settings.template.json`) and `/home/ubuntu/.local/share/…` (added afterwards by wtf-server's installer, whose idempotency check compared raw strings). Same file, so the hook **ran twice on every tool use** — for weeks, because nothing ever asked the question.
+
+  The source is fixed in mcp-server-wtf#34, but fixing one installer does not close the class: every MCP server's `install-remote.sh` writes hook registrations into that same file during the build, each with its own notion of "already present". So the build now asserts the invariant with `scripts/ci/assert-no-duplicate-hooks.sh` — no two commands under one matcher may **resolve** to the same script. It runs last, after `./install` and every MCP installer have had their say, so it checks the state that actually ships rather than the template's intent.
+
+  Identity is the script, not the spelling: `~/`, `$HOME/` and `${HOME}/` are expanded, arguments ignored, and the `[ -x … ] || exit 0;` guard (#1107) stripped — keying on its leading `[` would call a guarded and a bare spelling two different hooks and report all-clear, which is this bug re-admitted on every container the fleet actually runs. A settings file declaring **no** hooks exits non-zero rather than passing, because an empty denominator is the same shape as the original defect: a question nobody asked.
+
 - **Merged kit hooks no longer break older-image containers (#1107).** `sync_kit_hooks` (#1086) merges the image's hook wiring into `$CLAUDE_CONFIG_DIR/settings.json` — one file shared by every container on the host, **across image versions** — while the hook scripts are image-versioned. A hook new in release N was therefore registered for containers running N-1, and every SessionStart there failed with a missing-hook error. Measured live: 5 of 7 running agents were on older digests referencing `kit-hooks-alive.sh`, which their images do not contain.
 
   The beacon is *designed* to be absent from older images — that is how #1086's preflight was proven able to fail red-first — so writing it into shared state guaranteed the exact failure it exists to detect, in the wrong place.

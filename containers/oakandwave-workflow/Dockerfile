@@ -382,6 +382,26 @@ RUN set -eux; \
 		/usr/local/bin/claude-real --version \
 		&& OAW_SKIP_BOOTSTRAP=1 /usr/local/bin/claude --version'; \
 	"${KIT_SRC}/scripts/ci/assert-no-claude-bypass.sh"
+
+# No hook may be registered twice (#1094). The baked settings.json carried
+# wtf-post-tool-use.sh under BOTH `~/.local/share/…` (from settings.template.json)
+# and `/home/ubuntu/.local/share/…` (added afterwards by wtf-server's installer,
+# whose idempotency check compared raw strings) — same file, so it fired twice on
+# every tool use, for weeks, because nothing asked.
+#
+# Runs LAST, after `./install` and every MCP server's install-remote.sh have had
+# their say: this asserts the state that actually ships, not the template's
+# intent. Fixing the one installer that caused it (mcp-server-wtf#34) does not
+# close the class — every MCP installer writes into this same file with its own
+# notion of "already present".
+#
+# The settings path is explicit rather than left to `~`. Note that $HOME here is
+# /home/ubuntu, NOT /root: the `ENV HOME` above persists across `USER root`
+# (see the note at the USER ubuntu / ENV HOME lines). That is exactly why the
+# script derives the home to expand `~` against from the FILE it is given rather
+# than from the environment — an assertion whose detection depends on an ambient
+# variable nobody asserts reports "no duplicates" the day that variable changes.
+RUN HOME=/home/ubuntu "${KIT_SRC}/scripts/ci/assert-no-duplicate-hooks.sh" /home/ubuntu/.claude/settings.json
 USER ubuntu
 
 # ENTRYPOINT/CMD inherited from the base (CMD ["sleep","infinity"]); aoe manages
