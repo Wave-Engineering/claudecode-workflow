@@ -228,10 +228,12 @@ this one — the toolbox holds the toolchain, the cache holds what the toolchain
 downloads. A cold `mvn` otherwise re-fetches the whole dependency tree every
 session.
 
-**Still out of scope, deliberately: a container builder.** Docker/Podman inside
-the container is a *privilege* decision (socket mount vs rootless podman vs
-"Dockerfile work happens on the host") with a real security surface, and it must
-not be solved as a side effect of a toolchain fix.
+**The container builder is not part of this layer — see §3.8.** It was carved out
+of the toolbox work deliberately, so that "which runtime can agents build with"
+was decided on its own evidence rather than as a side effect of a toolchain fix.
+That decision landed in #1108: `podman` is now baked into the image. The toolbox
+still holds only *language* toolchains, materialised on demand into the durable
+mount; the builder is a baked capability with a host prerequisite.
 
 ### 3.3 settings.json: one file, merged by us (#1086)
 
@@ -733,6 +735,61 @@ Verified behaviourally on the built image: a fresh container with no manual
 config, in an arbitrary workspace path, reaches a prompt 3/3; setting
 `OAW_NO_AUTO_TRUST=1` brings the trust dialog back, which is the positive control
 proving the mechanism is doing the work.
+
+### 3.8 The container builder — podman, and the one host requirement (#1108)
+
+Agents build, run and scan container images from inside their own sandbox. The
+motivating case was `blueshift-kb#8` (swap a runtime image to distroless, shedding
+23 unfixable CVEs), which a containerised agent could not verify at all.
+
+**Not a docker socket mount.** Over a socket, `docker build` executes on the *host*
+daemon, so the build context and every bind-mount path resolve to host paths the
+agent cannot see, and concurrent agents collide in one shared image namespace. It
+is broken for the job — that is the reason, independent of any trust argument.
+Agents are inside the trust boundary and the container is not a security boundary;
+the ONE driver for containerisation is install isolation (§1).
+
+**Podman runs as root inside the container.** That is the mode sysbox is built for:
+container-root maps to an unprivileged host uid (`uid_map: 0 165536 65536`), so
+"root" here is not host root. Rootless was attempted first and is *structurally*
+impossible: the kernel refuses an unprivileged procfs mount unless the parent
+`/proc` is fully visible, and sysbox-fs overlays `/proc` to virtualise it, so any
+Dockerfile carrying a `RUN` step dies on `mount proc to proc: Operation not
+permitted`. No subuid or storage tuning reaches that.
+
+**Elevation is scoped to podman alone**, via a `sudoers.d` rule for
+`/usr/bin/podman` plus a wrapper on PATH, so an agent's unqualified `podman ...`
+works without knowing about it. Deliberately not blanket sudo, and for a measured
+reason rather than caution: a root-written file on a bind mount surfaces as **uid 0
+on the host** — sysbox does not idmap it back to the operator — so general sudo
+would let agents strand root-owned files in the operator's own workspaces. This
+does not reduce parity: `docker run -v` on the host produced root-owned files the
+same way, because the host daemon ran as root.
+
+**Storage is `vfs`.** Podman falls back to fuse-overlayfs when it cannot use kernel
+overlayfs, and under sysbox that dies on `/proc/sys/kernel/overflowuid` — readable
+at the container's top level, `Input/output error` from the nested userns where
+fuse-overlayfs runs. `mount_program = ""` does not force kernel overlayfs; podman
+ignores it. `vfs` copies every layer, so it is slower and hungrier, but agent builds
+are small and the store lives in the container's own writable layer, so it cannot
+grow without bound on the host.
+
+**The host requirement, and why it is reported rather than asserted.** This needs
+docker's `default-runtime` set to `sysbox-runc`. That is *host daemon
+configuration*, which sits outside the "image digest IS the release" boundary (R-05),
+and `aoe` cannot pass `--runtime` per container — its `[sandbox]` schema has no such
+key, and `container_runtime` selects the *engine* (docker/podman), not the OCI
+runtime (agent-of-empires#3218). So `aoe-preflight.sh` **reports** the capability at
+`[INFO]` when the host cannot provide it, naming the reason, instead of failing. A
+red gate would punish every adopter for a capability they never asked for; a silent
+absence would be rediscovered by each agent mid-task, which is the failure mode that
+produced the near-miss recorded on #1108. `scripts/ci/container-builder-probe.sh`
+draws the distinction with exit codes: `3` the image is broken (ours), `4` the host
+cannot nest (declared), `5` no verdict (registry unreachable).
+
+The probe insists on a Dockerfile with a `RUN` step. A `COPY`-only build succeeds
+even where nesting is impossible, because nothing ever executes — a build-only probe
+reports health on a host that cannot run anything at all.
 
 ## 4. Boundaries and invariants
 
