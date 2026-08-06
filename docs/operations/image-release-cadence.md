@@ -103,15 +103,80 @@ policy cannot see the operator's profile pins and would eventually delete one ou
 from under a running fleet — the failure arriving at the *next container launch*,
 long after the prune, with nothing connecting the two.
 
-**Always enumerate the pins first:**
+### The retention policy (#1100)
+
+**Use `scripts/ci/registry-prune.sh`. Do not hand-roll a delete.** It computes the
+keep-set from what is *actually referenced*, never from tags:
+
+| kept | why |
+|---|---|
+| every digest pinned by an aoe profile | the fleet is running it |
+| whatever `:edge` / `:stable` / any **named** tag points at | it is addressable |
+| the last **5** image manifests (`--keep-recent`) | a rollback window |
+| each survivor's `.sig` / `.att` | a signature orphaned from its subject verifies nothing, and a subject without its signature cannot be verified |
+
+Everything else is clutter. It is **dry-run by default**; `--apply` is a separate,
+deliberate act, because deleting published artifacts is irreversible and
+outward-facing.
+
+Four refusals are the point of the tool, not politeness:
+
+- **No profile pins found → it refuses.** An empty protect-list makes every other
+  check vacuous, and "nothing is in use" is exactly the reading that deletes a
+  running fleet.
+- **An empty registry listing → it refuses**, rather than concluding there is
+  nothing to protect from an instrument that returned nothing.
+- **A pin missing from the listing → it refuses.** The listing is then incomplete
+  — truncated pagination, a permissions gap, the wrong package — and a partial
+  listing is dangerous in a specific way: things whose protecting reference was
+  not seen look unreferenced. *"I could not see it"* and *"it is not there"* are
+  different claims, and only one is safe to act on.
+- **A digest it cannot resolve is KEPT, not deleted**, and if `docker` is
+  unavailable it refuses outright — parentage it cannot establish is not a
+  licence to delete.
+
+### The pinned digest is an INDEX, not a leaf
+
+This is the #1100 trap one layer down, and the reason the tool resolves manifests
+at all. buildx pushes an **image index**; its children are the per-arch manifest
+and a provenance attestation, and GHCR lists **each child as its own version** —
+untagged, unpinned, matching no cosign tag. Measured on the current pin:
+
+```
+7896722d  (index — what the profile pins, tagged :edge)
+├── 001185d8  amd64 image manifest      ← its own GHCR version, untagged
+└── 73d1c4d5  attestation manifest      ← its own GHCR version, untagged
+```
+
+**Deleting a child makes the pinned image unpullable** — and, as ever here, not at
+prune time but at the next container launch. Of 248 versions, **104 are index
+children**. The first cut of this script protected only the index; the children
+survived by being recent enough to fall inside the rollback window, which is luck
+rather than protection. The keep-set is now a closure: every descendant of
+anything kept, plus every cosign artifact of anything kept, iterated to a fixed
+point.
+
+**Can automation see the pins? Only if it runs where the pins are.** The script
+reads `~/.config/agent-of-empires/profiles/*/config.toml`, which exists on the
+operator's host and nowhere else — so this must **not** be wired to a scheduled
+GitHub Action, which would run with an empty pin list and hit the refusal (or
+worse, be "fixed" by removing it). Retention stays a host-side operator step until
+releases carry registry tags.
+
+**The rollback window exists because releases are not identifiable in the
+registry.** The build pushes only `:edge` — no `:vX.Y.Z` — so v8.1.1's image is
+indistinguishable from any intermediate push. Until that changes, "the most recent
+N manifests" is the only honest anchor for history. Tagging releases in the
+registry would let retention key on something meaningful and is the real fix.
+
+**Always enumerate the pins first** (the script does this, and prints them):
 
 ```bash
 grep -h default_image ~/.config/agent-of-empires/profiles/*/config.toml
 ```
 
 Everything in that list must survive, plus the current `:edge`, plus whatever
-`:stable` points at, plus each survivor's `.sig` and `.att` artifacts (a signature
-orphaned from its subject verifies nothing).
+`:stable` points at, plus each survivor's `.sig` and `.att` artifacts.
 
 ### `:stable` does not exist yet
 
