@@ -276,6 +276,57 @@ It deliberately does **not** delete host-only hooks. The strong reading of
 "image-authoritative" would clobber aoe's wiring and break its TUI; stale
 host-only entries are instead reported by `validate_hook_paths` (§3.5.1).
 
+**Merged commands are written self-guarding, because this file is shared across
+image VERSIONS (#1107).** The destination is one file for every container on the
+host; the hook *scripts* are image-versioned. So a hook new in release N was
+registered for containers running N-1, which do not have the script, and every
+SessionStart there failed with a missing-hook error. `kit-hooks-alive.sh` hit this
+live — and the beacon is *designed* to be absent from older images, so writing it
+into shared state guaranteed the very failure it exists to detect, in the wrong
+place. Each path-rooted command is therefore stored as:
+
+```
+[ -x <path> ] || exit 0; <path>
+```
+
+the same convention aoe already uses for its own hooks in this file
+(`[ -n "$AOE_INSTANCE_ID" ] || exit 0`). Three consequences worth stating, because
+each one is a place this could have gone wrong:
+
+- **Dedup and validation key on the UNGUARDED command.** Otherwise the guarded
+  spelling in the destination and the bare one in the image read as two different
+  hooks, and the merge registers both — the duplicate-execution bug of #1094, one
+  layer out.
+- **Pre-existing bare entries are upgraded in place, and duplicates are pruned.**
+  Guarding only new writes would leave the entry that caused #1107 sitting bare,
+  still breaking every older container; a fix that does not reach the
+  already-broken state is not a fix. The prune is what makes the file *converge*
+  rather than merely improve: an N-1 image's `key()` has no notion of the wrapper,
+  so it sees head `[`, judges its own bare spelling absent, and appends it. Without
+  a prune the next N boot rewrites that copy into a second guarded one and never
+  removes it, so alternating boots between digests grow the list without bound —
+  and mixed digests is the premise of #1107, not an edge case. Keep the first entry
+  per `(event, key)`; drop the rest, scoped to hooks this image ships so aoe's own
+  wiring is never touched.
+- **Only conservatively-shaped heads are wrapped.** The head is spliced raw into
+  the test, so a metacharacter in it (`/p/x.sh;`) yields `[ -x /p/x.sh` with no
+  closing `]` — the shell errors and the trailing `|| exit 0` then swallows a hook
+  whose script is present. Refusing to wrap costs the #1107 protection for one odd
+  hook; wrapping something unparseable silently disables a working one.
+- **`validate_hook_paths` stays loud for *unguarded* misses and silent for guarded
+  ones.** A guarded path is inert by construction, so warning would put a line on
+  every boot of every older container. The cases a guard could hide — an image
+  declaring a hook it never shipped, or shipping one without its exec bit (the
+  guard tests `-x`, so that is skipped exactly like a missing file, where it used
+  to fail loudly with `Permission denied`) — are caught in `sync_kit_hooks`
+  instead, against the image that claims the hook, which is the only place the
+  answer is unambiguous. That check runs over the image's *declared* hook set on
+  every boot, deliberately **not** inside the add-if-absent loop: placed there it
+  would fire once against a virgin config dir and stay silent forever after, since
+  on any real host the kit's hooks are already registered in this long-lived shared
+  file. It is the one compensating assertion for making absence inert, so it has to
+  be live.
+
 The shared-knob seam R-03 wanted still exists — it is simply this same file,
 rather than a second one beside it.
 
