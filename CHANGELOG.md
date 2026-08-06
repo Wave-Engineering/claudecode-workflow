@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`registry-prune.sh` — clear the GHCR backlog without deleting what the fleet is running (#1100).** 248 versions had accumulated, 155 of them untagged. The standard GHCR recipe is "delete all untagged versions", and running it would have deleted the live fleet's image: a profile pins a **bare digest**, which is correct — it is what makes a release immutable (R-05/R-23) — but leaves no tag behind, so a pinned, actively-running image is indistinguishable from garbage to any tag-based rule. **Untagged does not mean unused**, and the failure is delayed and disconnected: nothing breaks at prune time, it breaks at the next container launch.
+
+  The keep-set is computed from what is actually referenced — profile pins, named tags, a rollback window of the last N manifests, and each survivor's cosign `.sig`/`.att` (a signature orphaned from its subject verifies nothing). **Dry-run by default**; `--apply` is a separate act. It **refuses** on an empty pin list or an empty registry listing rather than concluding there is nothing to protect — the two states in which it would propose deleting everything.
+
+  The rollback window exists because releases are not identifiable in the registry: the build pushes only `:edge`, never `:vX.Y.Z`, and `:stable` has never been created, so v8.1.1's image looks like any intermediate push. Retention is therefore host-side only — the pins live in `~/.config/agent-of-empires/`, so a scheduled Action would run with an empty pin list. Policy documented in `docs/operations/image-release-cadence.md`.
+
 - **Containerised agents have a voice again (#1084).** `vox` could not work inside a container — no provider config, and no player at all (none of `afplay`/`paplay`/`aplay`/`ffplay`, no `libpulse`) — so every agent moved into a container lost the audible interrupt, the thing that gets attention when nobody is watching a Discord channel.
 
   **Text is forwarded, not audio.** The container's provider spools the message onto a host-visible mount and a `systemd --user` path unit runs the operator's own already-configured `vox` on it. Mounting the host's PipeWire socket was considered and rejected: with no client libraries and no player in the image it would mean adding an entire audio stack to play one sentence, and coupling containers to the host's audio devices.
