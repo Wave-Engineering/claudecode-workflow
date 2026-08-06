@@ -112,7 +112,8 @@ keep-set from what is *actually referenced*, never from tags:
 |---|---|
 | every digest pinned by an aoe profile | the fleet is running it |
 | whatever `:edge` / `:stable` / any **named** tag points at | it is addressable |
-| the last **5** image manifests (`--keep-recent`) | a rollback window |
+| every `:vX.Y.Z`-tagged digest | **the release anchor** (#1122) |
+| the last **5** image manifests (`--keep-recent`) | a backstop for unreleased candidates |
 | each survivor's `.sig` / `.att` | a signature orphaned from its subject verifies nothing, and a subject without its signature cannot be verified |
 
 Everything else is clutter. It is **dry-run by default**; `--apply` is a separate,
@@ -163,11 +164,19 @@ GitHub Action, which would run with an empty pin list and hit the refusal (or
 worse, be "fixed" by removing it). Retention stays a host-side operator step until
 releases carry registry tags.
 
-**The rollback window exists because releases are not identifiable in the
-registry.** The build pushes only `:edge` — no `:vX.Y.Z` — so v8.1.1's image is
-indistinguishable from any intermediate push. Until that changes, "the most recent
-N manifests" is the only honest anchor for history. Tagging releases in the
-registry would let retention key on something meaningful and is the real fix.
+**Releases now carry `:vX.Y.Z` (#1122), and that is the anchor.** A tag-triggered
+build publishes the version tag alongside `:edge` at the same digest;
+`workflow_dispatch` gets `:edge` only, because a manual build is a candidate, not
+a release. `scripts/ci/backfill-release-tags.sh` gave the already-published
+releases their tags, reading the version from each image's own
+`org.opencontainers.image.version` label rather than a hand-typed list.
+
+`--keep-recent` is now a **backstop**, not the mechanism: it protects recent
+unreleased candidates, while releases are protected by name.
+
+**Executed 2026-08-06:** 248 versions → 40. Every release from v7.2.0 tagged,
+every index child and signature retained, `aoe-preflight.sh dogfood` green
+afterwards on a real container launch.
 
 **Always enumerate the pins first** (the script does this, and prints them):
 

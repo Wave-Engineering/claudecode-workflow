@@ -100,6 +100,15 @@ jobs:
         id: build
         env:
           OAKANDWAVE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          # Tag-triggered builds ALSO publish the version tag, at the same digest
+          # (#1122). Until this, a release left no trace in the registry — only
+          # `:edge` was ever pushed — so retention had no anchor and rollback
+          # meant reading OCI labels off candidate digests one at a time.
+          #
+          # workflow_dispatch deliberately gets no version tag: a manual build is
+          # a CANDIDATE, not a release, and #1063's whole point is that those are
+          # different acts.
+          EXTRA_TAGS: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: ./scripts/ci/build-oakandwave-image.sh
 
       - name: Sign (cosign) + SBOM (syft) the digest
