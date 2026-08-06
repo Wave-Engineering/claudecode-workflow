@@ -48,6 +48,81 @@ RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ca-certificates curl tar xz-utils unzip \
 	&& rm -rf /var/lib/apt/lists/*
 
+# --- Container builder: podman (#1108) ----------------------------------------
+# Agents must be able to build, run and scan container images from inside their
+# own sandbox. blueshift-kb#8 (swap a runtime image to distroless, shedding 23
+# unfixable CVEs) could not be verified without it, and the agent that hit the
+# gap tried to route around the boundary rather than stop — a missing capability
+# generates pressure to solve the wrong problem.
+#
+# NOT a docker socket mount. Over a socket, `docker build` executes on the HOST
+# daemon, so the build context and every bind-mount path resolve to host paths
+# the agent cannot see, and concurrent agents collide in one shared image
+# namespace. It is broken for the job, independent of any trust argument.
+#
+# `nftables` is NOT optional despite being invisible at build time: without it
+# `podman build` still succeeds and `podman run` fails with
+# `netavark: nftables error: unable to execute "nft"`.
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends \
+		podman crun conmon netavark passt nftables iptables uidmap fuse-overlayfs sudo \
+	&& rm -rf /var/lib/apt/lists/*
+
+# HOST REQUIREMENT: podman needs the `sysbox-runc` OCI runtime as docker's
+# default-runtime. Under stock runc the nested user namespace is refused outright
+# ("cannot clone: Operation not permitted"). aoe cannot pass --runtime per
+# container — its [sandbox] schema has no such key, and `container_runtime`
+# selects the ENGINE (docker/podman), not the OCI runtime — so this is a
+# daemon-level setting (agent-of-empires#3218). The capability is therefore
+# REPORTED by aoe-preflight.sh, never assumed: an adopter without sysbox gets a
+# declared, explained absence rather than a red gate for something they did not
+# ask for.
+#
+# Podman runs as ROOT inside the container, which is the mode sysbox is designed
+# for: sysbox maps container-root to an unprivileged host uid, so this is not
+# host root. Rootless was tried first and is structurally impossible here — the
+# kernel refuses an unprivileged procfs mount unless the parent /proc is fully
+# visible, and sysbox-fs overlays /proc to virtualise it, so any Dockerfile with
+# a RUN step dies on `mount proc to proc: Operation not permitted`.
+#
+# vfs, deliberately: podman selects fuse-overlayfs when it cannot use kernel
+# overlayfs, and under sysbox that fails on `/proc/sys/kernel/overflowuid`
+# (present at the container's top level, EIO from the nested userns). Setting
+# `mount_program = ""` does not force kernel overlayfs — podman ignores it. vfs
+# copies every layer, so it is slower and hungrier, but agents build small
+# verification images and the store lives in the container's own writable layer,
+# so it cannot grow without bound on the host.
+RUN install -d -m 0755 /etc/containers \
+	&& printf '%s\n' \
+		'[storage]' \
+		'driver = "vfs"' \
+		> /etc/containers/storage.conf
+
+# The agent runs as uid-1000 `ubuntu`. Elevation is scoped to podman ALONE, not
+# blanket sudo. Measured reason, not caution: a root-written file on a bind mount
+# surfaces as uid 0 on the HOST (sysbox does not idmap it back to the operator),
+# so general sudo would let agents strand root-owned files in the operator's own
+# workspaces. This is parity, not new privilege — agents ran on the host as a user
+# with passwordless sudo, and `docker run -v` there produced root-owned files the
+# same way, because the host daemon ran as root.
+#
+# The wrapper keeps `podman ...` working unqualified, mirroring the `claude`
+# wrapper precedent below; an agent should not have to know about the elevation.
+RUN set -eux; \
+	printf '%s\n' 'ubuntu ALL=(root) NOPASSWD: /usr/bin/podman' \
+		> /etc/sudoers.d/oaw-podman; \
+	chmod 0440 /etc/sudoers.d/oaw-podman; \
+	visudo -cf /etc/sudoers.d/oaw-podman; \
+	printf '%s\n' \
+		'#!/bin/bash' \
+		'# Podman must run as root inside the sysbox container (see Dockerfile).' \
+		'# Re-exec under the scoped sudoers rule unless already root.' \
+		'if [ "$(id -u)" -eq 0 ]; then exec /usr/bin/podman "$@"; fi' \
+		'exec sudo -n /usr/bin/podman "$@"' \
+		> /usr/local/bin/podman; \
+	chmod 0755 /usr/local/bin/podman; \
+	su ubuntu -c '/usr/local/bin/podman --version'
+
 # --- Go -----------------------------------------------------------------------
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${GOARCH}.tar.gz" -o /tmp/go.tar.gz \
 	&& tar -C /usr/local -xzf /tmp/go.tar.gz \

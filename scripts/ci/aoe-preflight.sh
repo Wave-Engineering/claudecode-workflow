@@ -59,6 +59,15 @@ fail() {
 	[[ -n "${2:-}" ]] && printf '         %s\n' "$2" >&2
 	FAILED=$((FAILED + 1))
 }
+# A capability that depends on HOST configuration cannot be a red gate: the kit's
+# premise is that the image digest is the release, and an adopter who never asked
+# for that capability must not get a failing preflight for its absence. Report it,
+# with the reason, so it is a declared absence rather than one each agent
+# rediscovers mid-task.
+info() {
+	printf '  [INFO] %s\n' "$1"
+	[[ -n "${2:-}" ]] && printf '         %s\n' "$2"
+}
 
 echo "==> launching via aoe (profile: $PROFILE, workspace: $WS)"
 SESSION_ID="$(timeout 180 aoe -p "$PROFILE" add --sandbox --launch "$WS" 2>&1 |
@@ -309,6 +318,42 @@ else
 			"the CLI reads \$CLAUDE_CONFIG_DIR/settings.json; bootstrap's sync_kit_hooks must merge the image's hooks into it"
 	fi
 fi
+
+# --- 9. the container builder builds AND RUNS (#1108) -------------------------
+# The probe lives in the kit (it is COPY'd to $KIT_SRC) rather than inline here,
+# and it insists on a Dockerfile with a RUN step: a COPY-only build succeeds even
+# under a runtime that cannot nest a process at all, so "podman is installed" and
+# "podman works" are different claims. Its exit codes separate "capability
+# missing" (ours to fix) from "host cannot nest" (declared, not failed) from
+# "probe unavailable" (no verdict).
+BUILDER_MSG="$(x /opt/oakandwave-workflow/scripts/ci/container-builder-probe.sh)"
+BUILDER_RC=$?
+case "$BUILDER_RC" in
+0)
+	pass "container builder works (${BUILDER_MSG})"
+	;;
+3)
+	fail "container builder broken in the image: ${BUILDER_MSG}" \
+		"podman and its networking deps (incl. nftables) ship in the image — this is a kit regression, not a host one"
+	;;
+4)
+	info "container builder unavailable on this host: ${BUILDER_MSG}" \
+		"needs docker's default-runtime set to sysbox-runc; aoe cannot pass --runtime per container (agent-of-empires#3218)"
+	;;
+5)
+	info "container builder not verified: ${BUILDER_MSG}" \
+		"the probe could not reach a registry — this is not a verdict either way"
+	;;
+*)
+	# The probe only ever exits 0/3/4/5, so anything else came from `docker exec`
+	# itself — 127 (the probe is not in the image), 126 (present but not
+	# executable), 125 (container failure). Reporting those as "could not reach a
+	# registry" would state a false cause AND pass green, which is the opposite
+	# polarity to every other check in this file.
+	fail "could not run the builder probe (rc=${BUILDER_RC}): ${BUILDER_MSG}" \
+		"the probe ships in the image at \$KIT_SRC — a non-probe exit code means it is missing or not executable"
+	;;
+esac
 
 echo
 if ((FAILED)); then
