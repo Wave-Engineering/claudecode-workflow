@@ -18,7 +18,7 @@ Combo skill chaining `/scp` → `/mmr`. Both underlying skills are rewritten to 
 Requires `/precheck` first — invoking `/scpmmr` after `/precheck` is approval to execute. If `/precheck` has not been run, run it first and wait for approval.
 
 1. Run `/scp` — creates the PR/MR via `pr_create`
-2. Run `/mmr` — targets the just-created PR/MR. Merges directly via `pr_merge` (no `--admin` flag needed; the fleet is queue-less). Post-merge `ci_wait_run(ref: "main", timeout_sec: 1800)` confirms the main-branch pipeline lands clean.
+2. Run `/mmr` — targets the just-created PR/MR. Merges directly via `pr_merge` (no `--admin` flag needed; the fleet is queue-less). Post-merge `ci_wait_run(ref: <the actual merge target — main OR kahuna/<N>-<slug> on the sandbox path, never a hardcoded literal>, expected_sha: <merge_commit_sha from pr_merge>, timeout_sec: 1800)` confirms the target-branch pipeline lands clean. **Always pass `expected_sha`** — without it, a propagation race can grade a previous merge's already-completed run instead of the one that just landed, silently (`mcp-server-sdlc#523`). **`ref` must track the real target, not a literal `"main"`** — on the sandbox path below the merge lands on `kahuna/*`, and pairing a hardcoded `main` with `expected_sha` turns a clean merge into a spurious failure with no human present to catch it; see `/mmr`'s step 8 for the full mechanism.
 3. `vox` announcement (best-effort): identity from `<project_root>/.claude/agent-identity.json` (fallback: `/tmp/claude-agent-<md5>.json`), then name/team/project/issue/PR/"merged into main"
 
 ## Important

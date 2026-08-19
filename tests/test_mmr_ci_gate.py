@@ -295,3 +295,58 @@ class TestDefaultDenyDoesNotBecomeATotalBlock:
             "counter-example the warning is an assertion a future editor can "
             "reasonably dismiss"
         )
+
+
+class TestPostMergeCiWaitUsesExpectedSha:
+    """Step 8's `ci_wait_run` call must be race-hardened (cc-workflow#1124).
+
+    `ci_wait_run` picks whatever run is newest *in the list at the moment it
+    is called* when no `expected_sha` is given — if the new run for the
+    commit that just merged hasn't been dispatched yet (there is always some
+    propagation delay), it can silently grade a PREVIOUS merge's
+    already-completed run instead, returning `ok:true` for a commit nobody
+    asked about. `mcp-server-sdlc#523` reproduced this live: `waited_sec:0`
+    with the wrong `sha` was the only tell.
+    """
+
+    def test_expected_sha_is_required(self, mmr_text: str) -> None:
+        assert re.search(
+            r"[Aa]lways pass `expected_sha`", mmr_text
+        ), "step 8 must require expected_sha on every ci_wait_run call"
+        assert "mcp-server-sdlc#523" in mmr_text, (
+            "the skill must cite the live reproduction; without a concrete "
+            "counter-example the rule reads as caution a future editor can "
+            "reasonably relax"
+        )
+
+    def test_ref_is_not_a_hardcoded_main_literal(self, mmr_text: str) -> None:
+        """Pairing expected_sha with a hardcoded ref: "main" is worse than the
+        bug it fixes on the KAHUNA sandbox path: the merge lands on
+        `kahuna/<N>-<slug>`, so `--branch main --commit <sha>` matches
+        nothing and a clean merge reports ok:false — with no human present
+        on that auto-approved path to notice the mismatch and move on.
+        """
+        assert not re.search(r'ci_wait_run\(ref:\s*"main"', mmr_text), (
+            "ci_wait_run's ref must not be a hardcoded \"main\" literal — it "
+            "must track the same target branch_guard validated in step 1, "
+            "which is `main` OR a `kahuna/*` sandbox target"
+        )
+        assert re.search(r"never a hardcoded `\"main\"`", mmr_text), (
+            "the skill must state explicitly why a literal main is unsafe here"
+        )
+
+    def test_missing_merge_commit_sha_has_a_stated_fallback(
+        self, mmr_text: str
+    ) -> None:
+        """merge_commit_sha is optional on the pr_merge response (absent when
+        the merge did not complete synchronously) — 'always pass expected_sha'
+        must not silently degrade to 'call ci_wait_run without it' when the
+        field happens to be missing, which is exactly the #523 shape again.
+        """
+        assert re.search(
+            r"[Ii]f `merge_commit_sha` is absent", mmr_text
+        ), "the skill must state what to do when merge_commit_sha is missing"
+        assert re.search(r"do not call `?ci_wait_run`? without a sha", mmr_text, re.I), (
+            "the skill must explicitly forbid calling ci_wait_run without a "
+            "sha as the fallback, not just describe the absent case"
+        )
