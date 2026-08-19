@@ -30,6 +30,7 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parents[1]
 MMR_PATH = _ROOT / "skills" / "mmr" / "SKILL.md"
+SCPMMR_PATH = _ROOT / "skills" / "scpmmr" / "SKILL.md"
 PRECHECK_PATH = _ROOT / "skills" / "precheck" / "SKILL.md"
 
 
@@ -37,6 +38,12 @@ PRECHECK_PATH = _ROOT / "skills" / "precheck" / "SKILL.md"
 def mmr_text() -> str:
     """Read the /mmr SKILL.md file."""
     return MMR_PATH.read_text(encoding="utf-8")
+
+
+@pytest.fixture
+def scpmmr_text() -> str:
+    """Read the /scpmmr SKILL.md file."""
+    return SCPMMR_PATH.read_text(encoding="utf-8")
 
 
 @pytest.fixture
@@ -349,4 +356,38 @@ class TestPostMergeCiWaitUsesExpectedSha:
         assert re.search(r"do not call `?ci_wait_run`? without a sha", mmr_text, re.I), (
             "the skill must explicitly forbid calling ci_wait_run without a "
             "sha as the fallback, not just describe the absent case"
+        )
+
+    # --- /scpmmr carries its own copy of the step-8 call, so it needs its own
+    # --- pin. Asserting only against /mmr leaves the second call site free to
+    # --- regress to `ci_wait_run(ref: "main")` with CI green — the same
+    # --- declared-but-not-wired shape as #1076 (bootstrap never invoked) and
+    # --- #1056 (trivy parsing zero manifests). Two call sites, two pins.
+
+    def test_scpmmr_step_2_also_requires_expected_sha(
+        self, scpmmr_text: str
+    ) -> None:
+        assert re.search(r"[Aa]lways pass `expected_sha`", scpmmr_text), (
+            "/scpmmr step 2 spells out its own ci_wait_run call rather than "
+            "deferring to /mmr, so it must carry the expected_sha requirement "
+            "itself"
+        )
+        assert "mcp-server-sdlc#523" in scpmmr_text, (
+            "the live reproduction must be cited here too — a rule with no "
+            "counter-example attached is one a future editor relaxes"
+        )
+
+    def test_scpmmr_ref_is_not_a_hardcoded_main_literal(
+        self, scpmmr_text: str
+    ) -> None:
+        """Same KAHUNA-sandbox hazard as /mmr step 8, and worse here: /scpmmr
+        IS the auto-approved path, so a spurious ok:false lands where no human
+        is watching to dismiss it.
+        """
+        assert not re.search(r'ci_wait_run\(ref:\s*"main"', scpmmr_text), (
+            "ci_wait_run's ref must not be a hardcoded \"main\" literal — on "
+            "the sandbox path the merge target is `kahuna/<N>-<slug>`"
+        )
+        assert re.search(r'not a literal `"main"`', scpmmr_text), (
+            "the skill must state explicitly why a literal main is unsafe here"
         )
