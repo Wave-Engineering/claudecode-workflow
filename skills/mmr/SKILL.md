@@ -73,7 +73,13 @@ Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix)
    - Comprehensive enough that `git log` alone tells the full story without opening the PR
 6. **Present for approval**: PR/MR number, title, source→target branches, the drafted squash message. Ask "May I merge this PR/MR?" and WAIT. A second `/mmr` invocation counts as approval.
 7. `pr_merge(number, squash_message)` — squash merge. Returns `merge_method`, `merge_commit_sha`, `url`.
-8. **Post-merge**: switch to target branch, pull, delete local source branch if present. Optionally `ci_wait_run(ref: "main", timeout_sec: 1800)` to confirm the main-branch pipeline lands clean — skip if the user wants to move on immediately.
+8. **Post-merge**: switch to target branch, pull, delete local source branch if present. Optionally `ci_wait_run(ref: <PR/MR target from step 1>, expected_sha: <merge_commit_sha from step 7>, timeout_sec: 1800)` to confirm the target-branch pipeline lands clean — skip if the user wants to move on immediately.
+
+   **Always pass `expected_sha`, sourced from step 7's `merge_commit_sha`.** Without it, `ci_wait_run` picks whatever run is newest *in the list at that moment* — if GitHub/GitLab hasn't dispatched the new run for the commit that just landed yet (there is always some propagation delay after a merge), it can silently grade a PREVIOUS merge's already-completed run instead, returning `ok:true, final_status:"success"` for a commit nobody asked about. Reproduced live (`mcp-server-sdlc#523`): `waited_sec:0` with the wrong `sha` in the response was the only tell — no error, no warning. `expected_sha` closes this by filtering to the exact commit before grading anything.
+
+   **Use the SAME target reference as step 1's `branch_guard` call, never a literal `"main"`.** On the KAHUNA sandbox path the merge target is `kahuna/<N>-<slug>`, not `main` (see `/scpmmr`'s sandbox note) — pairing a hardcoded `ref: "main"` with `expected_sha` would query `--branch main --commit <sha>` for a commit that lives on neither, turning a merge that landed cleanly into a spurious `ok:false` on exactly the auto-approved path with no human present to notice the mismatch and move on.
+
+   **If `merge_commit_sha` is absent from step 7's response** (the merge did not complete synchronously — see `pr_merge`'s aggregate-envelope semantics), do not call `ci_wait_run` without a sha: resolve the target branch's current HEAD after the pull and use that, or skip the wait entirely.
 9. Report success with the merge commit URL.
 
 ## Important Rules
@@ -82,6 +88,7 @@ Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix)
 - ONLY merge if `checks.summary == "all_passed"` — an allowlist, never a blocklist. `has_failures` blocks, and so does `none`, and so does any value not in this list. A blocklist of known-bad states silently permits every state you did not think of, which is exactly how this gate sat inert (cc-workflow#925). **But on `none`/unrecognised, escalate to `pr_wait_ci` first (step 3) — stop only if that also cannot confirm a pass.** Without that clause this rule reads as "block every GitHub merge", because `pr_status` returned `none` for every GitHub PR on `gh 2.45.0`.
 - `pr_wait_ci` is an allowlist too — proceed only on `passed`. **`no_checks_configured` and `no_checks_yet` are both STOPs**, not passes: they mean the probe found nothing to wait for, or found that CI has not reported yet — never that anything succeeded. (`no_checks_required` was their single ambiguous predecessor, retired in `mcp-server-sdlc` v4.0.0.)
 - NEVER merge into a protected, non-default, non-`kahuna/*` branch — `branch_guard` STOPs this (target must be the live default or a `kahuna/*` sandbox)
+- Post-merge `ci_wait_run` (step 8) MUST pass `expected_sha` (from `merge_commit_sha`) and MUST use the same target ref as step 1's `branch_guard` call, never a hardcoded `"main"` — without `expected_sha` a propagation race can silently grade a stale run (`mcp-server-sdlc#523`); a hardcoded `main` fails outright on the `kahuna/*` sandbox path, with no human present to notice
 - Always squash + delete source branch
 - Squash message replaces the entire commit history — make it comprehensive
 - Merge conflicts → STOP and report, do NOT attempt to resolve
