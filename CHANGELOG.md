@@ -4,7 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+Entries here are curated rather than generated — each states the defect and the reasoning that
+produced the fix — so not every tagged release carries a section of its own. Two distinct gaps, which
+are worth keeping apart:
+
+- **1.0.0 through 5.1.0** have no section, but their content is not missing: that era was swept into
+  the oversized `[6.0.0]` block below rather than filed per release. Reading `[6.0.0]` as "what
+  changed in 6.0.0" will mislead you.
+- **7.1.2, 7.1.3, 7.1.4, 7.2.0, 7.2.1, 7.3.0, 8.1.0 and 8.1.1** shipped with no curated entry at all.
+  For these the record is the auto-generated
+  [GitHub release notes](https://github.com/Wave-Engineering/claudecode-workflow/releases), which
+  `release.yml` builds from PR titles on every `v*` tag — with one hole: **7.1.3** is a real tag
+  (`bae1b8d`) that never got a GitHub Release, so it has no record anywhere but `git log`.
+
 ## [Unreleased]
+
+_Nothing yet._
+
+## [8.3.0] - 2026-08-19
 
 ### Added
 
@@ -32,25 +49,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   Adds a `vox-spool` mount (`shared-mutable-rw`, sandbox-scoped and major-partitioned under `~/.oaw/state/<major>/`), so **aoe profiles must be regenerated** — it takes effect on container recreation, leaving running agents untouched.
 
-
-- **Containerised agents can build, run and scan container images (#1108).** `podman` is baked into the image, closing the gap that blocked `blueshift-kb#8` (swap a runtime image to distroless, shedding 23 unfixable CVEs, 4 CRITICAL) — a containerised agent could not verify it at all. The near-miss is the reason this is `Added` and not deferred again: the agent that hit the gap proposed putting a container-generated key in the operator's `authorized_keys` so it could build on the host. **A missing capability does not just block work, it generates pressure to solve the wrong problem.**
-
-  **⚠️ Host prerequisite — without it the capability reports absent.** Docker's `default-runtime` must be `sysbox-runc`. Under stock `runc` podman cannot create its nested user namespace at all, and `aoe` cannot pass `--runtime` per container (its `[sandbox]` schema has no such key, and `container_runtime` selects the *engine*, not the OCI runtime — agent-of-empires#3218), so this is a daemon-level setting made once per host:
-
-  ```json
-  {
-      "live-restore": true,
-      "default-runtime": "sysbox-runc",
-      "runtimes": { "sysbox-runc": { "path": "/usr/bin/sysbox-runc" } }
-  }
-  ```
-
-  Set `live-restore` in the *same* edit — without it every future daemon restart kills every running container, including live agent sessions. Note also that sysbox rejects `--privileged` and `--network host`; nothing in the fleet uses either, and the opt-out for another workload on the same host is one explicit `--runtime=runc`. Before installing sysbox, pin `bip` and `default-address-pools` to the host's **current** values: its installer otherwise sets `bip` to `172.20.0.1/16` (already occupied by an unrelated project's network on malory) and replaces docker's built-in pools with a single `172.25.0.0/16`. Its precondition check is purely textual, so declaring the existing values both satisfies it and makes it a no-op.
-
-  **Not a docker socket mount**, and the reason is capability rather than trust: over a socket `docker build` runs on the *host* daemon, so the build context and bind-mount paths resolve to host paths the agent cannot see, and concurrent agents collide in one image namespace. **Podman runs as root inside the container** — the mode sysbox is built for, since container-root maps to an unprivileged host uid. Rootless was tried first and is structurally impossible: the kernel refuses an unprivileged procfs mount unless the parent `/proc` is fully visible, and sysbox-fs overlays it, so any Dockerfile with a `RUN` step dies on `mount proc to proc: Operation not permitted`. Elevation is scoped to `/usr/bin/podman` alone via `sudoers.d` plus a PATH wrapper — deliberately not blanket sudo, because a root-written file on a bind mount surfaces as **uid 0 on the host**, which would let agents strand root-owned files in the operator's workspaces. Storage is `vfs`: podman falls back to fuse-overlayfs, which under sysbox dies on `/proc/sys/kernel/overflowuid` (readable at the container's top level, `EIO` from the nested userns), and `mount_program = ""` does not force kernel overlayfs.
-
-  `aoe-preflight.sh` gains a behavioural check backed by `scripts/ci/container-builder-probe.sh`, which **insists on a Dockerfile with a `RUN` step** — a `COPY`-only build succeeds even where nesting is impossible, so a build-only probe reports health on a host that cannot run anything. Its exit codes keep three outcomes apart that a single red/green would merge: broken in our image (fails), host cannot nest (reported as a declared absence with the reason, since the kit's contract is the image digest and this depends on host config outside it), and probe unavailable (no verdict — the base image is pulled from ECR Public rather than Docker Hub after the first real run hit an anonymous rate limit).
-
 ### Fixed
 
 - **`wtf-post-tool-use.sh` was baked into the image twice, and now cannot be (#1094).** The image's `settings.json` registered it under both `~/.local/share/…` (from `settings.template.json`) and `/home/ubuntu/.local/share/…` (added afterwards by wtf-server's installer, whose idempotency check compared raw strings). Same file, so the hook **ran twice on every tool use** — for weeks, because nothing ever asked the question.
@@ -71,15 +69,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   Caught by the operator on a live restart and by no test: the #1086 suite drove the merge against fake homes where the script always existed, so the cross-version case was not representable. It is now — the tests delete the script after merging, which is precisely what an older container sees.
 
-### Removed
+- **`/mmr` and `/scpmmr` could grade the wrong pipeline run and call a merge green (#1124).** Post-merge, both skills called `ci_wait_run` with no `expected_sha`, so the tool graded whatever run was newest *in the list at that moment*. A merge always has some propagation delay before its own run is dispatched, so inside that window the call reads a **previous** merge's already-completed run and returns `ok:true, final_status:"success"` for a commit nobody asked about. Reproduced live (`mcp-server-sdlc#523`): `waited_sec:0` paired with the wrong `sha` was the **only** tell — no error, no warning, and the shape of a fast green. Both call sites now thread `merge_commit_sha` from `pr_merge` through as `expected_sha`, and both are pinned independently by the `TestPostMergeCiWaitUsesExpectedSha` class — `/scpmmr` spells out its own `ci_wait_run` call rather than deferring to `/mmr`'s, so a pin on `/mmr` alone would leave the second call site free to regress with CI green.
 
-- **Slack support, entirely — `/ping`, `/pong`, and `slackbot-send` (#1062).** Both skills were wholly Slack-specific (`#ai-dev`, Slack mrkdwn) with no Discord path, and unused. Removed with them: the `~/.secrets/slack-bot-token` dependency (`deps.json`), the `slack-bot-token` entry in the image build's expected-missing whitelist, the `slack@claude-plugins-official` marketplace plugin (enabled by default with **zero consumers** — its only documented purpose was OAuth on first `/ping`/`/pong` use, so it was costing context every session for a dead integration), and the README's "Slack Setup" section, which instructed new users to provision a bot token for a skill that no longer exists.
+  **The `ref` must track the real merge target, never a literal `"main"`** — code review caught that in the first draft, and it is the more dangerous half. On the KAHUNA sandbox path the merge lands on `kahuna/<N>-<slug>`, so pairing a hardcoded `main` with the new `expected_sha` filter would query for a commit that exists on neither ref — converting a silent wrong-green into a hard failure on **every** sandbox merge, i.e. precisely the auto-approved path with no human present to read the mismatch and move on. It now reuses the target `branch_guard` already validated in step 1. Where `merge_commit_sha` is legitimately absent (the merge did not complete synchronously), the skills resolve the target's HEAD or skip the wait — they do not fall back to the unfiltered call that caused this.
 
-  **Already-installed hosts are pruned.** Deleting a skill from source does not uninstall it — `install` walks the surviving `skills/*/` and prunes *within* each, so a skill that vanishes from source is never visited. `~/.claude/skills/ping`, `~/.claude/skills/pong`, `~/.claude/scripts/skills/ping`, and `~/.local/bin/slackbot-send` are now in `DEPRECATED_PATHS`. Without that, the upgrade would have been *worse* than no change: `cellar_deploy` wipes the Cellar copy of `slackbot-send` while `~/.claude/skills/ping/SKILL.md` survives, leaving `/ping` a live, invocable skill whose helper had just been deleted. Guarded by a regression test that plants the installed copies and asserts they are gone.
+## [8.2.0] - 2026-08-05
 
-  **Known gap:** `scripts/install-remote.sh` has no `DEPRECATED_PATHS` mechanism (pre-existing), so tarball-installed hosts retain `/ping` and `/pong` until they are removed by hand.
+### Added
 
-  Mattermost is the intended successor (Analogic self-hosted; better IP posture), post-cutover, behind a backend abstraction at the MCP-server layer.
+- **Containerised agents can build, run and scan container images (#1108).** `podman` is baked into the image, closing the gap that blocked `blueshift-kb#8` (swap a runtime image to distroless, shedding 23 unfixable CVEs, 4 CRITICAL) — a containerised agent could not verify it at all. The near-miss is the reason this is `Added` and not deferred again: the agent that hit the gap proposed putting a container-generated key in the operator's `authorized_keys` so it could build on the host. **A missing capability does not just block work, it generates pressure to solve the wrong problem.**
+
+  **⚠️ Host prerequisite — without it the capability reports absent.** Docker's `default-runtime` must be `sysbox-runc`. Under stock `runc` podman cannot create its nested user namespace at all, and `aoe` cannot pass `--runtime` per container (its `[sandbox]` schema has no such key, and `container_runtime` selects the *engine*, not the OCI runtime — agent-of-empires#3218), so this is a daemon-level setting made once per host:
+
+  ```json
+  {
+      "live-restore": true,
+      "default-runtime": "sysbox-runc",
+      "runtimes": { "sysbox-runc": { "path": "/usr/bin/sysbox-runc" } }
+  }
+  ```
+
+  Set `live-restore` in the *same* edit — without it every future daemon restart kills every running container, including live agent sessions. Note also that sysbox rejects `--privileged` and `--network host`; nothing in the fleet uses either, and the opt-out for another workload on the same host is one explicit `--runtime=runc`. Before installing sysbox, pin `bip` and `default-address-pools` to the host's **current** values: its installer otherwise sets `bip` to `172.20.0.1/16` (already occupied by an unrelated project's network on malory) and replaces docker's built-in pools with a single `172.25.0.0/16`. Its precondition check is purely textual, so declaring the existing values both satisfies it and makes it a no-op.
+
+  **Not a docker socket mount**, and the reason is capability rather than trust: over a socket `docker build` runs on the *host* daemon, so the build context and bind-mount paths resolve to host paths the agent cannot see, and concurrent agents collide in one image namespace. **Podman runs as root inside the container** — the mode sysbox is built for, since container-root maps to an unprivileged host uid. Rootless was tried first and is structurally impossible: the kernel refuses an unprivileged procfs mount unless the parent `/proc` is fully visible, and sysbox-fs overlays it, so any Dockerfile with a `RUN` step dies on `mount proc to proc: Operation not permitted`. Elevation is scoped to `/usr/bin/podman` alone via `sudoers.d` plus a PATH wrapper — deliberately not blanket sudo, because a root-written file on a bind mount surfaces as **uid 0 on the host**, which would let agents strand root-owned files in the operator's workspaces. Storage is `vfs`: podman falls back to fuse-overlayfs, which under sysbox dies on `/proc/sys/kernel/overflowuid` (readable at the container's top level, `EIO` from the nested userns), and `mount_program = ""` does not force kernel overlayfs.
+
+  `aoe-preflight.sh` gains a behavioural check backed by `scripts/ci/container-builder-probe.sh`, which **insists on a Dockerfile with a `RUN` step** — a `COPY`-only build succeeds even where nesting is impossible, so a build-only probe reports health on a host that cannot run anything. Its exit codes keep three outcomes apart that a single red/green would merge: broken in our image (fails), host cannot nest (reported as a declared absence with the reason, since the kit's contract is the image digest and this depends on host config outside it), and probe unavailable (no verdict — the base image is pulled from ECR Public rather than Docker Hub after the first real run hit an anonymous rate limit).
+
+## [8.0.0] - 2026-08-03
 
 ### Changed
 
@@ -89,7 +105,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
   `glab` gains an API credential (file, mode 600, `git_protocol: ssh` matching the host) from the whole-dir secrets mount, unblocking MR/CI work. Its token shape guard accepts `.` — real `glpat-` tokens contain dots, and the first cut rejected the operator's actual token while a dot-free fixture passed. The operator's `~/.local/bin` (139 utilities) is also mounted read-only at `/home/ubuntu/.oaw/overlay/local-bin` and **appended** to PATH — never prepended, since the kit's own bin holds the claude wrapper (#1076) and the MCP binaries, and shadowing it would silently un-bootstrap every agent. Profiles must be regenerated or `check-mount-drift.sh` fails and the mount silently does not happen (the #1069 class).
 
-
 - **`~/.secrets` is mounted whole-directory read-only again, restoring host-agent parity (#1090).** Reverses the named-single-file scoping from #1061 on an operator decision, recorded so it is not silently restored: *"they all get used by agents one time or another. I don't want to curate which agents will need what access via who's tokens. I just want every agent to have access to all those tokens like they do today."* Two corrections to the #1061 rationale made it reversible: **mounted is not baked** — R-12 keeps secrets out of every image layer and `mounts.d/` entries are *runtime* binds, so "an OaW image on a public registry" was never an argument against a runtime mount (the original framing conflated the two) — and **the trust model is unchanged**, since every *host* agent already reads all ~80 entries; per-agent curation bought no security the fleet does not already grant, and #1089 showed it merely moves the blocker to whoever needs the next credential.
 
   **Availability and inheritance are separate axes, and only availability widened.** Everything stays **path-modality**: a file must be deliberately opened, whereas an environment variable is inherited by **every child process**. `OAW_SECRET_ENV` remains limited to `CLAUDE_CODE_OAUTH_TOKEN` (the exception argued narrowly in #1076 — that token *is* the agent's identity, so a child stealing it gains nothing the agent lacks), and `gh`'s credential is still written to a file rather than exported (#1082). MCP servers follow the same rule: `disc-server`/`discord-watcher` consume `DISCORD_TOKEN_FILE`/`DISCORD_TOKEN_PATH` — **pointers**, not values — so a new MCP credential gets a pointer line, never a value. Verified on the built image: 81 secrets visible as files, `GH_TOKEN` still absent from the agent environment.
@@ -97,6 +112,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   **The scoping guard was replaced, not deleted.** `test_secrets_mounts_are_scoped_not_whole_dir` existed specifically to stop a silent widening, and its docstring said so; removing it would have left a tripwire's worth of nothing. Widening is now intended, so the guards moved to the invariants that still matter: the mount must be **whole-dir and `ro`** (an `rw` mount would let a container corrupt the operator's entire credential store), and **no secret beyond the documented exception may be env-projected** — which is the real risk once 80 credentials are reachable. Both mutation-tested, along with a scope-back-to-named-files mutation. The separator check that rejects `~/.secrets-analogic/…` was preserved while allowing the directory itself; a bare `startswith` would have quietly accepted the sibling.
 
   Side benefit for R-13: a credential added on the host now appears in every running container immediately, where previously it needed a new mount fragment and a relaunch.
+
+### Removed
+
+- **Slack support, entirely — `/ping`, `/pong`, and `slackbot-send` (#1062).** Both skills were wholly Slack-specific (`#ai-dev`, Slack mrkdwn) with no Discord path, and unused. Removed with them: the `~/.secrets/slack-bot-token` dependency (`deps.json`), the `slack-bot-token` entry in the image build's expected-missing whitelist, the `slack@claude-plugins-official` marketplace plugin (enabled by default with **zero consumers** — its only documented purpose was OAuth on first `/ping`/`/pong` use, so it was costing context every session for a dead integration), and the README's "Slack Setup" section, which instructed new users to provision a bot token for a skill that no longer exists.
+
+  **Already-installed hosts are pruned.** Deleting a skill from source does not uninstall it — `install` walks the surviving `skills/*/` and prunes *within* each, so a skill that vanishes from source is never visited. `~/.claude/skills/ping`, `~/.claude/skills/pong`, `~/.claude/scripts/skills/ping`, and `~/.local/bin/slackbot-send` are now in `DEPRECATED_PATHS`. Without that, the upgrade would have been *worse* than no change: `cellar_deploy` wipes the Cellar copy of `slackbot-send` while `~/.claude/skills/ping/SKILL.md` survives, leaving `/ping` a live, invocable skill whose helper had just been deleted. Guarded by a regression test that plants the installed copies and asserts they are gone.
+
+  **Known gap:** `scripts/install-remote.sh` has no `DEPRECATED_PATHS` mechanism (pre-existing), so tarball-installed hosts retain `/ping` and `/pong` until they are removed by hand.
+
+  Mattermost is the intended successor (Analogic self-hosted; better IP posture), post-cutover, behind a backend abstraction at the MCP-server layer.
 
 ### Fixed
 
@@ -127,6 +152,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   Two further defects fell out. **The shipped `.env` template aborted the boot:** `OAW_REQUIRED_SECRETS=claude-code-oauth-token discord-bot-token` is `source`d, so unquoted it is not a two-item list but `VAR=first` prefixed to a command named `second` — `line 42: discord-bot-token: command not found`, exit 127. Every fixture used a single-token value, so no test could reach it. **And the guard added for it was itself inert:** bash *strips* `errexit` inside `$( )`, so a command-substitution probe kept sourcing past the first failure and returned the status of the **last** line — and because the template ends with a good `OAW_SECRET_ENV=` line, the guard probed "clean" for the very file it ships, discarded the stderr it had captured, and let the real source die with 127. The probe now runs in a fresh `bash -c` with its own live errexit, stopping at the first failure, and surfaces captured stderr instead of dropping it. Bootstrap's summary line also moved to **stderr**: under `source` + `exec` its fd 1 *is* the agent's, so on stdout it prepended a non-JSON line to every headless `claude -p --output-format json`.
 
   Verified end to end on a real agent in a real container — `AUTH_OK`, agent process showing as `claude-real`, token present in `/proc/<pid>/environ` — not inferred from configuration. New tests assert the **caller**, execute the real wrapper to prove an `export` survives the `exec`, and strip comments before asserting on the Dockerfile so prose cannot satisfy them; all were mutation-tested red-first. Follow-ups: #1078 (bootstrap's skills host-fill has no mount, so it warns every boot) and #1079 (interactive agents still park on the first-run onboarding wizard — provably *not* auth: the token returns HTTP 200 and headless works).
+
+## [7.1.1] - 2026-07-19
+
+### Fixed
 
 - **Session liveness detection never fired — `skill-gc`/`reorient` could rewrite LIVE agents' transcripts (#919).** `session_liveness()` documented a fail-closed contract whose *strong signal* was "a process holds the transcript fd open". Claude Code appends to its transcript and closes the descriptor, so that branch was dead code. Swept on the development workstation (a single-host observation, not reproducible from a read-only review): **0 of 277 transcripts were held open across 10,613 open fds**, so everything fell through to the 60-second mtime window and **10 of 14 live sessions there classified as STOPPED** — eligible for transcript surgery, and selected by the documented fleet invocation `find-projects --stopped … -exec reorient {} \;`. The suite stayed green throughout because `test_detects_open_fd_as_live` opened the fd *itself* and `test_stopped_vs_running` monkeypatched `_liveness` away; both asserted a path production never took. **Replaced** with a process-identity signal: one `/proc` sweep extracting session UUIDs from `--resume`/`--session-id`/`-r`, covering all four cmdline forms observed in the fleet — bare uuid, `--resume=<uuid>`, and path-valued `--resume /…/<uuid>.jsonl`. Every cmdline is scanned rather than filtering on `argv[0]`, because sessions run under a two-word `argv[0]` (`claude bg-pty-host`) and under the bare version binary (`…/claude/versions/2.1.215`) — a basename filter dropped 4 live sessions. Flag-scoped parsing (not "any UUID in the cmdline") avoids 8 false positives from grunt ids carried in `--append-system-prompt`. The mtime window survives as a **secondary** signal only. Two cmdline forms name no written session at all and fall to **cwd-scoped doubt** (`unknown` → refused) rather than poisoning the fleet: a bare `claude`/`--continue`, which carries no uuid anywhere; and `--resume A --fork-session`, where the fork mints a *new* id, so naming `A` accounts for the source and never the file the process actually writes. The latter is easy to miss precisely because every `--fork-session` in this fleet also passes an explicit `--session-id` — when the new session *is* named the process is fully accounted for and its cwd is deliberately not blanketed. On the development workstation that scoping cost 1 store of 84 its collectability, and the recorded cwd strips the kernel's `" (deleted)"` suffix — left on, the doubt is filed under a path no transcript can match and silently evaporates, which `git worktree remove` under a running agent is enough to trigger. Fail-closed is preserved and widened: no `/proc`, *or* pid dirs exposing no readable cmdline, *or* a `/proc` with no pids at all now yield `unknown` — a blinded scan must never be indistinguishable from a healthy all-clear. `find-projects` hard-errors (rc 2) on `--stopped`/`--running` both when `skill-gc` fails to load **and** when the `/proc` sweep comes back blinded, instead of printing nothing and exiting 0; answering "the fleet is drained" from a detector that saw nothing is what made `./install` look safe under ten live agents. The two tools share one implementation, now asserted by a differential test and a load-path test. Also **~500× faster**: the dead fd scan re-globbed all `/proc` fds *per session* (277 × 10.6k), so `find-projects --stopped` went from >120 s (timed out) to 0.12 s by sweeping once per run. Verified against the development workstation's live fleet: `--running` 6 → 12 stores, every live-with-transcript session detected, **0 live sessions in the `--stopped` set**, and `skill-gc` refuses a real agent idle 34,712 s (578× the window) that the old code evicts. New `tests/test_liveness.py` (38 cases) was red-first against the prior implementation — **28 failed / 10 passed** — and drives the real detector via `/proc` trees built from observed cmdlines. **Known residual (#923):** the blinding guard fires only when *no* cmdline is readable, so a *partially* readable `/proc` (hidepid, PID namespace, another user's `claude`) still fails open; unaffected on hosts where `/proc` carries no `hidepid`.
 
