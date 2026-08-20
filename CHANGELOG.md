@@ -19,7 +19,46 @@ are worth keeping apart:
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+
+- **The test suite wrote the operator's real `~/.gitconfig` on every run (#1130).**
+  `tests/contained-workflow/test_bootstrap.py` drives the real `bootstrap.sh` by
+  subprocess with `OAW_HOME` redirected to a tempdir — but not `HOME`.
+  `ensure_github_auth` runs `git config --global`, and git reads `$HOME`, so every
+  run rewrote the host config, silently reinstating a `url.…insteadOf` rewrite the
+  operator had deliberately removed after a token leak forced a roll. Reproduced
+  with a canary `HOME`: one test, one `.gitconfig`, byte-identical to the block on
+  the host.
+
+  **Two things made this worse than a stray write.** It is invisible —
+  `git remote -v` and `git remote get-url` both report the *rewritten* URL, so 32
+  repos stored as `git@github.com:…` were authenticating with a broadly-scoped PAT
+  and nothing said so (only the `ssh://git@github.com/…` spelling escapes the
+  rewrite). And it contaminated our own reasoning: `CHANGELOG.md`, the `bootstrap.sh`
+  comment, and a test docstring all justified keeping the rewrite by citing that
+  `~/.gitconfig` as evidence of operator intent — evidence we had written ~29 hours
+  earlier. A leak that corrupts files is recoverable; one that corrupts your evidence
+  argues for its own continuation.
+
+  Fixed by `_sealed_env`, which seals `HOME`, `XDG_CONFIG_HOME` and `OAW_HOME`
+  together and is now the only sanctioned way to drive the bootstrap;
+  `test_beacon_is_silent_on_stdout` likewise no longer runs against the ambient
+  `HOME`. Guarded by `test_bootstrap_never_writes_the_operator_home`, which asserts
+  the operator's home is **empty** — not merely free of `.gitconfig`, since the next
+  leak will have a different filename. Mutation-tested: removing the `HOME` seal
+  turns it red with exactly `.gitconfig`.
+
+- **Removed the github URL rewrite from the container (#1130).** With the evidence
+  for it withdrawn, the question was re-asked on the container's own merits and the
+  answer is no. #1082's diagnosis (container git broken) was right; the cause was
+  that the mounted keys were unreachable to the runtime user, fixed by #1085 plus
+  `ensure_ssh_parity`. Measured in a live container: `ssh -T` succeeds for both
+  forges and `git ls-remote ssh://git@github.com/…` resolves. A rewrite only
+  redirects a working SSH path onto a token that also carries full API scope. The
+  credential helper stays — inert for SSH remotes, correct for a genuine `https://`
+  one. `test_git_transport_matches_the_host_per_forge`, which pinned the wrong
+  premise, is replaced by
+  `test_git_transport_is_ssh_for_both_forges_with_no_url_rewrite`.
 
 ## [8.3.0] - 2026-08-19
 
@@ -101,7 +140,7 @@ _Nothing yet._
 
 - **Container SSH parity — the operator's keys were mounted and invisible (#1089).** aoe mounts `~/.ssh` to `/root/.ssh` (keys plus a host→identity config) and agents use them constantly: git over SSH for both forges, and troubleshooting remote installs (blueshift, perkollate, `agent-smith-ca`), where no token substitutes. The agent runs as `ubuntu` with `HOME=/home/ubuntu`, so `ssh` looked in an empty `/home/ubuntu/.ssh`, fell back to default identity names, and failed `Permission denied (publickey)`. Before #1085 made `/root` traversable it could not have worked at all. `ensure_ssh_parity` links `~/.ssh` to the mounted keys — idempotent, clears `ssh`'s own `known_hosts` scratch dir (which silently appears and made a naive `ln -s` land *inside* it), and refuses loudly to clobber a real `~/.ssh`. Measured after: `ssh -T git@gitlab.com` → *Welcome to GitLab*, and `git ls-remote git@…` succeeds on **both** forges.
 
-  **This also corrects #1082 and retires machinery it added.** That fix concluded, from `gh api user` passing while `git push` failed, that git needed HTTPS+token, and added `url.https://github.com/.insteadOf` plus `credential.helper = !gh auth git-credential`. The diagnosis was half right — git transport *was* broken — and the remedy was wrong: git failed because the mounted keys were unreachable, not because a credential was missing. Routing git onto HTTPS+token worked, but it **changed behaviour rather than restoring it** and bypassed keys provisioned on purpose. The github rewrite was **restored** after review: the operator's own `~/.gitconfig` carries `url.https://github.com/.insteadof` and the gh credential helper, so HTTPS+PAT *is* what a host session uses for github — #1082 was right, and removing it diverged. gitlab has no host rewrite and stays SSH. The premise "the host uses SSH for git" was true for one forge and generalised to both; a test now pins **both** halves, since pinning either alone is what went wrong. Documented rationale claiming the container deliberately has no `~/.ssh` was **inference from a permissions bug presented as design intent**, and is corrected in `architecture.md` rather than quietly dropped.
+  **This also corrects #1082 and retires machinery it added.** That fix concluded, from `gh api user` passing while `git push` failed, that git needed HTTPS+token, and added `url.https://github.com/.insteadOf` plus `credential.helper = !gh auth git-credential`. The diagnosis was half right — git transport *was* broken — and the remedy was wrong: git failed because the mounted keys were unreachable, not because a credential was missing. Routing git onto HTTPS+token worked, but it **changed behaviour rather than restoring it** and bypassed keys provisioned on purpose. The github rewrite was **restored** after review: the operator's own `~/.gitconfig` carries `url.https://github.com/.insteadof` and the gh credential helper, so HTTPS+PAT *is* what a host session uses for github — #1082 was right, and removing it diverged. **[CORRECTED by #1130 — this sentence is wrong, and wrong in an instructive way. That `~/.gitconfig` was written by our own test suite: it sealed `$OAW_HOME` but not `$HOME`, so every run of `tests/contained-workflow/test_bootstrap.py` executed `git config --global` against the operator's real home. The rewrite entered `bootstrap.sh` on 2026-07-31 and this claim was written ~29 hours later, so the "evidence" was almost certainly our own side effect read back as host intent. It is also moot: SSH covers git for both forges in the container (`ensure_ssh_parity`), verified live. The rewrite is removed and the leak sealed.]** gitlab has no host rewrite and stays SSH. The premise "the host uses SSH for git" was true for one forge and generalised to both; a test now pins **both** halves, since pinning either alone is what went wrong. Documented rationale claiming the container deliberately has no `~/.ssh` was **inference from a permissions bug presented as design intent**, and is corrected in `architecture.md` rather than quietly dropped.
 
   `glab` gains an API credential (file, mode 600, `git_protocol: ssh` matching the host) from the whole-dir secrets mount, unblocking MR/CI work. Its token shape guard accepts `.` — real `glpat-` tokens contain dots, and the first cut rejected the operator's actual token while a dot-free fixture passed. The operator's `~/.local/bin` (139 utilities) is also mounted read-only at `/home/ubuntu/.oaw/overlay/local-bin` and **appended** to PATH — never prepended, since the kit's own bin holds the claude wrapper (#1076) and the MCP binaries, and shadowing it would silently un-bootstrap every agent. Profiles must be regenerated or `check-mount-drift.sh` fails and the mount silently does not happen (the #1069 class).
 

@@ -633,8 +633,11 @@ removed. Retained here for the record:
 - `credential.https://github.com.helper = !gh auth git-credential`
 - `url.https://github.com/.insteadOf = git@github.com:`
 
-Only together do they work: the helper supplies the token, the rewrite makes the
-SSH remote use HTTPS so the helper is consulted at all.
+Only together did they work: the helper supplies the token, and the rewrite is what
+made an SSH remote use HTTPS so the helper was consulted at all. **Only the helper
+survives** — the rewrite was removed for good in #1130 (see §3.6.2), where it turned
+out to be both unnecessary (SSH covers git for both forges) and self-justifying (the
+`~/.gitconfig` cited as evidence for it had been written by our own test suite).
 
 **Timing note:** the credential is written when *bootstrap* runs, i.e. when the
 agent starts. A bare `docker exec … gh` before any agent has run will find no
@@ -705,18 +708,42 @@ Measured after: `ssh -T git@gitlab.com` → *Welcome to GitLab*, and
 > the container **differ** from the host — however defensible in isolation — is a
 > regression against that goal, not a hardening.
 
-**Git transport is per-forge, because the host treats them differently.** Verified
-against the operator's `~/.gitconfig`: github has
-`url.https://github.com/.insteadof git@github.com:` plus
-`credential.https://github.com.helper !gh auth git-credential`, and gitlab has **no**
-rewrite. So a host session uses **HTTPS+PAT for github** and **SSH for gitlab**, and
-the container now does the same.
+**Git transport is SSH for both forges. There is no URL rewriting. (#1130)**
 
-An earlier draft of this section removed the github rewrite on the premise "the host
-uses SSH for git" — true for gitlab, false for github, generalised from one forge to
-both. That made the container authenticate github git as the SSH *key* identity while
-the host uses the *PAT* identity: different credential, audit trail and effective
-permissions. Restored, with a test pinning both halves.
+An earlier revision of this section claimed transport was *per-forge* — HTTPS+PAT for
+github, SSH for gitlab — and verified that "against the operator's `~/.gitconfig`,"
+which carried a github rewrite and no gitlab one.
+
+**That verification was circular, and the conclusion was wrong.** The suite drives
+`bootstrap.sh` for real, and until #1130 it sealed only `$OAW_HOME`, not `$HOME`. So
+`ensure_github_auth`'s `git config --global` wrote the **operator's real
+`~/.gitconfig`** on every test run. The asymmetry read as host intent was our own
+side effect: we set github's rewrite and never set a gitlab one, then found exactly
+that shape and cited it as independent evidence. Timeline: the rewrite entered
+`bootstrap.sh` on 2026-07-31; the "verified against the operator's gitconfig" claim
+was written ~29 hours later.
+
+What is actually true, measured in a live container after `ensure_ssh_parity`:
+
+```
+ssh -T git@github.com                   -> Hi <user>!
+ssh -T git@gitlab.com                   -> Welcome to GitLab, @<user>!
+git ls-remote ssh://git@github.com/...  -> resolves
+```
+
+SSH covers git for **both** forges, which is what a host session does. A rewrite adds
+nothing and costs plenty: it redirects a working SSH path onto a token that also
+carries full API scope, and it is invisible to `git remote -v` (which reports the
+*rewritten* URL, so a remote stored as `git@github.com:…` reads as SSH while
+authenticating over HTTPS). The credential helper stays — inert for SSH remotes,
+correct for a genuine `https://` one. Only the rewrite was the defect.
+
+**The lesson worth carrying beyond this bug:** a test suite that writes outside its
+tempdir does not merely risk clobbering a file. It can manufacture the evidence you
+later reason from. `_sealed_env` seals every home-ish variable, and
+`test_bootstrap_never_writes_the_operator_home` asserts the operator's home is empty
+after a run — mutation-tested, since a guard only ever run against the fixed tree is
+an assertion that happens to be true.
 
 ### 3.7 First-run onboarding state (#1079)
 

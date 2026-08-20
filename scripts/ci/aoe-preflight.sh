@@ -180,13 +180,17 @@ else
 	fail "gh not authenticated" "no push, no PR, no merge, no /scpmmr"
 fi
 # ASSERT THE BEHAVIOUR, NOT THE MECHANISM. The first cut asserted a git
-# credential helper existed — machinery #1082 added and #1089 removed, because
-# git transport is SSH here exactly as on the host. A check pinned to one
-# implementation fails when the implementation is corrected, which is what it did.
-# What matters is that git can reach a forge at all.
+# credential helper existed — a mechanism check that broke when the mechanism
+# changed. What matters is that git can reach a forge at all.
+#
+# #1082 added BOTH a credential helper and a `url…insteadOf` rewrite. Only the
+# REWRITE was removed (#1130); the helper stays, inert for SSH remotes and correct
+# for a genuine https one. Transport here is SSH for github as well as gitlab —
+# see #1130 for why the earlier "github is HTTPS+PAT" reading was our own test
+# suite's side effect read back as host intent.
 GITREACH="$(x sh -c 'timeout 40 git ls-remote git@github.com:Wave-Engineering/claudecode-workflow.git HEAD 2>&1 | head -1')"
 if printf '%s' "$GITREACH" | grep -qE '^[0-9a-f]{40}'; then
-	pass "git transport works (github: HTTPS+PAT, as on the host)"
+	pass "git transport works (github: SSH, as on the host)"
 else
 	fail "git cannot reach the forge: ${GITREACH:-no output}" \
 		"an agent that cannot fetch cannot verify an MR before merging it"
@@ -222,8 +226,10 @@ else
 		"a directory symlink onto the read-only mount does this"
 fi
 
-# gitlab uses a DIFFERENT transport (SSH — the host has no gitlab rewrite), so
-# testing github alone proves only half the parity claim.
+# BOTH forges use SSH (#1130 removed the github URL rewrite; there was never a
+# gitlab one). Testing github alone still proves only half the parity claim —
+# the mounted keyring must serve both, and an ssh config that maps only one host
+# fails exactly here.
 GLREACH="$(x sh -c 'timeout 40 git ls-remote git@gitlab.com:gitlab-org/cli.git HEAD 2>&1 | head -1')"
 if printf '%s' "$GLREACH" | grep -qE '^[0-9a-f]{40}'; then
 	pass "gitlab git transport works (SSH, as on the host)"
