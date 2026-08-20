@@ -113,9 +113,38 @@ def _make_home(
     return home
 
 
-def _run(home: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
+def _sealed_env(home: Path, **overrides: str) -> dict[str, str]:
+    """Environment for driving the real ``bootstrap.sh`` without touching the host.
+
+    ``OAW_HOME`` redirects everything the bootstrap resolves *for itself*. It does
+    NOT redirect what the tools it INVOKES resolve. ``ensure_github_auth`` runs
+    ``git config --global``, and git reads ``$HOME`` / ``$XDG_CONFIG_HOME`` — so a
+    suite that seals only ``OAW_HOME`` writes the operator's real ``~/.gitconfig``
+    on every run.
+
+    It did exactly that for three weeks (#1130). Worse, the config it planted was
+    later read back and cited in a CHANGELOG entry and a test docstring as
+    independent evidence of what the operator wanted. A leak that only corrupts
+    files is recoverable; one that corrupts your evidence is not.
+
+    So: seal every home-ish variable, not only the one we named. Anything driving
+    the real bootstrap MUST build its env here rather than hand-rolling
+    ``{**os.environ, "OAW_HOME": ...}`` — that literal is the bug, and a new call
+    site copying it is how the leak comes back.
+    """
     env = dict(os.environ)
     env["OAW_HOME"] = str(home)
+    env["HOME"] = str(home)
+    env["XDG_CONFIG_HOME"] = str(home / ".config")
+    # Two more that redirect writes OUT of the tempdir and that the guard test
+    # cannot see, because it only inspects the stand-in operator home:
+    #   GIT_CONFIG_GLOBAL outranks $HOME for git itself, so it defeats the seal above.
+    #   GLAB_CONFIG_DIR is honoured directly by ensure_gitlab_auth, which would then
+    #   write a fixture token into the operator's real glab config.
+    # Neither is normally set — scrub them anyway. The cost is two lines; the cost
+    # of the last unsealed variable was three weeks of silently rewriting ~/.gitconfig.
+    env.pop("GIT_CONFIG_GLOBAL", None)
+    env.pop("GLAB_CONFIG_DIR", None)
     # SCRUB the ambient value. Run this suite INSIDE an aoe container — which is
     # the whole point of the dogfood ring — and every test here would resolve the
     # CLI config to the real, host-mounted, FLEET-SHARED /root/.claude/.claude.json:
@@ -124,7 +153,12 @@ def _run(home: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
     # mcpServers merged in permanently, since the merge is add-if-absent).
     # _run_cfgdir is the only place this may be set.
     env.pop("CLAUDE_CONFIG_DIR", None)
-    env.update(env_overrides)
+    env.update(overrides)
+    return env
+
+
+def _run(home: Path, **env_overrides: str) -> subprocess.CompletedProcess[str]:
+    env = _sealed_env(home, **env_overrides)
     return subprocess.run(
         ["bash", str(BOOTSTRAP)],
         capture_output=True,
@@ -881,7 +915,7 @@ def test_trust_is_recorded_for_the_ACTUAL_working_directory(tmp_path: Path) -> N
         ["bash", str(BOOTSTRAP)],
         capture_output=True,
         text=True,
-        env={**os.environ, "OAW_HOME": str(home)},
+        env=_sealed_env(home),
         cwd=str(workspace),
         timeout=60,
     )
@@ -988,6 +1022,59 @@ def _home_with_pat(tmp_path: Path, token: str = "ghp_TESTTOKEN") -> Path:
     )
 
 
+def test_bootstrap_never_writes_the_operator_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """THE GUARD (#1130). The suite must not write outside its tempdir.
+
+    ``operator_home`` stands in for the real ``~``: it is what ``$HOME`` points at
+    when the suite starts. ``_sealed_env`` must override that with the per-test
+    tempdir, so a bootstrap run leaves it untouched.
+
+    Why this exists rather than a comment. For three weeks the suite sealed
+    ``OAW_HOME`` and not ``HOME``; ``ensure_github_auth`` ran ``git config
+    --global``; git read ``$HOME``; and every single run rewrote the operator's
+    real ``~/.gitconfig`` — silently reinstating a URL rewrite he had deliberately
+    removed after a token leak. Nothing failed, because nothing was looking.
+
+    ASSERT EMPTINESS, not the absence of one filename. Checking only for
+    ``.gitconfig`` would pass the day some new bootstrap step writes ``.netrc``,
+    and the next leak would be as invisible as this one was.
+
+    MUTATION-TESTED: delete ``env["HOME"] = str(home)`` from ``_sealed_env`` and
+    this test must go red. A guard only ever run against the fixed tree is not a
+    guard — it is an assertion that happens to be true.
+    """
+    operator_home = tmp_path / "operator-home"
+    operator_home.mkdir()
+    monkeypatch.setenv("HOME", str(operator_home))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+
+    # A PAT present is what drives ensure_github_auth down the git-config path —
+    # the exact route that leaked. A run without one would pass vacuously.
+    home = _home_with_pat(tmp_path)
+    proc = _run(home)
+    assert proc.returncode == 0, proc.stderr
+
+    # POSITIVE half first: prove the git-config path actually executed. Without
+    # this the guard passes vacuously the day ensure_github_auth returns early
+    # (empty token, shape-guard rejection, `command -v git` false, or the
+    # "hosts.yml already carries a token" branch) — an empty denominator wearing
+    # a pass's clothes, which is the exact shape this file polices elsewhere.
+    # It also pins WHERE the write landed, not only where it did not.
+    assert (home / ".gitconfig").is_file(), (
+        "bootstrap never reached `git config --global` — this guard proved nothing. "
+        "Check that the PAT fixture still drives ensure_github_auth down that path."
+    )
+
+    leaked = sorted(child.name for child in operator_home.iterdir())
+    assert leaked == [], (
+        "bootstrap wrote into the operator's home directory: "
+        f"{leaked}. Everything the bootstrap and the tools it invokes touch must "
+        "resolve inside the per-test tempdir — see _sealed_env."
+    )
+
+
 def test_github_credential_is_written_as_a_file(tmp_path: Path) -> None:
     home = _home_with_pat(tmp_path)
     proc = _run(home)
@@ -1022,7 +1109,7 @@ def test_github_token_is_never_exported_to_the_environment(tmp_path: Path) -> No
         ["bash", "-c", f'. "{BOOTSTRAP}" >/dev/null 2>&1; env'],
         capture_output=True,
         text=True,
-        env={**os.environ, "OAW_HOME": str(home)},
+        env=_sealed_env(home),
         cwd=str(tmp_path),
         timeout=60,
     )
@@ -1106,7 +1193,7 @@ def test_github_pat_cannot_be_projected_into_the_environment(tmp_path: Path) -> 
     proc = subprocess.run(
         ["bash", "-c", f'. "{BOOTSTRAP}" >/dev/null 2>&1; env'],
         capture_output=True, text=True,
-        env={**os.environ, "OAW_HOME": str(home)}, cwd=str(tmp_path), timeout=60,
+        env=_sealed_env(home), cwd=str(tmp_path), timeout=60,
     )
     assert "ghp_MUSTNOTLEAK" not in proc.stdout, "deny-list bypassed — PAT reached the env"
 
@@ -1145,7 +1232,7 @@ def _run_cfgdir(home: Path, cfgdir: Path, cwd: Path, **env: str):
     return subprocess.run(
         ["bash", str(BOOTSTRAP)],
         capture_output=True, text=True, timeout=60, cwd=str(cwd),
-        env={**os.environ, "OAW_HOME": str(home), "CLAUDE_CONFIG_DIR": str(cfgdir), **env},
+        env=_sealed_env(home, CLAUDE_CONFIG_DIR=str(cfgdir), **env),
     )
 
 
@@ -1548,7 +1635,7 @@ def test_gitlab_token_is_never_exported_to_the_environment(tmp_path: Path) -> No
     proc = subprocess.run(
         ["bash", "-c", f'. "{BOOTSTRAP}" >/dev/null 2>&1; env'],
         capture_output=True, text=True, timeout=60,
-        env={**os.environ, "OAW_HOME": str(home)}, cwd=str(tmp_path),
+        env=_sealed_env(home), cwd=str(tmp_path),
     )
     assert "glpat-LEAKCANARY" not in proc.stdout
 
@@ -1634,53 +1721,66 @@ def test_operator_local_bin_is_read_only() -> None:
     assert 'mode = "ro"' in block, "operator bin mount must be read-only"
 
 
-def test_git_transport_matches_the_host_per_forge() -> None:
-    """Parity is PER FORGE — the host does not treat them alike.
+def test_git_transport_is_ssh_for_both_forges_with_no_url_rewrite() -> None:
+    """git in the container goes over SSH, for BOTH forges, with no URL rewriting.
 
-    Verified against the operator's real ~/.gitconfig:
+    Replaces ``test_git_transport_matches_the_host_per_forge`` (#1130), which
+    asserted the opposite for github and justified it in its docstring by citing
+    the operator's ``~/.gitconfig``. That evidence was written by this very suite:
+    it sealed ``$OAW_HOME`` but not ``$HOME``, so ``git config --global`` in
+    ``ensure_github_auth`` wrote the operator's real config on every run. The test
+    pinned a conclusion drawn from our own side effect.
 
-        url.https://github.com/.insteadof       git@github.com:
-        credential.https://github.com.helper    !gh auth git-credential
-        (no gitlab rewrite at all)
+    What is actually true, measured in a live container after ``ensure_ssh_parity``:
 
-    So a host session uses **HTTPS+PAT for github** and **SSH for gitlab**.
+        ssh -T git@github.com                   -> Hi bakeb7j0!
+        ssh -T git@gitlab.com                   -> Welcome to GitLab, @brbaker-alog!
+        git ls-remote ssh://git@github.com/...  -> resolves
 
-    An earlier draft of #1089 removed the github rewrite on the premise "the host
-    uses SSH for git" — true for gitlab, false for github, generalised from one
-    forge to both. That made the container authenticate github git as the SSH key
-    identity while the host uses the PAT identity: different credential, different
-    audit trail, different effective permissions. Under the parity principle that
-    is a regression, not a simplification.
+    So a rewrite would only redirect a working SSH path onto a broadly-scoped
+    token — invisibly, since ``git remote -v`` reports the rewritten URL.
 
-    This test pins BOTH halves, because pinning either alone is what went wrong.
+    The credential helper is deliberately still asserted present: it is inert for
+    SSH remotes and correct for a genuine ``https://`` one. Only the rewrite was
+    the defect.
     """
     body = (
         REPO_ROOT / "containers" / "oakandwave-workflow" / "bootstrap.sh"
     ).read_text()
-    assert 'url.https://github.com/.insteadOf' in body, (
-        "github rewrite missing — the host HAS it; removing it diverges from parity"
+
+    # Assert on the CALL, not on prose: this file's own comments discuss the
+    # rewrite at length, so a substring check against the whole body would match
+    # the explanation of why it is gone.
+    # Case-INSENSITIVE, on the bare word. Git config names are case-insensitive, so
+    # `url.…insteadof` is legal and identical — and `pushInsteadOf` (the natural
+    # reach for "push over HTTPS, fetch over SSH") does not contain the literal
+    # ".insteadOf" at all. A substring check on the exact camelCase spelling would
+    # wave through both.
+    rewrites = [
+        l.strip()
+        for l in body.splitlines()
+        if re.search(r"insteadof", l, re.I) and not l.lstrip().startswith("#")
+    ]
+    assert rewrites == [], (
+        f"a URL rewrite is being configured: {rewrites}. git over SSH works for "
+        "both forges; a rewrite silently moves it onto the PAT."
     )
-    assert "gh auth git-credential" in body, "github credential helper missing"
-    assert "url.https://gitlab.com/.insteadOf" not in body, (
-        "gitlab rewrite added — the host has NO gitlab rewrite; gitlab git is SSH"
-    )
+
+    # Anchored to the CALL, not the raw body: eleven lines above, this test insists
+    # on exactly that discipline, and bootstrap.sh's prose now discusses the helper
+    # by name. A bare substring check would go green on a comment alone.
+    assert re.search(
+        r"^\s*git config --global .*\n?.*gh auth git-credential", body, re.M
+    ), ("github credential helper is not CONFIGURED — needed for a genuine https remote")
+
     # Assert the CALL, not the definition. `"ensure_ssh_parity" in body` is
     # satisfied by the function existing while main never invokes it — the
     # declared-but-not-wired shape this repo keeps producing (#1076 most of all).
     # Caught by mutation: removing the call from main left that assertion green.
-    assert re.search(r"^\tensure_ssh_parity$", body, re.M), (
-        "ensure_ssh_parity is defined but not CALLED from main: gitlab git and "
-        "every remote host (blueshift, perkollate, agent-smith-ca) depend on it"
+    assert re.search(r"^\s*ensure_ssh_parity\s*$", body, re.M), (
+        "ensure_ssh_parity is never CALLED — the keys stay invisible and git over "
+        "SSH fails, which is the failure the rewrite was papering over"
     )
-
-
-# --- kit hook wiring into the settings the CLI reads (#1086) ------------------
-#
-# R-06 says hook wiring is versioned with the release. Under aoe it was not: the
-# CLI reads $CLAUDE_CONFIG_DIR/settings.json and never the image's own copy. That
-# went unnoticed because the shared file had been seeded from a host carrying the
-# same kit, so an equivalent hook set was already sitting in it and hooks DID fire.
-# What could not happen was version movement — and nothing reported that.
 
 
 _GUARD_RE = re.compile(r"^\[ -x (?P<path>\S+) \] \|\| exit 0; (?P<cmd>.*)$", re.S)
@@ -2185,13 +2285,24 @@ def test_beacon_writes_its_marker_by_running(tmp_path: Path) -> None:
     assert marker.read_text().strip(), "the marker is empty — no timestamp recorded"
 
 
-def test_beacon_is_silent_on_stdout() -> None:
+def test_beacon_is_silent_on_stdout(tmp_path: Path) -> None:
     """SessionStart stdout becomes additionalContext in the agent's window. A
-    beacon that spends context would tax every session for the life of the kit."""
-    home = os.environ.get("HOME", "/tmp")
+    beacon that spends context would tax every session for the life of the kit.
+
+    Uses a tempdir HOME, not the ambient one (#1130). This previously ran the
+    beacon with ``HOME`` = the operator's real home, so asserting "silent on
+    stdout" had the side effect of writing ``~/.claude/.kit-hooks-alive`` on the
+    host every run. The marker is a kit file and harmless in itself — but a suite
+    that writes outside its tempdir at all is one refactor away from writing
+    something that is not harmless, which is precisely how the ~/.gitconfig leak
+    happened. The beacon needs ``$HOME/.claude`` to exist; it does not need it to
+    be the operator's.
+    """
+    home = tmp_path / "beaconhome"
+    (home / ".claude").mkdir(parents=True)
     proc = subprocess.run(
         ["bash", str(BEACON)], capture_output=True, text=True, timeout=30,
-        env={**os.environ, "HOME": home},
+        env={**os.environ, "HOME": str(home)},
     )
     assert proc.stdout == "", f"beacon wrote to stdout: {proc.stdout!r}"
 
@@ -2292,8 +2403,7 @@ def _stub_mise(binroot: Path, *, exit_code: int = 0, message: str = "") -> Path:
 
 
 def _run_toolbox(home: Path, toolbox: Path, binroot: Path | None = None, **env: str):
-    e = {**os.environ, "OAW_HOME": str(home), "OAW_TOOLBOX_DIR": str(toolbox)}
-    e.pop("CLAUDE_CONFIG_DIR", None)
+    e = _sealed_env(home, OAW_TOOLBOX_DIR=str(toolbox))
     if binroot is not None:
         e["PATH"] = f"{binroot}:{e['PATH']}"
     e.update(env)

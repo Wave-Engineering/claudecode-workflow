@@ -1360,25 +1360,38 @@ ensure_github_auth() {
 	chmod 600 "$hosts"
 	info "github: wrote $hosts (mode 600, file modality — NOT exported to env)"
 
-	# RESTORED after being wrongly removed (#1089). The host's own ~/.gitconfig has
-	# exactly this, verified:
+	# NO URL REWRITE (#1130). An earlier revision set
+	# `url.https://github.com/.insteadOf = git@github.com:` here, so every
+	# `git@github.com:` remote silently resolved to HTTPS and authenticated with the
+	# PAT instead of the mounted SSH key.
 	#
-	#   url.https://github.com/.insteadof      git@github.com:
-	#   credential.https://github.com.helper   !gh auth git-credential
+	# It was justified by "the host's own ~/.gitconfig has exactly this, verified".
+	# That evidence was self-inflicted: this suite drives bootstrap.sh for real, and
+	# until #1130 it sealed only $OAW_HOME — not $HOME — so `git config --global`
+	# below wrote the OPERATOR'S real ~/.gitconfig on every test run. The config was
+	# then read back as proof of host intent. We were citing our own side effect.
 	#
-	# so HTTPS+PAT *is* what a host session uses for github git — #1082 was right.
-	# An earlier draft removed it on the premise "the host uses SSH for git". That is
-	# true for GITLAB (the host has no gitlab rewrite) and FALSE for github; it was
-	# generalised from one forge to both. Removing it made the container authenticate
-	# github git as the SSH key identity while the host uses the PAT identity — a
-	# different credential, audit trail and permission set. Under the parity
-	# principle that is a regression, not a simplification.
+	# The rewrite is also unnecessary. #1082's diagnosis (container git is broken)
+	# was right; its cause was that the mounted keys were UNREACHABLE to the runtime
+	# user, fixed by #1085 (traversable /root) + ensure_ssh_parity below. Measured in
+	# a live container after that fix:
+	#
+	#   ssh -T git@github.com            -> Hi bakeb7j0!
+	#   ssh -T git@gitlab.com            -> Welcome to GitLab, @brbaker-alog!
+	#   git ls-remote ssh://git@github.com/...  -> resolves
+	#
+	# SSH covers git for BOTH forges, which is what a host session does. A rewrite
+	# that redirects a working SSH path onto a broadly-scoped token is strictly worse:
+	# the token also carries full API scope, and the redirect is invisible to
+	# `git remote -v`.
+	#
+	# The credential helper STAYS. It is inert while remotes are SSH, and it is the
+	# right mechanism for a repo that genuinely carries an `https://` remote — the
+	# rewrite is what hijacked remotes that did not.
 	if command -v git >/dev/null 2>&1; then
 		git config --global --replace-all \
 			"credential.https://github.com.helper" '!gh auth git-credential' || true
-		git config --global --replace-all \
-			"url.https://github.com/.insteadOf" "git@github.com:" || true
-		info "github: git configured HTTPS+PAT for github.com (matching the host's ~/.gitconfig)"
+		info "github: credential helper set for genuine https remotes (git over SSH needs no rewrite)"
 	fi
 
 }
