@@ -17,7 +17,7 @@ are worth keeping apart:
   `release.yml` builds from PR titles on every `v*` tag — with one hole: **7.1.3** is a real tag
   (`bae1b8d`) that never got a GitHub Release, so it has no record anywhere but `git log`.
 
-## [Unreleased]
+## [8.3.1] - 2026-08-20
 
 ### Fixed
 
@@ -47,6 +47,30 @@ are worth keeping apart:
   the operator's home is **empty** — not merely free of `.gitconfig`, since the next
   leak will have a different filename. Mutation-tested: removing the `HOME` seal
   turns it red with exactly `.gitconfig`.
+
+- **Operators: check your own `~/.gitconfig` (#1130).** The fix stops the leak; it does
+  not clean up what three weeks of test runs already wrote. Any host that ran this
+  suite still carries the planted block, invisibly routing `git@github.com:` remotes
+  onto the PAT — and `git remote -v` will not show it, because it reports the
+  *rewritten* URL:
+
+  ```sh
+  git config --global --get-regexp '^url\.'          # planted? (git remote -v won't tell you)
+  git config --get remote.origin.url                  # the RAW stored remote
+  git ls-remote --get-url origin                      # where git will ACTUALLY connect
+  ```
+
+  To remove it:
+
+  ```sh
+  git config --global --unset-all url."https://github.com/".insteadOf
+  ```
+
+  Leave `credential.https://github.com.helper` alone — it is inert for SSH remotes and
+  correct for a genuine `https://` one. **Container git is unaffected:** aoe mounts the
+  host gitconfig at `/root/.gitconfig` while the agent runs as `ubuntu` with
+  `HOME=/home/ubuntu`, and there is no gitconfig parity step, so the host block never
+  reached container git.
 
 - **Removed the github URL rewrite from the container (#1130).** With the evidence
   for it withdrawn, the question was re-asked on the container's own merits and the
