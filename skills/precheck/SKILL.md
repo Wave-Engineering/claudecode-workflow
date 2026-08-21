@@ -188,7 +188,19 @@ Ready for `/scp` / `/scpmr` / `/scpmmr` or rework.
 
 **`vox`:** same info, conversational, 1-2 sentences, ending with "Ready for your call."
 
-**FRONT-LOAD the speaker identity — open with `"<Dev-Name> here."`** (#952). Synthesis runs at ~1x realtime, so a long body can exhaust a caller's `timeout` budget *during synthesis*, and whatever is still playing gets cut — the tail first. `vox` appends its own `. This is <name>.` sign-off, but the sign-off is the tail, so it is exactly what a truncation drops. Leading with the name means the identity is spoken first and survives a cut. Example: `vox "<Dev-Name> here. Precheck gate ready on #<N>. <one sentence>. Ready for your call."` — do NOT open with "Precheck gate ready on #<N>…" and rely on the appended sign-off to identify you; that identity is the first thing lost. `vox` playback is non-blocking by default (it detaches, so a caller timeout bounds synthesis, not playback), so no flag is needed — just invoke `vox` normally.
+**FRONT-LOAD the speaker identity — open with `"<Dev-Name> here."`** (#952). Synthesis runs at ~1x realtime, so a long body can exhaust a caller's `timeout` budget *during synthesis*, and whatever is still playing gets cut — the tail first. `vox` appends its own `. This is <name>.` sign-off, but the sign-off is the tail, so it is exactly what a truncation drops. Leading with the name means the identity is spoken first and survives a cut. Example — **pipe it, never inline** (#942):
+
+```bash
+vox <<'EOF'
+<Dev-Name> here. Precheck gate ready on #<N>. <one sentence>. Ready for your call.
+EOF
+```
+
+Do NOT open with "Precheck gate ready on #<N>…" and rely on the appended sign-off to identify you; that identity is the first thing lost.
+
+**The heredoc is a safety requirement, not formatting.** `vox "…"` passes prose through a double-quoted shell string, where backticks and `$(...)` are command substitution — bash executes them before `vox` runs, and strips them from what gets spoken. A precheck announcement names issues, branches and scripts, so it is exactly the message most likely to carry a code span. The quoted `<<'EOF'` delimiter is load-bearing: a bare `<<EOF` still substitutes. See #942 and `tests/test_body_never_inline.py`.
+
+`vox` playback is non-blocking by default (it detaches, so a caller timeout bounds synthesis, not playback), so no flag is needed — just invoke `vox` normally.
 
 ## Sandbox Auto-Approval (KAHUNA Flight Agents)
 

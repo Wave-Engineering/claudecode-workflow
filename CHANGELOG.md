@@ -17,6 +17,50 @@ are worth keeping apart:
   `release.yml` builds from PR titles on every `v*` tag — with one hole: **7.1.3** is a real tag
   (`bae1b8d`) that never got a GitHub Release, so it has no record anywhere but `git log`.
 
+## [Unreleased]
+
+### Fixed
+
+- **Prose passed to a CLI as a double-quoted literal is executed by bash (#942).**
+  Backticks and `$(...)` in a double-quoted shell string are command substitution,
+  so documentation *about* commands *runs* those commands — and the span is
+  **stripped from the text**, so the body silently loses content while the side
+  effect happens. The 2026-07-20 near-miss launched `discord-watcher directmsg`
+  and an MCP server that then blocked forever on stdin; the call hit its timeout,
+  nothing posted, and the natural diagnosis was "network blip, retry."
+
+  **Most of this was already fixed by a mechanism the issue did not anticipate.**
+  Issue and PR bodies now go through MCP tools (`work_item`, `pr_create`,
+  `pr_comment`, `disc_send`) where `body` is a JSON parameter that never reaches a
+  shell — structurally immune, not merely carefully quoted.
+
+  **The live residual was `vox`**, which takes prose on argv, has no `--body-file`,
+  and which `/precheck` *prescribed* in the unsafe form — so the announcement fired
+  on every gate and every merge was the most likely message to carry a tool name.
+  `vox` already reads stdin, so the fix is guidance: `vox <<'EOF' … EOF`. Also
+  corrected: `git commit -m "<prose>"` in the cross-repo recipe and `/prepwaves`
+  (commit messages are the highest-volume agent-composed prose here), and the
+  `/vox` shell example in `docs/skill-reference.md`.
+
+  **The rule is narrower than "don't pass prose inline", and the narrow version is
+  the one that works.** Substitution happens at **assignment** — `msg="see
+  \`cmd\`"` has already executed by the time anything uses `$msg` — so hoisting
+  prose into a variable relocates the symptom and fixes nothing. `msg="$(cat
+  file)"` *is* safe, because expansion does not re-parse the value. The invariant:
+  **prose must never appear as a double-quoted literal in shell source, anywhere in
+  the chain.** A fixed literal with no metacharacters
+  (`scripts/godspeed-lookback.sh:861`) is fine and was left alone.
+
+  Pinned by `tests/test_body_never_inline.py` (12 tests). Every hazard claim is
+  reproduced against a marker tool that records actual execution rather than
+  inferred from output shape, and each safe-form test has an unsafe-form twin that
+  must execute — assertion-liveness (#922), because a suite that only shows the fix
+  behaving safely cannot distinguish "fixed" from "this shell never substituted."
+  The guards match **invocations, not characters**: scoped to lines that really run
+  `git`/`gh`/`glab`/`vox`, permitting bare `"$var"` expansion, ignoring
+  slash-command syntax, and honouring a declared `# ANTI-EXAMPLE` sentinel so
+  documentation can show the hazard it forbids.
+
 ## [8.3.1] - 2026-08-20
 
 ### Fixed
