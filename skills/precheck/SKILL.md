@@ -198,6 +198,25 @@ EOF
 
 Do NOT open with "Precheck gate ready on #<N>…" and rely on the appended sign-off to identify you; that identity is the first thing lost.
 
+**Two hazards, not one (#942 substitution, #1136 termination).** The quoted
+delimiter fixes the first. It does not fix the second: a body containing a line
+equal to the delimiter truncates the text there and executes the remainder.
+
+**The boundary is the content, not the author.** A heredoc is safe only when you
+can see the whole body in the source and no line of it could equal the delimiter.
+The template above has a `<one sentence>` placeholder — so you *cannot* see the
+body, and this announcement is the message most likely to carry a code span
+(it names issues, branches and scripts). **Compose it with the `Write` tool and
+feed it on stdin:**
+
+```bash
+vox < /tmp/precheck-announce.md
+```
+
+`vox` takes **no path argument** — `vox /tmp/precheck-announce.md` synthesises the
+literal path string and exits 0, giving you silence and a success code. Verified;
+an earlier draft of this paragraph got it wrong.
+
 **The heredoc is a safety requirement, not formatting.** `vox "…"` passes prose through a double-quoted shell string, where backticks and `$(...)` are command substitution — bash executes them before `vox` runs, and strips them from what gets spoken. A precheck announcement names issues, branches and scripts, so it is exactly the message most likely to carry a code span. The quoted `<<'EOF'` delimiter is load-bearing: a bare `<<EOF` still substitutes. See #942 and `tests/test_body_never_inline.py`.
 
 `vox` playback is non-blocking by default (it detaches, so a caller timeout bounds synthesis, not playback), so no flag is needed — just invoke `vox` normally.

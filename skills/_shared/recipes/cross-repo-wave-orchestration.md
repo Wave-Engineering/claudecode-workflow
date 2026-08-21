@@ -123,29 +123,35 @@ worktree IS the isolation.
 
 ```bash
 git -C /tmp/wt-sdlc-<num> add <files>
-# Commit message to a FILE too (#942) — same rule as the PR body three lines
-# down, and for the same reason: a conventional-commit subject routinely names
-# tools, and `-m "..."` is a double-quoted literal.
-cat > /tmp/msg-<num>.txt <<'MSG'
-type(scope): description
-
-Closes #<num>
-MSG
+# PREFER THE MCP TOOLS — no shell, so neither hazard exists (#942, #1136).
+# `pr_create` / `work_item` take `body` as a JSON parameter that never reaches a
+# shell, so backticks cannot substitute and no line can terminate anything. A wave
+# Flight generates PR bodies unattended and at volume, and those bodies routinely
+# carry fenced shell examples — i.e. lines that are exactly `EOF`. This is the
+# highest-exposure prose in the repo; do not hand-roll it through bash.
+#
+#   pr_create({ title, body, base: "$KAHUNA_BRANCH", head: "feature/<num>-<slug>" })
+#
+# FALLBACK, only if the MCP tool is unavailable. The body and the commit message
+# are BOTH composed per-PR, so neither is a fixed template: write each with the
+# `Write` tool and pass the path. A quoted heredoc is NOT sufficient here — it
+# stops substitution but not termination, and a body containing a line equal to
+# the delimiter truncates and leaks the remainder to the shell (#1136).
+#
+#   Write /tmp/pr-body-<num>.md   <- compose the body here, not in bash
+#   Write /tmp/msg-<num>.txt      <- and the commit message here
+#
 git -C /tmp/wt-sdlc-<num> commit -F /tmp/msg-<num>.txt
 git -C /tmp/wt-sdlc-<num> push -u origin feature/<num>-<slug>
 
-# Body to a FILE via a QUOTED heredoc — never inline --body "..." (#942).
-# Backticks and $(...) in a double-quoted arg are command substitution: bash
-# runs them and strips them from the body. The quoted 'BODY' delimiter is
-# what suppresses that; a bare <<BODY still substitutes.
-cat > /tmp/pr-body-<num>.md <<'BODY'
-## Summary
-...markdown with `backticks` and $(...) freely...
-BODY
-
+# `gh pr create` has --body-file but NO --title-file. A whole-argument command
+# substitution is the safe way to pass the title: bash expands the value and does
+# not re-parse it, so backticks inside the file are inert (verified in
+# tests/test_body_never_inline.py::test_variable_EXPANSION_does_not_resubstitute).
 gh pr create -R Wave-Engineering/mcp-server-sdlc \
   --base "$KAHUNA_BRANCH" --head feature/<num>-<slug> \
-  --title "..." --body-file /tmp/pr-body-<num>.md
+  --title "$(cat /tmp/pr-title-<num>.txt)" \
+  --body-file /tmp/pr-body-<num>.md
 
 gh pr merge <pr-num> -R Wave-Engineering/mcp-server-sdlc \
   --squash --auto --delete-branch

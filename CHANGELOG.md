@@ -21,6 +21,35 @@ are worth keeping apart:
 
 ### Fixed
 
+- **A quoted heredoc stops substitution but not termination (#1136).** #942's rule
+  — write prose to a file with `<<'EOF'` — is correct and was incomplete. The
+  quoted delimiter suppresses expansion; it does nothing about a body that
+  *contains* a line equal to the delimiter, which ends the heredoc there,
+  truncates the text, and executes the remainder as shell.
+
+  Hit ten minutes after #942 merged, filing #1135: that issue's body documented a
+  `vox <<'EOF'` example, so it contained a line that was exactly `EOF`. `gh` never
+  received a coherent body, nothing was created, and it surfaced as a bash parse
+  error rather than "your text was truncated" — the same misleading symptom #942
+  is about. Same shape as #942's core observation, too: documentation explaining
+  heredocs necessarily contains heredocs, so the hazard is worst precisely where
+  the documentation is most useful.
+
+  "Use a distinctive delimiter" is the weak mitigation — it works only if the
+  author can predict the content, which converts a systematic property back into a
+  per-invocation judgement call. **For agent-composed prose the guidance is now to
+  avoid a shell heredoc entirely** and write the file with a tool that has no
+  delimiter semantics (the `Write` tool). Heredocs remain sanctioned for fixed,
+  author-controlled text, and the boundary is stated: whether you know the body in
+  advance.
+
+  Three new tests reproduce termination the same way the substitution cases were
+  reproduced — including one that lets a "distinctive" delimiter collide with
+  content *about* delimiters, demonstrating the weak mitigation failing on its own
+  terms. Two further pins require the guidance to state the mechanism (not merely
+  the word "terminate" — an earlier pin passed on an unrelated `/lazyriver`
+  paragraph containing "terminates") and to name a working non-shell path.
+
 - **Prose passed to a CLI as a double-quoted literal is executed by bash (#942).**
   Backticks and `$(...)` in a double-quoted shell string are command substitution,
   so documentation *about* commands *runs* those commands — and the span is
@@ -51,7 +80,7 @@ are worth keeping apart:
   the chain.** A fixed literal with no metacharacters
   (`scripts/godspeed-lookback.sh:861`) is fine and was left alone.
 
-  Pinned by `tests/test_body_never_inline.py` (12 tests). Every hazard claim is
+  Pinned by `tests/test_body_never_inline.py` (17 tests, with #1136 below). Every hazard claim is
   reproduced against a marker tool that records actual execution rather than
   inferred from output shape, and each safe-form test has an unsafe-form twin that
   must execute — assertion-liveness (#922), because a suite that only shows the fix

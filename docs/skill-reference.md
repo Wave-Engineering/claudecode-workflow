@@ -479,6 +479,8 @@ Build finished
 EOF
 ```
 
+For anything filled in at invocation time, write the text with the `Write` tool and feed the file on **stdin** — `vox < /tmp/announcement.md`. **`vox` takes no path argument**: `vox /tmp/announcement.md` synthesises the literal path and exits 0. A quoted heredoc stops substitution but not *termination*, so a body containing a line equal to the delimiter truncates and leaks the remainder to the shell (#1136). Full rationale in `/vox`.
+
 (The `/vox "..."` examples above are slash-command syntax typed into Claude Code, not shell — they are not affected.)
 
 **Paralinguistic tags:** Chatterbox supports expressive tags like `[laugh]`, `[sigh]`, `[clear throat]` -- use sparingly for personality.
