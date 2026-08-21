@@ -140,9 +140,28 @@ QUARANTINE="$SPOOL/.quarantine"
 
 # Move anything we cannot drain OUT of the watched set rather than leaving it to
 # re-trigger. Hidden, so systemd's DirectoryNotEmpty ignores it.
+#
+# NOTHING GONE IS QUARANTINED. `mkdir -p` before the `mv` means a source that
+# another drain already claimed still creates $QUARANTINE — empty. An empty
+# quarantine directory is a FALSE SIGNAL in the one place an operator looks to
+# ask "did anything fail to drain?", and it is the residue #1142 was reporting:
+# the spool ends with a hidden entry nothing put there. Caller-side claiming
+# (below) is what closes the race; this guard keeps any future caller honest.
+#
+# $2 is the name to land under — callers that have already renamed the file to a
+# private claim pass the ORIGINAL basename, because a quarantine full of
+# `.claimed.4711.29103` is useless for the triage it exists to serve.
 quarantine() {
+	# `-L` as well as `-e`, and the omission was a real regression: `-e` stats THROUGH
+	# a symlink, so a DANGLING one (or a loop, or a target behind an untraversable
+	# directory) is a visible directory entry that `-e` calls absent. On the no-vox
+	# path that left it in the spool and exited 1 — a visible entry plus a failure is
+	# the exact DirectoryNotEmpty latch the header above exists to prevent. `mv`
+	# renames the LINK and never resolves it, so quarantining works fine; only the
+	# guard was wrong. Verified both ways against a dangling `.msg` symlink.
+	[[ -e "$1" || -L "$1" ]] || return 0
 	mkdir -p "$QUARANTINE" 2>/dev/null || return 0
-	mv -f "$1" "$QUARANTINE/" 2>/dev/null || rm -f "$1" 2>/dev/null || true
+	mv -f "$1" "$QUARANTINE/${2:-}" 2>/dev/null || rm -f "$1" 2>/dev/null || true
 }
 
 if [[ ! -x "$VOX" ]]; then
@@ -163,30 +182,59 @@ fi
 shopt -s nullglob
 spoken=0
 dropped=0
+# A monotonic counter, not $RANDOM. $$ separates concurrent drains; this separates
+# the claims WITHIN one. $RANDOM draws from 32768, so 40 entries collide at ~2.4%
+# and a large backlog approaches certainty — and a repeat is only harmless while the
+# earlier claim was consumed. A claimed DIRECTORY that quarantine could neither move
+# nor `rm -f` outlives its iteration, and a repeat then renames a good .msg INTO it,
+# where it is classified undrainable and swallowed unspoken. Counting cannot repeat.
+claim_seq=0
 
+# `dotglob` is deliberately NOT set, and that is load-bearing rather than incidental:
+# it is what stops a drain enumerating another drain's `.claimed.*`, the provider's
+# in-flight `.tmp.*`, or `.quarantine` itself. Turning it on would make concurrent
+# drains steal each other's claims.
 for f in "$SPOOL"/*; do
-	# VANISHED is not UNDRAINABLE. Under concurrent drains the glob is a snapshot,
-	# so an entry another drain already claimed is simply gone — treating that as
-	# "cannot drain this" sent every loser down the quarantine path and created a
-	# stray .quarantine directory on every race.
-	[[ -e "$f" ]] || continue
-
-	# Anything that exists but is not a plain .msg cannot be drained — a
-	# subdirectory, a stray file — and would re-trigger the path unit forever if
-	# left in the watched set.
-	if [[ ! -f "$f" || "$f" != *.msg ]]; then
-		quarantine "$f"
+	# CLAIM IT FIRST, before deciding anything about it. The glob is evaluated once
+	# at loop start, so two drains racing — the path unit's instance and an operator
+	# running this by hand, which the runbook tells them to do — can both enumerate
+	# the same entry. `mv` is atomic and fails when the source is already gone, so
+	# exactly one drain wins and the loser moves on. `rm -f` would not do this: it
+	# succeeds for both.
+	#
+	# UNCONDITIONALLY, and this is the #1142 fix. Classifying first and claiming
+	# second means every `[[ ... "$f" ]]` test races the winner's rename: the file
+	# passes `-e`, another drain claims it, and `! -f` is then true for a file that
+	# was perfectly drainable — sending the loser down the quarantine path. A prior
+	# fix added the `-e` guard, which narrowed that window without closing it,
+	# because the two tests are separate stat() calls. Measured with the window
+	# widened to 20ms: 5 runs of 6 concurrent drains, 5 stray quarantine
+	# directories, every one empty. After the claim we OWN the entry, so no check
+	# below can be invalidated by anyone else.
+	#
+	# A failed claim is not an error: it means the entry vanished or another drain
+	# won it. Either way it is not ours and it is not left behind.
+	claim_seq=$((claim_seq + 1))
+	claim="$SPOOL/.claimed.$$.$claim_seq"
+	if ! mv "$f" "$claim" 2>/dev/null; then
+		# Distinguish the two reasons the claim failed, because they need opposite
+		# responses. Gone = another drain won it, which is the normal case and silent.
+		# STILL THERE = we could not claim something we can see — a read-only spool, a
+		# permissions change — and every entry will fail the same way, leaving the whole
+		# spool visible while we exit 0 reporting nothing. That is a silent latch in a
+		# script whose doctrine is that guessing silently is worse than refusing.
+		[[ -e "$f" || -L "$f" ]] && echo "oaw-vox-drain: cannot claim ${f##*/} — check permissions on $SPOOL" >&2
 		continue
 	fi
 
-	# CLAIM IT FIRST, with a rename. The glob is evaluated once at loop start, so
-	# two drains racing — the path unit's instance and an operator running this by
-	# hand, which the runbook tells them to do — can both enumerate the same file
-	# and both speak it. `mv` is atomic and fails when the source is already gone,
-	# so exactly one drain wins and the loser moves on. `rm -f` would not do this:
-	# it succeeds for both.
-	claim="$SPOOL/.claimed.$$.${RANDOM}"
-	mv "$f" "$claim" 2>/dev/null || continue
+	# Anything that is not a plain .msg cannot be drained — a subdirectory, a stray
+	# file — and would re-trigger the path unit forever if left in the watched set.
+	# Tested on the CLAIM, which cannot change under us; named for the original, so
+	# the quarantine still says what landed there.
+	if [[ ! -f "$claim" || "$f" != *.msg ]]; then
+		quarantine "$claim" "${f##*/}"
+		continue
+	fi
 
 	dev_name="$(sed -n 's/^dev_name: //p' "$claim" | head -1)"
 	# Body is everything after the first blank line — the header is metadata for
