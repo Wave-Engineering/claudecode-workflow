@@ -231,6 +231,121 @@ def test_variable_EXPANSION_does_not_resubstitute(shell):
     )
 
 
+# --- termination: the half a quoted delimiter does NOT solve (#1136) ---------
+
+
+def test_quoted_delimiter_does_not_prevent_termination(shell):
+    """`<<'EOF'` stops SUBSTITUTION. It does not stop TERMINATION.
+
+    Two independent properties, and #942 shipped guidance covering only one. A
+    body containing a line equal to the delimiter ends the heredoc there, and
+    everything after it is executed as shell.
+
+    Hit live ten minutes after #942 merged, filing #1135: the issue body
+    documented a `vox <<'EOF'` example, so it contained a line that was exactly
+    `EOF`, which closed the outer heredoc. `gh` never received a coherent body,
+    no issue was created, and it surfaced as a bash parse error rather than
+    "your text was truncated" — the same misleading-symptom shape #942 is about.
+    """
+    shell(
+        "cat > body.md <<'EOF'\n"
+        "line one\n"
+        "EOF\n"
+        "marker-tool leaked-past-the-delimiter\n"
+    )
+    body = (shell.tmp / "body.md").read_text()
+
+    assert "line one" in body
+    assert "leaked" not in body, (
+        "expected the body to be TRUNCATED at the inner delimiter"
+    )
+    assert "ran:leaked-past-the-delimiter" in _executed(shell), (
+        "expected the remainder to reach the shell — if it no longer does, "
+        "re-derive this rule before relaxing the guidance built on it"
+    )
+
+
+def test_a_distinctive_delimiter_collides_with_docs_about_delimiters(shell):
+    """The "just pick a weird delimiter" rebuttal, refuted on its own terms.
+
+    An earlier draft used the delimiter `BODY` and a body containing `BODY` — which
+    only re-proved the previous test (a delimiter present in the content
+    terminates) while *claiming* to refute distinctiveness. A nonce delimiter
+    genuinely would not have collided there, so the assertion overclaimed against
+    its own evidence. In a file that says "the instrument is a claim, and claims get
+    tested," that mattered, and review caught it.
+
+    The honest demonstration is reflexive, and it is the actual shape of #1135:
+    documentation explaining "use `<<'BODY942'`" **necessarily contains the line
+    `BODY942`**. Distinctiveness cannot save a document whose subject is the
+    delimiter — the more distinctive you make it, the more distinctive the string
+    you have just written into the body.
+    """
+    shell(
+        "cat > body.md <<'BODY942'\n"
+        "Pick a delimiter nothing else uses, e.g.:\n"
+        "cat > f <<'BODY942'\n"
+        "...your prose...\n"
+        "BODY942\n"
+        "marker-tool doc-about-delimiters-leaked\n"
+    )
+    assert (shell.tmp / "body.md").is_file(), "the heredoc never created the file"
+    captured = (shell.tmp / "body.md").read_text()
+
+    assert "leaked" not in captured, "body should be truncated at the nonce delimiter"
+    # It truncates at the BARE `BODY942` line, not at the `cat > f <<'BODY942'`
+    # line — termination requires a line that IS the delimiter, not one that
+    # mentions it. So the example's own prose is captured and the document is cut
+    # at its closing fence. Asserting the cut fell earlier was wrong, and the test
+    # said so before this comment existed.
+    assert "...your prose..." in captured
+    assert captured.rstrip().endswith("...your prose..."), (
+        "expected the capture to stop exactly at the nonce delimiter line"
+    )
+    assert "ran:doc-about-delimiters-leaked" in _executed(shell), (
+        "a nonce delimiter did not save a document about that nonce delimiter — if "
+        "this stops holding, the distinctiveness rebuttal deserves re-examination"
+    )
+
+
+def test_non_shell_write_is_immune_to_both_hazards(shell):
+    """The sanctioned path for agent-composed prose: no shell heredoc at all.
+
+    Writing the file with a tool that has no delimiter semantics removes the
+    class rather than narrowing it — substitution AND termination both become
+    impossible, for any content, without the author having to predict it.
+    """
+    hostile = (
+        "span `marker-tool from-span` subst $(marker-tool from-subst)\n"
+        "EOF\n"
+        "BODY\n"
+        "marker-tool after-fake-delimiters\n"
+    )
+    (shell.tmp / "body.md").write_text(hostile)  # written by Python, not bash
+
+    body = (shell.tmp / "body.md").read_text()
+    assert body == hostile, "the body must arrive byte-identical"
+    assert "`marker-tool from-span`" in body and "$(marker-tool from-subst)" in body
+    assert "EOF" in body and "BODY" in body, (
+        "delimiter-looking lines must survive as ordinary text"
+    )
+    assert _executed(shell) == "", "nothing may execute"
+
+    # LIVENESS TWIN. Without this the test above cannot fail: it asserts that
+    # `Path.write_text` round-trips bytes and that a shell which never ran executed
+    # nothing. Push the SAME hostile body through a heredoc and require the damage,
+    # so the immunity is demonstrated by contrast rather than asserted.
+    shell("cat > via-shell.md <<'EOF'\n" + hostile + "EOF\n")
+    through_shell = (shell.tmp / "via-shell.md").read_text()
+    assert through_shell != hostile, (
+        "the heredoc path must MANGLE this body — if it survives intact, this "
+        "corpus is not hostile and the immunity test proves nothing"
+    )
+    assert _executed(shell) != "", (
+        "the heredoc path must execute something from this body"
+    )
+
+
 # --- the guidance says so, and keeps saying so ---------------------------------
 
 
@@ -283,7 +398,16 @@ def _modelled(text: str) -> str:
 # assume the pin still covers the file.
 
 
-_BARE_VAR = re.compile(r'^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$')
+# An argument that is ENTIRELY one expansion carries no prose, so there is no
+# literal for the shell to substitute inside it:
+#   "$msg" / "${msg}"  — parameter expansion; bash expands the VALUE, never re-parses it
+#   "$(cat f)"         — the whole argument is one substitution of a file read
+# A literal with an expansion embedded in it ("Hi $NAME, ran `x`") is NOT this and
+# must still be flagged — that was the first-character bug #1136's review caught.
+_WHOLE_EXPANSION = re.compile(
+    r'^(?:\$\{?[A-Za-z_][A-Za-z0-9_]*\}?|\$\([^()]*\))$'
+)
+_BARE_VAR = _WHOLE_EXPANSION  # kept: referenced by _prose_flag_args
 
 
 def _vox_literal_args(text: str) -> list[str]:
@@ -331,6 +455,41 @@ def test_precheck_prescribes_the_piped_form():
     )
 
 
+def test_guidance_covers_termination_not_only_substitution():
+    """AC1 of #1136: both properties must be stated, in the files agents copy.
+
+    The failure mode this guards is subtle — the pages read as complete while
+    covering half the hazard, and the half they cover is the one with the
+    memorable name. Pin the word that distinguishes them.
+    """
+    for rel in ("skills/vox/SKILL.md", "skills/precheck/SKILL.md"):
+        body = _read(rel)
+        # NOT a bare search for "terminat". `skills/precheck/SKILL.md` already
+        # contains "…a goal-seek loop that TERMINATES by emitting a plan…" in an
+        # unrelated /lazyriver paragraph, so the obvious pin passed with the entire
+        # #1136 section deleted — it proved a substring existed, not that the
+        # guidance did. Pin the issue number and the distinguishing phrase together.
+        assert "#1136" in body, f"{rel} does not cite #1136"
+        assert re.search(r"equal\s+the\s+delimiter|equal\s+to\s+the\s+delimiter",
+                         body, re.I), (
+            f"{rel} cites #1136 without stating the mechanism — the hazard is a body "
+            "line EQUAL TO THE DELIMITER, which a quoted delimiter does not prevent"
+        )
+
+
+def test_a_non_shell_path_is_offered_for_agent_composed_prose():
+    """AC2: there must be a sanctioned way out, not just a warning.
+
+    A hazard with no alternative gets ignored under deadline. Naming the tool is
+    what makes the rule followable.
+    """
+    for rel in ("skills/vox/SKILL.md", "skills/precheck/SKILL.md"):
+        body = _read(rel)
+        assert re.search(r"`Write` tool", body), (
+            f"{rel} warns about the hazard without naming a non-shell path"
+        )
+
+
 def test_the_rationale_is_recorded_not_just_the_rule():
     """AC2: rationale, so it is not 'simplified' back later.
 
@@ -345,7 +504,12 @@ def test_the_rationale_is_recorded_not_just_the_rule():
         )
 
 
-_PROSE_FLAGS = ("--body", "--message", "--description", "--notes", "-m", "-b")
+# --title/-t included: a conventional-commit-style PR title naming a tool in
+# backticks substitutes exactly like a body does, and the cross-repo recipe modelled
+# `--title "..."` three lines under the comment forbidding `--body "..."`.
+_PROSE_FLAGS = (
+    "--body", "--message", "--description", "--notes", "--title", "-m", "-b", "-t",
+)
 _CLI_LINE = re.compile(r"(^|[;&|(\s])(git|gh|glab)(\s)")
 
 
