@@ -21,6 +21,43 @@ are worth keeping apart:
 
 ### Fixed
 
+- **The kit proved input existed, never that the scanner ingested it (#1137).**
+  `check-scannable.sh` is a **pre-scan** denominator — "is there anything to
+  scan?" — and it is good at that. But nothing in the kit ran the scan itself:
+  the whole dependency check lived as **prose in `/precheck`'s Job C**, asking a
+  sub-agent to report the count. It complied, which is the problem — an
+  instruction can be forgotten by the next agent, misread, or dropped in a
+  rewrite, and the resulting verdict looks identical to a real one.
+
+  Two green checks either side of a stage prove nothing about the stage between
+  them. flightdeck sits in exactly that gap: manifests present and countable,
+  trivy parsing none of them (`bun.lock` unsupported, flightdeck#8), both checks
+  green. **cc-workflow turned out to be a partial instance of the same thing** —
+  2 scannable manifests, 1 ingested, because this trivy build cannot read
+  `bun.lock` here either. Nothing had ever said so.
+
+  `scripts/ci/dependency-scan.sh` runs the scan and reports what it **actually
+  covered**, on every path including the passing one: manifests ingested, package
+  count, and a `coverage: N of M` line. A shortfall is stated in the verdict
+  itself (`PASS … (COVERS 1/2 — see WARNING above)`), so a copied PASS cannot
+  quietly mean half a denominator. Exit codes distinguish conditions that used to
+  look alike: **2 = manifests present but zero ingested** is not the same as
+  **4 = nothing scannable**, and they are worded differently on purpose. `trivy`
+  absent is `3` / SKIP, because a hard dependency would make `validate.sh`
+  unrunnable on a fresh box — which is how a check gets commented out rather than
+  fixed.
+
+  Wired into `validate.sh` (the lane CI runs) and into `/precheck` Job C, which
+  now **invokes the tool** instead of describing the report it wants.
+
+  **Scope, because the fix is narrower than the problem:** `install` excludes
+  `ci/*` from distribution, so this script lives in a cc-workflow checkout and
+  nowhere else. Every other repo still takes Job C's prose fallback — including
+  flightdeck, the case that motivated the issue. Shipping it fleet-wide is #1141.
+  Also emits the scanner version alongside the counts: a coverage shortfall could
+  be an ecosystem limit *or* a stale binary, and the output cannot distinguish
+  them without it.
+
 - **A quoted heredoc stops substitution but not termination (#1136).** #942's rule
   — write prose to a file with `<<'EOF'` — is correct and was incomplete. The
   quoted delimiter suppresses expansion; it does nothing about a body that

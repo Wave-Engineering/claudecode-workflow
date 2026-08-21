@@ -313,6 +313,51 @@ else
 	FAIL=$((FAIL + 1))
 fi
 
+# --- Dependency COVERAGE (#1137) ----------------------------------------------
+#
+# The check above is PRE-scan: it proves input exists. It cannot prove the scanner
+# ingested that input. Those are different denominators on opposite sides of the
+# scan, and two green checks either side of a stage prove nothing about the stage
+# between them — flightdeck sits in exactly that gap (manifests present, trivy
+# parsing none of them, both checks green, flightdeck#8).
+#
+# It also closes the other half: the kit never ran the scan at all. It existed only
+# as PROSE in /precheck's Job C asking a sub-agent to report the denominator. An
+# instruction can be forgotten by the next agent; a tool that emits the number
+# cannot.
+#
+# trivy absent is a SKIP, not a failure — the scan is not universally installable
+# and a hard dependency here would make validate.sh unrunnable on a fresh box.
+# `dep_rc=0` then `|| dep_rc=$?` — NOT a bare assignment followed by `$?`.
+# This script runs under `set -euo pipefail` (line 22). A simple command that is
+# only an assignment takes the exit status of its command substitution, and
+# errexit fires on it: the `case` below would be DEAD CODE, validate.sh would
+# abort mid-section with no summary, and `$dep_out` — which captured stderr too —
+# would be discarded unprinted.
+#
+# It would have failed in CI on the very first run: .github/workflows/validate.yml
+# installs shellcheck, shfmt and Python but NOT trivy, so the script returns 3,
+# and the branch that exists to make that a [SKIPPED] was unreachable. It passed
+# locally only because trivy happens to be installed here and this repo is clean —
+# rc=0, errexit never trips. The one path that worked was the one path exercised.
+dep_rc=0
+dep_out="$(bash "$REPO_DIR/scripts/ci/dependency-scan.sh" "$REPO_DIR" 2>&1)" || dep_rc=$?
+printf '%s\n' "$dep_out" | sed -n 's/^dependency-scan: /  /p'
+case "$dep_rc" in
+0)
+	info "scripts/ci/dependency-scan.sh"
+	PASS=$((PASS + 1))
+	;;
+3)
+	info "scripts/ci/dependency-scan.sh — [SKIPPED] trivy not installed"
+	;;
+*)
+	err "scripts/ci/dependency-scan.sh — rc=$dep_rc (1=findings, 2=present-but-uningested, 4=nothing scannable, 5=scanner error)"
+	printf '%s\n' "$dep_out" >&2
+	FAIL=$((FAIL + 1))
+	;;
+esac
+
 # --- Summary ------------------------------------------------------------------
 echo ""
 echo "──────────────────────────────────────────"

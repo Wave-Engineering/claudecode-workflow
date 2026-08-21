@@ -64,32 +64,41 @@ prompt: "Run the project's validation and test tooling in <repo_root>.
 ```
 subagent_type: general-purpose
 model: haiku
-prompt: "Run: trivy fs --scanners vuln --severity HIGH,CRITICAL --format json --quiet <repo_root>
+prompt: "Run: bash <repo_root>/scripts/ci/dependency-scan.sh <repo_root>
          Also run: git -C <repo_root> rev-parse HEAD
 
-         Parse the JSON. FIRST report the denominator and the commit, ALWAYS, on one line:
-           scanned: <N> manifest(s) at <short-sha>   [list each Target and Type]
+         Report the script's output VERBATIM, then its exit code, then the commit.
+         Do not summarise, do not re-derive the counts, do not substitute your own
+         judgement for the exit code.
 
-         THEN return one of:
-           PASS — one or more manifests parsed, zero findings
-           NO MANIFESTS — trivy ran and parsed ZERO manifests. This is NOT a pass
-                          and, as of #1073, NOT a deferral either: it FAILS the
-                          checklist item. Nothing was scanned. Say so; do not
-                          report PASS.
-                          The enforcing half lives in scripts/ci/check-scannable.sh
-                          (run by validate.sh), which exits 1 when nothing is
-                          scannable and absence is not declared — because an
-                          honest report that changes no outcome is
-                          indistinguishable from no report at all. cc-workflow
-                          emitted this verdict on every precheck for ELEVEN DAYS
-                          across FIVE filings before anyone acted on it.
-                          A repo with genuinely nothing to scan declares it in
-                          .no-scannable-dependencies with a reason; omitting the
-                          declaration is the failure, not having no dependencies.
-           SKIP — trivy not installed
-           FINDINGS — list each as: package | CVE | severity | fixed_version (or 'no fix available')
-         Do not auto-upgrade anything. Just report."
+         Exit codes:
+           0  scanned, zero HIGH/CRITICAL      -> checklist item PASSES
+           1  findings                          -> report each; do NOT auto-upgrade
+           2  manifests present, ZERO ingested  -> checklist item FAILS
+           3  trivy not installed               -> [SKIPPED]
+           4  nothing scannable, absence not declared -> checklist item FAILS
+
+         If the output carries a `coverage:` line showing fewer ingested than
+         scannable, report that shortfall explicitly — a PASS covering 1 of 2
+         manifests is a pass over half a denominator.
+
+         If the script is MISSING (older checkout), say so and fall back to
+         `trivy fs --scanners vuln --severity HIGH,CRITICAL --format json --quiet`,
+         reporting the manifest count first. Do not report a verdict without a
+         denominator."
 ```
+
+**The denominator is emitted by the tool, not requested from the agent (#1137).** This job used to be prose asking a sub-agent to report the count. It complied — and compliance is the problem: an instruction can be forgotten by the next agent, misread, or quietly dropped in a rewrite, and the resulting verdict looks identical to a real one. `dependency-scan.sh` emits the number on every path including the passing one, so the report survives the agent.
+
+**Reach, stated honestly: cc-workflow only, for now.** `install` excludes `ci/*`
+from distribution (four sites), so `dependency-scan.sh` exists in a cc-workflow
+checkout and nowhere else. In every other repo this job takes the fallback above —
+raw `trivy` with an agent asked to report the count, i.e. exactly the prose path
+this replaces. The structural guarantee is real where the script is; the fallback
+is what actually runs on flightdeck, mcp-server-sdlc and the rest until the kit
+ships it (#1141).
+
+It also closes a gap `check-scannable.sh` structurally cannot see. That check is **pre-scan** — it proves input exists. This one is **post-scan** — it proves the scanner ingested that input. Two green checks either side of a stage prove nothing about the stage between them, and flightdeck lives in exactly that gap: manifests present, trivy parsing none of them (`flightdeck#8`), both checks green. cc-workflow is a partial instance of the same thing — 2 scannable, 1 ingested, because this trivy build cannot read `bun.lock` either, which nothing said out loud until the coverage line existed.
 
 **Report the denominator and the commit before the verdict — never the verdict alone.** Two failures on 2026-07-19 make this non-optional:
 
