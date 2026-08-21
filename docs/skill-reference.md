@@ -471,7 +471,15 @@ Speaks to the user via text-to-speech -- one-way audio for status updates, appro
 
 **Tone:** Write for the ear, not the eye. Brief, conversational, informative. 1-2 sentences max. The default voice is Taylor.
 
-**Best-effort:** If vox fails (no audio backend, network down, no speakers), it continues normally. Never blocks on audio. Use `vox "..." 2>/dev/null || true` in scripts.
+**Best-effort:** If vox fails (no audio backend, network down, no speakers), it continues normally. Never blocks on audio. In scripts, **pipe the message — never pass it as a double-quoted argument** (#942), because backticks and `$(...)` in a double-quoted shell string are command substitution and run before vox sees the text:
+
+```bash
+vox 2>/dev/null <<'EOF' || true
+Build finished
+EOF
+```
+
+(The `/vox "..."` examples above are slash-command syntax typed into Claude Code, not shell — they are not affected.)
 
 **Paralinguistic tags:** Chatterbox supports expressive tags like `[laugh]`, `[sigh]`, `[clear throat]` -- use sparingly for personality.
 

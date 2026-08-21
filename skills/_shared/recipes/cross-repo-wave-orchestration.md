@@ -123,14 +123,29 @@ worktree IS the isolation.
 
 ```bash
 git -C /tmp/wt-sdlc-<num> add <files>
-git -C /tmp/wt-sdlc-<num> commit -m "type(scope): description
+# Commit message to a FILE too (#942) — same rule as the PR body three lines
+# down, and for the same reason: a conventional-commit subject routinely names
+# tools, and `-m "..."` is a double-quoted literal.
+cat > /tmp/msg-<num>.txt <<'MSG'
+type(scope): description
 
-Closes #<num>"
+Closes #<num>
+MSG
+git -C /tmp/wt-sdlc-<num> commit -F /tmp/msg-<num>.txt
 git -C /tmp/wt-sdlc-<num> push -u origin feature/<num>-<slug>
+
+# Body to a FILE via a QUOTED heredoc — never inline --body "..." (#942).
+# Backticks and $(...) in a double-quoted arg are command substitution: bash
+# runs them and strips them from the body. The quoted 'BODY' delimiter is
+# what suppresses that; a bare <<BODY still substitutes.
+cat > /tmp/pr-body-<num>.md <<'BODY'
+## Summary
+...markdown with `backticks` and $(...) freely...
+BODY
 
 gh pr create -R Wave-Engineering/mcp-server-sdlc \
   --base "$KAHUNA_BRANCH" --head feature/<num>-<slug> \
-  --title "..." --body "..."
+  --title "..." --body-file /tmp/pr-body-<num>.md
 
 gh pr merge <pr-num> -R Wave-Engineering/mcp-server-sdlc \
   --squash --auto --delete-branch

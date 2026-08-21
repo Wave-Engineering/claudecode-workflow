@@ -92,7 +92,13 @@ Bound by WAVE_AXIOMS 1 and 10 (`WAVE_AXIOMS.md` at the repo root). `/prepwaves` 
    **Commit the plan file (required).** After `wave_init` returns, check whether `.claude/status/phases-waves.json` appears in `git status --porcelain` output. If it does (the file is tracked or newly added), commit it:
    ```
    git add .claude/status/phases-waves.json
-   git commit -m "chore: persist wave plan for Plan #N"
+   # -F, not -m "..." (#942): this particular message is a fixed literal and is
+   # safe, but modelling one transport here and another in the cross-repo recipe
+   # teaches the agent that the choice is stylistic. It is not.
+   cat > /tmp/wave-plan-msg.txt <<'MSG'
+   chore: persist wave plan for Plan #N
+   MSG
+   git commit -F /tmp/wave-plan-msg.txt
    ```
    If the file does not appear in `git status` (it is gitignored in this repo), the working tree is already clean — no commit needed. Do NOT skip this check. `/wavemachine`'s pre-flight requires a clean base branch (`base branch clean`). Leaving `phases-waves.json` uncommitted in a tracking repo is the #1 cause of "tidy the sandbox" errors when the campaign starts.
 8. **Conditional recipe injection.** If any prepped Phase has `cross_repo: true`, append the cross-repo recipe to this skill's output by `cat`ing `skills/_shared/recipes/cross-repo-wave-orchestration.md`. Format:
