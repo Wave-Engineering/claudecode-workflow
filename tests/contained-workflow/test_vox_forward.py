@@ -271,8 +271,18 @@ def test_concurrent_drains_speak_each_message_exactly_once(tmp_path: Path) -> No
     assert len(set(spoken)) == 40, (
         f"a message was spoken more than once: {sorted(x for x in spoken if spoken.count(x) > 1)[:5]}"
     )
-    leftover = [p for p in spool.iterdir()]
-    assert not leftover, f"the spool was not fully drained: {leftover}"
+    # NAME THE TWO KINDS OF LEFTOVER APART. An EMPTY directory left behind is not
+    # undrained work — it is the #1142 residue: a drain that lost a claim race
+    # created `.quarantine` for a file another drain had already taken. Reported
+    # as a bare "not fully drained" it reads as a message-handling failure, which
+    # is how #1142 came to be filed as a duplicate-announcement race when the two
+    # assertions above — the ones this test is named for — had never once failed.
+    leftover = sorted(spool.iterdir())
+    empty = [p.name for p in leftover if p.is_dir() and not any(p.iterdir())]
+    assert not leftover, (
+        f"the spool was not fully drained: {[p.name for p in leftover]}"
+        + (f" — {empty} left EMPTY, so this is claim-race residue, not undrained work" if empty else "")
+    )
 
 
 def test_the_drain_is_loud_when_vox_is_missing(tmp_path: Path) -> None:
@@ -415,6 +425,117 @@ def test_stray_entries_are_cleared_on_the_normal_path_too(tmp_path: Path) -> Non
     assert not visible, (
         f"stray entries left in the watched set on the normal path: {visible}"
     )
+
+
+def test_quarantined_entries_keep_their_original_names(tmp_path: Path) -> None:
+    """Quarantine exists for triage, and triage needs to know WHAT failed.
+
+    The drain claims every entry with a private `.claimed.$$.$RANDOM` rename before
+    deciding anything about it (#1142) — that is what makes the decision race-free.
+    But the undrainable ones are then quarantined from that claim, so without care
+    the quarantine fills with `.claimed.4711.29103` and tells an operator nothing.
+    """
+    spool = _spool(tmp_path)
+    (spool / "stray.txt").write_text("not a message")
+    (spool / "subdir").mkdir()
+    (spool / "real.msg").write_text("dev_name: a\n\nhello\n")
+
+    proc = _drain(spool, tmp_path, '#!/usr/bin/env bash\necho "$1" >> "$SPOKEN_LOG"\n')
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    quarantined = sorted(p.name for p in (spool / ".quarantine").iterdir())
+    assert quarantined == ["stray.txt", "subdir"], (
+        f"quarantine should name what it holds, got {quarantined}"
+    )
+
+
+def _quarantine_shim(tmp_path: Path, spool: Path) -> Path:
+    """Lift `quarantine()` out of the drain so it can be called directly.
+
+    The concurrency test can only reach this function when a race actually lands,
+    which is nondeterministic by nature — the #1142 window was a couple of syscalls
+    wide and needed artificial widening to reproduce at all. Extracting the function
+    and calling it on a chosen input turns "usually catches it" into "always".
+    """
+    src = DRAIN.read_text()
+    m = re.search(r"^quarantine\(\) \{$.*?^\}$", src, re.S | re.M)
+    assert m, "quarantine() not found in the drain — extraction pattern is stale"
+    return_path = tmp_path / "shim.sh"
+    return_path.write_text(
+        "#!/usr/bin/env bash\nset -uo pipefail\n"
+        f'QUARANTINE="{spool}/.quarantine"\n'
+        f"{m.group(0)}\n"
+        'quarantine "$@"\n'
+    )
+    return_path.chmod(0o755)
+    return return_path
+
+
+def test_quarantine_does_not_create_the_directory_for_a_vanished_entry(
+    tmp_path: Path,
+) -> None:
+    """The #1142 invariant, asserted directly instead of waiting for a race.
+
+    A drain that loses a claim used to call `quarantine()` on a path another drain
+    had already taken. `mkdir -p` runs before the `mv`, so it created `.quarantine`
+    and then failed to move anything into it — leaving an EMPTY directory that says
+    "something failed to drain" in the one place an operator looks to ask that.
+    """
+    spool = _spool(tmp_path)
+    shim = _quarantine_shim(tmp_path, spool)
+
+    proc = subprocess.run(
+        ["bash", str(shim), str(spool / "already-claimed-by-someone-else.msg")],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not (spool / ".quarantine").exists(), (
+        "quarantine() created an empty .quarantine for an entry that was already gone"
+    )
+
+
+@pytest.mark.parametrize("vox_present", [True, False], ids=["normal", "no-vox"])
+def test_a_dangling_symlink_is_quarantined_on_both_exits(
+    tmp_path: Path, vox_present: bool
+) -> None:
+    """`-e` stats THROUGH a symlink, so a dangling one reads as absent while still
+    being a visible directory entry — and a visible entry is what latches the path
+    unit (see the header of the drain).
+
+    Both exits must clear it, and they failed at different times: the bail-out via a
+    guard that called the link absent, the normal path via a pre-claim `-e` test that
+    skipped it outright. `mv` renames the LINK and never resolves it, so quarantining
+    a dangling link works — only the tests guarding it were wrong.
+    """
+    spool = _spool(tmp_path)
+    (spool / "dangling.msg").symlink_to(tmp_path / "nothing-here")
+    (spool / "real.msg").write_text("dev_name: a\n\nhello\n")
+
+    vox = tmp_path / "fake-vox"
+    if vox_present:
+        vox.write_text(_STUB_PREAMBLE + 'printf "%s\\n" "$1" >> "$SPOKEN_LOG"\n')
+        vox.chmod(0o755)
+
+    subprocess.run(
+        ["bash", str(DRAIN)],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": str(tmp_path),
+            "OAW_VOX_SPOOL_HOST": str(spool),
+            "OAW_VOX_BIN": str(vox),
+            "SPOKEN_LOG": str(tmp_path / "spoken.log"),
+        },
+        timeout=60,
+    )
+
+    visible = [p.name for p in spool.iterdir() if not p.name.startswith(".")]
+    assert not visible, f"a visible entry was left behind, which latches the unit: {visible}"
+    assert "dangling.msg" in [p.name for p in (spool / ".quarantine").iterdir()]
 
 
 def test_the_service_disables_the_start_limiter() -> None:
