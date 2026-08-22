@@ -27,18 +27,21 @@ DI-seams (env vars):
 - ``FLIGHTDECK_EMIT_DISABLED``— hard off switch (no-op emit).
 - ``FLIGHTDECK_ACTIVITY_ID`` / ``FLIGHTDECK_AGENT`` / ``FLIGHTDECK_LOG_REF`` —
   scope defaults for :func:`emit_state_event`.
+- ``FLIGHTDECK_SCOPE_PATH``   — override the #1148 scope-marker file (test
+  isolation). Unset ⇒ ``<cwd>/.claude/status/flightdeck-scope.json``.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 import os
 import threading
 import urllib.request
 from pathlib import Path
 
-from wave_status.events import build_event, validate_event
+from wave_status.events import build_event, now_iso, validate_event
 
 __all__ = [
     "emit",
@@ -173,6 +176,91 @@ def _read_offset(buffer: Path) -> int:
         return int(_offset_path(buffer).read_text(encoding="utf-8").strip() or "0")
     except Exception:
         return 0
+
+
+# ---------------------------------------------------------------------------
+# FlightDeck scope marker (#1148) — the writer half of mcp-server-sdlc#537.
+#
+# `sdlc-server`'s own handlers (ci_wait_run, pr_merge, wave_finalize,
+# commutativity_verify, drift_*, wave_ci_trust_level) run inside the MCP SERVER
+# process, which is already spawned by the time a campaign starts. A driver's
+# in-session `export FLIGHTDECK_ACTIVITY_ID=...` (skills/wavemachine/SKILL.md)
+# runs in a Bash tool subprocess and can never reach that already-running
+# process's env — confirmed live via /proc/<pid>/environ on three running
+# servers, each frozen at spawn with no FLIGHTDECK_ACTIVITY_ID at all, falling
+# through to a repo-basename card (#1144's sdlc-server-side mechanism).
+#
+# This marker is the fix: a small durable per-repo file, read FRESH on every
+# call (no restart dependency), that the CLI writes the moment it knows the
+# campaign's real scope — construction, not one more line of skill prose for a
+# driver to forget.
+#
+# CONTRACT (identical on the read side, mcp-server-sdlc#537):
+#   path:  <cwd>/.claude/status/flightdeck-scope.json
+#   shape: {"activityId": "<str>", "agent": "<str|null>", "updatedAt": "<ISO8601>"}
+
+def _scope_marker_path() -> Path:
+    override = os.environ.get("FLIGHTDECK_SCOPE_PATH")
+    if override:
+        return Path(override).expanduser()
+    return Path.cwd() / ".claude" / "status" / "flightdeck-scope.json"
+
+
+def _write_scope_marker(activity_id: str, agent: str | None) -> None:
+    """Atomic write: temp file in the SAME directory, then os.replace() —
+    guarantees a same-filesystem rename (mirrors state.py's save_json, R-33).
+
+    Unlike save_json, this never raises to the caller (R-01/R-03: a broken
+    marker write must never fail the emit that triggered it) — but a failure
+    still cleans up its own temp file rather than leaving an orphan behind in
+    .claude/status/ (gitignored, so an orphan would silently accumulate,
+    one per failed write, forever).
+    """
+    fd = None
+    try:
+        path = _scope_marker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"activityId": activity_id, "agent": agent, "updatedAt": now_iso()}
+        fd = tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=str(path.parent), suffix=".tmp", delete=False
+        )
+        json.dump(payload, fd)
+        fd.flush()
+        os.fsync(fd.fileno())
+        fd.close()
+        os.replace(fd.name, path)
+    except Exception:
+        if fd is not None:
+            try:
+                fd.close()
+            except Exception:
+                pass
+            try:
+                os.unlink(fd.name)
+            except OSError:
+                pass
+
+
+def _clear_scope_marker_if_matching(activity_id: str) -> None:
+    """Clear the marker on activity_end, but ONLY if it names the activity that
+    is actually ending. An unrelated activity_end in the same repo (a session
+    close, a different activity) must not wipe a live campaign's marker out
+    from under it. Never raises.
+    """
+    try:
+        path = _scope_marker_path()
+        current = json.loads(path.read_text(encoding="utf-8"))
+        # Read-check-unlink is NOT atomic: a concurrent activity_start for a
+        # DIFFERENT campaign in this repo could land between the read and the
+        # unlink, and this would delete that new marker instead of the one it
+        # checked. Accepted rather than locked — the wavemachine pre-flight
+        # already refuses a second concurrent campaign per repo, so the window
+        # requires two overlapping campaigns to matter, and a lockfile is
+        # disproportionate for fire-and-forget instrumentation.
+        if current.get("activityId") == activity_id:
+            path.unlink()
+    except Exception:
+        pass
 
 
 def _write_offset(buffer: Path, offset: int) -> None:
@@ -431,6 +519,30 @@ def main(argv: list[str] | None = None) -> int:
             **_build_arg_fields(args),
         )
         if event is not None:
+            # BEFORE print(): if stdout is closed or full, print() can raise,
+            # and this must not be skipped as a result — it is the whole point
+            # of this CLI call succeeding.
+            #
+            # #1148: give sdlc-server's own handlers something live to resolve
+            # scope from, since their process env is frozen at spawn. Only on
+            # a RESOLVED id — writing a marker for the "unknown" fallback would
+            # poison the read side's own fallback chain with that literal string,
+            # worse than leaving no marker at all.
+            aid = event.get("activityId")
+            # CAMPAIGN ONLY, by allowlist not denylist. The session hook
+            # (scripts/flightdeck-session-emit.sh) ALSO emits activity_start —
+            # every new Claude Code session in this repo triggers one — and its
+            # legacy-retry path drops --activity-type entirely when an older
+            # installed CLI rejects the flag (argparse exit 2). A denylist on
+            # "session" would leak straight through that path: args.activity_type
+            # would read None, not "session", and a routine session start would
+            # silently clobber a LIVE campaign's marker with a presence id. The
+            # wavemachine driver always pins --activity-type campaign
+            # (skills/wavemachine/SKILL.md:232); nothing else emits "float" today.
+            if args.kind == "activity_start" and args.activity_type == "campaign" and aid != "unknown":
+                _write_scope_marker(aid, event.get("agent"))
+            elif args.kind == "activity_end" and aid:
+                _clear_scope_marker_if_matching(aid)
             print(json.dumps(event, separators=(",", ":"), ensure_ascii=False))
     except Exception:
         pass  # fire-and-forget: never fail the caller.
