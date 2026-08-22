@@ -147,6 +147,18 @@ def _isolate_flightdeck_buffer(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("FLIGHTDECK_EVENTS_PATH", str(d / "events.jsonl"))
     monkeypatch.delenv("FLIGHTDECK_INGEST_URL", raising=False)
     monkeypatch.delenv("FLIGHTDECK_INGEST_TOKEN", raising=False)
+    # #1148: same isolation for the scope marker. Without this, a test-runner
+    # shell that has `export FLIGHTDECK_ACTIVITY_ID=...` set (per
+    # skills/wavemachine/SKILL.md's own launch-sequence instructions — the same
+    # shell /precheck runs this suite from) makes activity_start resolve a real
+    # id and write a REAL marker into THIS repo's own .claude/status/,
+    # clobbering any live campaign's marker. Isolate the same four scope-default
+    # env vars for the same reason.
+    monkeypatch.setenv("FLIGHTDECK_SCOPE_PATH", str(d / "flightdeck-scope.json"))
+    monkeypatch.delenv("FLIGHTDECK_ACTIVITY_ID", raising=False)
+    monkeypatch.delenv("FLIGHTDECK_AGENT", raising=False)
+    monkeypatch.delenv("FLIGHTDECK_LOG_REF", raising=False)
+    monkeypatch.delenv("FLIGHTDECK_EMIT_DISABLED", raising=False)
 
 
 @pytest.fixture()

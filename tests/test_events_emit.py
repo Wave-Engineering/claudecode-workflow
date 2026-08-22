@@ -224,12 +224,33 @@ class TestReplayAndResilience:
 # CLI surface (used by the session hook S1.7 + Workflow tee S1.6)
 # ---------------------------------------------------------------------------
 
-def _run(argv: list[str], events_path: Path):
+def _run(
+    argv: list[str],
+    events_path: Path,
+    scope_path: Path | None = None,
+    extra_env: dict[str, str] | None = None,
+):
+    # os.environ.copy() inherits the isolation the autouse
+    # _isolate_flightdeck_buffer fixture (conftest.py) already set via
+    # monkeypatch — including FLIGHTDECK_SCOPE_PATH and the ACTIVITY_ID/AGENT/
+    # LOG_REF/EMIT_DISABLED scope defaults. Only override below what a specific
+    # test actually needs to differ; never pop the ambient isolation, or a test
+    # that doesn't pass scope_path silently loses conftest's protection and can
+    # write into THIS repo's real .claude/status/ (the bug that motivated it).
     env = os.environ.copy()
     src = str(Path(__file__).resolve().parent.parent / "src")
     env["PYTHONPATH"] = src + (os.pathsep + env.get("PYTHONPATH", "") if env.get("PYTHONPATH") else "")
     env["FLIGHTDECK_EVENTS_PATH"] = str(events_path)
+    # Isolate the shipper too, not just the buffer — an inherited ambient
+    # FLIGHTDECK_INGEST_URL (e.g. from ~/.profile) spawns a real daemon thread
+    # that races process exit and can segfault the interpreter on the way out
+    # (#1149, found while writing these tests). Never leave it set for a test.
     env.pop("FLIGHTDECK_INGEST_URL", None)
+    env.pop("FLIGHTDECK_INGEST_TOKEN", None)
+    if scope_path is not None:
+        env["FLIGHTDECK_SCOPE_PATH"] = str(scope_path)
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(argv, capture_output=True, text=True, env=env)
 
 
@@ -352,3 +373,285 @@ class TestResolveAgent:
             assert resolve_agent(tmp_path) == "legacy-name"  # no canonical file → uses /tmp
         finally:
             legacy.unlink(missing_ok=True)
+
+
+class TestScopeMarker:
+    """#1148 — the writer half of mcp-server-sdlc#537.
+
+    sdlc-server's own handlers (ci_wait_run, pr_merge, wave_finalize, ...) run
+    in the MCP SERVER process, already spawned before a campaign starts, so a
+    driver's in-session `export FLIGHTDECK_ACTIVITY_ID=...` can never reach it
+    (confirmed live via /proc/<pid>/environ on three running servers — each was
+    frozen at spawn with no FLIGHTDECK_ACTIVITY_ID at all, falling through to a
+    repo-basename card, #1144's sdlc-server-side mechanism). This marker gives
+    the server something live to read instead: `main()` writes it on
+    activity_start and clears it on a matching activity_end.
+    """
+
+    def test_activity_start_writes_the_marker(self, tmp_path):
+        ep = tmp_path / "events.jsonl"
+        sp = tmp_path / "scope.json"
+        r = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "116", "--agent", "harbinger", "--activity-type", "campaign"],
+            ep, sp,
+        )
+        assert r.returncode == 0, r.stderr
+        got = json.loads(sp.read_text(encoding="utf-8"))
+        assert got["activityId"] == "116"
+        assert got["agent"] == "harbinger"
+        # ISO8601 Z-suffixed, matching the contract in mcp-server-sdlc#537 —
+        # not asserting an exact value (that would be a flaky test), just shape.
+        assert got["updatedAt"].endswith("Z")
+        assert "T" in got["updatedAt"]
+
+    def test_no_agent_flag_writes_a_null_agent_not_a_string(self, tmp_path):
+        ep = tmp_path / "events.jsonl"
+        sp = tmp_path / "scope.json"
+        r = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "116", "--activity-type", "campaign"],
+            ep, sp,
+        )
+        assert r.returncode == 0, r.stderr
+        got = json.loads(sp.read_text(encoding="utf-8"))
+        assert got["agent"] is None
+
+    def test_unresolved_activity_id_writes_no_marker(self, tmp_path):
+        # No --activity-id and no FLIGHTDECK_ACTIVITY_ID ⇒ emit()'s own fallback
+        # is the literal string "unknown". Writing a marker for that would poison
+        # the READ side's fallback chain with "unknown" instead of nothing — worse
+        # than no marker at all, since "unknown" would then win over a later,
+        # correct env/repo-basename resolution.
+        ep = tmp_path / "events.jsonl"
+        sp = tmp_path / "scope.json"
+        r = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start"],
+            ep, sp,
+        )
+        assert r.returncode == 0, r.stderr
+        assert not sp.exists()
+
+    def test_matching_activity_end_clears_the_marker(self, tmp_path):
+        ep = tmp_path / "events.jsonl"
+        sp = tmp_path / "scope.json"
+        _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "116", "--agent", "harbinger", "--activity-type", "campaign"],
+            ep, sp,
+        )
+        assert sp.exists()
+        r = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_end",
+             "--activity-id", "116"],
+            ep, sp,
+        )
+        assert r.returncode == 0, r.stderr
+        assert not sp.exists()
+
+    def test_mismatched_activity_end_does_not_clear_it(self, tmp_path):
+        # An unrelated activity_end in the same repo — a session close, a
+        # different activity — must not wipe a live campaign's marker.
+        ep = tmp_path / "events.jsonl"
+        sp = tmp_path / "scope.json"
+        _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "116", "--agent", "harbinger", "--activity-type", "campaign"],
+            ep, sp,
+        )
+        r = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_end",
+             "--activity-id", "999"],
+            ep, sp,
+        )
+        assert r.returncode == 0, r.stderr
+        got = json.loads(sp.read_text(encoding="utf-8"))
+        assert got["activityId"] == "116"
+
+    def test_activity_end_with_no_prior_marker_is_a_noop(self, tmp_path):
+        ep = tmp_path / "events.jsonl"
+        sp = tmp_path / "scope.json"
+        r = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_end",
+             "--activity-id", "116"],
+            ep, sp,
+        )
+        assert r.returncode == 0, r.stderr
+        assert not sp.exists()
+
+    def test_a_second_activity_start_overwrites_cleanly(self, tmp_path):
+        # No prior activity_end required to start the next campaign — the
+        # wavemachine pre-flight already refuses a second concurrent campaign
+        # in one repo, so a new activity_start here always supersedes.
+        ep = tmp_path / "events.jsonl"
+        sp = tmp_path / "scope.json"
+        _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "116", "--agent", "harbinger", "--activity-type", "campaign"],
+            ep, sp,
+        )
+        _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "121", "--agent", "bishop", "--activity-type", "campaign"],
+            ep, sp,
+        )
+        got = json.loads(sp.read_text(encoding="utf-8"))
+        assert got == {"activityId": "121", "agent": "bishop", "updatedAt": got["updatedAt"]}
+
+    def test_unwritable_scope_path_does_not_break_the_underlying_emit(self, tmp_path):
+        # A FILE sitting where the marker's parent directory needs to be —
+        # path.parent.mkdir(parents=True) raises, caught by the marker helper's
+        # own guard. The emit it rode in on must still succeed (R-01/R-03: this
+        # is instrumentation, a broken marker must never fail the caller).
+        ep = tmp_path / "events.jsonl"
+        blocker = tmp_path / "blocked"
+        blocker.write_text("not a directory", encoding="utf-8")
+        sp = blocker / "scope.json"
+        r = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "116", "--agent", "harbinger", "--activity-type", "campaign"],
+            ep, sp,
+        )
+        assert r.returncode == 0, r.stderr
+        got = json.loads(ep.read_text(encoding="utf-8").splitlines()[0])
+        assert got["kind"] == "activity_start" and got["activityId"] == "116"
+        assert not sp.exists()
+
+    def test_write_scope_marker_itself_never_raises(self, tmp_path, monkeypatch):
+        # DIRECT, in-process — no subprocess, no main()'s own outer try/except
+        # around it. main()'s wrapping guard alone would make the CLI-level
+        # test above pass even if THIS function's own guard were removed (the
+        # buffer append already happened before this runs, so the observable
+        # CLI behavior is identical either way) — this is the test that is
+        # actually sensitive to whether _write_scope_marker's guard exists.
+        from wave_status.events.emit import _write_scope_marker
+
+        blocker = tmp_path / "blocked"
+        blocker.write_text("not a directory", encoding="utf-8")
+        monkeypatch.setenv("FLIGHTDECK_SCOPE_PATH", str(blocker / "scope.json"))
+        _write_scope_marker("116", "harbinger")  # must not raise
+
+    def test_clear_scope_marker_itself_never_raises_on_malformed_json(self, tmp_path, monkeypatch):
+        from wave_status.events.emit import _clear_scope_marker_if_matching
+
+        sp = tmp_path / "scope.json"
+        sp.write_text("{not valid json", encoding="utf-8")
+        monkeypatch.setenv("FLIGHTDECK_SCOPE_PATH", str(sp))
+        _clear_scope_marker_if_matching("116")  # must not raise
+        assert sp.read_text(encoding="utf-8") == "{not valid json"  # left untouched
+
+    def test_disabled_switch_leaves_a_live_marker_untouched(self, tmp_path):
+        # The intent is "a live marker must SURVIVE a disabled emit" — not just
+        # "a disabled emit writes nothing new". Targeting a second, never-written
+        # path proved only the latter; this targets the SAME marker the first
+        # call wrote, so it actually exercises the claim in the test's name.
+        ep = tmp_path / "events.jsonl"
+        sp = tmp_path / "scope.json"
+        _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "116", "--agent", "harbinger", "--activity-type", "campaign"],
+            ep, sp,
+        )
+        assert json.loads(sp.read_text(encoding="utf-8"))["activityId"] == "116"
+
+        r2 = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "999", "--agent", "someone-else"],
+            ep, sp, extra_env={"FLIGHTDECK_EMIT_DISABLED": "1"},
+        )
+        assert r2.returncode == 0, r2.stderr
+        assert json.loads(sp.read_text(encoding="utf-8"))["activityId"] == "116"
+
+    def test_session_activity_start_does_not_touch_the_marker(self, tmp_path):
+        # The critical case: scripts/flightdeck-session-emit.sh ALSO emits
+        # activity_start (every SessionStart hook firing), with
+        # --activity-type session. This must never create OR overwrite a
+        # campaign's marker — a routine session start silently clobbering a
+        # live campaign's telemetry would reintroduce #1144.
+        ep = tmp_path / "events.jsonl"
+        sp = tmp_path / "scope.json"
+        _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "116", "--agent", "harbinger", "--activity-type", "campaign"],
+            ep, sp,
+        )
+        r = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "session:abc123", "--agent", "harbinger",
+             "--activity-type", "session"],
+            ep, sp,
+        )
+        assert r.returncode == 0, r.stderr
+        assert json.loads(sp.read_text(encoding="utf-8"))["activityId"] == "116"
+
+    def test_a_bare_session_activity_start_with_no_prior_marker_writes_none(self, tmp_path):
+        # The session hook's own legacy-retry path drops --activity-type
+        # entirely (an older installed CLI rejects the unknown flag) — so this
+        # must ALSO be excluded, not just the explicit --activity-type session
+        # case. A denylist on "session" would pass the case above and fail
+        # this one; only an allowlist on "campaign" passes both.
+        ep = tmp_path / "events.jsonl"
+        sp = tmp_path / "scope.json"
+        r = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "session:abc123", "--agent", "harbinger"],
+            ep, sp,
+        )
+        assert r.returncode == 0, r.stderr
+        assert not sp.exists()
+
+    def test_lifecycle_events_other_than_start_and_end_never_touch_the_marker(self, tmp_path):
+        # The per-wave workflow's tee fires step/metric continuously against
+        # the same repo, far more often than activity_start/end — the highest-
+        # frequency caller of this CLI. It must never create or clear a marker.
+        ep = tmp_path / "events.jsonl"
+        sp = tmp_path / "scope.json"
+        _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "116", "--agent", "harbinger", "--activity-type", "campaign"],
+            ep, sp,
+        )
+        for kind, extra in (
+            ("step", ["--wave", "wave-1", "--label", "planning"]),
+            ("metric", ["--metric", "tokens"]),
+            ("phase", ["--phase", "P1"]),
+        ):
+            r = _run(
+                [sys.executable, "-m", "wave_status.events.emit", kind,
+                 "--activity-id", "116"] + extra,
+                ep, sp,
+            )
+            assert r.returncode == 0, r.stderr
+            marker = json.loads(sp.read_text(encoding="utf-8"))
+            assert marker["activityId"] == "116"
+            # Also pin agent, not just activityId: these calls pass no --agent,
+            # so a mutation that wrongly rewrites the marker on step/metric/phase
+            # would drop it to null while activityId (echoed back unchanged)
+            # would still read "116" either way — activityId alone can't tell
+            # "untouched" apart from "touched with the same id back".
+            assert marker["agent"] == "harbinger"
+
+    def test_the_production_default_path_is_cwd_dot_claude_status(self, tmp_path):
+        # Every other test in this class runs against FLIGHTDECK_SCOPE_PATH — a
+        # real, necessary test seam, but it means the literal PRODUCTION path
+        # (the only one that ever runs for real) had zero coverage. This is the
+        # one test that exercises it, with the override absent, cwd pinned to a
+        # scratch directory instead of the real repo. Also pins the writer's
+        # half of the cross-repo contract with mcp-server-sdlc#537.
+        ep = tmp_path / "events.jsonl"
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent / "src")
+        env["FLIGHTDECK_EVENTS_PATH"] = str(ep)
+        env.pop("FLIGHTDECK_INGEST_URL", None)
+        env.pop("FLIGHTDECK_INGEST_TOKEN", None)
+        env.pop("FLIGHTDECK_SCOPE_PATH", None)  # the one test that must NOT override it
+        r = subprocess.run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "116", "--agent", "harbinger", "--activity-type", "campaign"],
+            capture_output=True, text=True, env=env, cwd=str(tmp_path),
+        )
+        assert r.returncode == 0, r.stderr
+        default_path = tmp_path / ".claude" / "status" / "flightdeck-scope.json"
+        assert default_path.exists()
+        assert json.loads(default_path.read_text(encoding="utf-8"))["activityId"] == "116"
+
