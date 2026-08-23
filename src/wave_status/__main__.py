@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import traceback
@@ -810,5 +811,55 @@ def main() -> None:
         sys.exit(2)
 
 
+def _run_as_script() -> None:
+    """The real top-level entry-point body for the ``wave-status`` CLI
+    (#1149).
+
+    This is the TRUE top-level entry point — every subcommand (`emit`,
+    `campaign-head`, `close-issue`, ...) is dispatched from here, in-process,
+    via `main()`. That matters because some of them can start a FlightDeck
+    shipper daemon thread (`wave_status.events.emit._ship_async`) which must
+    never block its caller — so the bounded join that protects against the
+    daemon-thread/interpreter-shutdown segfault race belongs ONLY here,
+    never inside `main()` or any `_cmd_*` handler (which are also called
+    in-process by tests). See
+    `wave_status.events.emit.flush_pending_ships`'s docstring for the full
+    rationale — it is the same one this function exists to apply.
+
+    Factored out of the ``if __name__ == "__main__":`` guard so tests can
+    call it directly with ``os._exit`` mocked — actually invoking
+    ``os._exit`` would kill the test process. This function has a SECOND
+    caller beyond that guard: the zipapp shim ``scripts/ci/build.sh``
+    generates for the shipped ``wave-status`` binary calls it directly
+    (``getattr(_m, "_run_as_script", _m.main)()``), since that shim imports
+    this module rather than running it — the ``__main__`` guard never fires
+    there at all, and that gap was the original version of this fix's
+    critical bug (the join existed but was unreachable in production).
+    """
+    from wave_status.events.emit import _flush_std_streams, flush_pending_ships
+
+    _code = 0
+    try:
+        main()
+    except SystemExit as exc:
+        code = exc.code
+        if code is None:
+            _code = 0
+        elif isinstance(code, int):
+            _code = code
+        else:
+            print(str(code), file=sys.stderr)
+            _code = 1
+    finally:
+        flush_pending_ships()
+        _flush_std_streams()
+    # os._exit, not a bare return: skips Py_Finalize's interpreter teardown
+    # entirely, safe here specifically because flush_pending_ships() already
+    # ran. See emit.py's mirrored guard for the full "why os._exit, why here
+    # only" rationale — identical reasoning, same fix, the other true entry
+    # point.
+    os._exit(_code)
+
+
 if __name__ == "__main__":
-    main()
+    _run_as_script()

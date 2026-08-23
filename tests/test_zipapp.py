@@ -11,11 +11,15 @@ Every test invokes ``dist/wave-status``, NOT ``python3 -m wave_status``.
 from __future__ import annotations
 
 import json
+import os
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
+
+from tests.test_events_emit import _CaptureServer
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +124,7 @@ def _run_zipapp(
     args: list[str],
     cwd: str | Path,
     input_text: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> tuple[int, str, str]:
     """Run ``dist/wave-status <args>`` as a subprocess.
 
@@ -133,6 +138,13 @@ def _run_zipapp(
         Working directory — must be a git repo for ``get_project_root()``.
     input_text:
         Optional text piped to stdin.
+    env:
+        Full environment for the subprocess. ``None`` inherits this
+        process's environment unchanged (existing behavior). Callers that
+        need to ADD/override a variable should build off ``os.environ.copy()``
+        themselves — this helper does not merge for them, to keep it obvious
+        at each call site whether ambient env (e.g. an inherited
+        ``FLIGHTDECK_INGEST_URL``) is or isn't reaching the zipapp.
 
     Returns
     -------
@@ -145,6 +157,7 @@ def _run_zipapp(
         capture_output=True,
         text=True,
         input=input_text,
+        env=env,
     )
     return (result.returncode, result.stdout, result.stderr)
 
@@ -411,3 +424,80 @@ class TestZipappDashboardCreated:
         assert html.exists(), "Dashboard HTML was not created by zipapp init"
         content = html.read_text(encoding="utf-8")
         assert "<!DOCTYPE html>" in content
+
+
+class TestZipappShipperJoinsOnExit:
+    """#1149, at the layer that actually matters: the SHIPPED binary.
+
+    `dist/wave-status` is a zipapp — `scripts/ci/build.sh` generates its own
+    top-level ``__main__.py`` that IMPORTS the package's ``__main__`` module
+    and calls an entry point directly. Neither of `wave_status/__main__.py`'s
+    own module-level guard NOR `wave_status/events/emit.py`'s ever fires
+    inside that shim (the module is imported, never run as ``"__main__"``),
+    so a fix that only touched those guards and the `python -m` invocation
+    form (exercised elsewhere in this suite, and in test_events_emit.py)
+    would leave the REAL crash path — every hook and Workflow node that
+    calls the installed ``wave-status`` binary — completely unfixed. This
+    class is the one place that would have caught that: it runs the
+    ACTUAL built artifact, not `python -m`.
+    """
+
+    def test_zipapp_waits_for_a_slow_but_in_bound_post_before_exiting(
+        self, zipapp_binary: Path, temp_git_repo: Path
+    ) -> None:
+        server = _CaptureServer(delay=0.3).start()
+        try:
+            env = os.environ.copy()
+            env["FLIGHTDECK_EVENTS_PATH"] = str(temp_git_repo / "events.jsonl")
+            env["FLIGHTDECK_INGEST_URL"] = server.url
+            env["FLIGHTDECK_INGEST_TIMEOUT"] = "2"
+            rc, _, err = _run_zipapp(
+                zipapp_binary,
+                ["emit", "step", "--activity-id", "camp-1", "--wave", "w"],
+                temp_git_repo,
+                env=env,
+            )
+            assert rc == 0, err
+            assert len(server.received) == 1, (
+                "zipapp process exited before the delayed ship landed — "
+                "the shipper join is not reachable through the built binary"
+            )
+            assert server.received[0][1]["wave"] == "w"
+        finally:
+            server.stop()
+
+    def test_zipapp_exit_time_proves_the_join_not_a_noop(
+        self, zipapp_binary: Path, temp_git_repo: Path
+    ) -> None:
+        # Same lower+upper bound shape as
+        # test_events_emit.py::TestExitJoinsShipperEndToEnd — a hanging
+        # ingest still exits within a bound proportional to
+        # FLIGHTDECK_INGEST_TIMEOUT, but not so fast that the join never
+        # ran at all. Ported here specifically because it's the assertion
+        # that would have caught the zipapp-entrypoint gap.
+        # 5s is comfortably longer than the 1.5s join bound — no need for
+        # 30s, which only stalls this test's own teardown (_CaptureServer's
+        # single-threaded HTTPServer can't observe shutdown() until the
+        # in-flight handler's sleep() returns).
+        server = _CaptureServer(delay=5.0).start()
+        try:
+            env = os.environ.copy()
+            env["FLIGHTDECK_EVENTS_PATH"] = str(temp_git_repo / "events.jsonl")
+            env["FLIGHTDECK_INGEST_URL"] = server.url
+            env["FLIGHTDECK_INGEST_TIMEOUT"] = "1.5"
+            t0 = time.monotonic()
+            rc, _, err = _run_zipapp(
+                zipapp_binary,
+                ["emit", "step", "--activity-id", "camp-1", "--wave", "w"],
+                temp_git_repo,
+                env=env,
+            )
+            elapsed = time.monotonic() - t0
+            assert rc == 0, err
+            assert elapsed >= 1.0, (
+                f"zipapp exited in {elapsed}s — too fast to have joined the "
+                "shipper thread against a 1.5s bound; looks like a no-op join"
+            )
+            assert elapsed < 8.0, f"zipapp took {elapsed}s against a 1.5s ship bound"
+        finally:
+            server.stop()
