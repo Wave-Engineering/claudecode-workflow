@@ -228,18 +228,20 @@ refreshes the card):
 
 ```bash
 dev_name="$(jq -r '.dev_name // empty' .claude/agent-identity.json 2>/dev/null)"
-wave-status emit activity_start \
-  --activity-id "$FLIGHTDECK_ACTIVITY_ID" --activity-type campaign \
-  ${dev_name:+--agent "$dev_name"} \
-  --detail "{\"planTotal\": <total waves in the approved plan>}" \
-  --label "<project>" || true
+wave-status campaign-head \
+  --activity-id "$FLIGHTDECK_ACTIVITY_ID" \
+  ${dev_name:+--agent "$dev_name"} || true
 ```
 (Omit `--agent` when the Dev-Name is absent — `${dev_name:+…}` — so the card falls back to
-the project label rather than rendering an empty title; quote `<project>` in case it has spaces.)
+the project label rather than rendering an empty title.)
 
-`<total waves…>` (the wave denominator) and `<project>` (the fallback title) come from
-`wave_show`/the plan. `--agent` is the Dev-Name (card title). The per-wave `promoted` step
-then accrues the numerator (`per-wave-workflow.js`, #1026 incr 2).
+`campaign-head` derives `planTotal` (the wave denominator) and the project label FROM THE
+PLAN itself (`phases-waves.json`) — never a hand-typed literal (flightdeck#1145). It refuses
+loudly (non-zero exit, a message on stderr) rather than emitting a card claiming an unknown
+total if the plan can't be read; the `|| true` here only protects the launch sequence from
+aborting on that refusal, it does not hide the message. `--agent` is the Dev-Name (card
+title). The per-wave `promoted` step then accrues the numerator (`per-wave-workflow.js`,
+#1026 incr 2).
 
 1. Set the `wavemachine_active` flag (`wave-status wavemachine-start --launcher main`).
    Unset it on EVERY exit path (`wave-status wavemachine-stop`) — treat as a `finally`.

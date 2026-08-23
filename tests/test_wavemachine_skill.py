@@ -774,8 +774,14 @@ class TestFlightdeckCampaignCard:
         )
 
     def test_launch_emits_campaign_activity_start_vitals(self, skill_text: str) -> None:
+        # #1145: planTotal is derived from the plan by `campaign-head` itself,
+        # not hand-typed as a `<total waves in the approved plan>` placeholder
+        # — so this section no longer names planTotal directly; it names the
+        # command that computes it.
         launch = _bootstrap(skill_text)
-        assert "wave-status emit activity_start" in launch
-        assert "--activity-type campaign" in launch
-        assert "planTotal" in launch  # the wave denominator
+        assert "wave-status campaign-head" in launch
         assert "dev_name" in launch  # the Dev-Name (card title)
+        assert "<total waves in the approved plan>" not in launch, (
+            "campaign-head must derive planTotal from the plan — a hand-typed "
+            "placeholder here is exactly the flightdeck#1145 defect."
+        )

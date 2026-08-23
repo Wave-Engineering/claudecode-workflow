@@ -280,6 +280,48 @@ class TestEmitCli:
         assert got["concernKind"] == "gate-override"
         assert got["source"] == "coded"
 
+    def test_detail_json_decodes_to_an_object_not_a_string(self, tmp_path):
+        # #1145: --detail-json exists precisely so a caller with a structured
+        # payload (campaign-head) can ship an OBJECT, unlike plain --detail
+        # which is a JSON string that flightdeck's asRecord() only accepts as
+        # a compatibility shim for the old shape.
+        ep = tmp_path / "events.jsonl"
+        r = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "camp-x", "--detail-json", '{"planTotal": 3}'],
+            ep,
+        )
+        assert r.returncode == 0, r.stderr
+        got = json.loads(ep.read_text(encoding="utf-8").splitlines()[0])
+        assert got["detail"] == {"planTotal": 3}
+        assert isinstance(got["detail"], dict)
+
+    def test_detail_json_wins_over_plain_detail_when_both_given(self, tmp_path):
+        ep = tmp_path / "events.jsonl"
+        r = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "camp-x",
+             "--detail", "free-form prose",
+             "--detail-json", '{"planTotal": 5}'],
+            ep,
+        )
+        assert r.returncode == 0, r.stderr
+        got = json.loads(ep.read_text(encoding="utf-8").splitlines()[0])
+        assert got["detail"] == {"planTotal": 5}
+
+    def test_malformed_detail_json_never_raises_fire_and_forget(self, tmp_path):
+        # Consistent with the rest of this CLI's "never fail a hook" contract
+        # (main()'s docstring) — a bad --detail-json exits 0 and buffers
+        # nothing, exactly like an unparseable --detail string would.
+        ep = tmp_path / "events.jsonl"
+        r = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "camp-x", "--detail-json", "{ not json"],
+            ep,
+        )
+        assert r.returncode == 0, r.stderr
+        assert not ep.exists() or ep.read_text(encoding="utf-8") == ""
+
     def test_metric_stub_value_null_via_cli(self, tmp_path):
         ep = tmp_path / "events.jsonl"
         # No --value ⇒ honest seamed-absent token stub (value: null).

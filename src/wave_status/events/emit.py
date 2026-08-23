@@ -504,6 +504,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--action", default=None)
     p.add_argument("--label", default=None)
     p.add_argument("--detail", default=None)
+    p.add_argument(
+        "--detail-json", dest="detail_json", default=None,
+        help="structured detail payload as a JSON string, decoded before emit so the "
+             "buffered event carries an OBJECT rather than a string (#1145). Prefer this "
+             "over --detail for any new caller that has a structured payload; --detail "
+             "stays for free-form prose (schema permits 'string or structured'). Wins "
+             "over --detail if both are given.",
+    )
     p.add_argument("--activity-type", dest="activity_type", default=None,
                    help="convention field: campaign|float|session (#947)")
     p.add_argument("--host", default=None,
@@ -512,11 +520,14 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     try:
+        fields = _build_arg_fields(args)
+        if args.detail_json is not None:
+            fields["detail"] = json.loads(args.detail_json)
         event = emit(
             args.kind,
             activity_id=args.activity_id,
             ship_now=args.ship_now,
-            **_build_arg_fields(args),
+            **fields,
         )
         if event is not None:
             # BEFORE print(): if stdout is closed or full, print() can raise,
@@ -537,8 +548,10 @@ def main(argv: list[str] | None = None) -> int:
             # "session" would leak straight through that path: args.activity_type
             # would read None, not "session", and a routine session start would
             # silently clobber a LIVE campaign's marker with a presence id. The
-            # wavemachine driver always pins --activity-type campaign
-            # (skills/wavemachine/SKILL.md:232); nothing else emits "float" today.
+            # wavemachine driver always pins --activity-type campaign — since
+            # #1145, via `wave-status campaign-head` (__main__.py:_cmd_campaign_head),
+            # which delegates to this same main() precisely to keep this marker
+            # write; nothing else emits "float" today.
             if args.kind == "activity_start" and args.activity_type == "campaign" and aid != "unknown":
                 _write_scope_marker(aid, event.get("agent"))
             elif args.kind == "activity_end" and aid:

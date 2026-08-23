@@ -1568,3 +1568,34 @@ def show(root: Path) -> dict:
         "kahuna_flights_merged": kahuna_merged,
         "kahuna_flights_pending": kahuna_pending,
     }
+
+
+def resolve_campaign_head_detail(root: Path) -> dict:
+    """Derive the FlightDeck campaign card's ``detail`` payload from the plan.
+
+    Returns ``{"planTotal": N}`` (the wave-count denominator) plus
+    ``"project"`` (the card's fallback title) — read from ``phases-waves.json``,
+    never hand-typed (flightdeck#1145). Raises ``ValueError`` with a message
+    naming the specific problem when the plan cannot be read or has no waves:
+    a campaign head that cannot determine its own total must refuse rather
+    than emit a card claiming an unknown total silently (flightdeck#1145 AC).
+    """
+    path = status_dir(root) / "phases-waves.json"
+    try:
+        plan_data = load_json(path)
+    except FileNotFoundError:
+        raise ValueError(
+            f"Error: no plan found at {path}. Run 'wave-status init' before "
+            "emitting the campaign head."
+        ) from None
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Error: plan at {path} is not valid JSON: {exc}.") from exc
+
+    plan_total = len(_all_wave_ids(plan_data))
+    if plan_total == 0:
+        raise ValueError(
+            f"Error: plan at {path} has zero waves. Cannot compute a campaign "
+            "planTotal denominator."
+        )
+
+    return {"planTotal": plan_total, "project": plan_data.get("project")}
