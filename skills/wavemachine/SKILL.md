@@ -235,13 +235,15 @@ wave-status campaign-head \
 (Omit `--agent` when the Dev-Name is absent — `${dev_name:+…}` — so the card falls back to
 the project label rather than rendering an empty title.)
 
-`campaign-head` derives `planTotal` (the wave denominator) and the project label FROM THE
-PLAN itself (`phases-waves.json`) — never a hand-typed literal (flightdeck#1145). It refuses
-loudly (non-zero exit, a message on stderr) rather than emitting a card claiming an unknown
-total if the plan can't be read; the `|| true` here only protects the launch sequence from
-aborting on that refusal, it does not hide the message. `--agent` is the Dev-Name (card
-title). The per-wave `promoted` step then accrues the numerator (`per-wave-workflow.js`,
-#1026 incr 2).
+`campaign-head` derives `planTotal` (the wave denominator), `workItemsTotal` (the work-item
+denominator, #1154), and the project label FROM THE PLAN itself (`phases-waves.json`) — never
+a hand-typed literal (flightdeck#1145). It refuses loudly (non-zero exit, a message on
+stderr) rather than emitting a card claiming an unknown total if the plan can't be read, or
+if the plan has zero waves, or if it has zero work items; the `|| true` here only protects
+the launch sequence from aborting on that refusal, it does not hide the message. `--agent`
+is the Dev-Name (card title). The per-wave `promoted` step then accrues the wave numerator
+(`per-wave-workflow.js`, #1026 incr 2); `close-issue` (`state.py`'s `close_issue`, unrelated
+to wavemachine) accrues the work-items numerator the same way, campaign scope only.
 
 1. Set the `wavemachine_active` flag (`wave-status wavemachine-start --launcher main`).
    Unset it on EVERY exit path (`wave-status wavemachine-stop`) — treat as a `finally`.

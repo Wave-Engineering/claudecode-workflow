@@ -1225,6 +1225,47 @@ class TestResolveCampaignHeadDetail:
         assert detail["planTotal"] == 3
         assert detail["project"] == "test-project"
 
+    def test_work_items_total_is_issue_count(self, project_root: Path) -> None:
+        # SAMPLE_PLAN carries issues 13, 1, 2, 3, 5 — 5 work items total,
+        # spread unevenly across the 3 waves (2 + 2 + 1) — a wave-count
+        # coincidence must not make this pass by accident.
+        detail = resolve_campaign_head_detail(project_root)
+        assert detail["workItemsTotal"] == 5
+
+    def test_work_items_total_counts_refs_not_bare_numbers(self, tmp_path: Path) -> None:
+        # Code review finding (#1154): the defining reason for using
+        # `_all_issue_refs` over `_all_issue_numbers` — a cross-repo plan can
+        # legitimately repeat an issue number across repos — was untested.
+        # SAMPLE_PLAN is single-repo with unique numbers, so it can't tell
+        # `_all_issue_refs` and `_all_issue_numbers` apart: both would return
+        # 5. This plan repeats #5 across two repos; only the ref-counting
+        # implementation gets this right (3, not 2).
+        plan = {
+            "project": "cross-repo",
+            "base_branch": "main",
+            "master_issue": 1,
+            "repo": "org/a",
+            "phases": [
+                {
+                    "name": "Only",
+                    "waves": [
+                        {
+                            "id": "wave-1",
+                            "name": "Wave 1",
+                            "issues": [
+                                {"number": 5, "title": "in org/a", "deps": []},
+                                {"number": 7, "title": "also org/a", "deps": []},
+                                {"number": 5, "title": "same number, org/b", "deps": [], "repo": "org/b"},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        init_state(plan, tmp_path)
+        detail = resolve_campaign_head_detail(tmp_path)
+        assert detail["workItemsTotal"] == 3
+
     def test_no_plan_refuses_rather_than_guessing(self, tmp_path: Path) -> None:
         # tmp_path here is a bare project root — init_state was never called.
         with pytest.raises(ValueError, match="no plan found"):
@@ -1234,6 +1275,21 @@ class TestResolveCampaignHeadDetail:
         empty_plan = {"project": "empty", "base_branch": "main", "master_issue": 1, "phases": []}
         init_state(empty_plan, tmp_path)
         with pytest.raises(ValueError, match="zero waves"):
+            resolve_campaign_head_detail(tmp_path)
+
+    def test_zero_work_items_refuses_rather_than_guessing(self, tmp_path: Path) -> None:
+        # A wave with no issues at all — plan_total is nonzero (1 wave) so
+        # this exercises the SECOND refusal, not the first.
+        plan = {
+            "project": "no-issues",
+            "base_branch": "main",
+            "master_issue": 1,
+            "phases": [
+                {"name": "Only", "waves": [{"id": "wave-1", "name": "Wave 1", "issues": []}]}
+            ],
+        }
+        init_state(plan, tmp_path)
+        with pytest.raises(ValueError, match="zero work items"):
             resolve_campaign_head_detail(tmp_path)
 
     def test_malformed_plan_json_refuses_with_a_clear_message(self, tmp_path: Path) -> None:
@@ -1269,6 +1325,7 @@ class TestResolveCampaignHeadDetail:
         extend_state(extra, tmp_path)
         detail = resolve_campaign_head_detail(tmp_path)
         assert detail["planTotal"] == 4
+        assert detail["workItemsTotal"] == 6
 
 
 # ---------------------------------------------------------------------------
