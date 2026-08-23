@@ -1573,12 +1573,20 @@ def show(root: Path) -> dict:
 def resolve_campaign_head_detail(root: Path) -> dict:
     """Derive the FlightDeck campaign card's ``detail`` payload from the plan.
 
-    Returns ``{"planTotal": N}`` (the wave-count denominator) plus
-    ``"project"`` (the card's fallback title) — read from ``phases-waves.json``,
-    never hand-typed (flightdeck#1145). Raises ``ValueError`` with a message
-    naming the specific problem when the plan cannot be read or has no waves:
-    a campaign head that cannot determine its own total must refuse rather
-    than emit a card claiming an unknown total silently (flightdeck#1145 AC).
+    Returns ``{"planTotal": N, "workItemsTotal": M}`` (the wave-count and
+    work-item-count denominators) plus ``"project"`` (the card's fallback
+    title) — read from ``phases-waves.json``, never hand-typed
+    (flightdeck#1145, cc-workflow#1146 step 4). Raises ``ValueError`` with a
+    message naming the specific problem when the plan cannot be read or has
+    no waves: a campaign head that cannot determine its own totals must
+    refuse rather than emit a card claiming an unknown total silently
+    (flightdeck#1145 AC).
+
+    ``workItemsTotal`` counts issue **refs** (``_all_issue_refs``), not bare
+    numbers — a cross-repo plan can legitimately carry the same issue number
+    in two repos, and a number-keyed set would silently undercount that case
+    the same way a number-keyed ``state.json`` key would collide (see
+    ``_compose_issue_key``).
     """
     path = status_dir(root) / "phases-waves.json"
     try:
@@ -1598,4 +1606,15 @@ def resolve_campaign_head_detail(root: Path) -> dict:
             "planTotal denominator."
         )
 
-    return {"planTotal": plan_total, "project": plan_data.get("project")}
+    work_items_total = len(_all_issue_refs(plan_data))
+    if work_items_total == 0:
+        raise ValueError(
+            f"Error: plan at {path} has zero work items. Cannot compute a "
+            "campaign workItemsTotal denominator."
+        )
+
+    return {
+        "planTotal": plan_total,
+        "workItemsTotal": work_items_total,
+        "project": plan_data.get("project"),
+    }
