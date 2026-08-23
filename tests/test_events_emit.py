@@ -32,10 +32,13 @@ class _CaptureServer:
     """A tiny HTTP server capturing POSTed bodies + auth headers.
 
     ``received`` holds ``(path, body_dict_or_str, auth_header)`` tuples in
-    arrival order. ``status`` is the code it returns (default 202).
+    arrival order. ``status`` is the code it returns (default 202). ``delay``
+    (#1149) sleeps that many seconds BEFORE responding — lets a test control
+    exactly how long a POST stays in-flight, deterministically, instead of
+    relying on real network timing to land inside or outside a join window.
     """
 
-    def __init__(self, status: int = 202, port: int = 0):
+    def __init__(self, status: int = 202, port: int = 0, delay: float = 0.0):
         self.received: list[tuple] = []
         self.status = status
         captured = self.received
@@ -52,6 +55,8 @@ class _CaptureServer:
                     body = json.loads(raw)
                 except Exception:
                     body = raw
+                if delay:
+                    time.sleep(delay)
                 captured.append((self.path, body, self.headers.get("Authorization")))
                 self.send_response(status_code)
                 self.end_headers()
@@ -173,6 +178,215 @@ class TestNonBlockingShip:
             assert auth == "Bearer sekret"
         finally:
             server.stop()
+
+
+# ---------------------------------------------------------------------------
+# #1149 — bounded join of outstanding shipper threads at TRUE process exit
+# only. `emit()`/`_ship_async()` must stay non-blocking for every in-process
+# caller (`_cmd_emit`, `_cmd_campaign_head`, direct test calls) — only the
+# real ``if __name__ == "__main__":`` guards may call `flush_pending_ships`.
+# ---------------------------------------------------------------------------
+
+class TestFlushPendingShips:
+    def test_ship_async_registers_the_started_thread(self, buf, monkeypatch):
+        server = _CaptureServer().start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            assert emit_mod._pending_ships == []
+            emit("step", activity_id="camp-1", wave="w")
+            assert len(emit_mod._pending_ships) == 1
+            assert emit_mod._pending_ships[0].name == "flightdeck-ship"
+        finally:
+            emit_mod.flush_pending_ships(timeout=2.0)
+            server.stop()
+
+    def test_flush_joins_a_fast_ship_and_clears_the_registry(self, buf, monkeypatch):
+        server = _CaptureServer(delay=0.05).start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            emit("step", activity_id="camp-1", wave="w")
+            assert len(emit_mod._pending_ships) == 1
+            emit_mod.flush_pending_ships(timeout=2.0)
+            # The join WAITED for the POST rather than abandoning it — the
+            # slow (but well within the timeout) response already landed.
+            assert server.wait_for(1, timeout=0.1)
+            assert emit_mod._pending_ships == []
+        finally:
+            server.stop()
+
+    def test_flush_is_bounded_not_indefinite(self, buf, monkeypatch):
+        # A server that responds slower than the join timeout: flush must
+        # still return promptly (bounded), never hang waiting for the POST
+        # to finish. This is the R-02-preserving half of the fix — an
+        # unbounded join would just move the "caller blocks forever on a
+        # dead ingest" failure to a different call site.
+        server = _CaptureServer(delay=2.0).start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            emit("step", activity_id="camp-1", wave="w")
+            t0 = time.monotonic()
+            emit_mod.flush_pending_ships(timeout=0.2)
+            elapsed = time.monotonic() - t0
+            assert elapsed < 1.0, f"flush blocked for {elapsed}s against a 0.2s timeout"
+            # Registry is cleared regardless of whether the thread finished —
+            # waiting on an abandoned thread a second time serves no purpose.
+            assert emit_mod._pending_ships == []
+        finally:
+            server.stop()
+
+    def test_flush_default_timeout_is_flightdeck_ingest_timeout_env(self, monkeypatch):
+        monkeypatch.setenv("FLIGHTDECK_INGEST_TIMEOUT", "7.5")
+        calls: list[float | None] = []
+
+        class _FakeThread:
+            def join(self, timeout=None):
+                calls.append(timeout)
+
+        emit_mod._pending_ships.append(_FakeThread())
+        emit_mod.flush_pending_ships()  # no explicit timeout ⇒ env default
+        assert calls == [7.5]
+
+    def test_flush_never_raises_when_join_raises(self, monkeypatch):
+        class _RaisingThread:
+            def join(self, timeout=None):
+                raise RuntimeError("boom")
+
+        emit_mod._pending_ships.append(_RaisingThread())
+        emit_mod.flush_pending_ships(timeout=0.1)  # must not propagate (R-03)
+        assert emit_mod._pending_ships == []
+
+    def test_flush_is_a_noop_with_nothing_pending(self):
+        assert emit_mod._pending_ships == []
+        emit_mod.flush_pending_ships(timeout=0.1)  # no error, nothing to do
+        assert emit_mod._pending_ships == []
+
+    def test_flush_std_streams_swallows_a_broken_pipe(self, monkeypatch):
+        # A closed reading end (`wave-status show | head -1`) makes flush()
+        # raise BrokenPipeError. Letting that propagate out of the
+        # `_run_as_script()` finally block would skip the os._exit() call
+        # right after it — a clean, fast exit turning into a shutdown
+        # traceback. Both streams must be independently guarded: one
+        # raising must not prevent the other's flush from being attempted.
+        class _Boom:
+            def __init__(self):
+                self.flushed = False
+
+            def flush(self):
+                self.flushed = True
+                raise BrokenPipeError(32, "Broken pipe")
+
+        boom_out, boom_err = _Boom(), _Boom()
+        monkeypatch.setattr(emit_mod.sys, "stdout", boom_out)
+        monkeypatch.setattr(emit_mod.sys, "stderr", boom_err)
+        emit_mod._flush_std_streams()  # must not raise
+        assert boom_out.flushed and boom_err.flushed
+
+
+class TestRunAsScriptExitsThroughFlush:
+    """Both modules' TRUE top-level entry points are factored into a named
+    ``_run_as_script()`` function specifically so this can be tested without
+    ever letting a real ``os._exit`` fire — that would kill the pytest
+    process. `_run_as_script()` has a THIRD caller beyond the two
+    ``if __name__ == "__main__":`` guards exercised here in-process: the
+    zipapp shim `scripts/ci/build.sh` generates for the shipped
+    `wave-status` binary calls it directly (see
+    `tests/test_zipapp.py::TestZipappShipperJoinsOnExit`, which is the
+    regression test for THAT path specifically — it caught a real bug this
+    module's tests alone did not, since the zipapp shim never runs either
+    `__main__` guard). Mocking os._exit and asserting call ORDER is the
+    regression test AC #4 on #1149 asked for: it fails on the pre-fix code
+    (no `flush_pending_ships` existed to call) with no timing dependency,
+    unlike the crash itself (probabilistic, 2/3 in the original report)."""
+
+    def test_emit_module_guard_flushes_before_exit(self, monkeypatch):
+        from wave_status.events import emit as emit_module
+
+        order: list[str] = []
+        monkeypatch.setattr(emit_module, "main", lambda: (order.append("main"), 0)[1])
+        monkeypatch.setattr(
+            emit_module, "flush_pending_ships", lambda: order.append("flush")
+        )
+        monkeypatch.setattr(
+            emit_module.os, "_exit", lambda code: order.append(f"exit:{code}")
+        )
+        emit_module._run_as_script()
+        assert order == ["main", "flush", "exit:0"]
+
+    def test_emit_module_guard_flushes_even_when_main_raises(self, monkeypatch):
+        from wave_status.events import emit as emit_module
+
+        order: list[str] = []
+
+        def _boom():
+            order.append("main")
+            raise RuntimeError("kaboom")
+
+        monkeypatch.setattr(emit_module, "main", _boom)
+        monkeypatch.setattr(
+            emit_module, "flush_pending_ships", lambda: order.append("flush")
+        )
+        monkeypatch.setattr(
+            emit_module.os, "_exit", lambda code: order.append(f"exit:{code}")
+        )
+        with pytest.raises(RuntimeError):
+            emit_module._run_as_script()
+        # The finally block still ran flush before the exception propagated —
+        # os._exit is unreachable here (the exception wins), which is correct:
+        # an unhandled error in the standalone-script form should surface,
+        # not be silently swallowed into a clean exit.
+        assert order == ["main", "flush"]
+
+    def test_dunder_main_guard_flushes_before_exit_on_success(self, monkeypatch):
+        import wave_status.__main__ as main_module
+
+        order: list[str] = []
+        monkeypatch.setattr(main_module, "main", lambda: order.append("main"))
+        monkeypatch.setattr(
+            "wave_status.events.emit.flush_pending_ships",
+            lambda: order.append("flush"),
+        )
+        monkeypatch.setattr(
+            main_module.os, "_exit", lambda code: order.append(f"exit:{code}")
+        )
+        main_module._run_as_script()
+        assert order == ["main", "flush", "exit:0"]
+
+    def test_dunder_main_guard_extracts_systemexit_code(self, monkeypatch):
+        import wave_status.__main__ as main_module
+
+        order: list[str] = []
+
+        def _exits_nonzero():
+            order.append("main")
+            raise SystemExit(2)
+
+        monkeypatch.setattr(main_module, "main", _exits_nonzero)
+        monkeypatch.setattr(
+            "wave_status.events.emit.flush_pending_ships",
+            lambda: order.append("flush"),
+        )
+        monkeypatch.setattr(
+            main_module.os, "_exit", lambda code: order.append(f"exit:{code}")
+        )
+        main_module._run_as_script()
+        # flush still ran (finally), and the REAL SystemExit code (2) reached
+        # os._exit — not silently coerced to 0 or swallowed.
+        assert order == ["main", "flush", "exit:2"]
+
+    def test_dunder_main_guard_systemexit_none_code_means_zero(self, monkeypatch):
+        import wave_status.__main__ as main_module
+
+        def _exits_bare():
+            raise SystemExit()  # .code is None ⇒ conventionally exit 0
+
+        monkeypatch.setattr(main_module, "main", _exits_bare)
+        monkeypatch.setattr("wave_status.events.emit.flush_pending_ships", lambda: None)
+        captured: dict[str, int] = {}
+        monkeypatch.setattr(
+            main_module.os, "_exit", lambda code: captured.__setitem__("code", code)
+        )
+        main_module._run_as_script()
+        assert captured["code"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +557,81 @@ class TestEmitCli:
         )
         assert r.returncode == 0  # fire-and-forget: never fail the caller
         assert not ep.exists() or ep.read_text() == ""
+
+
+class TestExitJoinsShipperEndToEnd:
+    """#1149, end to end: a REAL subprocess, through the REAL
+    ``if __name__ == "__main__":`` guard (`_run_as_script`), against a REAL
+    (slow, but in-bound) ingest server — not mocked, not in-process. This is
+    the closest thing to the original crash scenario this suite can assert
+    without ever needing the crash to actually reproduce: the process must
+    (a) still exit cleanly (not hang, not crash) when the shipper is slow,
+    and (b) actually deliver the event before exiting rather than abandoning
+    it, proving the join is real and not a no-op.
+    """
+
+    def test_cli_process_waits_for_a_slow_but_in_bound_post_before_exiting(
+        self, tmp_path
+    ):
+        server = _CaptureServer(delay=0.3).start()
+        try:
+            ep = tmp_path / "events.jsonl"
+            r = _run(
+                [sys.executable, "-m", "wave_status.events.emit", "step",
+                 "--activity-id", "camp-1", "--wave", "w"],
+                ep,
+                extra_env={
+                    "FLIGHTDECK_INGEST_URL": server.url,
+                    "FLIGHTDECK_INGEST_TIMEOUT": "2",
+                },
+            )
+            assert r.returncode == 0, r.stderr
+            # Not abandoned mid-flight: the subprocess's own exit already
+            # waited long enough for the 0.3s-delayed POST to land.
+            assert len(server.received) == 1, "process exited before the ship landed"
+            assert server.received[0][1]["wave"] == "w"
+        finally:
+            server.stop()
+
+    def test_cli_process_exits_promptly_against_a_hanging_ingest(self, tmp_path):
+        # A server that never responds at all (accepts the connection, then
+        # sits). The join must still be BOUNDED — the process should exit
+        # near FLIGHTDECK_INGEST_TIMEOUT, not hang indefinitely.
+        #
+        # Asserts BOTH bounds, deliberately: an upper bound alone doesn't
+        # distinguish this fix from the pre-fix code, which ALSO exits
+        # "promptly" against a hanging ingest — it just never waits on the
+        # thread at all (fire-and-forget, exits in ~0.1s regardless of the
+        # server). A lower bound close to the configured timeout is what
+        # actually proves the join happened rather than being a no-op: on
+        # pre-fix code this assertion fails (elapsed lands near 0.1s, not
+        # >=1.0s) — confirmed by mutation-reverting this exact test.
+        # 5s is comfortably longer than the 1.5s join bound — no need for
+        # 30s, which only stalls this test's own teardown (_CaptureServer's
+        # single-threaded HTTPServer can't observe shutdown() until the
+        # in-flight handler's sleep() returns).
+        server = _CaptureServer(delay=5.0).start()
+        try:
+            ep = tmp_path / "events.jsonl"
+            t0 = time.monotonic()
+            r = _run(
+                [sys.executable, "-m", "wave_status.events.emit", "step",
+                 "--activity-id", "camp-1", "--wave", "w"],
+                ep,
+                extra_env={
+                    "FLIGHTDECK_INGEST_URL": server.url,
+                    "FLIGHTDECK_INGEST_TIMEOUT": "1.5",
+                },
+            )
+            elapsed = time.monotonic() - t0
+            assert r.returncode == 0, r.stderr
+            assert elapsed >= 1.0, (
+                f"process exited in {elapsed}s — too fast to have joined the "
+                "shipper thread against a 1.5s bound; looks like a no-op join"
+            )
+            assert elapsed < 8.0, f"process took {elapsed}s against a 1.5s ship bound"
+        finally:
+            server.stop()
 
 
 class TestResolveAgent:

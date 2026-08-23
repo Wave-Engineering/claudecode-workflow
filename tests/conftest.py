@@ -159,6 +159,17 @@ def _isolate_flightdeck_buffer(tmp_path_factory, monkeypatch):
     monkeypatch.delenv("FLIGHTDECK_AGENT", raising=False)
     monkeypatch.delenv("FLIGHTDECK_LOG_REF", raising=False)
     monkeypatch.delenv("FLIGHTDECK_EMIT_DISABLED", raising=False)
+    # #1149: `_pending_ships` is module-level state (the registry
+    # `flush_pending_ships` joins at true process exit). In-process, it can
+    # outlive any one test that starts a shipper thread without flushing it —
+    # clear it before AND after so no test starts with another's leftover
+    # thread, and no daemon thread from this test lingers registered for a
+    # LATER test's flush to (uselessly, confusingly) join.
+    from wave_status.events import emit as _emit_mod
+
+    _emit_mod._pending_ships.clear()
+    yield
+    _emit_mod._pending_ships.clear()
 
 
 @pytest.fixture()

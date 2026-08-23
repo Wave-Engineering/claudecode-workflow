@@ -61,9 +61,17 @@ for pkg_dir in "${packages[@]}"; do
 	staging="$(mktemp -d)"
 	cleanup_dirs+=("$staging")
 	cp -r "$pkg_dir" "$staging/$pkg_name"
+	# Prefer the package's `_run_as_script` entry point over bare `main()`
+	# when one exists (#1149) — this zipapp shim IMPORTS the package's
+	# __main__.py as a module, so its own `if __name__ == "__main__":`
+	# guard never fires, and a bare `main()` call would silently skip
+	# whatever that guard was meant to do on real process exit (e.g.
+	# wave_status's bounded shipper-thread join before interpreter
+	# finalization). Fall back to `main` for packages that don't define
+	# `_run_as_script` (campaign_status has only `main()`).
 	cat >"$staging/__main__.py" <<ENTRY
-from ${pkg_name}.__main__ import main
-main()
+import ${pkg_name}.__main__ as _m
+(getattr(_m, "_run_as_script", None) or _m.main)()
 ENTRY
 
 	if python3 -m zipapp "$staging" -o "$output" -p '/usr/bin/env python3'; then

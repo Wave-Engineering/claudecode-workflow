@@ -37,6 +37,7 @@ import hashlib
 import json
 import tempfile
 import os
+import sys
 import threading
 import urllib.request
 from pathlib import Path
@@ -50,11 +51,17 @@ __all__ = [
     "replay",
     "buffer_path",
     "activity_id_for_root",
+    "flush_pending_ships",
 ]
 
 # Sentinel so ``value=None`` (a seamed-absent metric, #853 token stub) is
 # distinguishable from "value not supplied".
 _UNSET = object()
+
+# Daemon threads started by `_ship_async`, not yet joined (#1149). Populated
+# here, drained by `flush_pending_ships` — see that function's docstring for
+# why the join lives at the true top-level exit point and nowhere else.
+_pending_ships: list[threading.Thread] = []
 
 # Map the ergonomic snake_case emit() kwargs to the schema's camelCase keys.
 # ``activity_type`` and ``host`` (#947) are additive convention fields — the
@@ -347,15 +354,105 @@ replay = ship
 
 
 def _ship_async(buffer: Path) -> None:
-    """Fire :func:`ship` in a daemon thread so the caller never blocks (R-02)."""
+    """Fire :func:`ship` in a daemon thread so the caller never blocks (R-02).
+
+    The thread is registered in :data:`_pending_ships` so a true top-level exit
+    can bound-join it (:func:`flush_pending_ships`, #1149) — never joined here,
+    which would defeat R-02 for every in-process caller.
+    """
     if not os.environ.get("FLIGHTDECK_INGEST_URL"):
         return  # DI-seam: buffer-only, no thread.
     try:
-        threading.Thread(
+        t = threading.Thread(
             target=ship, args=(buffer,), daemon=True, name="flightdeck-ship"
-        ).start()
+        )
+        t.start()
+        _pending_ships.append(t)
     except Exception:
         pass
+
+
+def _flush_std_streams() -> None:
+    """Best-effort ``stdout``/``stderr`` flush ahead of ``os._exit`` (#1149).
+
+    Never raises: a closed pipe on the READING end (``wave-status show |
+    head -1``) makes ``flush()`` raise ``BrokenPipeError``, and letting that
+    propagate out of a ``finally`` block would skip the ``os._exit()`` call
+    right after it — turning a clean, fast exit into a shutdown traceback.
+    Best-effort is the correct contract here anyway: os._exit truncates an
+    unflushed buffer no worse than any other abrupt exit would.
+    """
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
+    try:
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+def flush_pending_ships(timeout: float | None = None) -> None:
+    """Bound-join every outstanding shipper thread before a REAL process exit.
+
+    #1149: a daemon thread mid-flight in an SSL/socket call when CPython's
+    interpreter finalization tears down C-extension state it still depends on
+    is a known segfault class. `_ship_async` never blocks its caller (R-02) —
+    that contract must hold for every IN-PROCESS caller of :func:`emit`
+    (``_cmd_emit``, ``_cmd_campaign_head``, direct test calls), so this
+    function must be called ONLY from :func:`_run_as_script` — never from
+    :func:`emit`, :func:`main`, or any command handler. Calling it anywhere
+    else reintroduces exactly the caller-blocking cost R-02 exists to avoid,
+    on every state mutation, not just the crash-prone one.
+
+    `_run_as_script` has THREE callers, not two — this is the exact blind
+    spot that let the original fix land as dead code in production (a code
+    review caught it before merge, not after): this module's own
+    ``if __name__ == "__main__":`` guard, ``wave_status/__main__.py``'s
+    (the real ``wave-status`` CLI's entry when invoked as
+    ``python -m wave_status``), and the zipapp shim
+    ``scripts/ci/build.sh`` generates for the SHIPPED ``wave-status``
+    binary — the one that matters in production, since it imports
+    ``wave_status.__main__`` as a module rather than running it, so neither
+    ``__main__`` guard fires there at all. Any new packaging/invocation path
+    added later needs to route through `_run_as_script` too, or it silently
+    reopens #1149.
+
+    Bounded, not indefinite: an unbounded join would hang the CLI forever
+    against a truly dead/hanging ingest endpoint — the same failure mode R-02
+    was built to avoid, just moved to a different call site. *timeout*
+    defaults to ``FLIGHTDECK_INGEST_TIMEOUT`` (the same bound a single
+    in-flight POST is already allowed to take), so the worst case this adds
+    to a real process exit is one more instance of a cost the process was
+    already prepared to pay.
+
+    Never raises (R-03). Clears :data:`_pending_ships` unconditionally —
+    whether a thread finished, is still running past the timeout, or joining
+    it raised, waiting on it a second time serves no purpose.
+
+    This join is bounded PER THREAD, so `ship()`'s own internal backlog
+    replay can still legitimately exceed *timeout* in total — a thread can be
+    abandoned here mid-POST if the buffer had a lot of catching up to do.
+    That's fine ONLY because both call sites follow this with `os._exit()`,
+    not a normal return: no `Py_Finalize` runs, so an abandoned in-flight
+    thread has nothing left to race and can't trigger the crash class this
+    fix exists for. **The join buys delivery; `os._exit()` buys crash
+    safety — they are not substitutes for each other.** If a future change
+    ever "simplifies" a call site back to a bare return/`sys.exit()`, the
+    abandoned-thread case reopens #1149 exactly as it was before this fix,
+    even with this join still in place.
+    """
+    if timeout is None:
+        try:
+            timeout = float(os.environ.get("FLIGHTDECK_INGEST_TIMEOUT", "2"))
+        except (TypeError, ValueError):
+            timeout = 2.0
+    threads, _pending_ships[:] = list(_pending_ships), []
+    for t in threads:
+        try:
+            t.join(timeout=timeout)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -562,5 +659,34 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _run_as_script() -> None:
+    """The real top-level entry-point body for this module's standalone form
+    (``python -m wave_status.events.emit ...``) — the one place it's safe to
+    both join outstanding shipper threads and skip normal interpreter
+    finalization. See `flush_pending_ships`'s docstring for why this must
+    never move into `main()` itself (it's called in-process elsewhere, and a
+    bad move here would either block those callers or kill a test run).
+
+    Factored out of the ``if __name__ == "__main__":`` guard so tests can
+    call it directly with ``os._exit`` mocked — actually invoking
+    ``os._exit`` would kill the test process, and the whole point of it is
+    that it can't be caught.
+    """
+    _code = 1
+    try:
+        _code = main()
+    finally:
+        flush_pending_ships()
+        _flush_std_streams()
+    # os._exit, not SystemExit/return: skips Py_Finalize's interpreter
+    # teardown entirely, which is what the daemon-thread-shutdown race needs
+    # to exist at all. Safe here specifically because flush_pending_ships()
+    # just ran — nothing this module does relies on atexit/GC finalizers
+    # (verified: no `atexit`, no `__del__`, no buffered writes other than the
+    # stdout/stderr just flushed above; the buffer append and scope-marker
+    # write are already fsync'd+closed before `main()` returns).
+    os._exit(_code)
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _run_as_script()
