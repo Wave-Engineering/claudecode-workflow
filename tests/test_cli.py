@@ -521,6 +521,116 @@ class TestCmdShow:
 
 
 # ---------------------------------------------------------------------------
+# campaign-head [flightdeck#1145]
+# ---------------------------------------------------------------------------
+
+class TestCmdCampaignHead:
+    """``wave-status campaign-head`` — planTotal derived from the plan, never
+    hand-typed (the wavemachine SKILL.md bash snippet this replaces used to
+    require the driver to fill in ``<total waves in the approved plan>`` by
+    hand). The autouse ``_isolate_flightdeck_buffer`` fixture (conftest.py)
+    points ``FLIGHTDECK_EVENTS_PATH``/``FLIGHTDECK_SCOPE_PATH`` at throwaway
+    files for every test in this process, so reading them back here is safe.
+    """
+
+    def _read_buffer(self) -> list[dict]:
+        from wave_status.events.emit import buffer_path
+
+        path = buffer_path()
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    def test_emits_activity_start_with_derived_plan_total(self, project_root: Path) -> None:
+        # SAMPLE_PLAN carries 3 waves (wave-1/2/3) across 2 phases.
+        code = _run_cli(
+            ["campaign-head", "--activity-id", "116", "--agent", "babelfish"],
+            project_root,
+        )
+        assert code == 0
+        # `init_state` (via the `project_root` fixture) already emitted its own
+        # bare activity_start into this same buffer (state.py:664) — a
+        # different activityId (derived from the repo path, not "116"), so
+        # filter rather than assume this is the only event.
+        events = [e for e in self._read_buffer() if e.get("activityId") == "116"]
+        assert len(events) == 1
+        event = events[0]
+        assert event["kind"] == "activity_start"
+        assert event["activityId"] == "116"
+        assert event["activityType"] == "campaign"
+        assert event["agent"] == "babelfish"
+        assert event["label"] == "test-project"
+        # Mutation guard: the OLD skill-prose bash snippet hand-typed this
+        # number. A wrong-but-plausible fix (e.g. hardcoding 0, or counting
+        # phases instead of waves) must fail this assertion.
+        #
+        # detail is a real OBJECT here, not a JSON string — campaign-head uses
+        # --detail-json (not --detail) precisely so the buffered event carries
+        # a structured payload rather than the string shape flightdeck's
+        # asRecord() only accepts as a compatibility shim for the old emitter.
+        assert isinstance(event["detail"], dict)
+        assert event["detail"] == {"planTotal": 3}
+
+    def test_agent_is_optional(self, project_root: Path) -> None:
+        code = _run_cli(["campaign-head", "--activity-id", "116"], project_root)
+        assert code == 0
+        events = [e for e in self._read_buffer() if e.get("activityId") == "116"]
+        assert len(events) == 1
+        assert "agent" not in events[0] or events[0].get("agent") is None
+
+    def test_empty_activity_id_refuses_rather_than_emitting_under_unknown(
+        self, project_root: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        # #1145 code review finding 2: an empty --activity-id (e.g. an unset
+        # $FLIGHTDECK_ACTIVITY_ID passed through unquoted-empty) must not
+        # silently fall through to emit()'s own "" -> "unknown" fallback —
+        # that would render a real planTotal under a bogus card id AND skip
+        # the scope-marker write (the allowlist explicitly excludes
+        # "unknown"), the exact phantom-card shape this whole fix exists to
+        # prevent, one field over.
+        # `project_root`'s own init_state() already emitted its own bare
+        # activity_start into this buffer (state.py:664) — capture that
+        # baseline so the assertion below is about what THIS call added, not
+        # an assumption the buffer starts empty (it doesn't, here).
+        before = self._read_buffer()
+        code = _run_cli(["campaign-head", "--activity-id", ""], project_root)
+        assert code == 1
+        after = self._read_buffer()
+        assert after == before  # nothing new landed — not under "unknown", not at all
+        assert not any(e.get("activityId") in ("", "unknown") for e in after)
+        captured = capsys.readouterr()
+        assert "activity-id" in captured.err
+
+    def test_no_plan_exits_1_and_emits_nothing(self, tmp_path: Path) -> None:
+        # tmp_path here is a bare root — init_state was never called, so
+        # there is no phases-waves.json for the command to read.
+        code = _run_cli(["campaign-head", "--activity-id", "999"], tmp_path)
+        assert code == 1
+        assert self._read_buffer() == []
+
+    def test_error_message_names_the_specific_problem(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        _run_cli(["campaign-head", "--activity-id", "999"], tmp_path)
+        captured = capsys.readouterr()
+        assert "no plan found" in captured.err
+
+    def test_writes_the_flightdeck_scope_marker(self, project_root: Path) -> None:
+        # #1148/#1150: the SAME side effect a hand-typed `wave-status emit
+        # activity_start --activity-type campaign` gets — lost if this command
+        # were reimplemented by calling emit() directly instead of delegating
+        # to the emit CLI's own main().
+        import os
+
+        code = _run_cli(["campaign-head", "--activity-id", "116"], project_root)
+        assert code == 0
+        marker_path = Path(os.environ["FLIGHTDECK_SCOPE_PATH"])
+        assert marker_path.exists()
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        assert marker["activityId"] == "116"
+
+
+# ---------------------------------------------------------------------------
 # Error handling [R-32]
 # ---------------------------------------------------------------------------
 

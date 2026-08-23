@@ -39,6 +39,7 @@ from wave_status.state import (
     planning,
     preflight,
     record_mr,
+    resolve_campaign_head_detail,
     resolve_issue_value,
     review,
     save_json,
@@ -1213,6 +1214,61 @@ class TestShow:
         result = show(tmp_path)
         assert "1/2" in result["progress"]
         assert "50%" in result["progress"]
+
+
+class TestResolveCampaignHeadDetail:
+    """flightdeck#1145 — planTotal derived from the plan, never hand-typed."""
+
+    def test_plan_total_is_wave_count(self, project_root: Path) -> None:
+        # SAMPLE_PLAN carries wave-1/wave-2/wave-3 — 3 waves total, across 2 phases.
+        detail = resolve_campaign_head_detail(project_root)
+        assert detail["planTotal"] == 3
+        assert detail["project"] == "test-project"
+
+    def test_no_plan_refuses_rather_than_guessing(self, tmp_path: Path) -> None:
+        # tmp_path here is a bare project root — init_state was never called.
+        with pytest.raises(ValueError, match="no plan found"):
+            resolve_campaign_head_detail(tmp_path)
+
+    def test_zero_waves_refuses_rather_than_guessing(self, tmp_path: Path) -> None:
+        empty_plan = {"project": "empty", "base_branch": "main", "master_issue": 1, "phases": []}
+        init_state(empty_plan, tmp_path)
+        with pytest.raises(ValueError, match="zero waves"):
+            resolve_campaign_head_detail(tmp_path)
+
+    def test_malformed_plan_json_refuses_with_a_clear_message(self, tmp_path: Path) -> None:
+        d = status_dir(tmp_path)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "phases-waves.json").write_text("{ not json", encoding="utf-8")
+        with pytest.raises(ValueError, match="not valid JSON"):
+            resolve_campaign_head_detail(tmp_path)
+
+    def test_error_message_format(self, tmp_path: Path) -> None:
+        """[R-32] Error messages follow 'Error: <what>. <fix>.' like every
+        other ValueError site in this module (#1145 code review finding 3 —
+        these three were the only ones missing the prefix)."""
+        with pytest.raises(ValueError, match=r"Error:.*\..+\."):
+            resolve_campaign_head_detail(tmp_path)
+
+    def test_reflects_extend_state_additions(self, tmp_path: Path) -> None:
+        # A campaign that grows mid-flight (init --extend) must see the NEW
+        # total, not the total at first init — this is the whole point of
+        # deriving from the plan rather than a one-time hand-typed literal.
+        init_state(SAMPLE_PLAN, tmp_path)
+        extra = {
+            "project": "test-project",
+            "phases": [
+                {
+                    "name": "Extension",
+                    "waves": [
+                        {"id": "wave-4", "name": "Wave 4", "issues": [{"number": 20, "title": "t", "deps": []}]},
+                    ],
+                }
+            ],
+        }
+        extend_state(extra, tmp_path)
+        detail = resolve_campaign_head_detail(tmp_path)
+        assert detail["planTotal"] == 4
 
 
 # ---------------------------------------------------------------------------

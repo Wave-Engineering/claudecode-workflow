@@ -44,6 +44,7 @@ from wave_status.state import (
     promoting,
     read_trajectory,
     record_mr,
+    resolve_campaign_head_detail,
     review,
     save_json,
     set_current_wave,
@@ -367,6 +368,64 @@ def _cmd_emit(args: argparse.Namespace) -> None:
     from wave_status.events.emit import main as emit_main
 
     emit_main(args.emit_args)
+
+
+def _cmd_campaign_head(args: argparse.Namespace) -> None:
+    """Handle ``campaign-head`` — emit the FlightDeck campaign card's head.
+
+    Unlike ``emit`` (a generic, fire-and-forget event that never raises),
+    this command computes ``planTotal``/the project title FROM THE PLAN
+    (``resolve_campaign_head_detail``) rather than accepting them as
+    caller-supplied literals, and lets a ``ValueError`` propagate to
+    ``main()``'s handler — refusing loudly (non-zero exit, a message on
+    stderr) rather than emitting a card with an unknown/guessed total
+    (flightdeck#1145). The driver owns ``--activity-id`` (the plan id) —
+    see skills/wavemachine/SKILL.md — because only its shell has
+    ``FLIGHTDECK_ACTIVITY_ID``; ``resolve_campaign_head_detail`` cannot key
+    the event itself the way the plain state mutators do.
+
+    Delegates the actual emit to the events emit CLI (`_cmd_emit`'s own
+    pattern) rather than calling ``emit()`` directly, so this call site gets
+    the SAME side effects a hand-typed ``wave-status emit`` gets for free —
+    most importantly the durable FlightDeck scope marker a campaign
+    ``activity_start`` writes (#1148/#1150), which the per-wave tee resolves
+    scope from. Reimplementing the emit here would silently lose that. Uses
+    ``--detail-json`` (not ``--detail``) so the buffered event carries
+    ``planTotal`` as an OBJECT, not a string — the flightdeck-side shim that
+    accepts a string is explicitly a compatibility shim for the OLD shape,
+    not the target (flightdeck fold.ts `asRecord`).
+    """
+    from wave_status.events.emit import main as emit_main
+
+    # An empty --activity-id is the SAME defect this command exists to fix,
+    # one field over: emit()'s own fallback chain reads a blank string as
+    # falsy and resolves it to "unknown", which the scope-marker allowlist
+    # then explicitly SKIPS (aid != "unknown") — so a card would render under
+    # a bogus id AND leave no marker for the per-wave tee to resolve scope
+    # from, silently, at exit 0. Refuse here instead, same as an unresolvable
+    # plan.
+    if not (args.activity_id or "").strip():
+        raise ValueError(
+            "Error: --activity-id is empty. Export FLIGHTDECK_ACTIVITY_ID=<plan_id> "
+            "before emitting the campaign head."
+        )
+
+    root = get_project_root()
+    resolved = resolve_campaign_head_detail(root)
+    argv = [
+        "activity_start",
+        "--activity-id", args.activity_id,
+        "--activity-type", "campaign",
+        "--detail-json", json.dumps({"planTotal": resolved["planTotal"]}),
+    ]
+    if resolved["project"]:
+        # `--flag=value` (one token), not `--flag value` (two) — a project
+        # name that happens to start with "-" would otherwise be parsed as a
+        # flag by the emit CLI's own argparse instance.
+        argv += [f"--label={resolved['project']}"]
+    if args.agent:
+        argv += [f"--agent={args.agent}"]
+    emit_main(argv)
 
 
 def _cmd_show(args: argparse.Namespace) -> None:
@@ -697,6 +756,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="<kind> [--wave …] [--metric …] … (see the emit CLI -h)",
     )
     p_em.set_defaults(func=_cmd_emit)
+
+    # campaign-head (flightdeck#1145): computes planTotal/project from the
+    # plan itself rather than requiring the caller to hand-type them.
+    p_ch = sub.add_parser(
+        "campaign-head",
+        help="Emit the FlightDeck campaign card head, deriving planTotal from the plan",
+    )
+    p_ch.add_argument(
+        "--activity-id", dest="activity_id", required=True,
+        help="the plan id (e.g. $FLIGHTDECK_ACTIVITY_ID) — only the driver's shell has this",
+    )
+    p_ch.add_argument("--agent", default=None, help="Dev-Name (card title); omit to fall back to the project label")
+    p_ch.set_defaults(func=_cmd_campaign_head)
 
     # show
     p_sh = sub.add_parser("show", help="Print status summary (read-only)")
