@@ -69,6 +69,9 @@ CONCERN_KINDS: tuple[str, ...] = (
 CONCERN_SOURCES: tuple[str, ...] = ("coded", "declared")
 
 #: The canonical scope-tag key set carried by every event (Dev Spec §5.1).
+#: `session` (cc-workflow#1165, #1146 step 3 prerequisite) is the stable AX-4
+#: identity; `agent` stays the mutable, chosen Dev-Name display value — two
+#: distinct fields, not two names for the same fact (AX-6).
 SCOPE_TAGS: tuple[str, ...] = (
     "activityId",
     "kind",
@@ -76,6 +79,7 @@ SCOPE_TAGS: tuple[str, ...] = (
     "wave",
     "flight",
     "agent",
+    "session",
     "ts",
     "logRef",
 )
@@ -132,6 +136,7 @@ _SCOPE_TYPES: dict[str, tuple[type, ...]] = {
     "wave": (str,),
     "flight": (str, int),
     "agent": (str,),
+    "session": (str,),
     "logRef": (str,),
 }
 

@@ -43,6 +43,10 @@
       "description": "Scope tag: the emitting agent identity (Dev-Name), when known.",
       "type": ["string", "null"]
     },
+    "session": {
+      "description": "Scope tag: the emitting session's stable identity (AX-4, cc-workflow#1146 step 3) — assigned, not chosen, stable across an agent renaming mid-session. Distinct from `agent` (the displayed Dev-Name, which is chosen and may collide or change).",
+      "type": ["string", "null"]
+    },
     "logRef": {
       "description": "Scope tag: a reference resolving to the transcript/log for this scope (the scoped log viewer keys on this).",
       "type": ["string", "null"]
@@ -127,6 +131,7 @@
         "wave",
         "flight",
         "agent",
+        "session",
         "ts",
         "logRef"
       ]

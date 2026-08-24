@@ -18,6 +18,7 @@ from wave_status.events import (
     CONCERN_KINDS,
     CONCERN_SOURCES,
     EVENT_KINDS,
+    SCOPE_TAGS,
     EventValidationError,
     build_event,
     kind_for_action,
@@ -51,6 +52,14 @@ class TestSchemaConstantsInSync:
     def test_required_top_level_keys(self):
         schema = load_schema()
         assert set(schema["required"]) == {"kind", "activityId", "ts"}
+
+    def test_scope_tags_const_matches_constant(self):
+        # #1165 code review: nothing previously pinned this — the docstring in
+        # wave_status/events/__init__.py CLAIMED it was pinned, but wasn't. Two
+        # hand-edited copies (this one, plus a third vendored one in flightdeck)
+        # is exactly the drift shape this whole module exists to prevent.
+        schema = load_schema()
+        assert tuple(schema["$defs"]["scopeTags"]["const"]) == SCOPE_TAGS
 
     def test_eight_event_kinds(self):
         assert len(EVENT_KINDS) == 8

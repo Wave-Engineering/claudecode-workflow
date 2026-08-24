@@ -25,8 +25,11 @@ DI-seams (env vars):
 - ``FLIGHTDECK_INGEST_TIMEOUT`` — POST timeout seconds (default 2).
 - ``FLIGHTDECK_EVENTS_PATH``  — override the buffer file (test isolation).
 - ``FLIGHTDECK_EMIT_DISABLED``— hard off switch (no-op emit).
-- ``FLIGHTDECK_ACTIVITY_ID`` / ``FLIGHTDECK_AGENT`` / ``FLIGHTDECK_LOG_REF`` —
-  scope defaults for :func:`emit_state_event`.
+- ``FLIGHTDECK_ACTIVITY_ID`` / ``FLIGHTDECK_AGENT`` / ``FLIGHTDECK_SESSION_ID`` /
+  ``FLIGHTDECK_LOG_REF`` — scope defaults for :func:`emit_state_event`.
+- ``CLAUDE_CODE_SESSION_ID`` — Claude Code's own ambient session id (set on
+  every Bash tool subprocess); :func:`resolve_session`'s fallback when
+  ``FLIGHTDECK_SESSION_ID`` isn't set (#1165).
 - ``FLIGHTDECK_SCOPE_PATH``   — override the #1148 scope-marker file (test
   isolation). Unset ⇒ ``<cwd>/.claude/status/flightdeck-scope.json``.
 """
@@ -73,6 +76,7 @@ _FIELD_KEYS: dict[str, str] = {
     "phase": "phase",
     "flight": "flight",
     "agent": "agent",
+    "session": "session",
     "log_ref": "logRef",
     "concern_kind": "concernKind",
     "source": "source",
@@ -158,6 +162,40 @@ def resolve_agent(root: object) -> str | None:
     return _dev_name_from(Path("/tmp") / f"claude-agent-{digest}.json")
 
 
+def resolve_session() -> str | None:
+    """Resolve the emitting session's stable AX-4 identity (cc-workflow#1146
+    step 3, #1165).
+
+    Unlike :func:`resolve_agent`, there is no per-session identity FILE to read
+    — a session id is inherently ephemeral/per-process, not a durable fact
+    written once to disk the way a Dev-Name is. Resolution order:
+
+    1. ``FLIGHTDECK_SESSION_ID`` env — an operator/driver override, same
+       precedence convention as ``FLIGHTDECK_AGENT``;
+    2. ``CLAUDE_CODE_SESSION_ID`` env — Claude Code's OWN session id. This is
+       not a guess: the product changelog confirms it is set on every Bash
+       tool subprocess (and on stdio MCP server subprocesses) as of the
+       versions in this fleet, matching the ``session_id`` hooks receive on
+       stdin. Verified live against this session's own environment before
+       relying on it. NOTE: NOT the same name as ``CLAUDE_SESSION_ID``, which
+       does not exist as a real ambient variable — an earlier draft of this
+       function checked that wrong name, which silently never resolves.
+       ``scripts/flightdeck-session-emit.sh``'s own fallback chain has the
+       identical bug and is tracked separately (#1166), bundled with that
+       script's other AX-4 fallback-collision fix rather than split across
+       two PRs.
+
+    Returns ``None`` when neither resolves — genuinely rare in a live Claude
+    Code Bash-tool context (case 2 above almost always fires there); real
+    outside that context (a bare terminal, a non-Claude-Code CI runner).
+    Never raises.
+    """
+    env = os.environ.get("FLIGHTDECK_SESSION_ID")
+    if env:
+        return env
+    return os.environ.get("CLAUDE_CODE_SESSION_ID") or None
+
+
 # ---------------------------------------------------------------------------
 # Buffer write (atomic append) + offset marker
 # ---------------------------------------------------------------------------
@@ -205,6 +243,13 @@ def _read_offset(buffer: Path) -> int:
 # CONTRACT (identical on the read side, mcp-server-sdlc#537):
 #   path:  <cwd>/.claude/status/flightdeck-scope.json
 #   shape: {"activityId": "<str>", "agent": "<str|null>", "updatedAt": "<ISO8601>"}
+#
+# `session` (#1165, #1146 step 3 prerequisite) is an ADDITIVE field on this
+# same marker — the write side only. mcp-server-sdlc's read side (#537) does
+# not consume it yet; that's a separate, uncoordinated change in that repo.
+# Safe regardless: an unread extra JSON key is a no-op for any parser that
+# reads this file today, same additive-safety property as the schema field
+# itself.
 
 def _scope_marker_path() -> Path:
     override = os.environ.get("FLIGHTDECK_SCOPE_PATH")
@@ -213,7 +258,7 @@ def _scope_marker_path() -> Path:
     return Path.cwd() / ".claude" / "status" / "flightdeck-scope.json"
 
 
-def _write_scope_marker(activity_id: str, agent: str | None) -> None:
+def _write_scope_marker(activity_id: str, agent: str | None, session: str | None = None) -> None:
     """Atomic write: temp file in the SAME directory, then os.replace() —
     guarantees a same-filesystem rename (mirrors state.py's save_json, R-33).
 
@@ -227,7 +272,7 @@ def _write_scope_marker(activity_id: str, agent: str | None) -> None:
     try:
         path = _scope_marker_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"activityId": activity_id, "agent": agent, "updatedAt": now_iso()}
+        payload = {"activityId": activity_id, "agent": agent, "session": session, "updatedAt": now_iso()}
         fd = tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", dir=str(path.parent), suffix=".tmp", delete=False
         )
@@ -467,6 +512,7 @@ def emit(
     phase: str | None = None,
     flight: str | int | None = None,
     agent: str | None = None,
+    session: str | None = None,
     log_ref: str | None = None,
     concern_kind: str | None = None,
     source: str | None = None,
@@ -493,6 +539,7 @@ def emit(
     fields: dict[str, object] = {}
     local = {
         "wave": wave, "phase": phase, "flight": flight, "agent": agent,
+        "session": session,
         "log_ref": log_ref, "concern_kind": concern_kind, "source": source,
         "metric": metric, "unit": unit, "action": action, "label": label,
         "detail": detail, "activity_type": activity_type, "host": host,
@@ -525,14 +572,16 @@ def emit(
 def emit_state_event(root: object, kind: str, **fields: object) -> dict | None:
     """Convenience wrapper for state.py mutators (S1.2).
 
-    Derives ``activityId`` from *root* and picks up ``agent`` / ``log_ref`` from
-    the environment, then delegates to :func:`emit`. Never raises.
+    Derives ``activityId`` from *root* and picks up ``agent`` / ``session`` /
+    ``log_ref`` from the environment, then delegates to :func:`emit`. Never
+    raises.
     """
     try:
         return emit(
             kind,
             activity_id=activity_id_for_root(root),
             agent=resolve_agent(root),
+            session=resolve_session(),
             log_ref=os.environ.get("FLIGHTDECK_LOG_REF"),
             **fields,
         )
@@ -548,7 +597,7 @@ def emit_state_event(root: object, kind: str, **fields: object) -> dict | None:
 def _build_arg_fields(args) -> dict:
     fields: dict[str, object] = {}
     for name in (
-        "wave", "phase", "flight", "agent", "log_ref", "concern_kind",
+        "wave", "phase", "flight", "agent", "session", "log_ref", "concern_kind",
         "source", "metric", "unit", "action", "label", "detail",
         "activity_type", "host",
     ):
@@ -592,6 +641,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--phase", default=None)
     p.add_argument("--flight", default=None)
     p.add_argument("--agent", default=None)
+    p.add_argument("--session", default=None,
+                   help="AX-4 stable session identity, distinct from --agent (Dev-Name); "
+                        "cc-workflow#1146 step 3 / #1165")
     p.add_argument("--log-ref", dest="log_ref", default=None)
     p.add_argument("--concern-kind", dest="concern_kind", default=None)
     p.add_argument("--source", default=None)
@@ -644,6 +696,16 @@ def main(argv: list[str] | None = None) -> int:
             resolved_agent = resolve_agent(Path.cwd())
             if resolved_agent:
                 fields["agent"] = resolved_agent
+        # Same default-injection + blank-normalization discipline as --agent
+        # above (#1165, #1146 step 3 prerequisite) — resolve_session() is
+        # env-only (no per-session identity FILE the way agent-identity.json
+        # holds Dev-Name), so this fills the gap on every caller that doesn't
+        # pass --session explicitly.
+        if not str(fields.get("session") or "").strip():
+            fields.pop("session", None)
+            resolved_session = resolve_session()
+            if resolved_session:
+                fields["session"] = resolved_session
         if args.detail_json is not None:
             fields["detail"] = json.loads(args.detail_json)
         event = emit(
@@ -676,7 +738,7 @@ def main(argv: list[str] | None = None) -> int:
             # which delegates to this same main() precisely to keep this marker
             # write; nothing else emits "float" today.
             if args.kind == "activity_start" and args.activity_type == "campaign" and aid != "unknown":
-                _write_scope_marker(aid, event.get("agent"))
+                _write_scope_marker(aid, event.get("agent"), event.get("session"))
             elif args.kind == "activity_end" and aid:
                 _clear_scope_marker_if_matching(aid)
             print(json.dumps(event, separators=(",", ":"), ensure_ascii=False))

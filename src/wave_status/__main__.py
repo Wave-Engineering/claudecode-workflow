@@ -431,6 +431,8 @@ def _cmd_campaign_head(args: argparse.Namespace) -> None:
         argv += [f"--label={resolved['project']}"]
     if args.agent:
         argv += [f"--agent={args.agent}"]
+    if args.session:
+        argv += [f"--session={args.session}"]
     emit_main(argv)
 
 
@@ -778,6 +780,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--agent", default=None,
         help="Dev-Name (card title); omit to resolve it from <cwd>/.claude/agent-identity.json "
              "(cc-workflow#1163), falling back to the project label when no identity resolves",
+    )
+    p_ch.add_argument(
+        "--session", default=None,
+        help="AX-4 stable session identity, distinct from --agent (Dev-Name); omit to resolve "
+             "it from FLIGHTDECK_SESSION_ID/CLAUDE_CODE_SESSION_ID (cc-workflow#1146 step 3 / #1165)",
     )
     p_ch.set_defaults(func=_cmd_campaign_head)
 
