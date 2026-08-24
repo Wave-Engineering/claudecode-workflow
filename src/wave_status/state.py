@@ -1464,14 +1464,15 @@ def record_mr(issue: int | str, mr: str, root: Path) -> dict:
     d = status_dir(root)
     state_data = load_state(d / "state.json")
     current_wave = state_data.get("current_wave")
-    if current_wave is None:
-        raise ValueError(
-            "Error: no current wave is set. "
-            "Run 'init' before recording an MR."
-        )
-
     waves = state_data.get("waves", {})
-    if current_wave not in waves:
+    # cc-workflow#1161: a non-None current_wave must still be a real wave —
+    # unchanged from before. A None current_wave is NOT refused here anymore;
+    # it legitimately happens once the terminal wave completes
+    # (_find_next_pending_wave), the MOST COMMON straggler shape for an MR,
+    # not an edge case — an MR merged and recorded after the campaign's final
+    # wave already finished. Whether that's resolvable is decided below, once
+    # the plan has been consulted via _issue_wave_id.
+    if current_wave is not None and current_wave not in waves:
         raise ValueError(
             f"Error: wave '{current_wave}' not found in state. "
             "Run 'init' before recording an MR."
@@ -1548,6 +1549,27 @@ def record_mr(issue: int | str, mr: str, root: Path) -> dict:
         if issue_wave is not None and issue_wave in waves:
             target_wave = issue_wave
 
+    # cc-workflow#1161: current_wave was None AND the plan couldn't resolve
+    # the issue to any wave either — both signals genuinely absent, nothing
+    # to fall back to. Only raised here, after giving _issue_wave_id a
+    # chance, not before it. Two distinct causes need two distinct remedies
+    # (code review): plan_data is None means 'init' genuinely never ran —
+    # but once a plan exists, 'init' plain refuses (state.py's own
+    # "plan already initialized" guard), so telling an operator to run it
+    # again when the REAL problem is an issue absent from an existing plan
+    # would misdirect them toward a destructive `init --force`.
+    if target_wave is None:
+        if plan_data is None:
+            raise ValueError(
+                "Error: no current wave is set. "
+                "Run 'init' before recording an MR."
+            )
+        raise ValueError(
+            f"Error: no current wave is set, and issue #{ref_num} does not "
+            "belong to any wave in the plan. Run 'init --extend' to add it, "
+            "or check the issue number."
+        )
+
     resolved = _resolve_issue_key(
         state_data, issue, container="mr_urls", wave_id=target_wave
     )
@@ -1562,6 +1584,16 @@ def record_mr(issue: int | str, mr: str, root: Path) -> dict:
     waves[target_wave].setdefault("mr_urls", {})[resolved] = mr
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    # cc-workflow#1161: when current_wave was None (the terminal-wave-
+    # complete straggler case above), this intentionally passes wave=None —
+    # emit() drops a None-valued field before it ever reaches build_event,
+    # so the event carries NO wave tag, rather than inventing one. Deliberate, not an
+    # accidental default: per #1158's own audit (see the target_wave
+    # comment above), fold.ts treats this tag as a genuine POSITION update,
+    # and there IS no live position once the campaign has already
+    # terminated — tagging it with the issue's static wave (target_wave)
+    # would misrepresent a finished campaign as having moved. An honest
+    # absence beats a fabricated position (AX-2).
     _emit_event(
         root,
         "step",
