@@ -258,6 +258,43 @@ class TestRenderIssueRow:
         html = _render_issue_row(999, {"number": 999, "title": "Mystery"}, STATE_DATA_BASE, "wave-1")
         assert "open" in html
 
+    def test_status_badge_resolves_qualified_key(self) -> None:
+        # #1160: a repo-qualified plan's state.json stores issues under
+        # "owner/repo#N" (state._compose_issue_key), not a bare number. A
+        # bare-key-only lookup would silently fall through to the "open"
+        # default even though the issue is actually closed.
+        state = {
+            **STATE_DATA_BASE,
+            "issues": {"acme/widgets#1": {"status": "closed"}},
+        }
+        html = _render_issue_row(1, {"number": 1, "title": "Bootstrap repo"}, state, "wave-1")
+        assert "badge-closed" in html
+        assert ">closed<" in html
+        assert ">open<" not in html
+        # The data-field binding stays bare (issues.1.status, not the
+        # qualified key) — cc-workflow#1173 tracks the live-poll staleness
+        # this leaves in place. Pinning it here so that follow-up edits this
+        # assertion consciously instead of discovering the coupling by accident.
+        assert 'data-field="issues.1.status"' in html
+
+    def test_mr_link_resolves_qualified_key(self) -> None:
+        # #1160: record_mr composes a qualified "owner/repo#N" key for a
+        # repo-tagged plan — the MR-link cell must find it via the same
+        # dual-read resolve_issue_value convention as the issues dict.
+        state = {
+            **STATE_DATA_BASE,
+            "waves": {
+                "wave-1": {
+                    "status": "in_progress",
+                    "mr_urls": {"acme/widgets#1": "https://github.com/acme/widgets/pull/42"},
+                },
+                "wave-2": {"status": "pending", "mr_urls": {}},
+                "wave-3": {"status": "pending", "mr_urls": {}},
+            },
+        }
+        html = _render_issue_row(1, {"number": 1, "title": "Bootstrap repo"}, state, "wave-1")
+        assert '<a href="https://github.com/acme/widgets/pull/42"' in html
+
 
 # ---------------------------------------------------------------------------
 # _render_wave_card() tests
