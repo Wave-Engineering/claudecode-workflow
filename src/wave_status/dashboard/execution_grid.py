@@ -13,7 +13,7 @@ from __future__ import annotations
 import html as _html
 
 from wave_status.dashboard.theme import PHASE_COLORS
-from wave_status.state import wave_flight_list
+from wave_status.state import resolve_issue_value, wave_flight_list
 
 
 def _status_badge(status: str, data_wave: str = "", data_issue: str = "") -> str:
@@ -85,7 +85,12 @@ def _render_issue_row(
     """
     title = _html.escape(issue_plan.get("title", f"Issue #{issue_number}"))
     issue_key = str(issue_number)
-    issue_state = state_data.get("issues", {}).get(issue_key, {})
+    # #1160: dual-read via resolve_issue_value, not a bare-key lookup — a
+    # repo-qualified plan (#198/#1157/#1158) composes state keys as
+    # "owner/repo#N", and a bare lookup here silently falls through to the
+    # default (issue_state={}, status="open") for every issue in such a plan,
+    # exactly like the mr_urls gap below (same function, same root cause).
+    issue_state = resolve_issue_value(state_data.get("issues", {}), issue_number, {})
     status = issue_state.get("status", "open")
     wid = _html.escape(wave_id)
 
@@ -107,9 +112,11 @@ def _render_issue_row(
         f' data-field="issues.{issue_key}.status">{_html.escape(badge_label)}</span>'
     )
 
-    # MR link — from current wave's mr_urls.
+    # MR link — from the rendered wave's mr_urls. #1160: dual-read, same reason as
+    # issue_state above — record_mr composes a qualified key for repo-tagged
+    # plans, and a bare lookup here would leave the MR-link column dark.
     mr_urls = state_data.get("waves", {}).get(wave_id, {}).get("mr_urls", {})
-    mr_url = mr_urls.get(issue_key, "")
+    mr_url = resolve_issue_value(mr_urls, issue_number, "")
     if mr_url:
         mr_cell = (
             f'<a href="{_html.escape(mr_url, quote=True)}"'
