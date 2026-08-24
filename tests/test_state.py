@@ -1091,9 +1091,11 @@ class TestRecordMr:
         assert state["waves"]["wave-1"]["mr_urls"]["13"] == "#14"
 
     def test_raises_when_no_current_wave(self, tmp_path: Path) -> None:
+        # No plan file at all -> plan_data stays None -> #1161's guard uses
+        # the "Run 'init'" remedy, the genuinely-correct one for this cause.
         d = ensure_status_dir(tmp_path)
         save_json(d / "state.json", {"current_wave": None, "waves": {}})
-        with pytest.raises(ValueError, match="Error:.*no current wave"):
+        with pytest.raises(ValueError, match=r"Error:.*no current wave.*Run 'init'"):
             record_mr(1, "#2", tmp_path)
 
     # --- Cross-repo qualified-key tests (#198) ----------------------------
@@ -1280,6 +1282,69 @@ class TestRecordMr:
         state = load_json(d / "state.json")
         assert state["waves"]["wave-2"]["mr_urls"]["13"] == "#99"  # fell back
         assert "ghost-wave" not in state["waves"]
+
+    # --- cc-workflow#1161: current_wave=None straggler, resolvable via plan --
+
+    def test_terminal_wave_straggler_resolves_via_plan_not_a_hard_fail(
+        self, tmp_path: Path
+    ) -> None:
+        """current_wave went None (terminal wave completed,
+        _find_next_pending_wave) — the MOST COMMON straggler shape, not an
+        edge case. The issue is still plan-resolvable via _issue_wave_id, so
+        this must succeed and land under that wave, not raise."""
+        init_state(self._straggler_plan(), tmp_path)
+        d = status_dir(tmp_path)
+        state = load_json(d / "state.json")
+        state["current_wave"] = None
+        save_json(d / "state.json", state)
+
+        record_mr(13, "#99", tmp_path)  # #13 lives in wave-1 per _straggler_plan
+
+        state = load_json(d / "state.json")
+        assert state["waves"]["wave-1"]["mr_urls"]["13"] == "#99"
+
+    def test_terminal_wave_straggler_emits_no_wave_tag(self, tmp_path: Path) -> None:
+        """#1161 AC2: the emitted event's wave tag in this case is a
+        DELIBERATE honest absence (wave=None -> emit() drops the key
+        entirely), not target_wave — there is no live campaign position to
+        tag a finished campaign's straggler MR with. Regression guard
+        against silently switching this to target_wave later, which would
+        misrepresent a finished campaign as having moved (see #1158's
+        audit note for why the emitted tag and the persisted-write target
+        are deliberately different fields)."""
+        from wave_status.events.emit import buffer_path
+
+        init_state(self._straggler_plan(), tmp_path)
+        d = status_dir(tmp_path)
+        state = load_json(d / "state.json")
+        state["current_wave"] = None
+        save_json(d / "state.json", state)
+
+        record_mr(13, "#99", tmp_path)
+
+        buf = buffer_path()
+        events = [json.loads(line) for line in buf.read_text(encoding="utf-8").splitlines()]
+        mr_events = [e for e in events if e.get("action") == "record-mr"]
+        assert len(mr_events) == 1
+        assert "wave" not in mr_events[0]
+
+    def test_terminal_wave_straggler_still_raises_when_issue_not_in_plan(
+        self, tmp_path: Path
+    ) -> None:
+        """#1161 AC3: current_wave=None AND the issue isn't plan-resolvable
+        either — both signals genuinely absent, a clear error must still
+        raise (no wave to fall back to). Code review: a plan DOES exist
+        here (init_state ran) — the remedy must be "init --extend", NOT the
+        generic "Run 'init'" (which plain-refuses on an existing plan and
+        would misdirect toward a destructive `init --force`)."""
+        init_state(self._straggler_plan(), tmp_path)
+        d = status_dir(tmp_path)
+        state = load_json(d / "state.json")
+        state["current_wave"] = None
+        save_json(d / "state.json", state)
+
+        with pytest.raises(ValueError, match=r"Error:.*no current wave.*init --extend"):
+            record_mr(999, "#1", tmp_path)  # #999 is in no wave of this plan
 
     def test_records_with_no_plan_file(self, tmp_path: Path) -> None:
         """record_mr never required a plan file to exist (unlike
