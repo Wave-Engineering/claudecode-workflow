@@ -12,9 +12,10 @@
 #
 # Session events are PRESENCE, not work (#947): they carry `activityType: session`
 # so the deck renders them in the agent-presence strip, never as campaign cards,
-# and `agent` is the Dev-Name from .claude/agent-identity.json (hostname only as
-# the visible degradation when identity is absent). The hostname always rides in
-# its own `host` field.
+# and `agent` is the Dev-Name from .claude/agent-identity.json — omitted entirely
+# (never a fabricated hostname) when no identity resolves, so the deck renders it
+# honestly unattributed (#1151, flightdeck#38). The hostname always rides
+# separately in its own `host` field.
 #
 # Usage: flightdeck-session-emit.sh [open|idle|close]   (default: idle)
 
@@ -75,12 +76,22 @@ fi
 activity="session:${session}"
 host="$(hostname 2>/dev/null || echo unknown)"
 
-# Agent identity (#947 defect 2): attribute the session to a Dev-Name, not the
-# hostname. Canonical file: <root>/.claude/agent-identity.json; read-fallback to
-# the legacy /tmp/claude-agent-<md5(root)>.json while the fleet cycles. Missing or
-# unreadable ⇒ agent stays the hostname — a VISIBLE degradation on the deck (the
-# chip shows the host), never a silent failure and never a non-zero exit.
-agent="$host"
+# Agent identity (#947 defect 2, honest-degradation fix #1151/flightdeck#38):
+# attribute the session to a Dev-Name, never fake one. Canonical file:
+# <root>/.claude/agent-identity.json; read-fallback to the legacy
+# /tmp/claude-agent-<md5(root)>.json while the fleet cycles. Missing or
+# unreadable ⇒ agent stays EMPTY, and the emit call below omits --agent
+# entirely — flightdeck#38 gave the deck a real, honest degradation path
+# (attributed:false, rendered distinctly, tallied) that doesn't require this
+# emitter to manufacture an identity value. Before #38 landed, `agent="$host"`
+# was the only available "visible degradation" the deck could render; keeping
+# it now would fabricate a fake Dev-Name AND, per #38's own code review,
+# nearly always suppress the real degradation signal (on live data v.agent is
+# essentially never null, so a deck-side resolver that only degrades on a
+# null agent barely ever fires — the honest-omission fix belongs at the
+# producer, not the consumer). --host still always ships, unaffected — it is
+# a separate, correctly-named field.
+agent=""
 identity="${root}/.claude/agent-identity.json"
 if [ ! -r "$identity" ] && command -v md5sum >/dev/null 2>&1; then
 	identity="/tmp/claude-agent-$(printf '%s' "$root" | md5sum | cut -d' ' -f1).json"
@@ -103,19 +114,26 @@ emit_event() {
 	fi
 }
 
+# #1151: --agent is genuinely OMITTED (not passed as an empty string) when no
+# Dev-Name resolved — an array, not a flat arg list, so the flag+value pair
+# only exists when there's a real value to attach it to. Applies to BOTH the
+# primary call and the legacy-argument retry below (#1151 AC2).
+agent_args=()
+[ -n "$agent" ] && agent_args=(--agent "$agent")
+
 # --activity-type / --host are additive (#947). An older installed emit CLI
 # rejects unknown flags (argparse exits 2), so retry with the legacy argument set
 # rather than silently losing the event during the install window.
 emit_event "$kind" \
 	--activity-id "$activity" \
 	--activity-type "session" \
-	--agent "$agent" \
+	"${agent_args[@]}" \
 	--host "$host" \
 	--phase "session" \
 	--label "session-${phase}" >/dev/null 2>&1 ||
 	emit_event "$kind" \
 		--activity-id "$activity" \
-		--agent "$agent" \
+		"${agent_args[@]}" \
 		--phase "session" \
 		--label "session-${phase}" >/dev/null 2>&1 || true
 
