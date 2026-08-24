@@ -436,6 +436,72 @@ def _cmd_campaign_head(args: argparse.Namespace) -> None:
     emit_main(argv)
 
 
+def _cmd_wave_begin(args: argparse.Namespace) -> None:
+    """Handle ``wave-begin <activity-id> <wave>`` — idempotently own the
+    FlightDeck ``activity_start`` head row for an activity id (cc-workflow#1138
+    step 2 / #1170).
+
+    Root cause this closes: ``skills/nextwave/per-wave-workflow.js``'s
+    ``AID = PLAN_ID || WAVE_ID`` degrades to a wave-scoped key whenever
+    ``planId`` isn't threaded through (a bare/standalone ``/nextwave`` run),
+    and nothing ever emitted an ``activity_start`` ROW for that key at all —
+    flightdeck's fold.ts backfilled ``startedAt`` from whichever event
+    happened to arrive first instead, an orphaned tail with no canonical
+    head. Calling this unconditionally, once, at the start of every wave
+    (from ``rehydrate()``) closes that regardless of whether ``AID``
+    resolved via the real plan id or the fallback: a real campaign's
+    already-real head gets an idempotent no-op re-fire; a bare/standalone
+    run gets a real head row where none existed.
+
+    NOT claimed: this does not, by itself, move a headless-classified
+    activity (flightdeck's fold.ts ``activityType``, per flightdeck#31/#42)
+    out of the headless UI bucket — that classification latches on any
+    event declaring ``activityType: campaign|float``, which this command
+    deliberately never does (see the narrow-surface rationale below). A
+    standalone real-``planId`` run with no ``campaign-head`` call therefore
+    still renders headless after this fix; it now has a real head row
+    instead of a backfilled one, no more. Closing the headless-classification
+    gap for that case is a separate, unstarted architectural question,
+    tracked in cc-workflow#1171, not this command's job.
+
+    Deliberately narrow option surface — NO ``--label``/``--detail-json``/
+    ``--activity-type``, unlike ``campaign-head``. That narrowness IS the
+    idempotency mechanism, not an incidental omission: flightdeck's fold.ts
+    guards ``startedAt`` (a second ``activity_start`` is a no-op there), but
+    ``label`` and the ``detail`` progress fields (``planTotal`` etc.) are
+    last-write-wins across ``activity_start`` events specifically. A version
+    of this command that could pass those fields would risk clobbering a
+    real campaign's label/planTotal on a defensive re-fire; one that
+    structurally cannot, cannot. If a real head is needed with a
+    label/detail/type, that is ``campaign-head``'s job, not this one's.
+
+    Delegates through the events emit CLI (`_cmd_campaign_head`'s own
+    pattern), never calling ``emit()`` directly, so this gets the same
+    agent/session default-injection a hand-typed ``wave-status emit`` gets
+    for free. It does NOT get campaign-head's scope-marker write — that
+    write is allowlisted on ``activity_type == "campaign"``
+    (``events/emit.py``), which this command structurally never passes.
+    """
+    from wave_status.events.emit import main as emit_main
+
+    # Same defect class campaign-head's own guard exists to close, one field
+    # over (see its docstring/guard above): a blank --activity-id resolves
+    # to "unknown" in emit()'s own fallback, silently mislabeling the head
+    # row rather than refusing. Refuse here instead.
+    if not (args.activity_id or "").strip():
+        raise ValueError(
+            "Error: activity-id is empty. Pass the AID the wave's tee resolved to "
+            "(planId, or waveId on a bare/test run)."
+        )
+
+    argv = ["activity_start", "--activity-id", args.activity_id, "--wave", args.wave]
+    if args.agent:
+        argv += [f"--agent={args.agent}"]
+    if args.session:
+        argv += [f"--session={args.session}"]
+    emit_main(argv)
+
+
 def _cmd_show(args: argparse.Namespace) -> None:
     """Handle ``show`` — print summary, NO dashboard regen.
 
@@ -787,6 +853,26 @@ def _build_parser() -> argparse.ArgumentParser:
              "it from FLIGHTDECK_SESSION_ID/CLAUDE_CODE_SESSION_ID (cc-workflow#1146 step 3 / #1165)",
     )
     p_ch.set_defaults(func=_cmd_campaign_head)
+
+    # wave-begin (cc-workflow#1138 step 2, #1170): idempotently own the
+    # activity_start head for a wave's activity id — no --label/--detail-json/
+    # --activity-type, unlike campaign-head. See _cmd_wave_begin's docstring
+    # for why that narrowness is the idempotency guarantee.
+    p_wb = sub.add_parser(
+        "wave-begin",
+        help="Idempotently emit the FlightDeck activity_start head for a wave's activity id",
+    )
+    p_wb.add_argument("activity_id", help="the AID the wave's tee resolved to (planId, or waveId on a bare/test run)")
+    p_wb.add_argument("wave", help="the wave id")
+    p_wb.add_argument(
+        "--agent", default=None,
+        help="Dev-Name; omit to auto-resolve (same as emit/campaign-head, cc-workflow#1163)",
+    )
+    p_wb.add_argument(
+        "--session", default=None,
+        help="AX-4 stable session identity; omit to auto-resolve (cc-workflow#1146 step 3 / #1165)",
+    )
+    p_wb.set_defaults(func=_cmd_wave_begin)
 
     # show
     p_sh = sub.add_parser("show", help="Print status summary (read-only)")

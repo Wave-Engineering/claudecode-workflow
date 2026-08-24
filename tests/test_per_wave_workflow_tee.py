@@ -130,6 +130,32 @@ class TestGateMetrics:
             assert "|| true" in ln
 
 
+class TestWaveBegin:
+    """cc-workflow#1138 step 2 / #1170 — idempotently own the FlightDeck
+    activity_start head for AID, fired exactly once per wave (from rehydrate(),
+    the one node that runs once per Workflow process), never from the generic
+    per-node flightdeckTee/teeAgent helpers which fire on every spine node."""
+
+    def test_helper_defined(self, src):
+        assert "function flightdeckWaveBegin()" in src
+
+    def test_keys_on_the_same_campaign_scoped_aid(self, src):
+        # Same AID/WAVE_ID as flightdeckTee — the campaign, not the wave alone.
+        assert "wave-status wave-begin '${AID}' '${WAVE_ID}'" in src
+
+    def test_is_fire_and_forget(self, src):
+        wb_line = next(
+            ln for ln in src.splitlines() if "wave-status wave-begin" in ln
+        )
+        assert "|| true" in wb_line
+
+    def test_only_rehydrate_calls_it(self, src):
+        # Exactly one call site — appended to rehydrate()'s prompt, not folded
+        # into flightdeckTee/teeAgent (which would re-fire it on every node).
+        assert src.count("flightdeckWaveBegin()") == 2  # definition + 1 call site
+        assert "rehydratePrompt({ waveId: WAVE_ID, allIssues: ALL_ISSUES, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR }) + '\\n' + flightdeckWaveBegin()" in src
+
+
 # ---------------------------------------------------------------------------
 # Spine nodes teed; trust-critical nodes intentionally NOT teed
 # ---------------------------------------------------------------------------
@@ -198,3 +224,7 @@ class TestBundle:
         assert bundle.count("await teeAgent(") == 5
         assert "FlightDeck telemetry" in bundle
         assert "SEAM #853" in bundle
+
+    def test_bundle_carries_wave_begin(self, bundle):
+        assert "function flightdeckWaveBegin()" in bundle
+        assert "wave-status wave-begin '${AID}' '${WAVE_ID}'" in bundle
