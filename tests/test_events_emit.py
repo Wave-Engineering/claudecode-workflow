@@ -443,6 +443,7 @@ def _run(
     events_path: Path,
     scope_path: Path | None = None,
     extra_env: dict[str, str] | None = None,
+    cwd: Path | None = None,
 ):
     # os.environ.copy() inherits the isolation the autouse
     # _isolate_flightdeck_buffer fixture (conftest.py) already set via
@@ -465,7 +466,19 @@ def _run(
         env["FLIGHTDECK_SCOPE_PATH"] = str(scope_path)
     if extra_env:
         env.update(extra_env)
-    return subprocess.run(argv, capture_output=True, text=True, env=env)
+    # #1146 step 1: main() now defaults `agent` via resolve_agent(Path.cwd())
+    # when `--agent` is omitted, so EVERY subprocess this helper spawns must
+    # get an isolated cwd, not just the tests that assert on `agent` today —
+    # inheriting pytest's own cwd (this repo's root, which has a REAL
+    # .claude/agent-identity.json) would silently stamp a real Dev-Name into
+    # every buffered event otherwise. Callers that pass `cwd` explicitly (the
+    # tests that exercise this resolution directly) keep their own isolated
+    # directory; everyone else falls back to `events_path`'s own tmp_path
+    # directory, which is per-test and never carries an identity file.
+    return subprocess.run(
+        argv, capture_output=True, text=True, env=env,
+        cwd=str(cwd) if cwd else str(events_path.parent),
+    )
 
 
 class TestEmitCli:
@@ -736,17 +749,113 @@ class TestScopeMarker:
         assert got["updatedAt"].endswith("Z")
         assert "T" in got["updatedAt"]
 
-    def test_no_agent_flag_writes_a_null_agent_not_a_string(self, tmp_path):
+    def test_no_agent_flag_and_no_resolvable_identity_writes_a_null_agent(self, tmp_path):
+        # cc-workflow#1146 step 1: main() now defaults `agent` via
+        # resolve_agent(Path.cwd()) when `--agent` is omitted — so this test's
+        # "no agent" case requires an isolated cwd with NO
+        # .claude/agent-identity.json, or it would silently resolve whatever
+        # repo checkout pytest happens to run from (this repo's own real
+        # identity file) instead of exercising the genuine null case.
+        empty_cwd = tmp_path / "no-identity-here"
+        empty_cwd.mkdir()
         ep = tmp_path / "events.jsonl"
         sp = tmp_path / "scope.json"
         r = _run(
             [sys.executable, "-m", "wave_status.events.emit", "activity_start",
              "--activity-id", "116", "--activity-type", "campaign"],
-            ep, sp,
+            ep, sp, cwd=empty_cwd,
         )
         assert r.returncode == 0, r.stderr
         got = json.loads(sp.read_text(encoding="utf-8"))
         assert got["agent"] is None
+
+    def test_no_agent_flag_but_a_resolvable_identity_stamps_it_anyway(self, tmp_path):
+        # The positive case cc-workflow#1146 step 1 exists to fix: a caller
+        # that never passes --agent at all (every hand-typed `wave-status
+        # emit`, every Workflow-generated flightdeckTee line) still gets a
+        # real Dev-Name, end-to-end through the CLI — not just in the
+        # resolve_agent() unit tests above, which never exercised main()'s
+        # own default-injection wiring.
+        project = tmp_path / "project"
+        (project / ".claude").mkdir(parents=True)
+        (project / ".claude" / "agent-identity.json").write_text(
+            json.dumps({"dev_name": "cortana", "dev_team": "oaw"}), encoding="utf-8"
+        )
+        ep = tmp_path / "events.jsonl"
+        sp = tmp_path / "scope.json"
+        r = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "116", "--activity-type", "campaign"],
+            ep, sp, cwd=project,
+        )
+        assert r.returncode == 0, r.stderr
+        # Both the buffered event AND the scope marker pick up the default —
+        # one resolution, two places it has to actually land.
+        event = json.loads(ep.read_text(encoding="utf-8").splitlines()[0])
+        assert event["agent"] == "cortana"
+        marker = json.loads(sp.read_text(encoding="utf-8"))
+        assert marker["agent"] == "cortana"
+
+    def test_explicit_agent_flag_wins_over_a_resolvable_identity(self, tmp_path):
+        # An explicit --agent is a caller's deliberate override — the new
+        # default-injection in main() must never clobber it, even when cwd
+        # ALSO has a resolvable (different) identity.
+        project = tmp_path / "project"
+        (project / ".claude").mkdir(parents=True)
+        (project / ".claude" / "agent-identity.json").write_text(
+            json.dumps({"dev_name": "cortana", "dev_team": "oaw"}), encoding="utf-8"
+        )
+        ep = tmp_path / "events.jsonl"
+        r = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "step",
+             "--activity-id", "116", "--agent", "explicit-override"],
+            ep, cwd=project,
+        )
+        assert r.returncode == 0, r.stderr
+        got = json.loads(ep.read_text(encoding="utf-8").splitlines()[0])
+        assert got["agent"] == "explicit-override"
+
+    def test_blank_agent_flag_is_treated_as_not_supplied(self, tmp_path):
+        # Code review: `--agent ""` / `--agent " "` is the documented
+        # accidental shape of an unset shell variable (`--agent "$DEV_NAME"`
+        # with DEV_NAME empty) — never a deliberate "suppress attribution"
+        # request. Every downstream consumer already normalizes a blank
+        # agent to "no attribution" (flightdeck's fold.ts, mcp-server-sdlc's
+        # scope-marker read), so a blank flag must resolve from cwd exactly
+        # like an omitted one, not ship the blank through untouched.
+        project = tmp_path / "project"
+        (project / ".claude").mkdir(parents=True)
+        (project / ".claude" / "agent-identity.json").write_text(
+            json.dumps({"dev_name": "cortana", "dev_team": "oaw"}), encoding="utf-8"
+        )
+        for blank in ("", " "):
+            ep = tmp_path / f"events-{blank!r}.jsonl"
+            r = _run(
+                [sys.executable, "-m", "wave_status.events.emit", "step",
+                 "--activity-id", "116", "--agent", blank],
+                ep, cwd=project,
+            )
+            assert r.returncode == 0, r.stderr
+            got = json.loads(ep.read_text(encoding="utf-8").splitlines()[0])
+            assert got["agent"] == "cortana"
+
+    def test_blank_agent_flag_with_no_resolvable_identity_omits_the_key(self, tmp_path):
+        # The other half of the normalization: blank must land on the SAME
+        # "no attribution" outcome as an omitted flag, not a half-fixed
+        # `agent: ""` — the exact shape every downstream consumer already
+        # treats as falsy-but-present, which the pop() (not just skip) in
+        # main() guarantees.
+        empty_cwd = tmp_path / "no-identity-here"
+        empty_cwd.mkdir()
+        ep = tmp_path / "events.jsonl"
+        r = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "step",
+             "--activity-id", "116", "--agent", ""],
+            ep, cwd=empty_cwd,
+        )
+        assert r.returncode == 0, r.stderr
+        got = json.loads(ep.read_text(encoding="utf-8").splitlines()[0])
+        assert "agent" not in got
 
     def test_unresolved_activity_id_writes_no_marker(self, tmp_path):
         # No --activity-id and no FLIGHTDECK_ACTIVITY_ID ⇒ emit()'s own fallback

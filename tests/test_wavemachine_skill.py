@@ -780,7 +780,18 @@ class TestFlightdeckCampaignCard:
         # command that computes it.
         launch = _bootstrap(skill_text)
         assert "wave-status campaign-head" in launch
-        assert "dev_name" in launch  # the Dev-Name (card title)
+        # cc-workflow#1163: the launch sequence used to hand-resolve the
+        # Dev-Name itself (a `dev_name="$(jq ...)"` + `${dev_name:+--agent
+        # ...}` shell dance) — that's now redundant, `wave-status emit`/
+        # `campaign-head` resolve it from cwd by default. The section still
+        # documents WHERE the card's title comes from, just via prose
+        # pointing at the mechanism rather than a shell variable.
+        assert "agent-identity.json" in launch  # the Dev-Name (card title) source
+        assert 'jq -r' not in launch, (
+            "the hand-rolled dev_name resolution is redundant with "
+            "cc-workflow#1163's default — reintroducing it here is the "
+            "exact shell-prose-guard gap that fix exists to remove."
+        )
         assert "<total waves in the approved plan>" not in launch, (
             "campaign-head must derive planTotal from the plan — a hand-typed "
             "placeholder here is exactly the flightdeck#1145 defect."
