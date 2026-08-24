@@ -719,6 +719,51 @@ class TestResolveAgent:
             legacy.unlink(missing_ok=True)
 
 
+class TestResolveSession:
+    """resolve_session() — the AX-4 stable session identity (#1146 step 3, #1165).
+
+    Unlike resolve_agent(), there is no per-root identity FILE to read — a
+    session id is inherently ephemeral/per-process, so this is env-only.
+    """
+
+    def test_flightdeck_session_id_wins(self, monkeypatch):
+        from wave_status.events.emit import resolve_session
+
+        monkeypatch.setenv("FLIGHTDECK_SESSION_ID", "sess-abc")
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        assert resolve_session() == "sess-abc"
+
+    def test_falls_back_to_claude_code_session_id(self, monkeypatch):
+        from wave_status.events.emit import resolve_session
+
+        monkeypatch.delenv("FLIGHTDECK_SESSION_ID", raising=False)
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "claude-sess-1")
+        assert resolve_session() == "claude-sess-1"
+
+    def test_flightdeck_session_id_beats_claude_code_session_id(self, monkeypatch):
+        from wave_status.events.emit import resolve_session
+
+        monkeypatch.setenv("FLIGHTDECK_SESSION_ID", "from-flightdeck")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "from-claude")
+        assert resolve_session() == "from-flightdeck"
+
+    def test_neither_set_returns_none(self, monkeypatch):
+        from wave_status.events.emit import resolve_session
+
+        monkeypatch.delenv("FLIGHTDECK_SESSION_ID", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        assert resolve_session() is None
+
+    def test_blank_env_values_are_not_trusted(self, monkeypatch):
+        # An exported-but-empty var (the same accidental shape --agent ""
+        # normalizes at the CLI layer, #1163) must not resolve to "".
+        from wave_status.events.emit import resolve_session
+
+        monkeypatch.setenv("FLIGHTDECK_SESSION_ID", "")
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "")
+        assert resolve_session() is None
+
+
 class TestScopeMarker:
     """#1148 — the writer half of mcp-server-sdlc#537.
 
@@ -748,6 +793,22 @@ class TestScopeMarker:
         # not asserting an exact value (that would be a flaky test), just shape.
         assert got["updatedAt"].endswith("Z")
         assert "T" in got["updatedAt"]
+
+    def test_activity_start_with_a_resolvable_session_writes_it_to_the_marker(self, tmp_path):
+        # #1165 code review: the marker's `session` param was wired but the
+        # ONE production call site never passed it — this pins the fix rather
+        # than (as the first draft did) pinning the dead null-forever behavior.
+        ep = tmp_path / "events.jsonl"
+        sp = tmp_path / "scope.json"
+        r = _run(
+            [sys.executable, "-m", "wave_status.events.emit", "activity_start",
+             "--activity-id", "116", "--agent", "harbinger", "--activity-type", "campaign"],
+            ep, sp,
+            extra_env={"FLIGHTDECK_SESSION_ID": "sess-x"},
+        )
+        assert r.returncode == 0, r.stderr
+        got = json.loads(sp.read_text(encoding="utf-8"))
+        assert got["session"] == "sess-x"
 
     def test_no_agent_flag_and_no_resolvable_identity_writes_a_null_agent(self, tmp_path):
         # cc-workflow#1146 step 1: main() now defaults `agent` via
@@ -936,7 +997,9 @@ class TestScopeMarker:
             ep, sp,
         )
         got = json.loads(sp.read_text(encoding="utf-8"))
-        assert got == {"activityId": "121", "agent": "bishop", "updatedAt": got["updatedAt"]}
+        assert got == {
+            "activityId": "121", "agent": "bishop", "session": None, "updatedAt": got["updatedAt"],
+        }
 
     def test_unwritable_scope_path_does_not_break_the_underlying_emit(self, tmp_path):
         # A FILE sitting where the marker's parent directory needs to be —

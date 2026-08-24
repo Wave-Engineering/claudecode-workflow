@@ -159,6 +159,15 @@ def _isolate_flightdeck_buffer(tmp_path_factory, monkeypatch):
     monkeypatch.delenv("FLIGHTDECK_AGENT", raising=False)
     monkeypatch.delenv("FLIGHTDECK_LOG_REF", raising=False)
     monkeypatch.delenv("FLIGHTDECK_EMIT_DISABLED", raising=False)
+    # #1165: same isolation for resolve_session()'s two inputs. CLAUDE_CODE_SESSION_ID
+    # is genuinely ambient in THIS suite's own run — Claude Code sets it on every Bash
+    # tool subprocess (confirmed via the product changelog + this very shell's env),
+    # so without this a test asserting "no session resolves" would silently pass or
+    # fail depending on whether the suite happens to run under a live Claude Code
+    # session, exactly the checkout-dependent flakiness class cc-workflow#1163 fixed
+    # for FLIGHTDECK_AGENT/agent-identity.json.
+    monkeypatch.delenv("FLIGHTDECK_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     # #1149: `_pending_ships` is module-level state (the registry
     # `flush_pending_ships` joins at true process exit). In-process, it can
     # outlive any one test that starts a shipper thread without flushing it —

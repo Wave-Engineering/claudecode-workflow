@@ -668,6 +668,26 @@ class TestCmdCampaignHead:
         marker = json.loads(marker_path.read_text(encoding="utf-8"))
         assert marker["activityId"] == "116"
 
+    def test_session_flag_reaches_the_event_and_the_scope_marker(self, project_root: Path) -> None:
+        # #1165 code review: --agent's pass-through (test_emits_activity_start_
+        # with_derived_plan_total above) was already proven end-to-end; --session
+        # got wired the same way (__main__.py's `if args.session:` passthrough)
+        # but shipped with no test of its own — the exact "new param wired, never
+        # proven to arrive" shape the scope-marker fix in this same PR fixed one
+        # layer down. Closing that gap here rather than shipping it again.
+        import os
+
+        code = _run_cli(
+            ["campaign-head", "--activity-id", "116", "--session", "sess-x"], project_root
+        )
+        assert code == 0
+        events = [e for e in self._read_buffer() if e.get("activityId") == "116"]
+        assert len(events) == 1
+        assert events[0]["session"] == "sess-x"
+        marker_path = Path(os.environ["FLIGHTDECK_SCOPE_PATH"])
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        assert marker["session"] == "sess-x"
+
 
 # ---------------------------------------------------------------------------
 # Error handling [R-32]
