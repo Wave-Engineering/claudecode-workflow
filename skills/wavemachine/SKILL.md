@@ -227,13 +227,13 @@ the card can only be keyed here). Then emit its vitals ONCE (idempotent on resum
 refreshes the card):
 
 ```bash
-dev_name="$(jq -r '.dev_name // empty' .claude/agent-identity.json 2>/dev/null)"
-wave-status campaign-head \
-  --activity-id "$FLIGHTDECK_ACTIVITY_ID" \
-  ${dev_name:+--agent "$dev_name"} || true
+wave-status campaign-head --activity-id "$FLIGHTDECK_ACTIVITY_ID" || true
 ```
-(Omit `--agent` when the Dev-Name is absent — `${dev_name:+…}` — so the card falls back to
-the project label rather than rendering an empty title.)
+(No `--agent` needed — `wave-status emit`/`campaign-head` resolve the Dev-Name from
+`.claude/agent-identity.json` at cwd by default when the flag is omitted, cc-workflow#1163.
+The `jq`-based hand-resolution this snippet used to do is redundant with that, one process
+lighter, and no longer needs `jq` on `PATH`. Falls back to the project label, same as before,
+when no identity file resolves.)
 
 `campaign-head` derives `planTotal` (the wave denominator), `workItemsTotal` (the campaign-scope
 work-item denominator, #1154), `waveWorkItems` (a per-wave work-item denominator map, #1157),

@@ -575,12 +575,47 @@ class TestCmdCampaignHead:
             "waveWorkItems": {"wave-1": 2, "wave-2": 2, "wave-3": 1},
         }
 
-    def test_agent_is_optional(self, project_root: Path) -> None:
+    def test_agent_is_optional_and_no_resolvable_identity_omits_it(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # cc-workflow#1146 step 1: emit.py's main() now defaults `agent` via
+        # resolve_agent(Path.cwd()) when `--agent` is omitted — `_run_cli`
+        # mocks `get_project_root()` but runs IN-PROCESS, so the real
+        # process cwd (not `project_root`) is what that resolution actually
+        # sees. chdir into `project_root` (which init_state alone never
+        # writes a .claude/agent-identity.json into) so this test isolates
+        # the genuine null case instead of accidentally resolving whatever
+        # repo checkout pytest happens to run from.
+        monkeypatch.chdir(project_root)
         code = _run_cli(["campaign-head", "--activity-id", "116"], project_root)
         assert code == 0
         events = [e for e in self._read_buffer() if e.get("activityId") == "116"]
         assert len(events) == 1
-        assert "agent" not in events[0] or events[0].get("agent") is None
+        # build_event drops every None-valued key except `value` — the exact
+        # contract is "agent" absent, not merely null (code review: the
+        # looser `or` form would still pass if something later regressed to
+        # emitting `agent: null` instead of omitting the key).
+        assert "agent" not in events[0]
+
+    def test_agent_is_optional_but_a_resolvable_identity_stamps_it_anyway(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The positive case cc-workflow#1146 step 1 exists to fix: campaign-head
+        # delegates to emit.py's main() (see _cmd_campaign_head's docstring),
+        # so a caller that never passes --agent still gets a real Dev-Name
+        # when the invoking cwd has one — same default-injection point that
+        # already covers every hand-typed `wave-status emit` and every
+        # Workflow-generated flightdeckTee line.
+        monkeypatch.chdir(project_root)
+        (project_root / ".claude").mkdir(parents=True, exist_ok=True)
+        (project_root / ".claude" / "agent-identity.json").write_text(
+            json.dumps({"dev_name": "cortana", "dev_team": "oaw"}), encoding="utf-8"
+        )
+        code = _run_cli(["campaign-head", "--activity-id", "116"], project_root)
+        assert code == 0
+        events = [e for e in self._read_buffer() if e.get("activityId") == "116"]
+        assert len(events) == 1
+        assert events[0]["agent"] == "cortana"
 
     def test_empty_activity_id_refuses_rather_than_emitting_under_unknown(
         self, project_root: Path, capsys: pytest.CaptureFixture

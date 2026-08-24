@@ -774,7 +774,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--activity-id", dest="activity_id", required=True,
         help="the plan id (e.g. $FLIGHTDECK_ACTIVITY_ID) — only the driver's shell has this",
     )
-    p_ch.add_argument("--agent", default=None, help="Dev-Name (card title); omit to fall back to the project label")
+    p_ch.add_argument(
+        "--agent", default=None,
+        help="Dev-Name (card title); omit to resolve it from <cwd>/.claude/agent-identity.json "
+             "(cc-workflow#1163), falling back to the project label when no identity resolves",
+    )
     p_ch.set_defaults(func=_cmd_campaign_head)
 
     # show

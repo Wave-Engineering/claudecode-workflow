@@ -618,6 +618,32 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         fields = _build_arg_fields(args)
+        # #1146 step 1: this CLI is the one remaining place that shipped
+        # agentless events by default. state.py's mutators all route through
+        # emit_state_event(), which already calls resolve_agent(root) — but
+        # THIS entry point (every hand-typed `wave-status emit ...` AND every
+        # Workflow-generated `flightdeckTee` line, skills/nextwave/
+        # per-wave-workflow.js) calls emit() directly and only carried `agent`
+        # when a caller explicitly passed `--agent`. Same resolution chain,
+        # rooted at the caller's cwd (there is no `root` param on a standalone
+        # CLI — cwd is the closest equivalent, matching
+        # scripts/flightdeck-session-emit.sh's own convention).
+        #
+        # A BLANK `--agent` (`""` or whitespace-only) is treated as "not
+        # supplied", not as a deliberate override — code review: every
+        # consumer (flightdeck's fold.ts, mcp-server-sdlc's scope-marker
+        # read) already normalizes an empty agent string to "no attribution"
+        # rather than trusting it, because that is the documented accidental
+        # shape of an unset shell variable (`--agent "$DEV_NAME"` with
+        # DEV_NAME empty), never a real request to suppress attribution. This
+        # also matches _cmd_campaign_head's own `if args.agent:` truthiness
+        # check one call up the stack — leaving `""` special here would make
+        # the two campaign-head/emit paths disagree on the exact same input.
+        if not str(fields.get("agent") or "").strip():
+            fields.pop("agent", None)
+            resolved_agent = resolve_agent(Path.cwd())
+            if resolved_agent:
+                fields["agent"] = resolved_agent
         if args.detail_json is not None:
             fields["detail"] = json.loads(args.detail_json)
         event = emit(
