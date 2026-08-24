@@ -235,15 +235,19 @@ wave-status campaign-head \
 (Omit `--agent` when the Dev-Name is absent — `${dev_name:+…}` — so the card falls back to
 the project label rather than rendering an empty title.)
 
-`campaign-head` derives `planTotal` (the wave denominator), `workItemsTotal` (the work-item
-denominator, #1154), and the project label FROM THE PLAN itself (`phases-waves.json`) — never
-a hand-typed literal (flightdeck#1145). It refuses loudly (non-zero exit, a message on
-stderr) rather than emitting a card claiming an unknown total if the plan can't be read, or
-if the plan has zero waves, or if it has zero work items; the `|| true` here only protects
-the launch sequence from aborting on that refusal, it does not hide the message. `--agent`
-is the Dev-Name (card title). The per-wave `promoted` step then accrues the wave numerator
-(`per-wave-workflow.js`, #1026 incr 2); `close-issue` (`state.py`'s `close_issue`, unrelated
-to wavemachine) accrues the work-items numerator the same way, campaign scope only.
+`campaign-head` derives `planTotal` (the wave denominator), `workItemsTotal` (the campaign-scope
+work-item denominator, #1154), `waveWorkItems` (a per-wave work-item denominator map, #1157),
+and the project label FROM THE PLAN itself (`phases-waves.json`) — never a hand-typed literal
+(flightdeck#1145). It refuses loudly (non-zero exit, a message on stderr) rather than emitting
+a card claiming an unknown total if the plan can't be read, or if the plan has zero waves, or
+if it has zero work items; the `|| true` here only protects the launch sequence from aborting
+on that refusal, it does not hide the message. `--agent` is the Dev-Name (card title). The
+per-wave `promoted` step then accrues the wave numerator (`per-wave-workflow.js`, #1026 incr
+2); `close-issue` (`state.py`'s `close_issue`, unrelated to wavemachine) accrues the
+work-items numerator at BOTH campaign scope (always) and wave scope (#1157) — tagged with
+the CLOSED ISSUE'S OWN wave (`_issue_wave_id`), not wherever `current_wave` happens to point,
+since those two can legitimately drift (a straggler close after the campaign has advanced, a
+human recovery via `set_current_wave`, `extend_state`'s auto-advance).
 
 1. Set the `wavemachine_active` flag (`wave-status wavemachine-start --launcher main`).
    Unset it on EVERY exit path (`wave-status wavemachine-stop`) — treat as a `finally`.

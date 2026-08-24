@@ -868,6 +868,144 @@ class TestCloseIssue:
         with pytest.raises(ValueError, match=r"Error:.*\..+\."):
             close_issue(999, project_root)
 
+    # --- FlightDeck wave tag: the issue's OWN wave, not current_wave -----
+    # (cc-workflow#1157 code review) -- close_issue's emitted step must be
+    # tagged with the CLOSED ISSUE'S wave, not wherever current_wave's
+    # pointer happens to sit -- those two legitimately drift (a straggler
+    # close after the campaign has advanced, human recovery via
+    # set_current_wave, extend_state's auto-advance). A wrong tag here
+    # would silently mis-attribute FlightDeck's wave-scope work-item
+    # numerator to the wrong wave.
+
+    def test_emitted_wave_tag_is_the_issue_own_wave_not_current_wave(
+        self, tmp_path: Path
+    ) -> None:
+        from wave_status.events.emit import buffer_path
+
+        plan = {
+            "project": "wave-tag-test",
+            "base_branch": "main",
+            "master_issue": 1,
+            "phases": [
+                {
+                    "name": "Only",
+                    "waves": [
+                        {"id": "wave-1", "name": "Wave 1", "issues": [{"number": 13, "title": "t", "deps": []}]},
+                        {"id": "wave-2", "name": "Wave 2", "issues": [{"number": 20, "title": "t", "deps": []}]},
+                    ],
+                }
+            ],
+        }
+        init_state(plan, tmp_path)
+        # Advance the pointer to wave-2, then close a WAVE-1 issue — the
+        # straggler shape: current_wave has already moved on.
+        state = load_json(status_dir(tmp_path) / "state.json")
+        state["current_wave"] = "wave-2"
+        save_json(status_dir(tmp_path) / "state.json", state)
+
+        close_issue(13, tmp_path)
+
+        buf = buffer_path()
+        events = [json.loads(line) for line in buf.read_text(encoding="utf-8").splitlines()]
+        close_events = [e for e in events if e.get("action") == "close-issue"]
+        assert len(close_events) == 1
+        # Must be "wave-1" (issue #13's real wave) — NOT "wave-2" (the
+        # pointer at close time). This is the exact bug the fix closes.
+        assert close_events[0]["wave"] == "wave-1"
+
+    def test_emitted_wave_tag_falls_back_to_current_wave_if_lookup_fails(
+        self, project_root: Path
+    ) -> None:
+        # Defensive fallback only — the issue's existence in the plan is
+        # already validated before this point, so _issue_wave_id should
+        # always find it in practice. Pins the fallback exists regardless.
+        # current_wave is forced to a DIFFERENT wave than issue #13's real
+        # one (wave-1, per SAMPLE_PLAN) so the fallback value is
+        # distinguishable from what a working lookup would have produced —
+        # otherwise this test would pass whether or not the fallback fired.
+        from wave_status.events.emit import buffer_path
+
+        state = load_json(status_dir(project_root) / "state.json")
+        state["current_wave"] = "wave-2"
+        save_json(status_dir(project_root) / "state.json", state)
+
+        with patch("wave_status.state._issue_wave_id", return_value=None):
+            close_issue(13, project_root)
+
+        buf = buffer_path()
+        events = [json.loads(line) for line in buf.read_text(encoding="utf-8").splitlines()]
+        close_events = [e for e in events if e.get("action") == "close-issue"]
+        assert close_events[-1]["wave"] == "wave-2"  # the forced fallback value
+
+    def test_emitted_wave_tag_matches_the_actually_resolved_issue_not_the_raw_input(
+        self, tmp_path: Path
+    ) -> None:
+        # #1157 review round 2: a BARE close can dual-read-resolve into a
+        # DIFFERENT repo's issue than the raw (ref_num, ref_repo) input
+        # names — _resolve_issue_key prefers a qualified hit over a bare
+        # one when exactly one of each exists (not ambiguous; that guard
+        # only fires on 2+ qualified hits). Both #5 exist here: wave-1's is
+        # bare (no repo), wave-2's is qualified (org/b). A bare
+        # close_issue(5) resolves to wave-2's "org/b#5" — the wave tag must
+        # follow the issue that was ACTUALLY closed, not wave-1 (what a
+        # lookup keyed on the raw un-resolved input would have found).
+        from wave_status.events.emit import buffer_path
+
+        plan = {
+            "project": "dual-read-ambiguity",
+            "base_branch": "main",
+            "master_issue": 1,
+            "phases": [
+                {
+                    "name": "Only",
+                    "waves": [
+                        {"id": "wave-1", "name": "Wave 1", "issues": [{"number": 5, "title": "bare", "deps": []}]},
+                        {"id": "wave-2", "name": "Wave 2", "issues": [{"number": 5, "title": "qualified", "deps": [], "repo": "org/b"}]},
+                    ],
+                }
+            ],
+        }
+        init_state(plan, tmp_path)
+        state_before = load_json(status_dir(tmp_path) / "state.json")
+        assert "5" in state_before["issues"] and "org/b#5" in state_before["issues"]
+
+        close_issue(5, tmp_path)  # bare — no repo qualifier
+
+        state_after = load_json(status_dir(tmp_path) / "state.json")
+        assert state_after["issues"]["org/b#5"]["status"] == "closed"
+        assert state_after["issues"]["5"]["status"] != "closed"  # wave-1's #5 untouched
+
+        buf = buffer_path()
+        events = [json.loads(line) for line in buf.read_text(encoding="utf-8").splitlines()]
+        close_events = [e for e in events if e.get("action") == "close-issue"]
+        assert len(close_events) == 1
+        assert close_events[0]["label"] == "org/b#5"
+        assert close_events[0]["wave"] == "wave-2"  # NOT wave-1
+
+    def test_emitted_wave_tag_survives_an_empty_string_wave_id(self, tmp_path: Path) -> None:
+        # #1157 review round 2: `or` would treat a falsy-but-real wave id
+        # ("") as a lookup miss and silently fall through to current_wave.
+        # Nothing in this module rejects an empty wave id, so this is a
+        # legitimate (if odd) plan shape, not a validation gap to close
+        # here — the fix is `is None`, not `or`.
+        plan = {
+            "project": "empty-wave-id",
+            "base_branch": "main",
+            "master_issue": 1,
+            "phases": [
+                {"name": "Only", "waves": [{"id": "", "name": "Nameless", "issues": [{"number": 5, "title": "t", "deps": []}]}]}
+            ],
+        }
+        init_state(plan, tmp_path)
+        from wave_status.events.emit import buffer_path
+
+        close_issue(5, tmp_path)
+
+        buf = buffer_path()
+        events = [json.loads(line) for line in buf.read_text(encoding="utf-8").splitlines()]
+        close_events = [e for e in events if e.get("action") == "close-issue"]
+        assert close_events[0]["wave"] == ""
+
     # --- Cross-repo qualified-key tests (#198) ----------------------------
 
     def test_bare_close_resolves_qualified_key(self, tmp_path: Path) -> None:
@@ -1232,6 +1370,41 @@ class TestResolveCampaignHeadDetail:
         detail = resolve_campaign_head_detail(project_root)
         assert detail["workItemsTotal"] == 5
 
+    def test_wave_work_items_maps_each_wave_to_its_issue_count(
+        self, project_root: Path
+    ) -> None:
+        # SAMPLE_PLAN: wave-1 has issues 13/1 (2), wave-2 has 2/3 (2),
+        # wave-3 has 5 (1). An even split (5/3) or the campaign total
+        # repeated per wave would both look plausible and both be wrong —
+        # this fixture's counts are DISTINCT per wave specifically so a
+        # wrong-but-plausible fix can't pass by accident.
+        detail = resolve_campaign_head_detail(project_root)
+        assert detail["waveWorkItems"] == {"wave-1": 2, "wave-2": 2, "wave-3": 1}
+
+    def test_wave_with_zero_issues_is_a_real_zero_not_absent(
+        self, tmp_path: Path
+    ) -> None:
+        # AC: a wave with no issues is a valid map entry (0), not a hole —
+        # the plan can legitimately carry an empty wave.
+        plan = {
+            "project": "empty-wave",
+            "base_branch": "main",
+            "master_issue": 1,
+            "phases": [
+                {
+                    "name": "Only",
+                    "waves": [
+                        {"id": "wave-1", "name": "Wave 1", "issues": [{"number": 1, "title": "t", "deps": []}]},
+                        {"id": "wave-2", "name": "Wave 2", "issues": []},
+                    ],
+                }
+            ],
+        }
+        init_state(plan, tmp_path)
+        detail = resolve_campaign_head_detail(tmp_path)
+        assert detail["waveWorkItems"] == {"wave-1": 1, "wave-2": 0}
+        assert "wave-2" in detail["waveWorkItems"]  # present, not omitted
+
     def test_work_items_total_counts_refs_not_bare_numbers(self, tmp_path: Path) -> None:
         # Code review finding (#1154): the defining reason for using
         # `_all_issue_refs` over `_all_issue_numbers` — a cross-repo plan can
@@ -1265,6 +1438,9 @@ class TestResolveCampaignHeadDetail:
         init_state(plan, tmp_path)
         detail = resolve_campaign_head_detail(tmp_path)
         assert detail["workItemsTotal"] == 3
+        # Same cross-repo dedup rationale applies per-wave: this wave has 3
+        # distinct issues (5@org/a, 7@org/a, 5@org/b), not 2.
+        assert detail["waveWorkItems"] == {"wave-1": 3}
 
     def test_no_plan_refuses_rather_than_guessing(self, tmp_path: Path) -> None:
         # tmp_path here is a bare project root — init_state was never called.
@@ -1326,6 +1502,9 @@ class TestResolveCampaignHeadDetail:
         detail = resolve_campaign_head_detail(tmp_path)
         assert detail["planTotal"] == 4
         assert detail["workItemsTotal"] == 6
+        assert detail["waveWorkItems"] == {
+            "wave-1": 2, "wave-2": 2, "wave-3": 1, "wave-4": 1,
+        }
 
 
 # ---------------------------------------------------------------------------

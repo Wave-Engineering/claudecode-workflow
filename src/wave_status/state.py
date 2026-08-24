@@ -354,6 +354,28 @@ def _all_issue_refs(plan_data: dict, default_repo: str | None = None) -> set[str
     return refs
 
 
+def _wave_work_item_counts(plan_data: dict) -> dict[str, int]:
+    """Return ``{wave_id: distinct issue-ref count}`` for every wave in the
+    plan (cc-workflow#1157).
+
+    Ref-based, like :func:`_all_issue_refs` — a cross-repo wave can
+    legitimately repeat an issue number across repos, and a bare-number
+    count would silently undercount that. A wave with zero issues is a
+    real ``0`` entry, not an absent key — the plan can legitimately carry
+    an empty wave, and that is a measurement ("we counted, it's zero"),
+    not a hole.
+    """
+    counts: dict[str, int] = {}
+    for phase in plan_data.get("phases", []):
+        for wave in phase.get("waves", []):
+            refs: set[str] = set()
+            for issue in wave.get("issues", []):
+                repo = _issue_repo(plan_data, issue)
+                refs.add(_compose_issue_key(issue["number"], repo))
+            counts[wave["id"]] = len(refs)
+    return counts
+
+
 def _resolve_issue_key(
     state_data: dict,
     ref: int | str,
@@ -1299,6 +1321,37 @@ def complete(root: Path, wave_id: str | None = None) -> dict:
     return state_data
 
 
+def _issue_wave_id(plan_data: dict, ref_num: int, ref_repo: str | None) -> str | None:
+    """Return the id of the wave containing issue *ref_num* (optionally
+    qualified by *ref_repo*), or ``None`` if not found.
+
+    Used to tag a FlightDeck close-issue event with the issue's OWN wave —
+    a static plan property — rather than the campaign's ``current_wave``
+    pointer, which can legitimately drift from the issue's actual wave: a
+    straggler close landing after the campaign has already advanced, a
+    human recovery via ``set_current_wave``, ``extend_state``'s
+    auto-advance, or the terminal wave completing (``current_wave`` goes
+    ``None``, per ``_find_next_pending_wave``). Code review on
+    cc-workflow#1157 caught this: the FlightDeck wave-scope work-item
+    numerator is only correct if the tag names the issue's real wave, not
+    wherever the pointer happened to be at close time.
+    """
+    for phase in plan_data.get("phases", []):
+        for wave in phase.get("waves", []):
+            wave_id = wave.get("id")
+            if wave_id is None:
+                continue  # #1157 review round 2: a wave.get("id") guard, not
+                # wave["id"] — this runs AFTER close_issue's save_json, so a
+                # KeyError here would raise on a mutation that already landed.
+            for issue in wave.get("issues", []):
+                if issue["number"] != ref_num:
+                    continue
+                if ref_repo and _issue_repo(plan_data, issue) != ref_repo:
+                    continue
+                return wave_id
+    return None
+
+
 def close_issue(n: int | str, root: Path) -> dict:
     """Set issue *n* to ``closed`` in ``state.json`` [R-07, R-14].
 
@@ -1371,10 +1424,30 @@ def close_issue(n: int | str, root: Path) -> dict:
     state_data["issues"][resolved]["status"] = "closed"
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    # The issue's OWN wave, not current_wave (cc-workflow#1157 code review) —
+    # see _issue_wave_id's docstring for why those can drift. Keyed off
+    # `resolved` (the key actually mutated above), NOT the raw (ref_num,
+    # ref_repo) input — round 2 of review: a bare close can dual-read-resolve
+    # into a DIFFERENT repo's issue than the raw input names (ambiguous
+    # bare+qualified match, "prefer qualified" in _resolve_issue_key), and
+    # keying the wave lookup off the pre-resolution input would then tag the
+    # event with the WRONG issue's wave. `is None`, not `or` — a wave id can
+    # legitimately be falsy (an empty string is still a real id in this
+    # module; nothing rejects one), and `or` would silently treat that as a
+    # miss and fall through to current_wave.
+    res_repo, res_num = _parse_issue_key(resolved)
+    issue_wave = _issue_wave_id(
+        plan_data, res_num if res_num is not None else ref_num, res_repo
+    )
+    if issue_wave is None:
+        # Falls back to current_wave only if the lookup somehow fails; the
+        # issue's existence in the plan was already validated above, so
+        # this should always find it in practice.
+        issue_wave = state_data.get("current_wave")
     _emit_event(
         root,
         "step",
-        wave=state_data.get("current_wave"),
+        wave=issue_wave,
         action="close-issue",
         label=str(resolved),
     )
@@ -1573,20 +1646,27 @@ def show(root: Path) -> dict:
 def resolve_campaign_head_detail(root: Path) -> dict:
     """Derive the FlightDeck campaign card's ``detail`` payload from the plan.
 
-    Returns ``{"planTotal": N, "workItemsTotal": M}`` (the wave-count and
-    work-item-count denominators) plus ``"project"`` (the card's fallback
-    title) — read from ``phases-waves.json``, never hand-typed
-    (flightdeck#1145, cc-workflow#1146 step 4). Raises ``ValueError`` with a
-    message naming the specific problem when the plan cannot be read or has
-    no waves: a campaign head that cannot determine its own totals must
-    refuse rather than emit a card claiming an unknown total silently
-    (flightdeck#1145 AC).
+    Returns ``{"planTotal": N, "workItemsTotal": M, "waveWorkItems": {...}}``
+    (the wave-count denominator, the campaign-scope work-item denominator,
+    and a per-wave work-item denominator map) plus ``"project"`` (the
+    card's fallback title) — read from ``phases-waves.json``, never
+    hand-typed (flightdeck#1145, cc-workflow#1146 step 4). Raises
+    ``ValueError`` with a message naming the specific problem when the plan
+    cannot be read or has no waves: a campaign head that cannot determine
+    its own totals must refuse rather than emit a card claiming an unknown
+    total silently (flightdeck#1145 AC).
 
     ``workItemsTotal`` counts issue **refs** (``_all_issue_refs``), not bare
     numbers — a cross-repo plan can legitimately carry the same issue number
     in two repos, and a number-keyed set would silently undercount that case
     the same way a number-keyed ``state.json`` key would collide (see
-    ``_compose_issue_key``).
+    ``_compose_issue_key``). ``waveWorkItems`` (cc-workflow#1157) is the
+    same ref-based counting, per wave — see :func:`_wave_work_item_counts`.
+    Ships once here rather than per wave-transition: it is a static property
+    of the plan, unlike the numerator (which the consumer derives from the
+    already-flowing ``close-issue`` step events, filtered by wave — each
+    tagged with the CLOSED ISSUE'S OWN wave via :func:`_issue_wave_id`, not
+    the campaign's ``current_wave`` pointer, which can drift from it).
     """
     path = status_dir(root) / "phases-waves.json"
     try:
@@ -1616,5 +1696,6 @@ def resolve_campaign_head_detail(root: Path) -> dict:
     return {
         "planTotal": plan_total,
         "workItemsTotal": work_items_total,
+        "waveWorkItems": _wave_work_item_counts(plan_data),
         "project": plan_data.get("project"),
     }
