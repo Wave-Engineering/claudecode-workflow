@@ -1455,8 +1455,8 @@ def close_issue(n: int | str, root: Path) -> dict:
 
 
 def record_mr(issue: int | str, mr: str, root: Path) -> dict:
-    """Record an MR/PR reference for *issue* in the current wave's
-    ``mr_urls`` [R-08].
+    """Record an MR/PR reference for *issue* in ITS OWN wave's ``mr_urls``
+    [R-08].
 
     Accepts either a bare integer/digit-string or a qualified ref
     (``"owner/repo#N"``).  Dual-read lookup on existing ``mr_urls`` keys.
@@ -1495,28 +1495,71 @@ def record_mr(issue: int | str, mr: str, root: Path) -> dict:
                 "Use an integer or 'owner/repo#N' form."
             )
 
+    # Loaded once, up front, so both the target-wave resolution below and the
+    # repo-inference fallback further down share one read (previously the
+    # fallback re-read this file itself).
+    try:
+        plan_data = load_json(d / "phases-waves.json")
+    except FileNotFoundError:
+        plan_data = None
+
+    # For a BARE ref (ref_repo is None), infer the repo from the plan BEFORE
+    # resolving the target wave — code review on cc-workflow#1158: the wave
+    # lookup (_issue_wave_id, first-match on a bare number) and the key
+    # composition below used to run as two SEPARATE scans over the same bare
+    # number, which can name DIFFERENT issues when that number appears in
+    # more than one wave under different repos (target_wave picks the FIRST
+    # match, the old inline repo scan picked the LAST). Deriving one
+    # (repo, wave) pair up front and reusing it for both makes them agree by
+    # construction — same discipline as #1157 round 2's "key the wave off
+    # the identity actually mutated, not the raw input" fix to close_issue.
+    lookup_repo = ref_repo
+    if lookup_repo is None and plan_data is not None:
+        plan_repo = _plan_default_repo(plan_data)
+        for phase in plan_data.get("phases", []):
+            for wave in phase.get("waves", []):
+                for iss in wave.get("issues", []):
+                    if iss["number"] == ref_num:
+                        plan_repo = _issue_repo(plan_data, iss) or plan_repo
+                        break
+        lookup_repo = plan_repo
+
+    # The PERSISTED write goes to the issue's OWN wave, not current_wave
+    # (cc-workflow#1158, the persisted-state sibling of #1157's close_issue
+    # fix — see _issue_wave_id's docstring for the four ways current_wave can
+    # legitimately drift from an issue's real wave). Scoped to the write
+    # only: `waves[wave_id].setdefault("mr_urls", {})` needs an id that is
+    # ACTUALLY a key in `waves`, so this falls back to current_wave both when
+    # the issue isn't in the plan (record_mr, unlike close_issue, never
+    # required plan membership — no fallback would strand a legitimately
+    # untracked issue with no error) and when a resolved wave id somehow
+    # isn't a real wave in state (defensive; every plan wave id should be).
+    #
+    # The EMITTED event's `wave` tag below is deliberately left as
+    # current_wave, NOT switched to target_wave — audited for cc-workflow#1158:
+    # flightdeck's fold.ts treats record-mr's wave tag as a genuine POSITION
+    # update (it is not in close-issue's exclusion list), so retagging it
+    # with the issue's static wave would silently snap FlightDeck's
+    # currentWave backward on a straggler MR — reintroducing the exact bug
+    # class #1157 fixed, one file over.
+    target_wave = current_wave
+    if plan_data is not None:
+        issue_wave = _issue_wave_id(plan_data, ref_num, lookup_repo)
+        if issue_wave is not None and issue_wave in waves:
+            target_wave = issue_wave
+
     resolved = _resolve_issue_key(
-        state_data, issue, container="mr_urls", wave_id=current_wave
+        state_data, issue, container="mr_urls", wave_id=target_wave
     )
     if resolved is None:
         if ref_repo:
             resolved = _compose_issue_key(ref_num, ref_repo)
+        elif lookup_repo is not None:
+            resolved = _compose_issue_key(ref_num, lookup_repo)
         else:
-            # Infer repo from plan for the preferred key shape.
-            try:
-                plan_data = load_json(d / "phases-waves.json")
-                plan_repo = _plan_default_repo(plan_data)
-                for phase in plan_data.get("phases", []):
-                    for wave in phase.get("waves", []):
-                        for iss in wave.get("issues", []):
-                            if iss["number"] == ref_num:
-                                plan_repo = _issue_repo(plan_data, iss) or plan_repo
-                                break
-                resolved = _compose_issue_key(ref_num, plan_repo)
-            except FileNotFoundError:
-                resolved = str(ref_num)
+            resolved = str(ref_num)
 
-    waves[current_wave].setdefault("mr_urls", {})[resolved] = mr
+    waves[target_wave].setdefault("mr_urls", {})[resolved] = mr
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
     _emit_event(
