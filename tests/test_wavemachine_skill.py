@@ -785,3 +785,15 @@ class TestFlightdeckCampaignCard:
             "campaign-head must derive planTotal from the plan — a hand-typed "
             "placeholder here is exactly the flightdeck#1145 defect."
         )
+
+    def test_launch_documents_wave_work_items_denominator(self, skill_text: str) -> None:
+        # #1157 code review: this prose went stale once before (still described
+        # a pre-#1154 payload) without a test to catch it. Pin the current
+        # payload here so a future denominator addition can't silently skip
+        # the docs the way #1154's did until review caught it.
+        launch = _bootstrap(skill_text)
+        assert "waveWorkItems" in launch
+        assert "campaign scope only" not in launch, (
+            "close-issue accrues the work-items numerator at BOTH campaign AND "
+            "wave scope as of #1157 — 'campaign scope only' is stale."
+        )

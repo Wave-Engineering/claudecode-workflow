@@ -569,7 +569,11 @@ class TestCmdCampaignHead:
         # a structured payload rather than the string shape flightdeck's
         # asRecord() only accepts as a compatibility shim for the old emitter.
         assert isinstance(event["detail"], dict)
-        assert event["detail"] == {"planTotal": 3, "workItemsTotal": 5}
+        assert event["detail"] == {
+            "planTotal": 3,
+            "workItemsTotal": 5,
+            "waveWorkItems": {"wave-1": 2, "wave-2": 2, "wave-3": 1},
+        }
 
     def test_agent_is_optional(self, project_root: Path) -> None:
         code = _run_cli(["campaign-head", "--activity-id", "116"], project_root)

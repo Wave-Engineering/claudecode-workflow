@@ -375,7 +375,7 @@ def _cmd_campaign_head(args: argparse.Namespace) -> None:
     """Handle ``campaign-head`` — emit the FlightDeck campaign card's head.
 
     Unlike ``emit`` (a generic, fire-and-forget event that never raises),
-    this command computes ``planTotal``/``workItemsTotal``/the project title
+    this command computes ``planTotal``/``workItemsTotal``/``waveWorkItems``/the project title
     FROM THE PLAN (``resolve_campaign_head_detail``) rather than accepting
     them as caller-supplied literals, and lets a ``ValueError`` propagate to
     ``main()``'s handler — refusing loudly (non-zero exit, a message on
@@ -421,6 +421,7 @@ def _cmd_campaign_head(args: argparse.Namespace) -> None:
         "--detail-json", json.dumps({
             "planTotal": resolved["planTotal"],
             "workItemsTotal": resolved["workItemsTotal"],
+            "waveWorkItems": resolved["waveWorkItems"],
         }),
     ]
     if resolved["project"]:
@@ -763,11 +764,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_em.set_defaults(func=_cmd_emit)
 
     # campaign-head (flightdeck#1145, cc-workflow#1154): computes
-    # planTotal/workItemsTotal/project from the plan itself rather than
+    # planTotal/workItemsTotal/waveWorkItems/project from the plan itself rather than
     # requiring the caller to hand-type them.
     p_ch = sub.add_parser(
         "campaign-head",
-        help="Emit the FlightDeck campaign card head, deriving planTotal/workItemsTotal from the plan",
+        help="Emit the FlightDeck campaign card head, deriving planTotal/workItemsTotal/waveWorkItems from the plan",
     )
     p_ch.add_argument(
         "--activity-id", dest="activity_id", required=True,
