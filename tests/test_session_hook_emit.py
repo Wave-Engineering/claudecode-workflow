@@ -202,6 +202,103 @@ class TestAgentIdentity:
         assert _last_event(ep)["agent"] == _last_event(ep)["host"]
 
 
+class TestSessionIdFallbackChain:
+    """#1166, AX-4: the fallback chain when hook stdin JSON extraction yields no
+    session_id (no jq, non-JSON stdin, or a genuinely bare invocation) must be
+    BOTH collision-resistant across concurrent agents in one project AND
+    lifecycle-stable across one session's own open/idle/close firings — the
+    `basename "$PWD"` fallback this replaces satisfied neither for the common
+    case where FLIGHTDECK_SESSION_ID/CLAUDE_CODE_SESSION_ID are both unset.
+    """
+
+    def _run_bare(self, cwd: Path, events_path: Path, extra_env: dict) -> subprocess.CompletedProcess:
+        # No stdin JSON at all (empty input, matches a non-hook direct
+        # invocation) — forces every case here through the env-var fallback
+        # chain, never the stdin-JSON primary path.
+        env = os.environ.copy()
+        env["PYTHONPATH"] = _SRC + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        env["FLIGHTDECK_EVENTS_PATH"] = str(events_path)
+        env["FLIGHTDECK_EMIT_CMD"] = "python3 -m wave_status.events.emit"
+        env.pop("FLIGHTDECK_INGEST_URL", None)
+        env.pop("FLIGHTDECK_EMIT_DISABLED", None)
+        env.pop("FLIGHTDECK_SESSION_ID", None)
+        env.pop("CLAUDE_CODE_SESSION_ID", None)
+        env.pop("TMUX_PANE", None)
+        env.update(extra_env)
+        return subprocess.run(
+            ["bash", str(_SCRIPT), "idle"],
+            input="", capture_output=True, text=True, env=env, cwd=str(cwd),
+        )
+
+    def test_claude_code_session_id_used_when_flightdeck_unset(self, tmp_path):
+        ep = tmp_path / "events.jsonl"
+        r = self._run_bare(
+            tmp_path, ep, {"CLAUDE_CODE_SESSION_ID": "cc-sess-1", "TMUX_PANE": "%99"}
+        )
+        assert r.returncode == 0, r.stderr
+        # Wins over TMUX_PANE, proving tier order — not just "resolves to SOMETHING".
+        assert _last_event(ep)["activityId"] == "session:cc-sess-1"
+
+    def test_tmux_pane_used_when_neither_session_id_var_set(self, tmp_path):
+        ep = tmp_path / "events.jsonl"
+        r = self._run_bare(tmp_path, ep, {"TMUX_PANE": "%42"})
+        assert r.returncode == 0, r.stderr
+        assert _last_event(ep)["activityId"] == "session:tmux-42"
+
+    def test_basename_is_the_absolute_last_resort(self, tmp_path):
+        proj = tmp_path / "my-project"
+        proj.mkdir()
+        ep = tmp_path / "events.jsonl"
+        r = self._run_bare(proj, ep, {})  # nothing set at all
+        assert r.returncode == 0, r.stderr
+        assert _last_event(ep)["activityId"] == "session:my-project"
+
+    def test_two_concurrent_tmux_panes_in_the_same_project_get_distinct_sessions(self, tmp_path):
+        # The exact bug #1166 fixes: two agents, same $PWD, both missing
+        # FLIGHTDECK_SESSION_ID/CLAUDE_CODE_SESSION_ID — must NOT fold into one
+        # card. `basename "$PWD"` alone (the old fallback) would have given both
+        # the identical session id here.
+        proj = tmp_path / "shared-project"
+        proj.mkdir()
+        ep = tmp_path / "events.jsonl"
+        r_a = self._run_bare(proj, ep, {"TMUX_PANE": "%1"})
+        r_b = self._run_bare(proj, ep, {"TMUX_PANE": "%2"})
+        assert r_a.returncode == 0 and r_b.returncode == 0
+        events = [json.loads(line) for line in ep.read_text(encoding="utf-8").splitlines()]
+        activity_ids = {e["activityId"] for e in events}
+        assert activity_ids == {"session:tmux-1", "session:tmux-2"}
+
+    def test_one_sessions_own_lifecycle_stays_consistent_across_hook_firings(self, tmp_path):
+        # The other half of AX-4: collision-resistance must not come at the
+        # cost of stability — open/idle/close are three SEPARATE subprocess
+        # firings for the SAME real session and must resolve to the SAME
+        # fallback identity, or activity_end would never close the
+        # activity_start it belongs to.
+        proj = tmp_path / "one-session"
+        proj.mkdir()
+        ep = tmp_path / "events.jsonl"
+        env_extra = {"TMUX_PANE": "%7"}
+        for phase in ("open", "idle", "close"):
+            env = os.environ.copy()
+            env["PYTHONPATH"] = _SRC + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+            env["FLIGHTDECK_EVENTS_PATH"] = str(ep)
+            env["FLIGHTDECK_EMIT_CMD"] = "python3 -m wave_status.events.emit"
+            env.pop("FLIGHTDECK_INGEST_URL", None)
+            env.pop("FLIGHTDECK_EMIT_DISABLED", None)
+            env.pop("FLIGHTDECK_SESSION_ID", None)
+            env.pop("CLAUDE_CODE_SESSION_ID", None)
+            env.update(env_extra)
+            r = subprocess.run(
+                ["bash", str(_SCRIPT), phase],
+                input="", capture_output=True, text=True, env=env, cwd=str(proj),
+            )
+            assert r.returncode == 0, r.stderr
+        events = [json.loads(line) for line in ep.read_text(encoding="utf-8").splitlines()]
+        assert len(events) == 3
+        ids = {e["activityId"] for e in events}
+        assert ids == {"session:tmux-7"}  # all three firings agree
+
+
 class TestSettingsWiring:
     def _hooks(self) -> dict:
         return json.loads(_SETTINGS.read_text(encoding="utf-8"))["hooks"]

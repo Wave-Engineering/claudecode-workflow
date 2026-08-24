@@ -168,6 +168,13 @@ def _isolate_flightdeck_buffer(tmp_path_factory, monkeypatch):
     # for FLIGHTDECK_AGENT/agent-identity.json.
     monkeypatch.delenv("FLIGHTDECK_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    # #1166: TMUX_PANE is the SAME class of ambient leak — the flightdeck-
+    # session-emit.sh fallback chain's third tier, genuinely set in every
+    # tmux-based agent session on this fleet, absent in CI. Scrubbed globally
+    # (not just in that script's own test's local pop) so no FUTURE test
+    # anywhere in this suite can silently resolve a different fallback tier
+    # locally than it does in CI — green both ways, testing different code.
+    monkeypatch.delenv("TMUX_PANE", raising=False)
     # #1149: `_pending_ships` is module-level state (the registry
     # `flush_pending_ships` joins at true process exit). In-process, it can
     # outlive any one test that starts a shipper thread without flushing it —

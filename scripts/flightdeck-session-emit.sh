@@ -30,7 +30,7 @@ idle | *) kind="step" ;;
 esac
 
 # Best-effort session id + project root: hook stdin JSON (.session_id/.cwd) →
-# env → cwd basename.
+# env → tmux pane → cwd basename.
 session=""
 root=""
 if [ ! -t 0 ]; then
@@ -40,8 +40,35 @@ if [ ! -t 0 ]; then
 		root="$(printf '%s' "$payload" | jq -r '.cwd // empty' 2>/dev/null || true)"
 	fi
 fi
+# AX-4 (#1166): the fallback chain below MUST resolve to the SAME value across
+# a session's separate open/idle/close hook firings (each a fresh subprocess),
+# and to DIFFERENT values for two concurrent agents sharing a project
+# directory — collision-resistant AND lifecycle-stable, not just one or the
+# other. `$$`/PID would satisfy neither (a fresh PID every firing). Both tiers
+# below hold for a whole session's lifetime:
+#   - CLAUDE_CODE_SESSION_ID is Claude Code's own ambient session id, set on
+#     every Bash tool subprocess for the session's full duration (confirmed
+#     via the product changelog, cc-workflow#1165's resolve_session()). NOT
+#     the same variable as the now-dead CLAUDE_SESSION_ID this fallback used
+#     to check — that name is not a real env var (a skill-body template
+#     substitution only), which is why this branch has never actually fired.
+#   - TMUX_PANE is this repo's own established per-session identifier
+#     elsewhere (skills/reseed/SKILL.md, scripts/hooks/workflow/
+#     reseed-revive.sh) — stable for one tmux pane's lifetime, distinct per
+#     pane, and this fleet runs one agent per pane by convention.
+# `basename "$PWD"` remains the absolute last resort — the original collision
+# risk, now narrowed to "not even running under tmux or a Claude Code Bash
+# subprocess," a much rarer shape than before.
 if [ -z "$session" ]; then
-	session="${FLIGHTDECK_SESSION_ID:-${CLAUDE_SESSION_ID:-$(basename "$PWD")}}"
+	if [ -n "${FLIGHTDECK_SESSION_ID:-}" ]; then
+		session="$FLIGHTDECK_SESSION_ID"
+	elif [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+		session="$CLAUDE_CODE_SESSION_ID"
+	elif [ -n "${TMUX_PANE:-}" ]; then
+		session="tmux-${TMUX_PANE#%}"
+	else
+		session="$(basename "$PWD")"
+	fi
 fi
 [ -n "$root" ] || root="$PWD"
 
