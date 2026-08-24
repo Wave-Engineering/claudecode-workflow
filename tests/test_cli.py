@@ -21,7 +21,7 @@ import pytest
 # Ensure src/ is importable.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from wave_status.__main__ import main, _build_parser, _regenerate_dashboard
+from wave_status.__main__ import main, _build_parser, _regenerate_dashboard, _cmd_wave_begin
 from wave_status.state import (
     init_state,
     load_json,
@@ -687,6 +687,112 @@ class TestCmdCampaignHead:
         marker_path = Path(os.environ["FLIGHTDECK_SCOPE_PATH"])
         marker = json.loads(marker_path.read_text(encoding="utf-8"))
         assert marker["session"] == "sess-x"
+
+
+# ---------------------------------------------------------------------------
+# wave-begin [cc-workflow#1138 step 2 / #1170]
+# ---------------------------------------------------------------------------
+
+class TestCmdWaveBegin:
+    """``wave-status wave-begin <activity-id> <wave>`` — idempotently own the
+    FlightDeck ``activity_start`` head for AID
+    (``skills/nextwave/per-wave-workflow.js``'s ``flightdeckWaveBegin()``,
+    fired once per wave from ``rehydrate()``). Deliberately narrower than
+    campaign-head: no ``--label``/``--detail-json``/``--activity-type`` — and,
+    as a direct consequence of emit.py's campaign-only allowlist, it never
+    writes the FlightDeck scope marker. That stays campaign-head's job.
+    """
+
+    def _read_buffer(self) -> list[dict]:
+        from wave_status.events.emit import buffer_path
+
+        path = buffer_path()
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    def test_emits_activity_start_for_the_given_activity_and_wave(self, project_root: Path) -> None:
+        code = _run_cli(
+            ["wave-begin", "116", "wave-2", "--agent", "babelfish"], project_root
+        )
+        assert code == 0
+        events = [e for e in self._read_buffer() if e.get("activityId") == "116"]
+        assert len(events) == 1
+        event = events[0]
+        assert event["kind"] == "activity_start"
+        assert event["activityId"] == "116"
+        assert event["wave"] == "wave-2"
+        assert event["agent"] == "babelfish"
+
+    def test_no_activity_type_and_no_scope_marker(self, project_root: Path) -> None:
+        # The narrow option surface (no --activity-type) IS the idempotency
+        # mechanism (_cmd_wave_begin's docstring) — a direct consequence is
+        # emit.py's campaign-only allowlist never firing the scope-marker
+        # write for this command. Proving the negative here catches a future
+        # "helpful" change that starts passing --activity-type campaign and
+        # silently reintroduces the label/detail clobber risk the docstring
+        # warns against.
+        import os
+
+        code = _run_cli(["wave-begin", "116", "wave-2"], project_root)
+        assert code == 0
+        events = [e for e in self._read_buffer() if e.get("activityId") == "116"]
+        assert len(events) == 1
+        assert "activityType" not in events[0]
+        marker_path = Path(os.environ["FLIGHTDECK_SCOPE_PATH"])
+        assert not marker_path.exists()
+
+    def test_agent_is_optional_and_defaults_via_the_same_resolution_chain(
+        self, project_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Same default-injection as campaign-head (both delegate through
+        # emit.py's main()) — chdir so resolution sees project_root, not the
+        # real process cwd, mirroring TestCmdCampaignHead's own isolation.
+        monkeypatch.chdir(project_root)
+        (project_root / ".claude").mkdir(parents=True, exist_ok=True)
+        (project_root / ".claude" / "agent-identity.json").write_text(
+            json.dumps({"dev_name": "cortana", "dev_team": "oaw"}), encoding="utf-8"
+        )
+        code = _run_cli(["wave-begin", "116", "wave-2"], project_root)
+        assert code == 0
+        events = [e for e in self._read_buffer() if e.get("activityId") == "116"]
+        assert len(events) == 1
+        assert events[0]["agent"] == "cortana"
+
+    def test_session_flag_reaches_the_event(self, project_root: Path) -> None:
+        code = _run_cli(
+            ["wave-begin", "116", "wave-2", "--session", "sess-x"], project_root
+        )
+        assert code == 0
+        events = [e for e in self._read_buffer() if e.get("activityId") == "116"]
+        assert len(events) == 1
+        assert events[0]["session"] == "sess-x"
+
+    def test_empty_activity_id_refuses_rather_than_emitting_under_unknown(
+        self, project_root: Path, capsys: pytest.CaptureFixture
+    ) -> None:
+        # Code review (#1170 round 1): same defect class campaign-head's own
+        # guard exists to close, one field over — a blank activity-id must not
+        # silently fall through to emit()'s own "" -> "unknown" fallback.
+        before = self._read_buffer()
+        code = _run_cli(["wave-begin", "", "wave-2"], project_root)
+        assert code == 1
+        after = self._read_buffer()
+        assert after == before
+        assert not any(e.get("activityId") in ("", "unknown") for e in after)
+        captured = capsys.readouterr()
+        assert "activity-id" in captured.err
+
+    def test_activity_id_and_wave_are_required_positionals(self) -> None:
+        parser = _build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["wave-begin"])
+        with pytest.raises(SystemExit):
+            parser.parse_args(["wave-begin", "116"])
+        ns = parser.parse_args(["wave-begin", "116", "wave-2"])
+        assert ns.activity_id == "116"
+        assert ns.wave == "wave-2"
+        assert ns.func is _cmd_wave_begin
 
 
 # ---------------------------------------------------------------------------
