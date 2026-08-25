@@ -125,10 +125,21 @@ try {
   ok('review prompt: reads staged workspace + origin/<base>...origin/<kahuna> + diff-scoped (ENG-5, §3.4)')
 
   const tv = trivySignalPrompt(A)
-  assert.match(tv, /trivy fs --scanners vuln --severity HIGH,CRITICAL/)
+  assert.match(tv, /trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet/) // #1169 round 2: JSON output required — the predicate reasons over it
+  assert.match(tv, /FIRST enumerate the dependency manifests/i) // #1169 round 2: denominator is a prescribed step, not left to the agent to think of
+  // #1169 round 3: the enumeration is a REAL, single-line, runnable find command (round 2's
+  // version was split across template-literal array elements with no line-continuation, i.e.
+  // broken bash if pasted literally) — pin the actual prune clause and the lockfile set,
+  // not just the sentence introducing it (a future edit that deletes the find command while
+  // keeping the sentence must fail this).
+  assert.match(tv, /find \S+ \\\( -name node_modules -o -name \.git .* \\\) -prune -o -type f \\\( -name 'bun\.lock' -o -name 'bun\.lockb'/)
   assert.match(tv, /AVAILABLE FIXED VERSION/i) // pass predicate: only fixable vulns fail
   assert.match(tv, /CONSERVATIVE-FAIL/i) // missing trivy = fail, not pass
-  ok('trivy prompt: HIGH,CRITICAL + available-fix predicate + conservative-fail if uninstalled')
+  assert.match(tv, /Results carry an empty\/absent\s+Packages list/i) // #1169: ran-but-covered-nothing is ALSO conservative-fail
+  // #1169 round 3 (code review M-1): the declaration escape must rescue BOTH a zero-manifest
+  // count AND a real-manifest-but-zero-extractable-packages count, not just the first.
+  assert.match(tv, /rescues BOTH a manifest count of 0 AND the zero-packages-despite-a-real-/i)
+  ok('trivy prompt: HIGH,CRITICAL + --include-dev-deps + --list-all-pkgs + JSON output + a real runnable enumeration command + declaration rescues both zero-manifest and zero-package cases')
 } catch (e) { bad('signal prompts', e) }
 
 // ── 3. promotion is CODE: mark-ready → pr_merge → delete-branch (#5) ──────────────────

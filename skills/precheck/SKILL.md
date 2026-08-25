@@ -64,18 +64,34 @@ prompt: "Run the project's validation and test tooling in <repo_root>.
 ```
 subagent_type: general-purpose
 model: haiku
-prompt: "Run: trivy fs --scanners vuln --severity HIGH,CRITICAL --format json --quiet <repo_root>
+prompt: "Run: trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet <repo_root>
          Also run: git -C <repo_root> rev-parse HEAD
+
+         --include-dev-deps is REQUIRED, not optional (cc-workflow#1169): trivy
+         suppresses dev/test dependencies by default, and a project whose entire
+         dependency tree is dev-only (a bun-based tools repo is the measured
+         case — @types/*, typescript, nothing else) scans ZERO packages without
+         it, while still exiting clean — indistinguishable from a real pass
+         unless you check the package count.
+
+         --list-all-pkgs is ALSO required, not just include-dev-deps: it only
+         became trivy's default in v0.67.0, and this fleet pins no minimum
+         trivy version — an older install never emits the Results[].Packages
+         array this rule reads without the flag, which would make every scan
+         (on ANY repo) look like zero-packages-scanned and fail every precheck.
 
          Parse the JSON. FIRST report the denominator and the commit, ALWAYS, on one line:
            scanned: <N> manifest(s) at <short-sha>   [list each Target and Type]
 
          THEN return one of:
            PASS — one or more manifests parsed, zero findings
-           NO MANIFESTS — trivy ran and parsed ZERO manifests. This is NOT a pass
-                          and, as of #1073, NOT a deferral either: it FAILS the
-                          checklist item. Nothing was scanned. Say so; do not
-                          report PASS.
+           NO MANIFESTS — trivy ran and either parsed ZERO manifests, OR parsed
+                          a real manifest but the Results carry zero packages
+                          (check for a missing Results key, or Results present
+                          with an empty/absent Packages list). This is NOT a
+                          pass and, as of #1073, NOT a deferral either: it FAILS
+                          the checklist item. Nothing was scanned. Say so; do
+                          not report PASS.
                           The enforcing half lives in scripts/ci/check-scannable.sh
                           (run by validate.sh), which exits 1 when nothing is
                           scannable and absence is not declared — because an
@@ -88,7 +104,18 @@ prompt: "Run: trivy fs --scanners vuln --severity HIGH,CRITICAL --format json --
                           declaration is the failure, not having no dependencies.
            SKIP — trivy not installed
            FINDINGS — list each as: package | CVE | severity | fixed_version (or 'no fix available')
-         Do not auto-upgrade anything. Just report."
+         Do not auto-upgrade anything. Just report.
+
+         'Target: repository' / 'ArtifactType: repository' is NOT a real manifest —
+         it is trivy's own top-level scan-target metadata (what was scanned, a
+         directory), present on every run whether or not any dependency manifest
+         was found. Do not count it toward the denominator or report it as a
+         scanned manifest — read the actual 'Results[].Target'/'Results[].Type'
+         entries (a real manifest looks like 'requirements.txt | Type: pip', or
+         with --include-dev-deps, 'bun.lock | Type: bun'). Confirmed
+         (cc-workflow#1169): earlier precheck runs against bun-based repos misread
+         this metadata as 'PASS — 1 manifest scanned' when zero packages had
+         actually been scanned — a false pass, now closed by --include-dev-deps above."
 ```
 
 **Report the denominator and the commit before the verdict — never the verdict alone.** Two failures on 2026-07-19 make this non-optional:

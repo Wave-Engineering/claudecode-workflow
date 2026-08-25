@@ -803,16 +803,67 @@ function reviewSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRepoD
 // ── 4. trivy signal (HIGH/CRITICAL dependency vulns on kahuna) ────────────────────────
 // pass = no HIGH/CRITICAL findings WITH AN AVAILABLE FIX (an unfixable upstream advisory
 // must not permanently wedge the gate — that is a deferral decision, not a wave defect).
+//
+// cc-workflow#1169: trivy's fs scanner suppresses devDependencies by default (its own
+// "Suppressing dependencies for development and testing" notice) — --include-dev-deps is
+// REQUIRED, not optional, for any project (a bun-based tools repo is the measured case) whose
+// entire dependency tree is dev-only. Without it, trivy exits clean with a real lockfile
+// present and ZERO packages scanned — indistinguishable in the JSON from "scanned, found
+// nothing" unless the agent checks the package count. That is exactly the shape this signal's
+// own conservative-fail clause was written to catch ("trivy... cannot run"), but the ORIGINAL
+// wording only named non-execution — an agent following it literally would read a clean,
+// zero-package JSON as a pass. Both gaps close together: the flag makes the scan actually
+// cover dev-only trees, and the predicate below now explicitly extends conservative-fail to
+// "ran but scanned zero packages against a real lockfile", so a future regression to this same
+// shape (a different suppression flag, a different ecosystem) still gets caught by the rule,
+// not just by the one flag.
+//
+// Round-2 review: the command MUST emit JSON (--format json --quiet) — the predicate below
+// reasons about a "Results key"/"package count", which a table-format run (the prior wording)
+// never produces; an agent given the table command had no artifact to apply the rule to.
+// --list-all-pkgs is explicit rather than assumed-default: it only became the default in trivy
+// v0.67.0, and this repo pins no minimum version (deps.json marks trivy "optional", no floor),
+// so an older install would otherwise never emit the Results[].Packages array the rule reads —
+// turning "scan ran clean" into a permanent conservative-fail on every repo, a gate that blocks
+// everything being exactly as broken as one that blocks nothing.
+//
+// Round-3 review (of round-2's own fix): the prescribed `find` was itself broken bash — split
+// across template-literal array elements with no line-continuation backslash, so pasted literally
+// two of its lines fail/misparse, and it named a prune in prose without a real `-prune` clause
+// (reachable: -maxdepth 3 still walks into node_modules/<pkg>/bun.lock). Rebuilt as ONE line,
+// TESTED directly in bash against a real tree with a node_modules trap (confirmed: finds the
+// real lockfile, prunes the nested copy). Also added bun.lockb — scripts/ci/check-scannable.sh's
+// own enumeration (the sibling authority in this repo) already carries it; trivySignalPrompt's
+// list mirrors that one now, on purpose, so the two lockfile lists in this repo drift together
+// instead of separately (widening beyond that shared set, e.g. poetry.lock/Gemfile.lock, is a
+// real gap too, but a bigger scope change than this fix — check-scannable.sh doesn't cover them
+// either, so parity with it is the bar this fix targets, not universal ecosystem coverage).
 function trivySignalPrompt({ waveId, kahunaBranch, targetRepoDir }) {
   return [
-    `Trust-gate TRIVY signal for wave ${waveId}. Scan ${kahunaBranch} for dependency vulnerabilities:`,
-    `  trivy fs --scanners vuln --severity HIGH,CRITICAL ${targetRepoDir}`,
+    `Trust-gate TRIVY signal for wave ${waveId}. Scan ${kahunaBranch} for dependency vulnerabilities.`,
+    `FIRST enumerate the dependency manifests/lockfiles under ${targetRepoDir} — run this exactly (one command, do not split it):`,
+    `  find ${targetRepoDir} \\( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \\) -prune -o -type f \\( -name 'bun.lock' -o -name 'bun.lockb' -o -name 'package-lock.json' -o -name 'yarn.lock' -o -name 'pnpm-lock.yaml' -o -name 'go.sum' -o -name 'Cargo.lock' -o -name 'requirements*.txt' \\) -print`,
+    `and report the count of lines it prints — this is the denominator the pass predicate below`,
+    `needs, not optional context.`,
+    `THEN run:`,
+    `  trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet ${targetRepoDir}`,
     `(ensure ${kahunaBranch} is the checked-out / scanned state of ${targetRepoDir}).`,
+    `--include-dev-deps is REQUIRED — trivy suppresses dev/test dependencies by default, and a`,
+    `project whose entire tree is dev-only (e.g. a bun-based tools repo) would otherwise scan`,
+    `ZERO packages while still exiting clean (cc-workflow#1169). --list-all-pkgs is required on`,
+    `trivy <0.67.0, where it is not yet the default.`,
     `Pass predicate: passed = NO HIGH/CRITICAL finding that has an AVAILABLE FIXED VERSION. An`,
     `unfixable upstream advisory (no fixed version published) does NOT fail the signal — record it in`,
-    `detail as a deferral. If trivy is not installed or the scan cannot run, that is CONSERVATIVE-FAIL`,
-    `(passed=false) — the gate must not PASS on the absence of a scan.`,
-    `Do NOT do any other work. Return signal="trivy", passed (bool), detail (count + 1 line).`,
+    `detail as a deferral. CONSERVATIVE-FAIL (passed=false) — the gate must not PASS on the absence`,
+    `of a scan — applies to trivy is not installed / the scan cannot run, AND to a manifest count`,
+    `greater than 0 where the JSON output has no Results key or Results carry an empty/absent`,
+    `Packages list (a real manifest existed but nothing was extractable from it — e.g. every entry`,
+    `is an unpinned range, not a version). A .no-scannable-dependencies declaration at the repo`,
+    `root, with a reason, rescues BOTH a manifest count of 0 AND the zero-packages-despite-a-real-`,
+    `manifest case above — a repo can legitimately have nothing pinnable and the declaration is`,
+    `how it says so; omitting the declaration is the failure in either shape, not having nothing`,
+    `to scan. Report the manifest count AND the actual package count scanned in detail either way.`,
+    `Do NOT do any other work beyond the enumeration above. Return signal="trivy", passed (bool), detail (count + 1 line).`,
   ].join('\n')
 }
 

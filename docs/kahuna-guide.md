@@ -52,7 +52,7 @@ The four trust signals at the kahuna→main gate, evaluated in parallel:
 1. `commutativity_verify` returns STRONG or MEDIUM on the composed kahuna-vs-main diff
 2. CI on the kahuna branch reports success
 3. `feature-dev:code-reviewer` finds zero critical or important issues on the composed diff
-4. `trivy fs --scanners vuln --severity HIGH,CRITICAL` reports zero findings
+4. `trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet` reports zero findings (#1169)
 
 Any red signal pauses the merge for your review. See [Procedure C](#what-happens-when-a-trust-signal-goes-red) below.
 
