@@ -76,9 +76,14 @@ declare -a REPORT=()
 
 # --- shape 1: a manifest with a lockfile beside it ---------------------------
 # Presence of the lockfile is the test, not its contents. A lockfile whose
-# packages are all devDependencies yields no trivy Results today (measured:
-# scripts/wave-watcher), but the repo is still doing the right thing and the
-# moment a runtime dependency lands it becomes scannable with no further action.
+# packages are all devDependencies scans as zero packages under trivy's DEFAULT
+# invocation (measured: scripts/wave-watcher) — not a trivy limitation, trivy
+# suppresses dev/test deps unless called with --include-dev-deps (fixed at the
+# call sites, cc-workflow#1169: skills/precheck/SKILL.md Job C and
+# skills/nextwave/gate.js's trivySignalPrompt). This script still counts the
+# lockfile's mere presence as scannable regardless — it answers "would a scan
+# have anything to look at", not "did the last scan use the right flags" — so
+# nothing here needed to change once the flag was added elsewhere.
 while IFS= read -r manifest; do
 	[[ -n "$manifest" ]] || continue
 	dir="$(dirname "$manifest")"
