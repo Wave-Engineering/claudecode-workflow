@@ -48,6 +48,21 @@ RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ca-certificates curl tar xz-utils unzip \
 	&& rm -rf /var/lib/apt/lists/*
 
+# tini — the image's eventual PID 1 (cc-workflow#1179, see the ENTRYPOINT/CMD
+# note near the bottom of this file for what it fixes and why). Installed
+# here, ahead of the `COPY --chown=ubuntu:ubuntu . ${KIT_SRC}` below, purely
+# for layer caching: this package has no dependency on anything the build
+# does between here and there, so installing it after that COPY would
+# re-hit the Ubuntu archives on every rebuild instead of caching once.
+# `tini --version` proves the binary actually runs, matching this file's own
+# established idiom for every other tool install (mise, podman, the
+# five-runtime probe below, the vox smoke test) — "config exists" is not
+# "config works" anywhere else in this file, and this step is no exception.
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends tini \
+	&& rm -rf /var/lib/apt/lists/* \
+	&& /usr/bin/tini --version
+
 # --- Container builder: podman (#1108) ----------------------------------------
 # Agents must be able to build, run and scan container images from inside their
 # own sandbox. blueshift-kb#8 (swap a runtime image to distroless, shedding 23
@@ -445,15 +460,18 @@ RUN HOME=/home/ubuntu "${KIT_SRC}/scripts/ci/assert-no-duplicate-hooks.sh" /home
 # --- Zombie reaping: tini as PID 1 (fleet-wide network dropouts) --------------
 # aoe never runs its own entrypoint into the agent — it `docker exec`s
 # `claude` into an already-running container (see the ENTRYPOINT/CMD note
-# below), so every exec'd process is PARENTLESS from birth inside the
-# container's PID namespace (PPID 0), not reparented to PID 1 mid-life. The
-# base image's own CMD, `sleep infinity`, never wait()s on anything, so
-# nothing ever reaps a process that gets orphaned this way — a `claude`
-# session that exits or is killed without cleaning up its own children
-# leaves them as permanent zombies. At fleet scale (every exec, every
-# session, every container, indefinitely) this accumulated to ~2k zombies
-# and caused the network dropouts that made the container deployment
-# unusable.
+# below), so the top-level exec'd process is PARENTLESS from birth in the
+# container's PID namespace (PPID 0 — its real parent, the containerd-shim,
+# lives outside the namespace and reaps IT fine). The zombies are its
+# CHILDREN: when that process forks work and exits without collecting them,
+# the kernel's find_new_reaper() reparents the orphans to the namespace's
+# child_reaper — PID 1. The base image's own CMD, `sleep infinity`, never
+# wait()s on anything, so a PID 1 that is merely "alive" does not collect
+# what gets reparented to it; a `claude` session that exits or is killed
+# without cleaning up its own children leaves them as permanent zombies
+# there. At fleet scale (every exec, every session, every container,
+# indefinitely) this accumulated to ~2k zombies and caused the network
+# dropouts that made the container deployment unusable.
 #
 # tini is the fix Docker's own `--init` flag would install as a launch-time
 # flag — baking it into the image instead means it works regardless of
@@ -463,15 +481,13 @@ RUN HOME=/home/ubuntu "${KIT_SRC}/scripts/ci/assert-no-duplicate-hooks.sh" /home
 # "stay alive, keep namespaces open" role the base image already relied on
 # `sleep infinity` for is unchanged, tini just adds the missing reap.
 #
-# `&& tini --version` proves the binary actually runs, matching this file's
-# own established idiom for every other tool install (mise, podman, the
-# five-runtime probe below, the vox smoke test) — "config exists" is not
-# "config works" anywhere else in this file, and this step is no exception.
-RUN apt-get update \
-	&& apt-get install -y --no-install-recommends tini \
-	&& rm -rf /var/lib/apt/lists/* \
-	&& /usr/bin/tini --version
-
+# Installed in the FIRST apt-get block (top of this file), not here — this
+# package has no dependency on anything the build does between there and
+# here, and folding it in keeps it a cached layer instead of re-hitting the
+# Ubuntu archives on every rebuild this ~15-minute image goes through: the
+# earlier `COPY --chown=ubuntu:ubuntu . ${KIT_SRC}` invalidates on every
+# repo change, so anything installed AFTER it re-downloads every build, and
+# a transient archive failure this late would abort a near-complete build.
 USER ubuntu
 
 # CODE REVIEW (cc-workflow#1179): CMD alone does NOT deliver the invariant

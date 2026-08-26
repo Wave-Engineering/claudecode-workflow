@@ -783,6 +783,24 @@ def test_dockerfile_uses_entrypoint_not_cmd_for_tini() -> None:
     )
 
 
+def test_dockerfile_keeps_a_keep_alive_cmd() -> None:
+    """#1179 code review: the ENTRYPOINT/CMD pair only keeps the container
+    alive if a CMD survives to be tini's argument. `ENTRYPOINT ["tini", "--"]`
+    with no CMD makes tini exit immediately (nothing to exec), and the
+    container exits right after start — silently, since the image tests that
+    would catch it (test_image.py) skip when Docker/the built image is
+    absent, which is the stock lane. This pins the shape without needing
+    Docker: the LAST CMD must be present and non-empty.
+    """
+    text = DOCKERFILE.read_text()
+    cmds = re.findall(r"^CMD\s+(.+)$", text, re.M)
+    assert cmds, "Dockerfile declares no CMD — tini has nothing to exec and the container exits immediately"
+    assert cmds[-1].strip() not in ("[]", ""), (
+        f"the last CMD is {cmds[-1]!r}, which is empty — tini needs a real "
+        "keep-alive command as its argument"
+    )
+
+
 # --- no-bypass guard (#1076) --------------------------------------------------
 
 BYPASS_GUARD = REPO_ROOT / "scripts" / "ci" / "assert-no-claude-bypass.sh"

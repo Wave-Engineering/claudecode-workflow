@@ -14,10 +14,12 @@
 #
 # PID 1 itself (cc-workflow#1179): the Dockerfile DOES now declare an ENTRYPOINT —
 # `tini`, wrapping `sleep infinity` — but that's an unrelated fix (fleet-wide zombie
-# reaping, since aoe's `docker exec`'d processes are parentless from birth in this
-# container's PID namespace). It exists solely to keep the container alive with a
-# process that reaps; it has no bearing on the bootstrap-never-runs gap this file
-# closes, because aoe still never routes `claude` through PID 1 to get here.
+# reaping: aoe's `docker exec`'d agent process is parentless from birth in this
+# container's PID namespace, and when IT forks work that outlives it, those
+# children reparent to PID 1 on exit — which needs to actually reap them). It
+# exists solely to keep the container alive with a process that reaps; it has
+# no bearing on the bootstrap-never-runs gap this file closes, because aoe
+# still never routes `claude` through PID 1 to get here.
 #
 # It went unnoticed because tests/contained-workflow/test_bootstrap.py drives
 # bootstrap.sh directly by subprocess. That proves the script WORKS; it never asks

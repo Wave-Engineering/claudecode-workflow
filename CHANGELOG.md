@@ -23,13 +23,16 @@ are worth keeping apart:
 
 - **`sleep infinity` as PID 1 never reaps zombies — fleet-wide network dropouts (#1179).**
   aoe never runs an entrypoint into the agent; it `docker exec`s `claude` into an
-  already-running container, so every exec'd process is parentless from birth in
-  that PID namespace (PPID 0), never reparented to PID 1 mid-life. The base
-  image's own `CMD ["sleep", "infinity"]` never `wait()`s on anything, so an
-  exited `claude` session's orphaned children were never reaped. At fleet scale —
-  every exec, every session, every container, indefinitely — this accumulated to
-  roughly 2,000 zombies and produced the network dropouts that made the
-  containers unusable.
+  already-running container, so the top-level exec'd process is parentless from
+  birth in that PID namespace (PPID 0 — its real parent, the containerd-shim,
+  lives outside the namespace and reaps it fine). The zombies are its
+  *children*: when that process forks work and exits without collecting them,
+  the kernel reparents the orphans to the namespace's `child_reaper` — PID 1.
+  The base image's own `CMD ["sleep", "infinity"]` never `wait()`s on anything,
+  so a PID 1 that is merely "alive" never collects what gets reparented to it.
+  At fleet scale — every exec, every session, every container, indefinitely —
+  this accumulated to roughly 2,000 zombies and produced the network dropouts
+  that made the containers unusable.
 
   Fixed by installing `tini` and declaring it the image's `ENTRYPOINT`, wrapping
   the existing `CMD ["sleep", "infinity"]`. **The first attempt shipped `tini` as
@@ -41,12 +44,27 @@ are worth keeping apart:
   before and after: `tini -- sleep infinity` reaps an orphaned exec'd child (0
   zombies); `sleep infinity` alone does not (1 `<defunct>` zombie).
 
-  Pinned by two static Dockerfile checks (tini installed; `ENTRYPOINT`, not
-  `CMD`, carries it) and three tests against the built image covering the exact
-  regression: PID 1 is tini with no override, PID 1 is *still* tini when a
-  trailing command argument is supplied, and an orphaned exec'd child is
-  actually reaped. Mutation-tested against the CMD-only variant to confirm the
-  new tests fail on it before confirming they pass on the fix.
+  Pinned by three static Dockerfile checks (tini installed; `ENTRYPOINT`, not
+  `CMD`, carries it; a keep-alive `CMD` still exists for tini to exec) and three
+  tests against the built image covering the exact regression: PID 1 is tini
+  with no override, PID 1 is *still* tini when a trailing command argument is
+  supplied, and an orphaned exec'd child is actually reaped. Mutation-tested
+  against a CMD-only variant and a CMD-less variant to confirm each new test
+  fails on the variant it exists for before confirming it passes on the fix.
+
+  **Side effect, not a regression:** `tini` installs signal handlers and
+  forwards them, so `docker stop` now returns essentially instantly instead of
+  burning the full grace period before SIGKILL (the old `sleep infinity` PID 1
+  had no handler, and a PID-namespace init silently discards a handler-less
+  signal even from an ancestor namespace). Faster teardown, and any in-flight
+  `docker exec`'d session loses that grace window when the container is asked
+  to stop.
+
+  **Does not retroactively fix a running fleet.** This is an image change: it
+  takes effect once a new image is built from a `v*` tag, promoted `:edge` →
+  `:stable` per `docs/operations/image-release-cadence.md`, and a container is
+  actually recreated from it — an already-running container keeps its old PID 1
+  regardless of what merges here.
 
 - **A quoted heredoc stops substitution but not termination (#1136).** #942's rule
   — write prose to a file with `<<'EOF'` — is correct and was incomplete. The
