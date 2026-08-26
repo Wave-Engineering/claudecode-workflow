@@ -370,15 +370,16 @@ function teeAgent(prompt, opts) {
 // with no head row (fold.ts backfills startedAt from whatever event happened
 // to arrive first instead). Unconditional (no branching on which value AID
 // resolved to) closes BOTH ways that happens: a real campaign's already-real
-// head (from `wave-status campaign-head`, wavemachine-only) gets an
-// idempotent no-op re-fire; a standalone `/nextwave` run — whether AID is a
-// real plan id (campaign-head is never called outside wavemachine) or the
-// WAVE_ID fallback — gets a real head row where none existed. `wave-begin`'s
-// narrow CLI surface (no --label/--detail-json/--activity-type) is what
-// makes the re-fire case safe — see _cmd_wave_begin's docstring in
-// __main__.py. NOT claimed: this alone does not move a headless-classified
-// activity (flightdeck's fold.ts activityType, flightdeck#31/#42) out of the
-// headless UI bucket — see that same docstring for why.
+// head (from `wave-status campaign-head`, now called from BOTH `/prepwaves`'s
+// persist step and `/wavemachine`'s launch sequence, cc-workflow#1171) gets
+// an idempotent no-op re-fire; a standalone `/nextwave` run — AID is now a
+// real plan id whenever `/prepwaves` prepped the plan (#1171) — gets a real
+// head row where none existed. `wave-begin`'s narrow CLI surface (no
+// --label/--detail-json/--activity-type) is what makes the re-fire case
+// safe — see _cmd_wave_begin's docstring in __main__.py. NOT claimed: this
+// function alone does not move a headless-classified activity (flightdeck's
+// fold.ts activityType, flightdeck#31/#42) out of the headless UI bucket —
+// that is #1171's fix, in `/prepwaves`, not here.
 function flightdeckWaveBegin() {
   return [
     ``,

@@ -226,6 +226,14 @@ deterministically on the plan, never the repo path (the driver owns the campaign
 the card can only be keyed here). Then emit its vitals ONCE (idempotent on resume — it just
 refreshes the card):
 
+`/prepwaves` (step 7, cc-workflow#1171) now makes this same call right after persisting the
+plan, so a standalone `/nextwave` run (no `/wavemachine` wrapper) also gets a real
+`activityType: campaign` card, not just a headless one. This call here is unaffected — it's
+the same idempotent re-fire the docstring already describes, now potentially the SECOND call
+for a given plan rather than the first. Still required: `/prepwaves` cannot resolve
+`$FLIGHTDECK_ACTIVITY_ID` from a shell it doesn't own, and a plan bootstrapped by other means
+(e.g. `/devspec upshift` run standalone, never prepped) never gets `/prepwaves`'s call at all.
+
 ```bash
 wave-status campaign-head --activity-id "$FLIGHTDECK_ACTIVITY_ID" || true
 ```
