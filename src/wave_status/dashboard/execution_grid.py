@@ -12,38 +12,34 @@ from __future__ import annotations
 
 import html as _html
 
+from wave_status.dashboard.polling import badge_css_and_label
 from wave_status.dashboard.theme import PHASE_COLORS
 from wave_status.state import future_issue_key, resolve_issue_key, wave_flight_list
-
-
-def _status_badge(status: str, data_wave: str = "", data_issue: str = "") -> str:
-    """Return an HTML badge span for *status*.
-
-    Parameters
-    ----------
-    status:
-        Raw status string, e.g. ``"pending"``, ``"in_progress"``, ``"completed"``.
-    data_wave:
-        Optional value for a ``data-wave`` attribute.
-    data_issue:
-        Optional value for a ``data-issue`` attribute.
-    """
-    css_class = "badge-" + status.replace("_", "-")
-    label = status.replace("_", " ")
-
-    attrs = f'class="badge {_html.escape(css_class)}"'
-    if data_wave:
-        attrs += f' data-wave="{_html.escape(data_wave)}"'
-    if data_issue:
-        attrs += f' data-issue="{_html.escape(data_issue)}"'
-
-    return f'<span {attrs}>{_html.escape(label)}</span>'
 
 
 def _render_flight_badges(wave_id: str, flights_data: dict) -> str:
     """Return HTML flight badge spans for the given wave.
 
     Returns an empty string if no flight plan exists for *wave_id*.
+
+    Stays on data-field, NOT data-status (cc-workflow#1180 code review):
+    unlike the issue/wave badges, this label is a COMPOUND string
+    ("flight N: <status>"), not the bare status. Wiring data-status here
+    would need a second attribute carrying the "flight N:" prefix, since
+    data-status's client-side handling replaces textContent with the bare
+    label alone — data-field's handling is no safer in that regard (both
+    just do `el.textContent = String(value)`), so this is not a "data-field
+    is protected" distinction, only a "data-status isn't wired for compound
+    labels yet" one.
+
+    In practice neither attribute live-updates this badge at all today: the
+    binding ("flights.<wid>.<i>.status") targets a `flights` top-level key
+    that the polled state.json document never carries — flights live in a
+    separate flights.json the client-side poller does not fetch. The CSS
+    class here still comes from the shared badge_css_and_label so the
+    initial render agrees with every other badge on this page; live-update
+    for flight badges remains unimplemented, not merely deferred to a
+    different attribute.
     """
     wave_flights = wave_flight_list(flights_data, wave_id)
     if not wave_flights:
@@ -53,8 +49,8 @@ def _render_flight_badges(wave_id: str, flights_data: dict) -> str:
     wid = _html.escape(wave_id)
     for i, flight in enumerate(wave_flights, start=1):
         status = flight.get("status", "pending")
-        css_class = "badge-" + status.replace("_", "-")
-        label = f"flight {i}: {status.replace('_', ' ')}"
+        css_class, status_label = badge_css_and_label(status)
+        label = f"flight {i}: {status_label}"
         badges.append(
             f'<span class="badge {_html.escape(css_class)}"'
             f' data-wave="{wid}"'
@@ -147,23 +143,32 @@ def _render_issue_row(
     status = issue_state.get("status", "open")
     wid = _html.escape(wave_id)
 
-    # Normalize status for CSS: "open" maps to badge-pending display.
-    if status == "open":
-        badge_css = "badge-pending"
-        badge_label = "open"
-    elif status == "closed":
-        badge_css = "badge-closed"
-        badge_label = "closed"
-    else:
-        badge_css = "badge-" + status.replace("_", "-")
-        badge_label = status.replace("_", " ")
+    # cc-workflow#1180 code review: shared with the client-side live-poll
+    # JS (polling.py serializes the SAME dict this reads) so the special
+    # case ("open" -> badge-pending display, not the generic transform)
+    # can never drift between the initial render and a later poll tick.
+    badge_css, badge_label = badge_css_and_label(status)
 
     issue_key_attr = _html.escape(issue_key, quote=True)
+    # cc-workflow#1180: data-status (not data-field) — the poller's data-status
+    # handling updates BOTH the badge class and the label with the exact same
+    # open->"badge-pending" special case this Python code just applied above,
+    # so a live poll tick reproduces this render exactly instead of drifting
+    # to the generic (wrong, for "open") badge-<status> class a bare
+    # data-field would leave behind (data-field only ever set textContent,
+    # never the class — the class was permanently stuck at whatever the
+    # INITIAL render painted). The key rides in data-field-key as an atomic
+    # value, never re-interpolated into the dotted path itself: a
+    # repo-qualified key can contain a literal "." (a legal GitHub org/repo
+    # name), which would otherwise silently split into extra path segments
+    # and break the poller's resolve() — the "*" placeholder is substituted
+    # back to this exact string before that walk, whatever it contains.
     status_badge = (
         f'<span class="badge {_html.escape(badge_css)}"'
         f' data-wave="{wid}"'
         f' data-issue="{issue_number}"'
-        f' data-field="issues.{issue_key_attr}.status">{_html.escape(badge_label)}</span>'
+        f' data-status="issues.*.status"'
+        f' data-field-key="{issue_key_attr}">{_html.escape(badge_label)}</span>'
     )
 
     # MR link — from the rendered wave's mr_urls. #1160: dual-read, same reason as
@@ -179,23 +184,36 @@ def _render_issue_row(
     # init_state pre-populates with qualified keys), so this fallback is the
     # NORMAL case here, not an edge case: the dashboard renders before any MR
     # exists, then record_mr writes a qualified key later.
+    #
+    # #1180: same "*" + data-field-key indirection as the status badge above,
+    # same reason — mr_key can carry a literal "." the same way issue_key can.
+    #
+    # #1180 code review: ALWAYS an <a>, never a <span> — a two-shape initial
+    # render meant a poll tick that later populates mr_urls could only ever
+    # rewrite the existing element's textContent (data-field's handling, like
+    # data-status's, is `el.textContent = String(value)`; it cannot change an
+    # element's tag), so a cell that started as an empty <span> stayed a
+    # <span> forever, showing the MR URL as unlinked plain text instead of a
+    # clickable link. data-bind-href (handled in polling.py's applyState,
+    # alongside data-bind-width) keeps href in sync with the same resolved
+    # value data-field uses for the label, and un-hides the element once a
+    # real URL lands — closing the same bug in the other direction too (a
+    # link whose URL changes without href changing is worse than one that
+    # never appears, since the visible text and the click target disagree).
     mr_urls = state_data.get("waves", {}).get(wave_id, {}).get("mr_urls", {})
     mr_key = _row_key(mr_urls, issue_number, plan_data, issue_plan)
     mr_key_attr = _html.escape(mr_key, quote=True)
     mr_url = mr_urls.get(mr_key, "")
-    if mr_url:
-        mr_cell = (
-            f'<a href="{_html.escape(mr_url, quote=True)}"'
-            f' data-wave="{wid}"'
-            f' data-issue="{issue_number}"'
-            f' data-field="waves.{wid}.mr_urls.{mr_key_attr}">{_html.escape(mr_url)}</a>'
-        )
-    else:
-        mr_cell = (
-            f'<span class="mr-link" data-wave="{wid}"'
-            f' data-issue="{issue_number}"'
-            f' data-field="waves.{wid}.mr_urls.{mr_key_attr}"></span>'
-        )
+    href_attr = f' href="{_html.escape(mr_url, quote=True)}"' if mr_url else ""
+    hidden_attr = "" if mr_url else ' style="display:none"'
+    mr_cell = (
+        f'<a class="mr-link"{href_attr}{hidden_attr}'
+        f' data-wave="{wid}"'
+        f' data-issue="{issue_number}"'
+        f' data-field="waves.{wid}.mr_urls.*"'
+        f' data-bind-href="waves.{wid}.mr_urls.*"'
+        f' data-field-key="{mr_key_attr}">{_html.escape(mr_url)}</a>'
+    )
 
     return (
         f"<tr>\n"
@@ -233,13 +251,18 @@ def _render_wave_card(
 
     wave_state = state_data.get("waves", {}).get(wave_id, {})
     wave_status = wave_state.get("status", "pending")
-    wave_css = "badge-" + wave_status.replace("_", "-")
-    wave_label = wave_status.replace("_", " ")
+    wave_css, wave_label = badge_css_and_label(wave_status)
 
+    # cc-workflow#1180 code review: data-status (not data-field) — same
+    # reason as the issue badge above, live-updates BOTH class and label.
+    # No data-field-key needed: unlike a repo-qualified issue key, `wid` is
+    # not a dynamic lookup key here, it's the wave id already baked into
+    # the literal path (see resolve()'s docstring for the one-"*"-per-path
+    # limit this relies on not needing).
     status_badge = (
         f'<span class="badge {_html.escape(wave_css)}"'
         f' data-wave="{wid}"'
-        f' data-field="waves.{wid}.status">{_html.escape(wave_label)}</span>'
+        f' data-status="waves.{wid}.status">{_html.escape(wave_label)}</span>'
     )
 
     # Issue table rows.
