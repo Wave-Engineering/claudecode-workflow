@@ -380,11 +380,13 @@ def _cmd_campaign_head(args: argparse.Namespace) -> None:
     them as caller-supplied literals, and lets a ``ValueError`` propagate to
     ``main()``'s handler — refusing loudly (non-zero exit, a message on
     stderr) rather than emitting a card with an unknown/guessed total
-    (flightdeck#1145, cc-workflow#1146 step 4). The driver owns
-    ``--activity-id`` (the plan id) —
-    see skills/wavemachine/SKILL.md — because only its shell has
-    ``FLIGHTDECK_ACTIVITY_ID``; ``resolve_campaign_head_detail`` cannot key
-    the event itself the way the plain state mutators do.
+    (flightdeck#1145, cc-workflow#1146 step 4). The caller owns
+    ``--activity-id`` (the plan id) — ``/wavemachine``'s launch sequence
+    resolves it from its own shell's ``FLIGHTDECK_ACTIVITY_ID``;
+    ``/prepwaves``'s persist step (cc-workflow#1171) resolves it by reading
+    back the ``plan_id`` it just persisted to ``phases-waves.json`` — because
+    ``resolve_campaign_head_detail`` cannot key the event itself the way the
+    plain state mutators do.
 
     Delegates the actual emit to the events emit CLI (`_cmd_emit`'s own
     pattern) rather than calling ``emit()`` directly, so this call site gets
@@ -453,16 +455,17 @@ def _cmd_wave_begin(args: argparse.Namespace) -> None:
     already-real head gets an idempotent no-op re-fire; a bare/standalone
     run gets a real head row where none existed.
 
-    NOT claimed: this does not, by itself, move a headless-classified
+    NOT claimed: this command does not, by itself, move a headless-classified
     activity (flightdeck's fold.ts ``activityType``, per flightdeck#31/#42)
     out of the headless UI bucket — that classification latches on any
     event declaring ``activityType: campaign|float``, which this command
-    deliberately never does (see the narrow-surface rationale below). A
-    standalone real-``planId`` run with no ``campaign-head`` call therefore
-    still renders headless after this fix; it now has a real head row
-    instead of a backfilled one, no more. Closing the headless-classification
-    gap for that case is a separate, unstarted architectural question,
-    tracked in cc-workflow#1171, not this command's job.
+    deliberately never does (see the narrow-surface rationale below).
+    cc-workflow#1171 closes that gap on the ``/prepwaves`` side instead:
+    ``/prepwaves``'s own persist step now calls ``campaign-head`` right
+    after writing the plan, so a standalone run gets a real
+    ``activityType: campaign`` declaration (with real ``planTotal``/
+    ``workItemsTotal``) from the moment the plan is prepped, not just under
+    ``/wavemachine``. This command's own narrow surface is unchanged.
 
     Deliberately narrow option surface — NO ``--label``/``--detail-json``/
     ``--activity-type``, unlike ``campaign-head``. That narrowness IS the

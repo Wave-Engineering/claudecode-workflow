@@ -121,6 +121,16 @@ else
 	pass "top-of-file '## Axioms' cross-reference block"
 fi
 
+# --- test_nextwave_resolves_plan_id (cc-workflow#1171) -----------------------
+# Step 1 must read plan_id back from the persisted plan and thread it as
+# args.planId, or a standalone run keeps degrading to a wave-scoped
+# FlightDeck activity id — the gap #1171 exists to close.
+if grep -q 'args\.planId' "$SKILL"; then
+	pass "test_nextwave_resolves_plan_id: threads plan_id into args.planId"
+else
+	fail "test_nextwave_resolves_plan_id: no args.planId resolution in step 1"
+fi
+
 # --- Summary -----------------------------------------------------------------
 echo ""
 if [[ $FAILS -gt 0 ]]; then
