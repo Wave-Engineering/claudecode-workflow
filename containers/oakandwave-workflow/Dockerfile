@@ -48,6 +48,21 @@ RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ca-certificates curl tar xz-utils unzip \
 	&& rm -rf /var/lib/apt/lists/*
 
+# tini — the image's eventual PID 1 (cc-workflow#1179, see the ENTRYPOINT/CMD
+# note near the bottom of this file for what it fixes and why). Installed
+# here, ahead of the `COPY --chown=ubuntu:ubuntu . ${KIT_SRC}` below, purely
+# for layer caching: this package has no dependency on anything the build
+# does between here and there, so installing it after that COPY would
+# re-hit the Ubuntu archives on every rebuild instead of caching once.
+# `tini --version` proves the binary actually runs, matching this file's own
+# established idiom for every other tool install (mise, podman, the
+# five-runtime probe below, the vox smoke test) — "config exists" is not
+# "config works" anywhere else in this file, and this step is no exception.
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends tini \
+	&& rm -rf /var/lib/apt/lists/* \
+	&& /usr/bin/tini --version
+
 # --- Container builder: podman (#1108) ----------------------------------------
 # Agents must be able to build, run and scan container images from inside their
 # own sandbox. blueshift-kb#8 (swap a runtime image to distroless, shedding 23
@@ -378,10 +393,12 @@ LABEL org.opencontainers.image.title="oakandwave-workflow" \
 # validate. Installing it here means the build uses the real CLI throughout and only
 # the RUNTIME gets the wrapper.
 #
-# Why a wrapper at all: aoe never runs an entrypoint. It starts the image with
-# `sleep infinity` as PID 1 and `docker exec`s `claude` separately, so bootstrap.sh
-# — skills-sync, settings merge, secret projection, R-14 validation — had no process
-# path to the agent and never ran. Full rationale in claude-entrypoint.sh.
+# Why a wrapper at all: aoe never runs an entrypoint INTO THE AGENT — it
+# `docker exec`s `claude` into the running container separately (PID 1 is
+# tini keeping the container alive, per the ENTRYPOINT/CMD near the bottom
+# of this file; cc-workflow#1179), so bootstrap.sh — skills-sync, settings
+# merge, secret projection, R-14 validation — had no process path to the
+# agent and never ran. Full rationale in claude-entrypoint.sh.
 # /usr/local/bin is root-owned and the build is running as `ubuntu` by here, so
 # this step needs root and must hand the uid back — the image's runtime user is
 # ubuntu by design (R-04/TC-2, so bind-mount writes are host-owned).
@@ -439,9 +456,69 @@ RUN set -eux; \
 # than from the environment — an assertion whose detection depends on an ambient
 # variable nobody asserts reports "no duplicates" the day that variable changes.
 RUN HOME=/home/ubuntu "${KIT_SRC}/scripts/ci/assert-no-duplicate-hooks.sh" /home/ubuntu/.claude/settings.json
+
+# --- Zombie reaping: tini as PID 1 (fleet-wide network dropouts) --------------
+# aoe never runs its own entrypoint into the agent — it `docker exec`s
+# `claude` into an already-running container (see the ENTRYPOINT/CMD note
+# below), so the top-level exec'd process is PARENTLESS from birth in the
+# container's PID namespace (PPID 0 — its real parent, the containerd-shim,
+# lives outside the namespace and reaps IT fine). The zombies are its
+# CHILDREN: when that process forks work and exits without collecting them,
+# the kernel's find_new_reaper() reparents the orphans to the namespace's
+# child_reaper — PID 1. The base image's own CMD, `sleep infinity`, never
+# wait()s on anything, so a PID 1 that is merely "alive" does not collect
+# what gets reparented to it; a `claude` session that exits or is killed
+# without cleaning up its own children leaves them as permanent zombies
+# there. At fleet scale (every exec, every session, every container,
+# indefinitely) this accumulated to ~2k zombies and caused the network
+# dropouts that made the container deployment unusable.
+#
+# tini is the fix Docker's own `--init` flag would install as a launch-time
+# flag — baking it into the image instead means it works regardless of
+# whatever aoe (a separate, external tool — not in this repo) passes to
+# `docker run`/`docker create`. tini's only job as PID 1 is to reap; it execs
+# its argument as its own child and otherwise stays out of the way — the
+# "stay alive, keep namespaces open" role the base image already relied on
+# `sleep infinity` for is unchanged, tini just adds the missing reap.
+#
+# Installed in the FIRST apt-get block (top of this file), not here — this
+# package has no dependency on anything the build does between there and
+# here, and folding it in keeps it a cached layer instead of re-hitting the
+# Ubuntu archives on every rebuild this ~15-minute image goes through: the
+# earlier `COPY --chown=ubuntu:ubuntu . ${KIT_SRC}` invalidates on every
+# repo change, so anything installed AFTER it re-downloads every build, and
+# a transient archive failure this late would abort a near-complete build.
 USER ubuntu
 
-# ENTRYPOINT/CMD inherited from the base (CMD ["sleep","infinity"]); aoe manages
-# the container lifecycle and sets the runtime uid via [sandbox] (Story 1.2).
-# The agent is bootstrapped by the /usr/local/bin/claude wrapper installed above,
-# NOT by an entrypoint — aoe execs the agent, so that is the only seam that works.
+# CODE REVIEW (cc-workflow#1179): CMD alone does NOT deliver the invariant
+# above. CMD survives docker run FLAGS but is discarded outright by a
+# trailing COMMAND ARGUMENT — `docker run <image> sleep infinity` (the single
+# most common keep-alive idiom for a tool like aoe) would silently drop tini
+# and PID 1 goes back to plain `sleep infinity`, no error, zombies resume.
+# Every measurement this repo has on file ("PID 1 = sleep infinity" —
+# claude-entrypoint.sh, docs/contained-workflow/architecture.md) is
+# indistinguishable between "aoe uses the image CMD" and "aoe passes its own
+# trailing command" — there is no way to rule out the second from existing
+# evidence, which is exactly why ENTRYPOINT is used instead: it is invoked
+# with WHATEVER command ends up in play (the image default below, or
+# anything aoe supplies) as its arguments, so the reap holds either way. Only
+# an explicit `--entrypoint` override defeats it — nothing in this repo's own
+# aoe-launch surface does that (`sandbox-profile.toml`'s SandboxConfig schema
+# has no such key); the tooling that DOES override it deliberately
+# (Makefile, README, the four image tests) uses `--entrypoint sh` for
+# interactive/debug shells, which is unaffected by what runs when nothing
+# overrides it.
+#
+# Absolute path (not bare `tini`): `/home/ubuntu/.oaw/toolbox/mise/shims`
+# precedes system PATH later in this image, so resolving PID 1 by bare name
+# would risk a future mise shim silently shadowing the real binary — the
+# same reasoning this file already applies to `/usr/bin/podman` and
+# `/usr/local/bin/claude`.
+#
+# aoe still never runs an entrypoint INTO THE AGENT: it `docker exec`s
+# `claude` separately and sets the runtime uid via [sandbox] (Story 1.2); the
+# agent is bootstrapped by the /usr/local/bin/claude wrapper installed
+# above, not by this ENTRYPOINT/CMD pair, which exists solely to keep the
+# container alive with a reaping PID 1.
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["sleep", "infinity"]

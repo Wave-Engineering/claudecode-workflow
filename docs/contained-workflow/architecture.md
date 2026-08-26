@@ -438,15 +438,20 @@ to a system the agent's children have no business touching. An agent's *own* aut
 token is different in kind: a child that steals it gains exactly what the agent
 already has. **Do not project third-party credentials this way.**
 
-**How bootstrap runs — the part that was missing entirely.** aoe never executes an
-entrypoint. It starts the image with `sleep infinity` as PID 1 and then
-`docker exec`s `claude` as a **separate** process (measured: PID 1 =
-`sleep infinity`, agent = PID 13 with **PPID 0**). Nothing in that path ever
-invoked `bootstrap.sh`, so until #1076 *every* bootstrap phase — skills-sync,
-settings merge, secret projection, R-14 validation — was inert in production
-while its unit tests passed, because they drive the script directly by
-subprocess. The env-modality row in §3.5 ("sourced once by `bootstrap.sh` at
-boot") described an intent, not a behaviour.
+**How bootstrap runs — the part that was missing entirely.** aoe never routes the
+agent through an entrypoint. It `docker exec`s `claude` into the running
+container as a **separate** process (measured: agent = PID 13 with **PPID 0**).
+Nothing in that path ever invoked `bootstrap.sh`, so until #1076 *every*
+bootstrap phase — skills-sync, settings merge, secret projection, R-14
+validation — was inert in production while its unit tests passed, because they
+drive the script directly by subprocess. The env-modality row in §3.5 ("sourced
+once by `bootstrap.sh` at boot") described an intent, not a behaviour.
+
+PID 1 itself is `tini` (wrapping `sleep infinity`), added in cc-workflow#1179 to
+reap the zombies this PPID-0 shape leaves behind when an exec'd `claude` session
+exits without cleaning up its own children — an unrelated fix to a different
+problem in the same corner of the architecture; it doesn't give bootstrap a
+process path either, since aoe still never runs the agent through PID 1.
 
 The seam is therefore
 [`claude-entrypoint.sh`](../../containers/oakandwave-workflow/claude-entrypoint.sh),

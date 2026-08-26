@@ -457,10 +457,11 @@ def test_bootstrap_failloud(tmp_path: Path) -> None:
 #
 # Everything above drives bootstrap.sh directly by subprocess. That proves the
 # script WORKS and is exactly why the real defect shipped: nothing ever ran it.
-# aoe starts the image with `sleep infinity` as PID 1 and `docker exec`s `claude`
-# as a separate process, so bootstrap had no process path to the agent and every
-# phase — skills-sync, settings merge, secret projection, R-14 validation — was
-# inert in production while this file stayed green.
+# aoe `docker exec`s `claude` into the running container as a separate process
+# (PID 1 is tini, keeping the container alive — cc-workflow#1179, unrelated to
+# this gap), so bootstrap had no process path to the agent and every phase —
+# skills-sync, settings merge, secret projection, R-14 validation — was inert
+# in production while this file stayed green.
 #
 # These tests assert the CALLER exists. They are static (no container needed) but
 # they bind to the two facts that make the wrapper work, so a future "cleanup"
@@ -733,6 +734,70 @@ def test_dockerfile_hands_the_uid_back_to_ubuntu() -> None:
     assert users[-1] == "ubuntu", (
         f"image must default to ubuntu, but the last USER is {users[-1]!r}; "
         "the root step for the wrapper install must hand the uid back"
+    )
+
+
+# --- zombie reaping: tini as PID 1 (#1179) ------------------------------------
+
+def test_dockerfile_installs_tini() -> None:
+    """tini must actually be installed, not just referenced in a comment."""
+    text = DOCKERFILE.read_text()
+    assert re.search(r"apt-get install.*\btini\b", text), (
+        "Dockerfile no longer installs tini — the zombie-reaping fix (#1179) "
+        "depends on the binary actually being present"
+    )
+    assert "tini --version" in text, (
+        "the tini install has no verification probe — every other tool "
+        "install in this file proves the binary runs (mise --version, "
+        "podman --version, ...); tini should not be the exception"
+    )
+
+
+def test_dockerfile_uses_entrypoint_not_cmd_for_tini() -> None:
+    """#1179 code review: CMD alone does not deliver the reaping guarantee.
+
+    CMD survives docker run FLAGS but is discarded outright by a trailing
+    COMMAND ARGUMENT — `docker run <image> sleep infinity` (the single most
+    common keep-alive idiom for a tool like aoe) would silently drop a
+    CMD-only tini and PID 1 goes back to plain `sleep infinity`, no error,
+    zombies resume. ENTRYPOINT is invoked with whatever command ends up in
+    play, so the reap holds regardless of what aoe passes. This is the
+    difference between the fix actually working and it being silently inert
+    in exactly the scenario it exists to prevent — assert the mechanism, not
+    just tini's presence somewhere in the file.
+    """
+    text = DOCKERFILE.read_text()
+    entrypoints = re.findall(r"^ENTRYPOINT\s+(.+)$", text, re.M)
+    assert entrypoints, "Dockerfile declares no ENTRYPOINT — tini must be the ENTRYPOINT, not the CMD"
+    assert "tini" in entrypoints[-1], (
+        f"the last ENTRYPOINT is {entrypoints[-1]!r}, which doesn't run tini — "
+        "a trailing docker run command argument would silently discard a "
+        "CMD-only tini and reintroduce the zombie-reap gap"
+    )
+    # The absolute path, matching this file's own habit for /usr/bin/podman and
+    # /usr/local/bin/claude — a later PATH entry (the mise toolbox shims)
+    # precedes system PATH, so a bare `tini` could resolve to a shadowing shim.
+    assert "/usr/bin/tini" in entrypoints[-1], (
+        f"ENTRYPOINT {entrypoints[-1]!r} should resolve tini by absolute path, "
+        "not rely on PATH order"
+    )
+
+
+def test_dockerfile_keeps_a_keep_alive_cmd() -> None:
+    """#1179 code review: the ENTRYPOINT/CMD pair only keeps the container
+    alive if a CMD survives to be tini's argument. `ENTRYPOINT ["tini", "--"]`
+    with no CMD makes tini exit immediately (nothing to exec), and the
+    container exits right after start — silently, since the image tests that
+    would catch it (test_image.py) skip when Docker/the built image is
+    absent, which is the stock lane. This pins the shape without needing
+    Docker: the LAST CMD must be present and non-empty.
+    """
+    text = DOCKERFILE.read_text()
+    cmds = re.findall(r"^CMD\s+(.+)$", text, re.M)
+    assert cmds, "Dockerfile declares no CMD — tini has nothing to exec and the container exits immediately"
+    assert cmds[-1].strip() not in ("[]", ""), (
+        f"the last CMD is {cmds[-1]!r}, which is empty — tini needs a real "
+        "keep-alive command as its argument"
     )
 
 
