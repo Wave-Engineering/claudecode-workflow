@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 
 import pytest
 
@@ -224,3 +225,113 @@ def test_image_runs_as_non_root_uid_1000() -> None:
     assert proc.returncode == 0, proc.stderr
     uid = proc.stdout.strip().splitlines()[0]
     assert uid == "1000", f"expected default uid 1000, got {uid!r}\n{proc.stdout}"
+
+
+# --- zombie reaping: tini as PID 1 (#1179) ------------------------------------
+#
+# Deliberately does NOT use _run_in_image / --entrypoint sh: overriding the
+# entrypoint is exactly what would make these tests blind to a CMD-only
+# regression (code review on #1179) — a fix that only works when nothing
+# overrides the command needs a test that runs the image with NOTHING
+# overridden, the same way aoe actually launches it.
+
+
+def _run_detached(docker: str, ref: str, *trailing_command: str) -> str:
+    """Start *ref* detached with no entrypoint override; return the container
+    id. *trailing_command*, if given, is a COMMAND passed after the image ref
+    (docker's own "override CMD" position) — never a docker run flag, which
+    must go before the image ref. Caller must stop/remove the container."""
+    proc = subprocess.run(
+        [docker, "run", "-d", ref, *trailing_command],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, f"docker run -d failed: {proc.stderr}"
+    return proc.stdout.strip()
+
+
+def test_image_pid_1_is_tini_with_no_override() -> None:
+    """PID 1 must be tini when the image runs with its OWN default command —
+    the only launch shape that matters, since aoe supplies no entrypoint
+    override and this file's other tests cannot see a CMD-only regression."""
+    docker, ref = _resolve_image_or_skip()
+    cid = _run_detached(docker, ref)
+    try:
+        time.sleep(1)
+        proc = subprocess.run(
+            [docker, "exec", cid, "ps", "-p", "1", "-o", "comm="],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert proc.returncode == 0, proc.stderr
+        comm = proc.stdout.strip()
+        assert comm == "tini", (
+            f"PID 1 is {comm!r}, not tini — a docker run with no override must "
+            "still reap zombies (#1179); a bare `sleep` here means the fix is "
+            "CMD-only and silently inert against a trailing command argument"
+        )
+    finally:
+        subprocess.run([docker, "rm", "-f", cid], capture_output=True, timeout=30)
+
+
+def test_image_pid_1_is_tini_even_with_a_trailing_command_argument() -> None:
+    """The exact regression code review caught: a trailing command argument to
+    `docker run` (the most common keep-alive idiom for a tool like aoe) must
+    NOT discard tini — that is precisely what a CMD-only fix would let happen,
+    silently, with zombies resuming and nothing to indicate why."""
+    docker, ref = _resolve_image_or_skip()
+    cid = _run_detached(docker, ref, "sleep", "infinity")
+    try:
+        time.sleep(1)
+        proc = subprocess.run(
+            [docker, "exec", cid, "ps", "-p", "1", "-o", "comm="],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert proc.returncode == 0, proc.stderr
+        comm = proc.stdout.strip()
+        assert comm == "tini", (
+            f"PID 1 is {comm!r} when `docker run <image> sleep infinity` supplies "
+            "a trailing command — a CMD-only tini would be silently discarded "
+            "here, which is exactly the shape that made the original fix inert"
+        )
+    finally:
+        subprocess.run([docker, "rm", "-f", cid], capture_output=True, timeout=30)
+
+
+def test_image_reaps_an_orphaned_exec_child() -> None:
+    """End-to-end: a process orphaned by a `docker exec` session that exits
+    must be reaped, not left as a permanent zombie — the actual fleet defect
+    (#1179), reproduced against the real built image rather than a synthetic
+    minimal container."""
+    docker, ref = _resolve_image_or_skip()
+    cid = _run_detached(docker, ref)
+    try:
+        time.sleep(1)
+        # Mirror aoe's own shape: docker exec a session that forks a child and
+        # exits before the child does, orphaning it for PID 1 to reap.
+        exec_proc = subprocess.run(
+            [docker, "exec", cid, "bash", "-c", 'bash -c "sleep 1; exit 0" & disown'],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert exec_proc.returncode == 0, exec_proc.stderr
+        time.sleep(3)  # let the orphan exit and (if reaped) disappear
+        ps_proc = subprocess.run(
+            [docker, "exec", cid, "bash", "-c", 'ps -eo stat,cmd | grep -c "^Z" || echo 0'],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert ps_proc.returncode == 0, ps_proc.stderr
+        zombie_count = int(ps_proc.stdout.strip().splitlines()[-1])
+        assert zombie_count == 0, (
+            f"{zombie_count} zombie process(es) found after an orphaned exec "
+            "child exited — tini as PID 1 should have reaped it"
+        )
+    finally:
+        subprocess.run([docker, "rm", "-f", cid], capture_output=True, timeout=30)

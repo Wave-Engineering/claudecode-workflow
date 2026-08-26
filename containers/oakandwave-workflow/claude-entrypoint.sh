@@ -4,13 +4,20 @@
 # WHY THIS FILE EXISTS (#1076).
 #
 # bootstrap.sh was written to be the agent's parent — its last act is "refusing to
-# hand off to the agent" — but nothing ever invoked it. The Dockerfile deliberately
-# set no ENTRYPOINT ("aoe manages the container lifecycle"), and aoe runs the image
-# with `sleep infinity` as PID 1 and then `docker exec`s `claude` as a SEPARATE
-# process. Measured on a live container: PID 1 = `sleep infinity`, claude = PID 13
-# with PPID 0. There was no process path from bootstrap to the agent, so every
+# hand off to the agent" — but nothing ever invoked it. The Dockerfile set no
+# ENTRYPOINT INTO THE AGENT ("aoe manages the container lifecycle"), and aoe
+# `docker exec`s `claude` into the running container as a SEPARATE process — never
+# through this file's own PID-1 process. Measured on a live container: claude = PID
+# 13 with PPID 0. There was no process path from bootstrap to the agent, so every
 # bootstrap responsibility — skills-sync, settings merge, secret projection, R-14
 # env validation — was shipped, unit-tested, documented, and inert.
+#
+# PID 1 itself (cc-workflow#1179): the Dockerfile DOES now declare an ENTRYPOINT —
+# `tini`, wrapping `sleep infinity` — but that's an unrelated fix (fleet-wide zombie
+# reaping, since aoe's `docker exec`'d processes are parentless from birth in this
+# container's PID namespace). It exists solely to keep the container alive with a
+# process that reaps; it has no bearing on the bootstrap-never-runs gap this file
+# closes, because aoe still never routes `claude` through PID 1 to get here.
 #
 # It went unnoticed because tests/contained-workflow/test_bootstrap.py drives
 # bootstrap.sh directly by subprocess. That proves the script WORKS; it never asks

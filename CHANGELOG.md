@@ -21,6 +21,33 @@ are worth keeping apart:
 
 ### Fixed
 
+- **`sleep infinity` as PID 1 never reaps zombies — fleet-wide network dropouts (#1179).**
+  aoe never runs an entrypoint into the agent; it `docker exec`s `claude` into an
+  already-running container, so every exec'd process is parentless from birth in
+  that PID namespace (PPID 0), never reparented to PID 1 mid-life. The base
+  image's own `CMD ["sleep", "infinity"]` never `wait()`s on anything, so an
+  exited `claude` session's orphaned children were never reaped. At fleet scale —
+  every exec, every session, every container, indefinitely — this accumulated to
+  roughly 2,000 zombies and produced the network dropouts that made the
+  containers unusable.
+
+  Fixed by installing `tini` and declaring it the image's `ENTRYPOINT`, wrapping
+  the existing `CMD ["sleep", "infinity"]`. **The first attempt shipped `tini` as
+  `CMD` alone and code review caught that this is silently inert**: a trailing
+  command argument to `docker run` (`docker run <image> sleep infinity` — the
+  common keep-alive idiom for a tool like aoe) discards `CMD` outright but never
+  touches `ENTRYPOINT`, so a CMD-only fix reverts to plain `sleep infinity` as PID
+  1 with zombies resuming, no error, nothing to indicate why. Reproduced live
+  before and after: `tini -- sleep infinity` reaps an orphaned exec'd child (0
+  zombies); `sleep infinity` alone does not (1 `<defunct>` zombie).
+
+  Pinned by two static Dockerfile checks (tini installed; `ENTRYPOINT`, not
+  `CMD`, carries it) and three tests against the built image covering the exact
+  regression: PID 1 is tini with no override, PID 1 is *still* tini when a
+  trailing command argument is supplied, and an orphaned exec'd child is
+  actually reaped. Mutation-tested against the CMD-only variant to confirm the
+  new tests fail on it before confirming they pass on the fix.
+
 - **A quoted heredoc stops substitution but not termination (#1136).** #942's rule
   — write prose to a file with `<<'EOF'` — is correct and was incomplete. The
   quoted delimiter suppresses expansion; it does nothing about a body that
