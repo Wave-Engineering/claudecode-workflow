@@ -60,12 +60,17 @@ build:
 
 # The oracle self-skips when docker or the image is unavailable, so `make test`
 # is safe to run without a build; `make ci` builds first so it runs for real.
-# OAKANDWAVE_IMAGE lets the oracle target this Makefile's tag.
+# OAKANDWAVE_IMAGE lets the oracle target this Makefile's tag. PYTHONPATH is
+# required (cc-workflow#1183): tests/conftest.py's autouse
+# _isolate_flightdeck_buffer fixture imports wave_status.events for every
+# test in the suite — not just this oracle's, but every pytest invocation
+# under tests/ — and without src/ on the path that import fails before any
+# test body runs, reading as "smoke failed" rather than "harness never ran".
 test:
-	OAKANDWAVE_IMAGE=$(REF) python3 -m pytest $(ORACLE) -q
+	PYTHONPATH=$(REPO_ROOT)/src OAKANDWAVE_IMAGE=$(REF) python3 -m pytest $(ORACLE) -q
 
 ci: build
-	OAKANDWAVE_IMAGE=$(REF) OAKANDWAVE_REQUIRE_IMAGE=1 python3 -m pytest $(ORACLE) -q
+	PYTHONPATH=$(REPO_ROOT)/src OAKANDWAVE_IMAGE=$(REF) OAKANDWAVE_REQUIRE_IMAGE=1 python3 -m pytest $(ORACLE) -q
 
 verify:
 	docker run --rm --entrypoint sh $(REF) -c '\

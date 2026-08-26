@@ -140,9 +140,19 @@ fi
 # The smoke suite is the image toolchain oracle run against the pulled DIGEST.
 # OAKANDWAVE_REQUIRE_IMAGE turns a missing/broken image into a hard failure
 # (never a skip), so a red smoke reliably blocks the digest from promotion.
+#
+# PYTHONPATH=src (cc-workflow#1183): tests/conftest.py's autouse
+# _isolate_flightdeck_buffer fixture imports wave_status.events for every
+# test in the suite, not just FlightDeck-specific ones — every other pytest
+# call site in this project sets PYTHONPATH=src, this was the one that
+# didn't, and it went uncaught because image builds (and therefore this
+# script) are deliberately rare. Without it every test in $smoke_suite
+# errors at fixture setup with ModuleNotFoundError, which reads as "smoke
+# failed" rather than "the harness never ran."
 echo "[ring] smoke (install-from-zero toolchain oracle against the digest)"
 OAKANDWAVE_IMAGE="$DIGEST_REF" \
 	OAKANDWAVE_REQUIRE_IMAGE=1 \
+	PYTHONPATH="$REPO_DIR/src" \
 	python3 -m pytest "$smoke_suite" -q
 
 echo "==> ring PASS: $DIGEST_REF is provenance-clean and smoked green"

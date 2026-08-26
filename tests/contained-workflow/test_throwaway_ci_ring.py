@@ -140,6 +140,35 @@ def test_smoke_hard_fails_never_skips() -> None:
     )
 
 
+def test_smoke_sets_pythonpath_for_the_repo_src() -> None:
+    """cc-workflow#1183: the smoke suite needs src/ importable, not just found.
+
+    tests/conftest.py's autouse `_isolate_flightdeck_buffer` fixture imports
+    `wave_status.events` for EVERY test under `tests/`, not only ones that
+    touch FlightDeck — so without PYTHONPATH every test in the smoke suite
+    errors at fixture setup with ModuleNotFoundError, which surfaces as "smoke
+    failed" rather than "the harness never ran". This regressed silently for
+    days because image builds (and therefore this script) run rarely, and
+    every OTHER pytest call site in this project already sets PYTHONPATH —
+    this was the one that didn't. Static-text only: this pins the shape
+    without needing Docker or a live digest, exactly like its sibling
+    test_smoke_hard_fails_never_skips above.
+
+    Scoped to the actual invocation block (OAKANDWAVE_IMAGE=... through the
+    `python3 -m pytest` call), not the whole file — mutation-tested: a bare
+    `"PYTHONPATH=" in text` check is satisfied by this very docstring/comment
+    even after the real env-var assignment is deleted, which would make the
+    test pass while the regression it exists to catch is reintroduced.
+    """
+    text = RING_SCRIPT.read_text()
+    match = re.search(r"OAKANDWAVE_IMAGE=.*?python3 -m pytest", text, re.S)
+    assert match, "could not locate the smoke pytest invocation block"
+    assert "PYTHONPATH=" in match.group(0), (
+        "smoke must put src/ on PYTHONPATH — tests/conftest.py's autouse "
+        "fixture imports wave_status.events for every test (#1183)"
+    )
+
+
 def test_signature_check_is_identity_bound() -> None:
     """The cosign verify binds to a signer identity + issuer, not a bare verify.
 
