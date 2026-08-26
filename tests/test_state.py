@@ -29,6 +29,7 @@ from wave_status.state import (
     extend_state,
     flight,
     flight_done,
+    future_issue_key,
     get_project_root,
     hold_wave,
     html_path,
@@ -40,6 +41,7 @@ from wave_status.state import (
     preflight,
     record_mr,
     resolve_campaign_head_detail,
+    resolve_issue_key,
     resolve_issue_value,
     review,
     save_json,
@@ -810,6 +812,80 @@ class TestResolveIssueValue:
     def test_default_returned_when_absent(self) -> None:
         assert resolve_issue_value({}, 7, "") == ""  # mr_urls-style string default
         assert resolve_issue_value({"owner/repo#8": "url"}, 8, "") == "url"  # value type is generic
+
+
+class TestResolveIssueKey:
+    """cc-workflow#1173: resolve_issue_value's sibling that names the KEY it
+    resolved, not the value — same semantics, mirrored 1:1 against
+    TestResolveIssueValue's cases."""
+
+    def test_bare_key_exact_match(self) -> None:
+        assert resolve_issue_key({"13": {}}, 13) == "13"
+
+    def test_qualified_key_suffix_match(self) -> None:
+        m = {"owner/repo#13": {}}
+        assert resolve_issue_key(m, 13) == "owner/repo#13"
+        assert resolve_issue_key(m, "13") == "owner/repo#13"
+
+    def test_suffix_false_match_guard(self) -> None:
+        m = {"owner/repo#119": {}}
+        assert resolve_issue_key(m, 19) is None  # #19 absent, NOT the #119 entry
+        assert resolve_issue_key(m, 119) == "owner/repo#119"
+
+    def test_bare_preferred_over_scan(self) -> None:
+        m = {"13": {}, "owner/repo#13": {}}
+        assert resolve_issue_key(m, 13) == "13"  # exact bare wins
+
+    def test_none_returned_when_absent(self) -> None:
+        assert resolve_issue_key({}, 7) is None
+
+    def test_agrees_with_resolve_issue_value_on_which_entry_resolves(self) -> None:
+        # The two functions must never disagree about WHICH key wins — this is
+        # the property #1173's fix actually depends on (data-field names the
+        # same key the rendered value came from).
+        m = {"13": {"status": "open"}, "owner/repo#13": {"status": "closed"}}
+        key = resolve_issue_key(m, 13)
+        assert m[key] == resolve_issue_value(m, 13, {})
+
+
+class TestFutureIssueKey:
+    """cc-workflow#1173 code review: composes the key a NOT-YET-WRITTEN
+    record_mr/close_issue call would use, for baking into a dashboard
+    binding before any state.json entry exists to resolve() against."""
+
+    def test_no_plan_data_falls_back_to_bare(self) -> None:
+        assert future_issue_key(None, {"number": 13}, 13) == "13"
+
+    def test_per_issue_repo_override_wins(self) -> None:
+        plan = {"repo": "default/repo"}
+        issue = {"number": 13, "repo": "acme/widgets"}
+        assert future_issue_key(plan, issue, 13) == "acme/widgets#13"
+
+    def test_plan_default_repo_used_when_issue_has_none(self) -> None:
+        plan = {"repo": "acme/widgets"}
+        issue = {"number": 13}
+        assert future_issue_key(plan, issue, 13) == "acme/widgets#13"
+
+    def test_bare_when_plan_has_no_repo_at_all(self) -> None:
+        plan = {"phases": []}
+        issue = {"number": 13}
+        assert future_issue_key(plan, issue, 13) == "13"
+
+    def test_agrees_with_what_record_mr_actually_writes(self, tmp_path: Path) -> None:
+        # The property this exists for: pre-baking a binding that a LATER
+        # record_mr call will actually satisfy, not just a plausible guess.
+        plan = {
+            "project": "test-proj",
+            "repo": "acme/widgets",
+            "phases": [
+                {"name": "P1", "waves": [{"id": "wave-1", "issues": [{"number": 13}]}]}
+            ],
+        }
+        init_state(plan, tmp_path)
+        predicted = future_issue_key(plan, {"number": 13}, 13)
+        record_mr(13, "https://github.com/acme/widgets/pull/1", tmp_path)
+        state_data = load_state(status_dir(tmp_path) / "state.json")
+        assert predicted in state_data["waves"]["wave-1"]["mr_urls"]
 
 
 class TestHoldWave:
