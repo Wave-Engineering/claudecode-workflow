@@ -271,11 +271,11 @@ class TestRenderIssueRow:
         assert "badge-closed" in html
         assert ">closed<" in html
         assert ">open<" not in html
-        # The data-field binding stays bare (issues.1.status, not the
-        # qualified key) — cc-workflow#1173 tracks the live-poll staleness
-        # this leaves in place. Pinning it here so that follow-up edits this
-        # assertion consciously instead of discovering the coupling by accident.
-        assert 'data-field="issues.1.status"' in html
+        # #1173 (fixed): data-field now names the ACTUAL RESOLVED key
+        # (owner/repo#1), not the bare guess — this is what makes the
+        # dashboard's live-poll able to find this cell again on a later
+        # poll tick, not just at initial render.
+        assert 'data-field="issues.acme/widgets#1.status"' in html
 
     def test_mr_link_resolves_qualified_key(self) -> None:
         # #1160: record_mr composes a qualified "owner/repo#N" key for a
@@ -294,6 +294,85 @@ class TestRenderIssueRow:
         }
         html = _render_issue_row(1, {"number": 1, "title": "Bootstrap repo"}, state, "wave-1")
         assert '<a href="https://github.com/acme/widgets/pull/42"' in html
+        # #1173 (fixed): data-field names the resolved key, same reasoning as
+        # the status-badge test above — the live-poll needs the real path.
+        assert 'data-field="waves.wave-1.mr_urls.acme/widgets#1"' in html
+
+    def test_mr_link_data_field_uses_future_key_before_mr_is_recorded(self) -> None:
+        # cc-workflow#1173 code review: mr_urls starts EMPTY from init_state
+        # (unlike issues, which init_state pre-populates) — the dashboard's
+        # very FIRST render of a repo-qualified plan hits exactly this state,
+        # not an edge case. Without future_issue_key, the pre-#1173-code-
+        # review fallback baked the BARE issue number here, which record_mr
+        # then never writes to (it composes "acme/widgets#1") — the live-poll
+        # binding would target a path that never gets an entry, silently,
+        # forever. This is issue #1173's own AC #2 and Test Procedure #1.
+        state = {**STATE_DATA_BASE}  # wave-1's mr_urls is {} in the base fixture
+        plan_data = {**PHASES_DATA, "repo": "acme/widgets"}
+        html = _render_issue_row(
+            1, {"number": 1, "title": "Bootstrap repo"}, state, "wave-1", plan_data
+        )
+        assert 'data-field="waves.wave-1.mr_urls.acme/widgets#1"' in html
+        assert 'data-field="waves.wave-1.mr_urls.1"' not in html
+
+    def test_status_badge_data_field_uses_future_key_when_issue_wholly_absent(self) -> None:
+        # Same future_issue_key fallback, issues-side: an issue absent from
+        # state.json entirely (e.g. added via `init --extend` before a
+        # re-init) must still get a qualified binding for a repo-tagged plan,
+        # not a bare guess the write path will never use.
+        state = {**STATE_DATA_BASE, "issues": {}}
+        plan_data = {**PHASES_DATA, "repo": "acme/widgets"}
+        html = _render_issue_row(
+            1, {"number": 1, "title": "Bootstrap repo"}, state, "wave-1", plan_data
+        )
+        assert 'data-field="issues.acme/widgets#1.status"' in html
+
+    def test_future_key_fallback_stays_bare_without_plan_data(self) -> None:
+        # Regression guard: omitting plan_data (existing callers, non-#1173
+        # code) must keep the pre-review bare-number behavior — no forced
+        # migration, no crash on a missing argument.
+        state = {**STATE_DATA_BASE, "issues": {}}
+        html = _render_issue_row(1, {"number": 1, "title": "Bootstrap repo"}, state, "wave-1")
+        assert 'data-field="issues.1.status"' in html
+
+    def test_resolved_key_is_html_escaped_in_data_field(self) -> None:
+        # Code review: issue_key/mr_key are read from state.json (operator-
+        # authored plan data), not guaranteed dot-free ints like the old bare
+        # issue_number — every other interpolated string in this renderer
+        # goes through _html.escape, these must too.
+        state = {
+            **STATE_DATA_BASE,
+            "issues": {'ac"me/widgets#1': {"status": "closed"}},
+        }
+        html = _render_issue_row(1, {"number": 1, "title": "Bootstrap repo"}, state, "wave-1")
+        assert 'data-field="issues.ac&quot;me/widgets#1.status"' in html
+        assert 'data-field="issues.ac"me/widgets#1.status"' not in html
+
+    def test_cross_repo_same_number_does_not_collide(self) -> None:
+        # Code review: resolve_issue_key's scan has no notion of which repo
+        # THIS row belongs to — it returns the FIRST "#N" match in insertion
+        # order. A cross-repo plan can legitimately repeat an issue number
+        # across repos (state.py's _wave_work_item_counts docstring), so a
+        # blind scan can bind this row to a DIFFERENT repo's same-numbered
+        # issue. _row_key must prefer THIS row's own future_issue_key when
+        # it's actually present in the bag, not the first insertion match.
+        state = {
+            **STATE_DATA_BASE,
+            "issues": {
+                "acme/a#5": {"status": "open"},
+                "acme/b#5": {"status": "closed"},
+            },
+        }
+        plan_data = {**PHASES_DATA, "repo": "acme/a"}
+        # This row's issue_plan carries its OWN repo override — "acme/b" —
+        # distinct from the plan-level default ("acme/a").
+        html = _render_issue_row(
+            5, {"number": 5, "title": "Widget B", "repo": "acme/b"}, state, "wave-1", plan_data
+        )
+        assert "badge-closed" in html
+        assert ">closed<" in html
+        assert 'data-field="issues.acme/b#5.status"' in html
+        assert 'data-field="issues.acme/a#5.status"' not in html
 
 
 # ---------------------------------------------------------------------------
@@ -560,6 +639,28 @@ class TestRenderExecutionGridWithMRLinks:
 
     def test_mr_link_data_field_attribute(self) -> None:
         assert 'data-field="waves.wave-1.mr_urls.1"' in self.html
+
+
+class TestRenderExecutionGridQualifiedPlanWiring:
+    """cc-workflow#1173 code review: pins the FULL production call chain
+    (render_execution_grid -> _render_phase_section -> _render_wave_card ->
+    _render_issue_row), not just the private _render_issue_row entry point
+    the other qualified-key tests call directly. Every prior qualified-key
+    test in this file calls _render_issue_row(..., plan_data) itself, so
+    deleting the plan_data argument from the real wiring at any of the three
+    intermediate hops would fail NO test while silently reintroducing the
+    bare-number regression #1173 exists to fix — this is issue #1173's own
+    Test Procedure #1, exercised at the level the operator actually calls
+    (generator.py -> render_execution_grid)."""
+
+    def test_qualified_plan_data_fields_reach_the_real_call_chain(self) -> None:
+        plan = {**PHASES_DATA, "repo": "acme/widgets"}
+        state = {**STATE_DATA_BASE, "issues": {}}  # nothing recorded yet
+        html = render_execution_grid(plan, state, FLIGHTS_DATA_EMPTY)
+        assert 'data-field="issues.acme/widgets#1.status"' in html
+        assert 'data-field="waves.wave-1.mr_urls.acme/widgets#1"' in html
+        assert 'data-field="issues.1.status"' not in html
+        assert 'data-field="waves.wave-1.mr_urls.1"' not in html
 
 
 class TestRenderExecutionGridWithClosedIssues:

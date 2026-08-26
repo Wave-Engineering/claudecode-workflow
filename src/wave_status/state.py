@@ -453,6 +453,46 @@ def _resolve_issue_key(
     return None
 
 
+def resolve_issue_key(mapping: dict, num: int | str) -> str | None:
+    """Like :func:`resolve_issue_value`, but returns the RESOLVED KEY itself
+    (bare or qualified) rather than the value stored at it.
+
+    cc-workflow#1173: a caller that needs to NAME the key going forward — e.g.
+    baking it into a dashboard ``data-field`` live-poll binding, so a later
+    poll's client-side lookup targets the key that actually holds the value —
+    can't do that from :func:`resolve_issue_value` alone, which only hands
+    back the value. Same non-raising, first-qualified-match-on-conflict
+    semantics; returns ``None`` when nothing resolves.
+    """
+    key = str(num)
+    if key in mapping:
+        return key
+    suffix = f"#{key}"
+    for k in mapping:
+        if isinstance(k, str) and k.endswith(suffix):
+            return k
+    return None
+
+
+def future_issue_key(plan_data: dict | None, issue_plan: dict, num: int | str) -> str:
+    """Compose the key a NOT-YET-WRITTEN entry for *issue_plan* would use —
+    same ``_issue_repo`` + ``_compose_issue_key`` resolution `record_mr` and
+    `close_issue` apply once they actually write.
+
+    cc-workflow#1173 code review: :func:`resolve_issue_key` only finds a key
+    that's already IN the mapping. The dashboard's MR-link cell is rendered
+    before any MR exists — ``mr_urls`` starts empty from ``init_state`` — so
+    at that render there is nothing to resolve, and a bare-number guess
+    disagrees with the qualified key ``record_mr`` composes the moment an MR
+    actually lands, leaving the pre-baked ``data-field`` binding permanently
+    unable to find the value. This guesses the way the write path itself
+    will resolve it, so the two agree by construction, not by luck.
+    """
+    if plan_data is None:
+        return str(num)
+    return _compose_issue_key(num, _issue_repo(plan_data, issue_plan))
+
+
 def resolve_issue_value(mapping: dict, num: int | str, default=None):
     """Look up issue *num* in *mapping*, tolerating BOTH bare (``"13"``) and v3
     qualified (``"owner/repo#13"``) keys [ENG-7 / #849].
@@ -467,14 +507,15 @@ def resolve_issue_value(mapping: dict, num: int | str, default=None):
     where the same bare number exists in two repos (it returns the first qualified
     match). Generic over the value type: an ``issues`` entry dict OR an ``mr_urls``
     URL string — the caller supplies the matching *default* (``{}`` or ``""``).
+
+    Delegates key resolution to :func:`resolve_issue_key` — kept as two
+    functions rather than one returning a tuple, since every existing caller
+    here wants only the value, and threading an unused key through them would
+    be dead weight.
     """
-    key = str(num)
-    if key in mapping:
+    key = resolve_issue_key(mapping, num)
+    if key is not None:
         return mapping[key]
-    suffix = f"#{key}"
-    for k, v in mapping.items():
-        if isinstance(k, str) and k.endswith(suffix):
-            return v
     return default
 
 
