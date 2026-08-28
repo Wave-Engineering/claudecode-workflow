@@ -6,9 +6,11 @@ the same stage, and two green checks either side of a stage prove nothing about
 the stage between them.
 
 flightdeck lives in that gap: manifests present and countable, trivy parsing none
-of them (bun.lock unsupported, flightdeck#8), both checks green. cc-workflow is a
-partial instance — 2 scannable, 1 ingested — which nothing stated out loud until
-the coverage line existed.
+of them (bun.lock unsupported, flightdeck#8), both checks green. cc-workflow was a
+partial instance — 2 scannable, 1 ingested — before this script's own
+--include-dev-deps fix (cc-workflow#1169): not a bun.lock parsing limitation, but
+trivy suppressing this repo's entirely-devDependencies bun.lock manifests by
+default, which nothing stated out loud until the coverage line existed.
 
 The other half closed here: the kit never ran the scan at all. It lived only as
 prose in /precheck's Job C asking a sub-agent to report the denominator. An
@@ -76,10 +78,15 @@ def test_reports_the_denominator_before_the_verdict():
 
 @trivy_required
 def test_partial_coverage_is_stated_not_hidden():
-    """cc-workflow itself covers 1 of 2 manifests. That must be visible.
+    """The coverage line must render on every run, full or partial.
 
     Zero-ingested is only the extreme case; partial coverage is the same defect
-    wearing a pass, and it is the common one.
+    wearing a pass, and it is the common one. cc-workflow itself used to
+    demonstrate the partial case for free (1 of 2 manifests, before the
+    --include-dev-deps fix above) — it is now 2 of 2 (3 of 3 in a checkout
+    carrying the gitignored .claude/ copy), so this only pins the line's
+    presence on a full-coverage run; the partial-coverage path itself is
+    exercised by test_stub_partial_coverage_warns_but_still_passes below.
     """
     proc = run(REPO_ROOT)
     assert "coverage:" in proc.stdout, "no coverage ratio emitted"
@@ -92,7 +99,10 @@ def test_present_but_uningested_FAILS_with_its_own_exit_code(tmp_path: Path):
     Distinct exit code and distinct wording from "nothing scannable" — they are
     opposite conditions that previously both surfaced as an unremarkable green.
     """
-    # A lockfile trivy cannot parse, with no manifest it can.
+    # A hand-written file check-scannable.sh recognizes by name but that is
+    # not valid bun.lock format, so trivy genuinely fails to parse it — a
+    # real parse failure, not "bun.lock is unsupported" (trivy parses real
+    # bun.lock fine; see --include-dev-deps above). No manifest trivy can.
     (tmp_path / "bun.lock").write_text('# bun lockfile v1\n"foo@1.0.0": {}\n')
     (tmp_path / "package.json").write_text('{"name":"x","dependencies":{"foo":"1.0.0"}}\n')
 
@@ -263,6 +273,33 @@ def test_stub_present_but_uningested_exits_2(tmp_path: Path):
     assert "ingested ZERO" in proc.stdout + proc.stderr
 
 
+def test_stub_partial_coverage_warns_but_still_passes(tmp_path: Path):
+    """SOME manifests ingested, not all — the common case, distinct from the
+    zero-ingested extreme above.
+
+    cc-workflow's own bun.lock manifests used to demonstrate this for free
+    (1 of 2 ingested) until the --include-dev-deps fix closed that gap —
+    which means the live-repo test above no longer exercises this path at
+    all. Stubbed here so it stays covered."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("flask==3.0.0\n")
+    (repo / "sub").mkdir()
+    (repo / "sub" / "requirements.txt").write_text("django==5.0.0\n")
+    # check-scannable.sh finds both (2 scannable); the stub trivy "ingests"
+    # only one of them, mirroring a scanner that silently skips one manifest.
+    payload = '{"Results":[{"Target":"requirements.txt","Type":"pip","Packages":[{"Name":"flask"}]}]}'
+    proc = _run_env(repo, _stub_trivy(tmp_path, payload))
+    assert proc.returncode == 0, (
+        f"partial coverage must still PASS (it is not zero-ingested) — "
+        f"the warning carries the shortfall, not a failing exit code\n"
+        f"{proc.stdout}{proc.stderr}"
+    )
+    assert "coverage: 1 of 2" in proc.stdout, proc.stdout
+    assert "WARNING" in proc.stdout + proc.stderr, "shortfall must not be silent"
+    assert "COVERS 1/2" in proc.stdout, "the verdict itself must carry the shortfall"
+
+
 def test_stub_scanner_error_exits_5_NOT_2(tmp_path: Path):
     """A broken scanner is not an unparseable lockfile.
 
@@ -277,12 +314,52 @@ def test_stub_scanner_error_exits_5_NOT_2(tmp_path: Path):
     )
 
 
+def test_stub_malformed_json_exits_5_NOT_2(tmp_path: Path):
+    """cc-workflow#1169 code review: malformed JSON is a scanner error too,
+    not a lockfile-format problem — same distinction as the timeout/no-output
+    cases above, previously exited 2 (present-but-uningested) instead."""
+    repo = _scannable_repo(tmp_path)
+    proc = _run_env(repo, _stub_trivy(tmp_path, "{not valid json"))
+    assert proc.returncode == 5, (
+        f"expected 5 (scanner error), got {proc.returncode} — 2 would blame the "
+        f"lockfile format\n{proc.stdout}{proc.stderr}"
+    )
+    assert "could not parse trivy output" in proc.stdout + proc.stderr
+
+
 def test_stub_nothing_scannable_exits_4(tmp_path: Path):
     """rc=4 is documented, referenced in validate.sh and /precheck, and was untested."""
     repo = tmp_path / "bare"
     repo.mkdir()
     proc = _run_env(repo, _stub_trivy(tmp_path, CLEAN_JSON))
     assert proc.returncode == 4, proc.stdout + proc.stderr
+
+
+def test_missing_sibling_check_scannable_exits_5_not_4(tmp_path: Path):
+    """cc-workflow#1169 code review: a partial install (this script present,
+    check-scannable.sh not) must not misreport as "nothing scannable".
+
+    `install` excludes ci/* from distribution today, so this is a real
+    reachable shape, not a hypothetical — and without the explicit guard,
+    bash's rc=127 for a missing file falls into the SAME branch as a
+    genuinely empty repo, sending the operator after a dependency-pinning
+    problem that does not exist."""
+    isolated = tmp_path / "isolated-ci"
+    isolated.mkdir()
+    lone_script = isolated / "dependency-scan.sh"
+    lone_script.write_text(SCRIPT.read_text())
+    lone_script.chmod(0o755)
+    # Deliberately NOT copying check-scannable.sh alongside it.
+
+    proc = subprocess.run(
+        ["bash", str(lone_script), str(_scannable_repo(tmp_path))],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 5, (
+        f"expected 5 (scanner-infrastructure error), got {proc.returncode} — "
+        f"4 would falsely claim nothing is scannable\n{proc.stdout}{proc.stderr}"
+    )
+    assert "check-scannable.sh missing" in proc.stdout + proc.stderr
 
 
 def test_validate_survives_a_non_zero_scan_rc(tmp_path: Path):

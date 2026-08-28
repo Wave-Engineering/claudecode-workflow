@@ -77,6 +77,10 @@ prompt: "Run: bash <repo_root>/scripts/ci/dependency-scan.sh <repo_root>
            2  manifests present, ZERO ingested  -> checklist item FAILS
            3  trivy not installed               -> [SKIPPED]
            4  nothing scannable, absence not declared -> checklist item FAILS
+           5  scanner error (timeout/no output/unparseable) -> checklist item FAILS
+              — this is NOT a skip and NOT a pass. Ordinary triggers: first
+              run pulling trivy's DB, a rate-limited or air-gapped network.
+              Never treat an unmapped/unrecognized exit code as a pass.
 
          If the output carries a `coverage:` line showing fewer ingested than
          scannable, report that shortfall explicitly — a PASS covering 1 of 2
@@ -106,7 +110,7 @@ this replaces. The structural guarantee is real where the script is; the fallbac
 is what actually runs on flightdeck, mcp-server-sdlc and the rest until the kit
 ships it (#1141).
 
-It also closes a gap `check-scannable.sh` structurally cannot see. That check is **pre-scan** — it proves input exists. This one is **post-scan** — it proves the scanner ingested that input. Two green checks either side of a stage prove nothing about the stage between them, and flightdeck lives in exactly that gap: manifests present, trivy parsing none of them (`flightdeck#8`), both checks green. cc-workflow is a partial instance of the same thing — 2 scannable, 1 ingested, because this trivy build cannot read `bun.lock` either, which nothing said out loud until the coverage line existed.
+It also closes a gap `check-scannable.sh` structurally cannot see. That check is **pre-scan** — it proves input exists. This one is **post-scan** — it proves the scanner ingested that input. Two green checks either side of a stage prove nothing about the stage between them, and flightdeck lives in exactly that gap: manifests present, trivy parsing none of them (`flightdeck#8`), both checks green — though `flightdeck#8`'s own root cause is worth re-measuring before it anchors a remedy (see below). cc-workflow was a partial instance of the same thing before `--include-dev-deps` above: 2 scannable, 1 ingested — not because this trivy build cannot read `bun.lock`, but because both of this repo's `bun.lock` manifests are entirely devDependencies, which trivy suppresses by default. With the flag, both parse cleanly (0 findings each). If flightdeck's tree is also dev-only, its "unsupported" diagnosis may be the same flag artifact, not a real parser gap — worth confirming before #1141 commits to "use a scanner that understands this ecosystem" as the remedy.
 
 **Report the denominator and the commit before the verdict — never the verdict alone.** Two failures on 2026-07-19 make this non-optional:
 
@@ -173,7 +177,8 @@ Run **sandbox-context detection** (see "Sandbox Auto-Approval" below): if the cu
 Delegated to Job C (Haiku sub-agent) in the parallel batch. Interpret the result as:
 - **PASS** → checklist item passes.
 - **SKIP** → emit `[SKIPPED — trivy not installed]` on the checklist. Do not fail the gate.
-- **FINDINGS** → report each finding (package, CVE, severity, fixed version if any) as a deferred checklist item. Do NOT auto-upgrade dependencies — the user approves the codebase state at the gate. Do NOT block the gate on vulnerabilities with no available fix.
+- **FINDINGS** (`dependency-scan.sh` exit 1) → report each finding (package, CVE, severity, fixed version if any) as a deferred checklist item. Do NOT auto-upgrade dependencies — the user approves the codebase state at the gate. **The checklist item FAILS on any HIGH/CRITICAL finding, with or without a fix available** — `dependency-scan.sh` does not distinguish them (no `--ignore-unfixed` support, no `.trivyignore` honored), which is stricter than this skill's own prose promised before this scan was a real tool rather than an agent's judgment call. Tracked for a policy decision: #1188.
+- **SCANNER ERROR** (`dependency-scan.sh` exit 5 — timeout, no output, or unparseable output) → the checklist item FAILS. This is not a skip: the scanner did not run to completion, which is not evidence of a clean dependency tree. Ordinary triggers (first DB pull, rate-limited/air-gapped network) are not a reason to wave it through.
 
 ## The Checklist (full every time; a checkmark means VERIFIED by reading the codebase)
 **Context:** Project | Issue #N — title | Branch `feature/N-...` → `<live default>`

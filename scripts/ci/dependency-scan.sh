@@ -10,9 +10,16 @@
 #
 # Passing the first proves INPUT EXISTED. It does not prove the scanner ingested
 # it. flightdeck sits in exactly that gap today: manifests present and countable,
-# trivy covering none of them (bun.lock unsupported, flightdeck#8), and the
-# pre-scan check with nothing to complain about. Two green checks either side of
-# a stage prove nothing about the stage between them.
+# trivy covering none of them (flightdeck#8), and the pre-scan check with
+# nothing to complain about. Two green checks either side of a stage prove
+# nothing about the stage between them.
+#
+# cc-workflow#1169 code review: flightdeck#8's own root cause is worth
+# re-measuring before it anchors a remedy — this script's own --include-dev-deps
+# fix (below) turned an apparently-unparseable bun.lock into a fully-ingested
+# one on THIS repo (see the comment on that flag). If flightdeck's tree is also
+# dev-only, "trivy cannot parse bun.lock" may be the same flag artifact wearing
+# a different name, not a real ecosystem gap #1141 needs to work around.
 #
 # The other half of the gap is that the kit never ran the scan at all. It lived
 # only as PROSE in /precheck's Job C, instructing a sub-agent to report the
@@ -28,6 +35,12 @@
 #   2  MANIFESTS PRESENT BUT ZERO INGESTED  <- the gap this script exists to close
 #   3  trivy not installed (skip; the caller decides whether that is acceptable)
 #   4  nothing scannable AND absence not declared (delegated to check-scannable.sh)
+#   5  SCANNER ERROR — timeout, no output, or unparseable output. Distinct from
+#      2 on purpose: a broken scanner is not an unparseable lockfile, and
+#      conflating them sends the operator hunting an ecosystem problem that
+#      does not exist. Ordinary triggers: first run pulling trivy's
+#      vulnerability DB, a rate-limited or air-gapped network — expect to hit
+#      this, and never treat an unmapped/unrecognized rc as a pass.
 set -uo pipefail
 
 ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
@@ -43,6 +56,17 @@ fi
 # Delegated rather than reimplemented. check-scannable.sh owns the shapes
 # (manifest-without-lockfile, unpinned requirements) and the declared-absence
 # contract; duplicating that here would let the two drift into disagreeing.
+#
+# Existence checked explicitly (cc-workflow#1169 code review): `install`
+# excludes ci/* from distribution today (#1141 is the fleet-wide follow-up),
+# so a repo carrying this script without its sibling would otherwise hit
+# bash's "No such file or directory" as rc=127 from `bash "$HERE/..."`,
+# which the guard below reads as "nothing scannable" — sending the operator
+# after a dependency-pinning problem that does not exist.
+if [[ ! -f "$HERE/check-scannable.sh" ]]; then
+	echo "dependency-scan: FAIL — check-scannable.sh missing at $HERE (partial install?)" >&2
+	exit 5
+fi
 scannable_out="$(bash "$HERE/check-scannable.sh" "$ROOT" 2>&1)"
 scannable_rc=$?
 printf '%s\n' "$scannable_out"
@@ -60,8 +84,11 @@ fi
 
 # How many the PRE-scan found. Compared against the ingested count below, because
 # "zero ingested" is only the extreme case: PARTIAL coverage is the same defect
-# wearing a pass. cc-workflow itself is an instance — 2 scannable, 1 ingested,
-# because this trivy cannot parse bun.lock either. Nothing said so before now.
+# wearing a pass. cc-workflow itself was an instance before the --include-dev-deps
+# fix below: 2 scannable (3 in a checkout carrying the gitignored .claude/ copy),
+# only 1 ingested — not because trivy cannot parse bun.lock, but because both
+# bun.lock manifests here are entirely devDependencies, which trivy suppresses
+# by default. Nothing said so before now.
 scannable_n="$(printf '%s' "$scannable_out" |
 	sed -n 's/^check-scannable: \([0-9][0-9]*\) scannable manifest.*/\1/p' | head -1)"
 scannable_n="${scannable_n:-0}"
@@ -159,9 +186,14 @@ for r in results:
 ')"
 
 if printf '%s' "$summary" | grep -q '^PARSE_ERROR'; then
+	# exit 5 (scanner error), NOT 2 (present-but-uningested): malformed JSON is
+	# a broken scanner, not an unparseable lockfile — the same distinction
+	# test_stub_scanner_error_exits_5_NOT_2 pins for the timeout/no-output
+	# cases. Conflating them sends the operator hunting an ecosystem problem
+	# that does not exist.
 	echo "dependency-scan: FAIL — could not parse trivy output" >&2
 	printf '%s\n' "$summary" >&2
-	exit 2
+	exit 5
 fi
 
 if ! printf '%s' "$summary" | grep -q '^COUNTS'; then
@@ -218,7 +250,7 @@ fi
 
 if ((findings > 0)); then
 	echo "dependency-scan: FINDINGS — ${findings} ${SEVERITY} across ${manifests} manifest(s)" >&2
-	printf '%s\n' "$summary" | sed -n 's/^VULN\t/  /p' |
+	printf '%s\n' "$summary" | sed -n "s/^VULN$(printf '\t')/  /p" |
 		awk -F'\t' '{printf "  %s | %s | %s | %s\n", $1, $2, $3, $4}' >&2
 	exit 1
 fi

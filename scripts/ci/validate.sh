@@ -335,11 +335,14 @@ fi
 # abort mid-section with no summary, and `$dep_out` — which captured stderr too —
 # would be discarded unprinted.
 #
-# It would have failed in CI on the very first run: .github/workflows/validate.yml
-# installs shellcheck, shfmt and Python but NOT trivy, so the script returns 3,
-# and the branch that exists to make that a [SKIPPED] was unreachable. It passed
-# locally only because trivy happens to be installed here and this repo is clean —
-# rc=0, errexit never trips. The one path that worked was the one path exercised.
+# It would have failed in CI on the very first run: at the time this bug was
+# found, .github/workflows/validate.yml installed shellcheck, shfmt and Python
+# but NOT trivy, so the script returned 3, and the branch that exists to make
+# that a [SKIPPED] was unreachable. It passed locally only because trivy
+# happens to be installed here and this repo is clean — rc=0, errexit never
+# trips. The one path that worked was the one path exercised. CI now installs
+# trivy too (cc-workflow#1169 code review) — the [SKIPPED] branch below is a
+# genuine fallback for a fresh box again, not a standing blind spot.
 dep_rc=0
 dep_out="$(bash "$REPO_DIR/scripts/ci/dependency-scan.sh" "$REPO_DIR" 2>&1)" || dep_rc=$?
 printf '%s\n' "$dep_out" | sed -n 's/^dependency-scan: /  /p'

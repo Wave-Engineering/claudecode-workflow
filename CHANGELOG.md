@@ -33,8 +33,14 @@ are worth keeping apart:
   them. flightdeck sits in exactly that gap: manifests present and countable,
   trivy parsing none of them (`bun.lock` unsupported, flightdeck#8), both checks
   green. **cc-workflow turned out to be a partial instance of the same thing** —
-  2 scannable manifests, 1 ingested, because this trivy build cannot read
-  `bun.lock` here either. Nothing had ever said so.
+  2 scannable manifests, 1 ingested. Root cause, confirmed by measurement rather
+  than assumed: not a `bun.lock` parsing limitation, but trivy suppressing
+  dev-only dependency trees by default (both bun.lock manifests here are
+  entirely devDependencies) — closed by passing `--include-dev-deps` and
+  `--list-all-pkgs` (cc-workflow#1169's fix, ported into this script). Nothing
+  had ever said so. flightdeck#8's own "unsupported" diagnosis may be the same
+  flag artifact rather than a real ecosystem gap — worth re-measuring before any
+  fleet-wide remedy assumes otherwise.
 
   `scripts/ci/dependency-scan.sh` runs the scan and reports what it **actually
   covered**, on every path including the passing one: manifests ingested, package
@@ -56,7 +62,11 @@ are worth keeping apart:
   flightdeck, the case that motivated the issue. Shipping it fleet-wide is #1141.
   Also emits the scanner version alongside the counts: a coverage shortfall could
   be an ecosystem limit *or* a stale binary, and the output cannot distinguish
-  them without it.
+  them without it. `.github/workflows/validate.yml` now installs trivy
+  (previously absent, so this script returned 3/[SKIPPED] on every PR and had
+  never actually run in the lane CI runs) — the scope limit above is about
+  which repos carry the script, not about whether cc-workflow's own CI
+  exercises it.
 
 - **`sleep infinity` as PID 1 never reaps zombies — fleet-wide network dropouts (#1179).**
   aoe never runs an entrypoint into the agent; it `docker exec`s `claude` into an

@@ -29,6 +29,22 @@ jobs:
         run: |
           GOBIN=/usr/local/bin go install mvdan.cc/sh/v3/cmd/shfmt@latest
 
+      # Pinned release tarball, hermetic — no piped installer — mirrors
+      # containers/oakandwave-workflow/Dockerfile's own trivy install.
+      # Without this, scripts/ci/dependency-scan.sh returns 3 (trivy not
+      # installed) on EVERY PR, silently, and the checklist item this exists
+      # to gate has never actually run in the lane CI runs (cc-workflow#1169
+      # code review) — the exact "config exists, config does not work" gap
+      # this fleet treats as a defect class elsewhere.
+      - name: Install trivy
+        env:
+          TRIVY_VERSION: "0.72.0"
+        run: |
+          curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" -o /tmp/trivy.tar.gz
+          tar -C /tmp -xzf /tmp/trivy.tar.gz trivy
+          sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
+          rm -f /tmp/trivy.tar.gz /tmp/trivy
+
       - name: Run validation
         run: ./scripts/ci/validate.sh
 
