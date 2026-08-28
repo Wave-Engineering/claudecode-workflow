@@ -83,9 +83,17 @@ prompt: "Run: bash <repo_root>/scripts/ci/dependency-scan.sh <repo_root>
          manifests is a pass over half a denominator.
 
          If the script is MISSING (older checkout), say so and fall back to
-         `trivy fs --scanners vuln --severity HIGH,CRITICAL --format json --quiet`,
-         reporting the manifest count first. Do not report a verdict without a
-         denominator."
+         `trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps
+         --list-all-pkgs --format json --quiet`, reporting the manifest count
+         first. Do not report a verdict without a denominator. Both flags are
+         REQUIRED on the fallback, not optional (cc-workflow#1169): trivy
+         suppresses dev/test dependencies by default (a project whose entire
+         dependency tree is dev-only scans ZERO packages without
+         --include-dev-deps, while still exiting clean), and --list-all-pkgs
+         only became trivy's default in v0.67.0, with this fleet pinning no
+         minimum trivy version. dependency-scan.sh itself already carries both
+         flags — this fallback exists only for a checkout that predates the
+         script."
 ```
 
 **The denominator is emitted by the tool, not requested from the agent (#1137).** This job used to be prose asking a sub-agent to report the count. It complied — and compliance is the problem: an instruction can be forgotten by the next agent, misread, or quietly dropped in a rewrite, and the resulting verdict looks identical to a real one. `dependency-scan.sh` emits the number on every path including the passing one, so the report survives the agent.

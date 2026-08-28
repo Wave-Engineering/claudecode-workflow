@@ -52,6 +52,28 @@ else
 	pass "test_prepwaves_no_unqualified_epic: no unqualified 'epic' in SKILL.md"
 fi
 
+# --- test_prepwaves_pins_plan_identity (cc-workflow#1171) --------------------
+# /prepwaves must persist a plan_id/slug and call campaign-head so a
+# standalone /nextwave run's FlightDeck card escapes the "headless" bucket,
+# not just a /wavemachine-orchestrated one.
+if grep -n 'plan_id' "$SKILL" >/dev/null; then
+	pass "test_prepwaves_pins_plan_identity: persists a top-level plan_id"
+else
+	fail "test_prepwaves_pins_plan_identity: no mention of persisting plan_id"
+fi
+
+if grep -n 'campaign-head' "$SKILL" >/dev/null; then
+	pass "test_prepwaves_pins_plan_identity: calls campaign-head after persist"
+else
+	fail "test_prepwaves_pins_plan_identity: no campaign-head call after wave_init"
+fi
+
+if grep -n 'never overwrite a running campaign' "$SKILL" >/dev/null; then
+	pass "test_prepwaves_pins_plan_identity: extend mode preserves existing plan_id"
+else
+	fail "test_prepwaves_pins_plan_identity: no extend-mode plan_id preservation guard"
+fi
+
 # --- Summary -----------------------------------------------------------------
 echo ""
 if [[ $FAILS -gt 0 ]]; then

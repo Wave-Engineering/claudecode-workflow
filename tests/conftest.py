@@ -147,6 +147,45 @@ def _isolate_flightdeck_buffer(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("FLIGHTDECK_EVENTS_PATH", str(d / "events.jsonl"))
     monkeypatch.delenv("FLIGHTDECK_INGEST_URL", raising=False)
     monkeypatch.delenv("FLIGHTDECK_INGEST_TOKEN", raising=False)
+    # #1148: same isolation for the scope marker. Without this, a test-runner
+    # shell that has `export FLIGHTDECK_ACTIVITY_ID=...` set (per
+    # skills/wavemachine/SKILL.md's own launch-sequence instructions — the same
+    # shell /precheck runs this suite from) makes activity_start resolve a real
+    # id and write a REAL marker into THIS repo's own .claude/status/,
+    # clobbering any live campaign's marker. Isolate the same four scope-default
+    # env vars for the same reason.
+    monkeypatch.setenv("FLIGHTDECK_SCOPE_PATH", str(d / "flightdeck-scope.json"))
+    monkeypatch.delenv("FLIGHTDECK_ACTIVITY_ID", raising=False)
+    monkeypatch.delenv("FLIGHTDECK_AGENT", raising=False)
+    monkeypatch.delenv("FLIGHTDECK_LOG_REF", raising=False)
+    monkeypatch.delenv("FLIGHTDECK_EMIT_DISABLED", raising=False)
+    # #1165: same isolation for resolve_session()'s two inputs. CLAUDE_CODE_SESSION_ID
+    # is genuinely ambient in THIS suite's own run — Claude Code sets it on every Bash
+    # tool subprocess (confirmed via the product changelog + this very shell's env),
+    # so without this a test asserting "no session resolves" would silently pass or
+    # fail depending on whether the suite happens to run under a live Claude Code
+    # session, exactly the checkout-dependent flakiness class cc-workflow#1163 fixed
+    # for FLIGHTDECK_AGENT/agent-identity.json.
+    monkeypatch.delenv("FLIGHTDECK_SESSION_ID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    # #1166: TMUX_PANE is the SAME class of ambient leak — the flightdeck-
+    # session-emit.sh fallback chain's third tier, genuinely set in every
+    # tmux-based agent session on this fleet, absent in CI. Scrubbed globally
+    # (not just in that script's own test's local pop) so no FUTURE test
+    # anywhere in this suite can silently resolve a different fallback tier
+    # locally than it does in CI — green both ways, testing different code.
+    monkeypatch.delenv("TMUX_PANE", raising=False)
+    # #1149: `_pending_ships` is module-level state (the registry
+    # `flush_pending_ships` joins at true process exit). In-process, it can
+    # outlive any one test that starts a shipper thread without flushing it —
+    # clear it before AND after so no test starts with another's leftover
+    # thread, and no daemon thread from this test lingers registered for a
+    # LATER test's flush to (uselessly, confusingly) join.
+    from wave_status.events import emit as _emit_mod
+
+    _emit_mod._pending_ships.clear()
+    yield
+    _emit_mod._pending_ships.clear()
 
 
 @pytest.fixture()

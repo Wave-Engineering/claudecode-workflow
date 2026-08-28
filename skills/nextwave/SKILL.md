@@ -93,7 +93,7 @@ Supplied by the caller (`/wavemachine` per wave, or a human launching one wave):
 | `dispatch` | #824: the wave's dispatch hint from `phases-waves.json` (written by `/prepwaves` #823). `fan` ⇒ the planner's conflict-free group runs in parallel; `serialize` / `serialize-preferred` / **absent** ⇒ single-file (one issue per flight-group). Threaded into the engine and **enforced** by the flight loop — see "Dispatch enforcement" below. Absent ⇒ `serialize` (CT-01). |
 | `protectedBranch` | the trunk. Used to *recognize* trunk (the engine derives "am I in a campaign?" from `integrationBase !== protectedBranch`), and as the default `integrationBase` for a standalone wave. A campaign wave never writes it. |
 | `mode` | `auto` (verdict drives promotion) \| `interactive` (verdict returned; human routes) |
-| `planId` | wave plan id — the gate's PR-open node needs it to assemble the kahuna→protected MR body (#687/#5) |
+| `planId` | wave plan id — the gate's PR-open node needs it to assemble the kahuna→protected MR body (#687/#5); also keys the FlightDeck activity id (`AID = PLAN_ID \|\| WAVE_ID`), so a standalone run without it degrades to a wave-scoped id (cc-workflow#1171). Read from `phases-waves.json`'s top-level `plan_id` (step 1), written by `/prepwaves`. |
 | `budget` | optional `{ total, remaining() }` cost guard (the `cost` legal exit) |
 
 The closed numeric guards (`maxGroups`, `maxRework`, `maxIdle`, `costFloor`) have
@@ -155,6 +155,20 @@ annotated `serialize` and never reaches the executor as `fan`.
    and the wave's **`dispatch`** field (from `phases-waves.json`;
    absent ⇒ `serialize`, CT-01) to thread into `args.dispatch`. Refuse if `kahuna_branch` is
    unset — wave state was not bootstrapped through the campaign launch sequence.
+
+   **Also read `plan_id`** (top-level, in the SAME persisted plan file this step already reads
+   for `dispatch` — do not hardcode its path: `status_dir()` resolves `.sdlc/waves/` in a repo
+   carrying `.sdlc/`, falling back to `.claude/status/` otherwise, and `/prepwaves`'s
+   `campaign-head` call resolves it the same way, so hardcoding either path here would read a
+   different plan than the one just prepped in a `.sdlc/`-carrying repo) and thread it into
+   **`args.planId`** (cc-workflow#1171). `/prepwaves` writes this field for every plan it
+   persists (step 7, backfilling it on an extend of a legacy plan that predates the
+   convention), so it is present whether this run is orchestrated by `/wavemachine` or
+   standalone — closing the gap where a bare `/nextwave` run left `per-wave-workflow.js`'s
+   `AID = PLAN_ID || WAVE_ID` with no `PLAN_ID` and degraded to a wave-scoped (not
+   campaign-scoped) FlightDeck activity id, a new id every wave. Absent field (a
+   `phases-waves.json` written by something other than `/prepwaves`) ⇒ omit
+   `args.planId` — the existing `WAVE_ID` fallback is unchanged, not an error.
 2. **Validate specs.** Confirm every wave issue is structurally buildable
    (`spec_validate_structure`). Any INVALID → report and exit (not an error — a Legal Exit).
 3. **Launch the Workflow.** Invoke the single-file artifact `per-wave-workflow.bundled.js`

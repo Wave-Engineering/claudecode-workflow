@@ -226,20 +226,36 @@ deterministically on the plan, never the repo path (the driver owns the campaign
 the card can only be keyed here). Then emit its vitals ONCE (idempotent on resume — it just
 refreshes the card):
 
-```bash
-dev_name="$(jq -r '.dev_name // empty' .claude/agent-identity.json 2>/dev/null)"
-wave-status emit activity_start \
-  --activity-id "$FLIGHTDECK_ACTIVITY_ID" --activity-type campaign \
-  ${dev_name:+--agent "$dev_name"} \
-  --detail "{\"planTotal\": <total waves in the approved plan>}" \
-  --label "<project>" || true
-```
-(Omit `--agent` when the Dev-Name is absent — `${dev_name:+…}` — so the card falls back to
-the project label rather than rendering an empty title; quote `<project>` in case it has spaces.)
+`/prepwaves` (step 7, cc-workflow#1171) now makes this same call right after persisting the
+plan, so a standalone `/nextwave` run (no `/wavemachine` wrapper) also gets a real
+`activityType: campaign` card, not just a headless one. This call here is unaffected — it's
+the same idempotent re-fire the docstring already describes, now potentially the SECOND call
+for a given plan rather than the first. Still required: `/prepwaves` cannot resolve
+`$FLIGHTDECK_ACTIVITY_ID` from a shell it doesn't own, and a plan bootstrapped by other means
+(e.g. `/devspec upshift` run standalone, never prepped) never gets `/prepwaves`'s call at all.
 
-`<total waves…>` (the wave denominator) and `<project>` (the fallback title) come from
-`wave_show`/the plan. `--agent` is the Dev-Name (card title). The per-wave `promoted` step
-then accrues the numerator (`per-wave-workflow.js`, #1026 incr 2).
+```bash
+wave-status campaign-head --activity-id "$FLIGHTDECK_ACTIVITY_ID" || true
+```
+(No `--agent` needed — `wave-status emit`/`campaign-head` resolve the Dev-Name from
+`.claude/agent-identity.json` at cwd by default when the flag is omitted, cc-workflow#1163.
+The `jq`-based hand-resolution this snippet used to do is redundant with that, one process
+lighter, and no longer needs `jq` on `PATH`. Falls back to the project label, same as before,
+when no identity file resolves.)
+
+`campaign-head` derives `planTotal` (the wave denominator), `workItemsTotal` (the campaign-scope
+work-item denominator, #1154), `waveWorkItems` (a per-wave work-item denominator map, #1157),
+and the project label FROM THE PLAN itself (`phases-waves.json`) — never a hand-typed literal
+(flightdeck#1145). It refuses loudly (non-zero exit, a message on stderr) rather than emitting
+a card claiming an unknown total if the plan can't be read, or if the plan has zero waves, or
+if it has zero work items; the `|| true` here only protects the launch sequence from aborting
+on that refusal, it does not hide the message. `--agent` is the Dev-Name (card title). The
+per-wave `promoted` step then accrues the wave numerator (`per-wave-workflow.js`, #1026 incr
+2); `close-issue` (`state.py`'s `close_issue`, unrelated to wavemachine) accrues the
+work-items numerator at BOTH campaign scope (always) and wave scope (#1157) — tagged with
+the CLOSED ISSUE'S OWN wave (`_issue_wave_id`), not wherever `current_wave` happens to point,
+since those two can legitimately drift (a straggler close after the campaign has advanced, a
+human recovery via `set_current_wave`, `extend_state`'s auto-advance).
 
 1. Set the `wavemachine_active` flag (`wave-status wavemachine-start --launcher main`).
    Unset it on EVERY exit path (`wave-status wavemachine-stop`) — treat as a `finally`.

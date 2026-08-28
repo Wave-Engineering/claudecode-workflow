@@ -82,8 +82,26 @@ SKIP_DIRS=(--skip-dirs "**/node_modules" --skip-dirs "**/dist" --skip-dirs "**/b
 # hang rather than a failure. stderr is CAPTURED, not discarded: it is the only
 # place trivy explains a DB-pull failure, and throwing it away is what made a
 # scanner error indistinguishable from an unparseable lockfile.
+# --include-dev-deps is REQUIRED, not optional (cc-workflow#1169): trivy
+# suppresses dev/test dependencies by default, and a project whose entire
+# dependency tree is dev-only (a bun-based tools repo is the measured case —
+# @types/*, typescript, nothing else) scans ZERO packages without it, while
+# still exiting clean and still emitting a Results entry for the manifest —
+# so `manifests` below reads nonzero and the "zero ingested" guard never
+# fires. That is a silent false PASS, indistinguishable from a real one
+# unless you check the package count, which is exactly the defect class
+# this whole script exists to close. check-scannable.sh documents this same
+# gap and explicitly leaves closing it to whatever runs the actual scan.
+#
+# --list-all-pkgs is ALSO required, not just --include-dev-deps: it only
+# became trivy's default in v0.67.0, and this fleet pins no minimum trivy
+# version — an older install never emits the Results[].Packages array this
+# script reads without the flag, which would make every scan on any repo
+# look like zero-packages-ingested and fail every precheck (cc-workflow#1169
+# code review, ported here from /precheck's own Job C prompt).
 trivy_err="$(mktemp)"
 raw="$(timeout "${DEP_SCAN_TIMEOUT:-300}" trivy fs --scanners vuln --severity "$SEVERITY" \
+	--include-dev-deps --list-all-pkgs \
 	"${SKIP_DIRS[@]}" --format json --quiet "$ROOT" 2>"$trivy_err")"
 trivy_rc=$?
 if ((trivy_rc == 124)); then
@@ -120,10 +138,10 @@ manifests, packages, findings = 0, 0, 0
 lines = []
 for r in results:
     target, rtype = r.get("Target", "?"), r.get("Type", "?")
-    # Measured, not inferred: trivy 0.69.3 populates Packages here WITHOUT
-    # --list-all-pkgs (verified: requirements.txt -> Packages=3). Upstream docs
-    # suggest that flag is required, so if a future trivy reports 0 packages
-    # alongside a parsed manifest, that is the flag to add — do not print the zero.
+    # --list-all-pkgs is passed explicitly above (cc-workflow#1169) rather than
+    # relied on as a default: it only became trivy's default in v0.67.0, and
+    # this fleet pins no minimum trivy version, so an older install would
+    # otherwise leave Packages empty here on every repo, not just this one.
     pkgs = len(r.get("Packages") or [])
     vulns = len(r.get("Vulnerabilities") or [])
     manifests += 1

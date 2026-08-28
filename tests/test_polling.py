@@ -6,13 +6,43 @@ Validates all acceptance criteria from Issue #17 related to polling.
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
+import subprocess
 import sys
+
+import pytest
 
 # Ensure src/ is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from wave_status.dashboard.polling import render_polling_script
+from wave_status.dashboard.polling import (
+    badge_css_and_label,
+    render_polling_script,
+)
+
+
+@pytest.fixture()
+def _require_node():
+    """cc-workflow#1180 code review: FAIL, don't skip, when node is absent.
+
+    Applied only to the two node-executing classes below (via
+    ``pytestmark``), not this whole module — the rest of this file is
+    substring assertions on the generated script and has no node
+    dependency at all. These two classes are the only tests that verify
+    the #1180 fix actually works; a silent skip here would read as
+    coverage that isn't there, exactly the kind of instrument-lies-about-
+    itself gap this codebase treats as a real defect elsewhere. Matches
+    the established convention for this repo's other node-dependent test
+    (tests/regression/test_campaign_bundle_in_sync.sh hard-FAILs rather
+    than skipping when node is missing); every CI runner this project
+    targets ships node already (used for skills/nextwave's bundle.mjs),
+    so an absence here means something is actually wrong with the
+    environment, not a legitimately node-less lane.
+    """
+    if shutil.which("node") is None:
+        pytest.fail("node not on PATH — required to verify the #1180 fix actually works")
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +74,21 @@ class TestRenderPollingScript:
         """No external src= references — must be inline [CT-04]."""
         assert 'src="' not in self.script
         assert "src='" not in self.script
+
+    def test_badge_special_cases_placeholder_is_substituted(self) -> None:
+        """cc-workflow#1180 code review: the __BADGE_SPECIAL_CASES__ token
+        must never survive into the emitted script — if the substitution
+        ever silently stopped happening (a renamed token, a dropped
+        .replace()), the resulting JS throws a ReferenceError before
+        polling starts, with no fallback-notice path (the throw is outside
+        pollState()'s try/catch). TestDataStatusBadgeMapping's node-execution
+        tests exercise the mapping algorithm but, before this test existed,
+        did so via a hand-rebuilt copy of BADGE_SPECIAL_CASES rather than the
+        declaration the generated script actually carries — this asserts the
+        serialization step itself, directly."""
+        assert "__BADGE_SPECIAL_CASES__" not in self.script
+        assert '"open": ["badge-pending", "open"]' in self.script
+        assert '"closed": ["badge-closed", "closed"]' in self.script
 
     # --- R-27: Fetches state.json every 3s ---
 
@@ -290,3 +335,304 @@ class TestBindWidthHandler:
         # so missing-derived-state doesn't blow up the dashboard.
         assert "isFinite" in self.script
         assert 'typeof widthValue === "number"' in self.script
+
+
+# ---------------------------------------------------------------------------
+# cc-workflow#1180: resolve() must not split a dotted key on its OWN dots
+# ---------------------------------------------------------------------------
+
+
+def _extract_resolve_fn(script: str) -> str:
+    """Pull the standalone `resolve(obj, path, el)` function body out of the
+    generated script (bounded by the next function definition), so it can be
+    executed under node in isolation — a real behavioral check, not a
+    substring assertion. Pure function, no DOM needed beyond a fake `el`
+    object with a `.getAttribute` method."""
+    start = script.index("function resolve(")
+    end = script.index("function applyState(")
+    return script[start:end]
+
+
+def _run_resolve(obj: dict, path: str, field_key: str | None) -> object:
+    """Execute the real resolve() from the generated script under node and
+    return its result. `field_key` is None to omit the element entirely
+    (exercises the no-el path); otherwise a fake element exposing
+    getAttribute("data-field-key") -> field_key is passed."""
+    resolve_fn = _extract_resolve_fn(render_polling_script())
+    el_js = "undefined" if field_key is None else (
+        "{ getAttribute: function(name) { return name === \"data-field-key\" ? "
+        + json.dumps(field_key) + " : null; } }"
+    )
+    node_src = f"""
+{resolve_fn}
+var obj = {json.dumps(obj)};
+var result = resolve(obj, {json.dumps(path)}, {el_js});
+console.log(JSON.stringify(result === undefined ? "__UNDEFINED__" : result));
+"""
+    proc = subprocess.run(
+        ["node", "-e", node_src], capture_output=True, text=True, timeout=10
+    )
+    assert proc.returncode == 0, f"node execution failed: {proc.stderr}"
+    parsed = json.loads(proc.stdout)
+    return None if parsed == "__UNDEFINED__" else parsed
+
+
+class TestResolveDottedKeyIndirection:
+    """The exact failure #1180 reports: a repo-qualified state.json key can
+    contain a literal "." (a legal GitHub org/repo name — socket.io,
+    docs.rs), and interpolating it straight into a dotted data-field path
+    breaks resolve()'s naive path.split(".") walk, silently, forever (the
+    poll's `value !== undefined` guard just skips the update). Fixed by a
+    "*" template segment substituted from a separate data-field-key
+    attribute, resolved as ONE atomic key, never re-split. These tests
+    execute the REAL resolve() under node — not a substring check — because
+    a bug in exactly this shape (client/server binding-shape drift) already
+    shipped once in this file's own history (data-status was wired
+    server-side with no renderer ever emitting it, per cc-workflow#1180's
+    own linked finding) and a substring assertion would not have caught it."""
+
+    pytestmark = pytest.mark.usefixtures("_require_node")
+
+    def test_star_segment_substituted_from_data_field_key(self) -> None:
+        obj = {"issues": {"acme/my.widgets#5": {"status": "closed"}}}
+        result = _run_resolve(obj, "issues.*.status", "acme/my.widgets#5")
+        assert result == "closed"
+
+    def test_dotted_key_would_break_a_naive_split_without_the_star(self) -> None:
+        # Proves the star indirection is load-bearing, not incidental: the
+        # SAME key interpolated directly into the path (the pre-#1180
+        # shape) must fail to resolve, which is the exact regression this
+        # fix exists to prevent from reappearing.
+        obj = {"issues": {"acme/my.widgets#5": {"status": "closed"}}}
+        result = _run_resolve(obj, "issues.acme/my.widgets#5.status", None)
+        assert result is None
+
+    def test_non_dotted_key_still_resolves_via_star(self) -> None:
+        # Regression guard: the common case (no dot in the key) must keep
+        # working through the new indirection, not just the dotted edge case.
+        obj = {"issues": {"acme/widgets#1": {"status": "open"}}}
+        result = _run_resolve(obj, "issues.*.status", "acme/widgets#1")
+        assert result == "open"
+
+    def test_star_with_no_element_returns_undefined(self) -> None:
+        # data-bind-width bindings never carry a "*" today, but resolve()
+        # must degrade safely (not throw) if one ever did without a
+        # data-field-key to substitute.
+        obj = {"issues": {"acme/widgets#1": {"status": "open"}}}
+        result = _run_resolve(obj, "issues.*.status", None)
+        assert result is None
+
+    def test_mr_urls_binding_shape_with_dotted_key(self) -> None:
+        # The MR-link cell's exact binding shape (waves.<wid>.mr_urls.*),
+        # not just the status badge's — #1180 fixes both.
+        obj = {"waves": {"wave-1": {"mr_urls": {"acme/my.widgets#5": "https://x/pull/1"}}}}
+        result = _run_resolve(obj, "waves.wave-1.mr_urls.*", "acme/my.widgets#5")
+        assert result == "https://x/pull/1"
+
+
+def _extract_badge_map_declaration(script: str) -> str:
+    """Pull the real `var BADGE_SPECIAL_CASES = {...};` declaration out of
+    the generated script — as opposed to hand-building it from the Python
+    dict — so a test using it proves the __BADGE_SPECIAL_CASES__ placeholder
+    actually substituted, not merely that badge_css_and_label() agrees with
+    a copy fed in independently (cc-workflow#1180 code review)."""
+    start = script.index("var BADGE_SPECIAL_CASES = ")
+    end = script.index(";", start) + 1
+    return script[start:end]
+
+
+def _run_apply_state_on_status_badge(state: dict, field_key: str) -> dict:
+    """Run the REAL applyState() against a single fake `[data-status]`
+    element and return its resulting className/textContent — a full
+    end-to-end behavioral check of the badge-update path (resolve() +
+    the open/closed/generic mapping), against a minimal DOM stub."""
+    applyState_start_marker = "function applyState("
+    pollstate_marker = "function pollState("
+    script = render_polling_script()
+    resolve_fn = _extract_resolve_fn(script)
+    apply_state_fn = script[script.index(applyState_start_marker) : script.index(pollstate_marker)]
+    badge_map_decl = _extract_badge_map_declaration(script)
+
+    node_src = f"""
+{badge_map_decl}
+{resolve_fn}
+{apply_state_fn}
+
+var el = {{
+  _attrs: {{ "data-status": "issues.*.status", "data-field-key": {json.dumps(field_key)} }},
+  className: "badge badge-pending",
+  textContent: "",
+  getAttribute: function(name) {{ return this._attrs[name] !== undefined ? this._attrs[name] : null; }},
+  classList: {{ add: function(cls) {{ el.className = (el.className + " " + cls).trim(); }} }},
+}};
+
+global.document = {{
+  querySelectorAll: function(sel) {{ return sel === "[data-status]" ? [el] : []; }},
+  querySelector: function() {{ return null; }},
+}};
+
+applyState({json.dumps(state)});
+console.log(JSON.stringify({{ className: el.className, textContent: el.textContent }}));
+"""
+    proc = subprocess.run(["node", "-e", node_src], capture_output=True, text=True, timeout=10)
+    assert proc.returncode == 0, f"node execution failed: {proc.stderr}"
+    return json.loads(proc.stdout)
+
+
+class TestDataStatusBadgeMapping:
+    """cc-workflow#1180: data-status drives BOTH the badge class and label
+    on a poll tick, and the mapping must mirror execution_grid.py's
+    _render_issue_row exactly — "open" is a special case (badge-pending,
+    not the generic badge-open), not the default hyphenated transform.
+    Getting this wrong would make the FIRST poll tick after page load
+    immediately overwrite a correct initial render with a broken class,
+    which is worse than the never-updates bug #1180 exists to fix — this
+    executes the REAL applyState() against a minimal DOM stub, not a
+    substring check."""
+
+    pytestmark = pytest.mark.usefixtures("_require_node")
+
+    def test_open_status_maps_to_badge_pending_not_badge_open(self) -> None:
+        state = {"issues": {"acme/widgets#1": {"status": "open"}}}
+        result = _run_apply_state_on_status_badge(state, "acme/widgets#1")
+        assert "badge-pending" in result["className"].split()
+        assert "badge-open" not in result["className"].split()
+        assert result["textContent"] == "open"
+
+    def test_closed_status_maps_to_badge_closed(self) -> None:
+        state = {"issues": {"acme/widgets#1": {"status": "closed"}}}
+        result = _run_apply_state_on_status_badge(state, "acme/widgets#1")
+        assert "badge-closed" in result["className"].split()
+        assert result["textContent"] == "closed"
+
+    def test_other_status_uses_generic_hyphenated_mapping(self) -> None:
+        state = {"issues": {"acme/widgets#1": {"status": "in_progress"}}}
+        result = _run_apply_state_on_status_badge(state, "acme/widgets#1")
+        assert "badge-in-progress" in result["className"].split()
+        assert result["textContent"] == "in progress"
+
+    def test_dotted_qualified_key_updates_the_badge_on_poll(self) -> None:
+        # The end-to-end proof: a repo name containing a literal "." no
+        # longer silently breaks the live-poll update for the status badge.
+        state = {"issues": {"acme/my.widgets#5": {"status": "closed"}}}
+        result = _run_apply_state_on_status_badge(state, "acme/my.widgets#5")
+        assert "badge-closed" in result["className"].split()
+        assert result["textContent"] == "closed"
+
+    @pytest.mark.parametrize("status", ["open", "closed", "in_progress", "held", "pending"])
+    def test_python_and_js_agree_for_every_status(self, status: str) -> None:
+        # cc-workflow#1180 code review: the structural fix (BADGE_SPECIAL_CASES
+        # as one shared dict) is what makes this true by construction rather
+        # than by two hand-synced mappings — this test is the belt-and-
+        # suspenders proof that the wiring between the shared dict and its
+        # two consumers (Python's badge_css_and_label, the serialized JS)
+        # actually holds, for every status this dashboard renders, not just
+        # the two originally-special-cased ones. A THIRD special case added
+        # to only one side would fail exactly this test.
+        expected_css, expected_label = badge_css_and_label(status)
+        state = {"issues": {"acme/widgets#1": {"status": status}}}
+        result = _run_apply_state_on_status_badge(state, "acme/widgets#1")
+        assert result["className"].split() == ["badge", expected_css]
+        assert result["textContent"] == expected_label
+
+
+def _run_apply_state_on_mr_link(
+    state: dict, field_key: str, initial_href: str = ""
+) -> dict:
+    """Run the REAL applyState() against a single fake always-<a> MR-link
+    element and return its resulting href/textContent/display — a full
+    end-to-end behavioral check of the data-bind-href wiring
+    (cc-workflow#1180 code review)."""
+    applyState_start_marker = "function applyState("
+    pollstate_marker = "function pollState("
+    script = render_polling_script()
+    resolve_fn = _extract_resolve_fn(script)
+    apply_state_fn = script[script.index(applyState_start_marker) : script.index(pollstate_marker)]
+
+    node_src = f"""
+{resolve_fn}
+{apply_state_fn}
+
+var el = {{
+  _attrs: {{
+    "data-field": "waves.wave-1.mr_urls.*",
+    "data-bind-href": "waves.wave-1.mr_urls.*",
+    "data-field-key": {json.dumps(field_key)}
+  }},
+  href: {json.dumps(initial_href)},
+  style: {{ display: "none" }},
+  textContent: "",
+  getAttribute: function(name) {{ return this._attrs[name] !== undefined ? this._attrs[name] : null; }},
+}};
+
+global.document = {{
+  querySelectorAll: function(sel) {{
+    if (sel === "[data-field]" || sel === "[data-bind-href]") return [el];
+    return [];
+  }},
+  querySelector: function() {{ return null; }},
+}};
+
+applyState({json.dumps(state)});
+console.log(JSON.stringify({{ href: el.href, textContent: el.textContent, display: el.style.display }}));
+"""
+    proc = subprocess.run(["node", "-e", node_src], capture_output=True, text=True, timeout=10)
+    assert proc.returncode == 0, f"node execution failed: {proc.stderr}"
+    return json.loads(proc.stdout)
+
+
+class TestDataBindHrefIndirection:
+    """cc-workflow#1180 code review: the MR-link cell became a single,
+    always-present <a> (never a <span>) specifically so a later poll tick
+    can populate href without needing to swap the element's tag — a
+    data-field-only update could only ever rewrite textContent, leaving a
+    populated cell as unlinked plain text, or a changed URL's href stale
+    against its own updated label. These tests run the REAL applyState()
+    under node against a fake anchor, not a substring check — the exact
+    "wiring looks right but the shipped artifact disagrees" shape #1180
+    itself exists to catch."""
+
+    pytestmark = pytest.mark.usefixtures("_require_node")
+
+    def test_href_and_text_populate_once_mr_is_recorded(self) -> None:
+        state = {
+            "waves": {"wave-1": {"mr_urls": {"acme/widgets#1": "https://github.com/acme/widgets/pull/42"}}}
+        }
+        result = _run_apply_state_on_mr_link(state, "acme/widgets#1")
+        assert result["href"] == "https://github.com/acme/widgets/pull/42"
+        assert result["textContent"] == "https://github.com/acme/widgets/pull/42"
+        assert result["display"] == ""
+
+    def test_stale_href_is_overwritten_when_mr_url_changes(self) -> None:
+        # The "worse than never appearing" case the review flagged: a
+        # previously-recorded href must not survive a poll tick that
+        # resolves to a different URL — visible text and click target must
+        # never be allowed to disagree.
+        state = {
+            "waves": {"wave-1": {"mr_urls": {"acme/widgets#1": "https://github.com/acme/widgets/pull/99"}}}
+        }
+        result = _run_apply_state_on_mr_link(
+            state, "acme/widgets#1", initial_href="https://github.com/acme/widgets/pull/42"
+        )
+        assert result["href"] == "https://github.com/acme/widgets/pull/99"
+
+    def test_no_mr_yet_leaves_element_hidden_with_no_href(self) -> None:
+        # mr_urls has no entry for this key yet — resolve() returns
+        # undefined, and the hidden/no-href initial state must be a silent
+        # no-op, never a throw or a literal "undefined" written into href.
+        state = {"waves": {"wave-1": {"mr_urls": {}}}}
+        result = _run_apply_state_on_mr_link(state, "acme/widgets#1")
+        assert result["href"] == ""
+        assert result["display"] == "none"
+
+    def test_dotted_qualified_key_updates_href_on_poll(self) -> None:
+        # Mirrors test_dotted_qualified_key_updates_the_badge_on_poll for
+        # the status badge: a repo name containing a literal "." must not
+        # break the href live-update either.
+        state = {
+            "waves": {
+                "wave-1": {"mr_urls": {"acme/my.widgets#5": "https://github.com/acme/my.widgets/pull/7"}}
+            }
+        }
+        result = _run_apply_state_on_mr_link(state, "acme/my.widgets#5")
+        assert result["href"] == "https://github.com/acme/my.widgets/pull/7"

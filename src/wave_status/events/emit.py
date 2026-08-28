@@ -25,20 +25,27 @@ DI-seams (env vars):
 - ``FLIGHTDECK_INGEST_TIMEOUT`` — POST timeout seconds (default 2).
 - ``FLIGHTDECK_EVENTS_PATH``  — override the buffer file (test isolation).
 - ``FLIGHTDECK_EMIT_DISABLED``— hard off switch (no-op emit).
-- ``FLIGHTDECK_ACTIVITY_ID`` / ``FLIGHTDECK_AGENT`` / ``FLIGHTDECK_LOG_REF`` —
-  scope defaults for :func:`emit_state_event`.
+- ``FLIGHTDECK_ACTIVITY_ID`` / ``FLIGHTDECK_AGENT`` / ``FLIGHTDECK_SESSION_ID`` /
+  ``FLIGHTDECK_LOG_REF`` — scope defaults for :func:`emit_state_event`.
+- ``CLAUDE_CODE_SESSION_ID`` — Claude Code's own ambient session id (set on
+  every Bash tool subprocess); :func:`resolve_session`'s fallback when
+  ``FLIGHTDECK_SESSION_ID`` isn't set (#1165).
+- ``FLIGHTDECK_SCOPE_PATH``   — override the #1148 scope-marker file (test
+  isolation). Unset ⇒ ``<cwd>/.claude/status/flightdeck-scope.json``.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 import os
+import sys
 import threading
 import urllib.request
 from pathlib import Path
 
-from wave_status.events import build_event, validate_event
+from wave_status.events import build_event, now_iso, validate_event
 
 __all__ = [
     "emit",
@@ -47,11 +54,17 @@ __all__ = [
     "replay",
     "buffer_path",
     "activity_id_for_root",
+    "flush_pending_ships",
 ]
 
 # Sentinel so ``value=None`` (a seamed-absent metric, #853 token stub) is
 # distinguishable from "value not supplied".
 _UNSET = object()
+
+# Daemon threads started by `_ship_async`, not yet joined (#1149). Populated
+# here, drained by `flush_pending_ships` — see that function's docstring for
+# why the join lives at the true top-level exit point and nowhere else.
+_pending_ships: list[threading.Thread] = []
 
 # Map the ergonomic snake_case emit() kwargs to the schema's camelCase keys.
 # ``activity_type`` and ``host`` (#947) are additive convention fields — the
@@ -63,6 +76,7 @@ _FIELD_KEYS: dict[str, str] = {
     "phase": "phase",
     "flight": "flight",
     "agent": "agent",
+    "session": "session",
     "log_ref": "logRef",
     "concern_kind": "concernKind",
     "source": "source",
@@ -148,6 +162,40 @@ def resolve_agent(root: object) -> str | None:
     return _dev_name_from(Path("/tmp") / f"claude-agent-{digest}.json")
 
 
+def resolve_session() -> str | None:
+    """Resolve the emitting session's stable AX-4 identity (cc-workflow#1146
+    step 3, #1165).
+
+    Unlike :func:`resolve_agent`, there is no per-session identity FILE to read
+    — a session id is inherently ephemeral/per-process, not a durable fact
+    written once to disk the way a Dev-Name is. Resolution order:
+
+    1. ``FLIGHTDECK_SESSION_ID`` env — an operator/driver override, same
+       precedence convention as ``FLIGHTDECK_AGENT``;
+    2. ``CLAUDE_CODE_SESSION_ID`` env — Claude Code's OWN session id. This is
+       not a guess: the product changelog confirms it is set on every Bash
+       tool subprocess (and on stdio MCP server subprocesses) as of the
+       versions in this fleet, matching the ``session_id`` hooks receive on
+       stdin. Verified live against this session's own environment before
+       relying on it. NOTE: NOT the same name as ``CLAUDE_SESSION_ID``, which
+       does not exist as a real ambient variable — an earlier draft of this
+       function checked that wrong name, which silently never resolves.
+       ``scripts/flightdeck-session-emit.sh``'s own fallback chain has the
+       identical bug and is tracked separately (#1166), bundled with that
+       script's other AX-4 fallback-collision fix rather than split across
+       two PRs.
+
+    Returns ``None`` when neither resolves — genuinely rare in a live Claude
+    Code Bash-tool context (case 2 above almost always fires there); real
+    outside that context (a bare terminal, a non-Claude-Code CI runner).
+    Never raises.
+    """
+    env = os.environ.get("FLIGHTDECK_SESSION_ID")
+    if env:
+        return env
+    return os.environ.get("CLAUDE_CODE_SESSION_ID") or None
+
+
 # ---------------------------------------------------------------------------
 # Buffer write (atomic append) + offset marker
 # ---------------------------------------------------------------------------
@@ -173,6 +221,98 @@ def _read_offset(buffer: Path) -> int:
         return int(_offset_path(buffer).read_text(encoding="utf-8").strip() or "0")
     except Exception:
         return 0
+
+
+# ---------------------------------------------------------------------------
+# FlightDeck scope marker (#1148) — the writer half of mcp-server-sdlc#537.
+#
+# `sdlc-server`'s own handlers (ci_wait_run, pr_merge, wave_finalize,
+# commutativity_verify, drift_*, wave_ci_trust_level) run inside the MCP SERVER
+# process, which is already spawned by the time a campaign starts. A driver's
+# in-session `export FLIGHTDECK_ACTIVITY_ID=...` (skills/wavemachine/SKILL.md)
+# runs in a Bash tool subprocess and can never reach that already-running
+# process's env — confirmed live via /proc/<pid>/environ on three running
+# servers, each frozen at spawn with no FLIGHTDECK_ACTIVITY_ID at all, falling
+# through to a repo-basename card (#1144's sdlc-server-side mechanism).
+#
+# This marker is the fix: a small durable per-repo file, read FRESH on every
+# call (no restart dependency), that the CLI writes the moment it knows the
+# campaign's real scope — construction, not one more line of skill prose for a
+# driver to forget.
+#
+# CONTRACT (identical on the read side, mcp-server-sdlc#537):
+#   path:  <cwd>/.claude/status/flightdeck-scope.json
+#   shape: {"activityId": "<str>", "agent": "<str|null>", "updatedAt": "<ISO8601>"}
+#
+# `session` (#1165, #1146 step 3 prerequisite) is an ADDITIVE field on this
+# same marker — the write side only. mcp-server-sdlc's read side (#537) does
+# not consume it yet; that's a separate, uncoordinated change in that repo.
+# Safe regardless: an unread extra JSON key is a no-op for any parser that
+# reads this file today, same additive-safety property as the schema field
+# itself.
+
+def _scope_marker_path() -> Path:
+    override = os.environ.get("FLIGHTDECK_SCOPE_PATH")
+    if override:
+        return Path(override).expanduser()
+    return Path.cwd() / ".claude" / "status" / "flightdeck-scope.json"
+
+
+def _write_scope_marker(activity_id: str, agent: str | None, session: str | None = None) -> None:
+    """Atomic write: temp file in the SAME directory, then os.replace() —
+    guarantees a same-filesystem rename (mirrors state.py's save_json, R-33).
+
+    Unlike save_json, this never raises to the caller (R-01/R-03: a broken
+    marker write must never fail the emit that triggered it) — but a failure
+    still cleans up its own temp file rather than leaving an orphan behind in
+    .claude/status/ (gitignored, so an orphan would silently accumulate,
+    one per failed write, forever).
+    """
+    fd = None
+    try:
+        path = _scope_marker_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"activityId": activity_id, "agent": agent, "session": session, "updatedAt": now_iso()}
+        fd = tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=str(path.parent), suffix=".tmp", delete=False
+        )
+        json.dump(payload, fd)
+        fd.flush()
+        os.fsync(fd.fileno())
+        fd.close()
+        os.replace(fd.name, path)
+    except Exception:
+        if fd is not None:
+            try:
+                fd.close()
+            except Exception:
+                pass
+            try:
+                os.unlink(fd.name)
+            except OSError:
+                pass
+
+
+def _clear_scope_marker_if_matching(activity_id: str) -> None:
+    """Clear the marker on activity_end, but ONLY if it names the activity that
+    is actually ending. An unrelated activity_end in the same repo (a session
+    close, a different activity) must not wipe a live campaign's marker out
+    from under it. Never raises.
+    """
+    try:
+        path = _scope_marker_path()
+        current = json.loads(path.read_text(encoding="utf-8"))
+        # Read-check-unlink is NOT atomic: a concurrent activity_start for a
+        # DIFFERENT campaign in this repo could land between the read and the
+        # unlink, and this would delete that new marker instead of the one it
+        # checked. Accepted rather than locked — the wavemachine pre-flight
+        # already refuses a second concurrent campaign per repo, so the window
+        # requires two overlapping campaigns to matter, and a lockfile is
+        # disproportionate for fire-and-forget instrumentation.
+        if current.get("activityId") == activity_id:
+            path.unlink()
+    except Exception:
+        pass
 
 
 def _write_offset(buffer: Path, offset: int) -> None:
@@ -259,15 +399,105 @@ replay = ship
 
 
 def _ship_async(buffer: Path) -> None:
-    """Fire :func:`ship` in a daemon thread so the caller never blocks (R-02)."""
+    """Fire :func:`ship` in a daemon thread so the caller never blocks (R-02).
+
+    The thread is registered in :data:`_pending_ships` so a true top-level exit
+    can bound-join it (:func:`flush_pending_ships`, #1149) — never joined here,
+    which would defeat R-02 for every in-process caller.
+    """
     if not os.environ.get("FLIGHTDECK_INGEST_URL"):
         return  # DI-seam: buffer-only, no thread.
     try:
-        threading.Thread(
+        t = threading.Thread(
             target=ship, args=(buffer,), daemon=True, name="flightdeck-ship"
-        ).start()
+        )
+        t.start()
+        _pending_ships.append(t)
     except Exception:
         pass
+
+
+def _flush_std_streams() -> None:
+    """Best-effort ``stdout``/``stderr`` flush ahead of ``os._exit`` (#1149).
+
+    Never raises: a closed pipe on the READING end (``wave-status show |
+    head -1``) makes ``flush()`` raise ``BrokenPipeError``, and letting that
+    propagate out of a ``finally`` block would skip the ``os._exit()`` call
+    right after it — turning a clean, fast exit into a shutdown traceback.
+    Best-effort is the correct contract here anyway: os._exit truncates an
+    unflushed buffer no worse than any other abrupt exit would.
+    """
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
+    try:
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+def flush_pending_ships(timeout: float | None = None) -> None:
+    """Bound-join every outstanding shipper thread before a REAL process exit.
+
+    #1149: a daemon thread mid-flight in an SSL/socket call when CPython's
+    interpreter finalization tears down C-extension state it still depends on
+    is a known segfault class. `_ship_async` never blocks its caller (R-02) —
+    that contract must hold for every IN-PROCESS caller of :func:`emit`
+    (``_cmd_emit``, ``_cmd_campaign_head``, direct test calls), so this
+    function must be called ONLY from :func:`_run_as_script` — never from
+    :func:`emit`, :func:`main`, or any command handler. Calling it anywhere
+    else reintroduces exactly the caller-blocking cost R-02 exists to avoid,
+    on every state mutation, not just the crash-prone one.
+
+    `_run_as_script` has THREE callers, not two — this is the exact blind
+    spot that let the original fix land as dead code in production (a code
+    review caught it before merge, not after): this module's own
+    ``if __name__ == "__main__":`` guard, ``wave_status/__main__.py``'s
+    (the real ``wave-status`` CLI's entry when invoked as
+    ``python -m wave_status``), and the zipapp shim
+    ``scripts/ci/build.sh`` generates for the SHIPPED ``wave-status``
+    binary — the one that matters in production, since it imports
+    ``wave_status.__main__`` as a module rather than running it, so neither
+    ``__main__`` guard fires there at all. Any new packaging/invocation path
+    added later needs to route through `_run_as_script` too, or it silently
+    reopens #1149.
+
+    Bounded, not indefinite: an unbounded join would hang the CLI forever
+    against a truly dead/hanging ingest endpoint — the same failure mode R-02
+    was built to avoid, just moved to a different call site. *timeout*
+    defaults to ``FLIGHTDECK_INGEST_TIMEOUT`` (the same bound a single
+    in-flight POST is already allowed to take), so the worst case this adds
+    to a real process exit is one more instance of a cost the process was
+    already prepared to pay.
+
+    Never raises (R-03). Clears :data:`_pending_ships` unconditionally —
+    whether a thread finished, is still running past the timeout, or joining
+    it raised, waiting on it a second time serves no purpose.
+
+    This join is bounded PER THREAD, so `ship()`'s own internal backlog
+    replay can still legitimately exceed *timeout* in total — a thread can be
+    abandoned here mid-POST if the buffer had a lot of catching up to do.
+    That's fine ONLY because both call sites follow this with `os._exit()`,
+    not a normal return: no `Py_Finalize` runs, so an abandoned in-flight
+    thread has nothing left to race and can't trigger the crash class this
+    fix exists for. **The join buys delivery; `os._exit()` buys crash
+    safety — they are not substitutes for each other.** If a future change
+    ever "simplifies" a call site back to a bare return/`sys.exit()`, the
+    abandoned-thread case reopens #1149 exactly as it was before this fix,
+    even with this join still in place.
+    """
+    if timeout is None:
+        try:
+            timeout = float(os.environ.get("FLIGHTDECK_INGEST_TIMEOUT", "2"))
+        except (TypeError, ValueError):
+            timeout = 2.0
+    threads, _pending_ships[:] = list(_pending_ships), []
+    for t in threads:
+        try:
+            t.join(timeout=timeout)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +512,7 @@ def emit(
     phase: str | None = None,
     flight: str | int | None = None,
     agent: str | None = None,
+    session: str | None = None,
     log_ref: str | None = None,
     concern_kind: str | None = None,
     source: str | None = None,
@@ -308,6 +539,7 @@ def emit(
     fields: dict[str, object] = {}
     local = {
         "wave": wave, "phase": phase, "flight": flight, "agent": agent,
+        "session": session,
         "log_ref": log_ref, "concern_kind": concern_kind, "source": source,
         "metric": metric, "unit": unit, "action": action, "label": label,
         "detail": detail, "activity_type": activity_type, "host": host,
@@ -340,14 +572,16 @@ def emit(
 def emit_state_event(root: object, kind: str, **fields: object) -> dict | None:
     """Convenience wrapper for state.py mutators (S1.2).
 
-    Derives ``activityId`` from *root* and picks up ``agent`` / ``log_ref`` from
-    the environment, then delegates to :func:`emit`. Never raises.
+    Derives ``activityId`` from *root* and picks up ``agent`` / ``session`` /
+    ``log_ref`` from the environment, then delegates to :func:`emit`. Never
+    raises.
     """
     try:
         return emit(
             kind,
             activity_id=activity_id_for_root(root),
             agent=resolve_agent(root),
+            session=resolve_session(),
             log_ref=os.environ.get("FLIGHTDECK_LOG_REF"),
             **fields,
         )
@@ -363,7 +597,7 @@ def emit_state_event(root: object, kind: str, **fields: object) -> dict | None:
 def _build_arg_fields(args) -> dict:
     fields: dict[str, object] = {}
     for name in (
-        "wave", "phase", "flight", "agent", "log_ref", "concern_kind",
+        "wave", "phase", "flight", "agent", "session", "log_ref", "concern_kind",
         "source", "metric", "unit", "action", "label", "detail",
         "activity_type", "host",
     ):
@@ -407,6 +641,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--phase", default=None)
     p.add_argument("--flight", default=None)
     p.add_argument("--agent", default=None)
+    p.add_argument("--session", default=None,
+                   help="AX-4 stable session identity, distinct from --agent (Dev-Name); "
+                        "cc-workflow#1146 step 3 / #1165")
     p.add_argument("--log-ref", dest="log_ref", default=None)
     p.add_argument("--concern-kind", dest="concern_kind", default=None)
     p.add_argument("--source", default=None)
@@ -416,6 +653,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--action", default=None)
     p.add_argument("--label", default=None)
     p.add_argument("--detail", default=None)
+    p.add_argument(
+        "--detail-json", dest="detail_json", default=None,
+        help="structured detail payload as a JSON string, decoded before emit so the "
+             "buffered event carries an OBJECT rather than a string (#1145). Prefer this "
+             "over --detail for any new caller that has a structured payload; --detail "
+             "stays for free-form prose (schema permits 'string or structured'). Wins "
+             "over --detail if both are given.",
+    )
     p.add_argument("--activity-type", dest="activity_type", default=None,
                    help="convention field: campaign|float|session (#947)")
     p.add_argument("--host", default=None,
@@ -424,18 +669,112 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     try:
+        fields = _build_arg_fields(args)
+        # #1146 step 1: this CLI is the one remaining place that shipped
+        # agentless events by default. state.py's mutators all route through
+        # emit_state_event(), which already calls resolve_agent(root) — but
+        # THIS entry point (every hand-typed `wave-status emit ...` AND every
+        # Workflow-generated `flightdeckTee` line, skills/nextwave/
+        # per-wave-workflow.js) calls emit() directly and only carried `agent`
+        # when a caller explicitly passed `--agent`. Same resolution chain,
+        # rooted at the caller's cwd (there is no `root` param on a standalone
+        # CLI — cwd is the closest equivalent, matching
+        # scripts/flightdeck-session-emit.sh's own convention).
+        #
+        # A BLANK `--agent` (`""` or whitespace-only) is treated as "not
+        # supplied", not as a deliberate override — code review: every
+        # consumer (flightdeck's fold.ts, mcp-server-sdlc's scope-marker
+        # read) already normalizes an empty agent string to "no attribution"
+        # rather than trusting it, because that is the documented accidental
+        # shape of an unset shell variable (`--agent "$DEV_NAME"` with
+        # DEV_NAME empty), never a real request to suppress attribution. This
+        # also matches _cmd_campaign_head's own `if args.agent:` truthiness
+        # check one call up the stack — leaving `""` special here would make
+        # the two campaign-head/emit paths disagree on the exact same input.
+        if not str(fields.get("agent") or "").strip():
+            fields.pop("agent", None)
+            resolved_agent = resolve_agent(Path.cwd())
+            if resolved_agent:
+                fields["agent"] = resolved_agent
+        # Same default-injection + blank-normalization discipline as --agent
+        # above (#1165, #1146 step 3 prerequisite) — resolve_session() is
+        # env-only (no per-session identity FILE the way agent-identity.json
+        # holds Dev-Name), so this fills the gap on every caller that doesn't
+        # pass --session explicitly.
+        if not str(fields.get("session") or "").strip():
+            fields.pop("session", None)
+            resolved_session = resolve_session()
+            if resolved_session:
+                fields["session"] = resolved_session
+        if args.detail_json is not None:
+            fields["detail"] = json.loads(args.detail_json)
         event = emit(
             args.kind,
             activity_id=args.activity_id,
             ship_now=args.ship_now,
-            **_build_arg_fields(args),
+            **fields,
         )
         if event is not None:
+            # BEFORE print(): if stdout is closed or full, print() can raise,
+            # and this must not be skipped as a result — it is the whole point
+            # of this CLI call succeeding.
+            #
+            # #1148: give sdlc-server's own handlers something live to resolve
+            # scope from, since their process env is frozen at spawn. Only on
+            # a RESOLVED id — writing a marker for the "unknown" fallback would
+            # poison the read side's own fallback chain with that literal string,
+            # worse than leaving no marker at all.
+            aid = event.get("activityId")
+            # CAMPAIGN ONLY, by allowlist not denylist. The session hook
+            # (scripts/flightdeck-session-emit.sh) ALSO emits activity_start —
+            # every new Claude Code session in this repo triggers one — and its
+            # legacy-retry path drops --activity-type entirely when an older
+            # installed CLI rejects the flag (argparse exit 2). A denylist on
+            # "session" would leak straight through that path: args.activity_type
+            # would read None, not "session", and a routine session start would
+            # silently clobber a LIVE campaign's marker with a presence id. The
+            # wavemachine driver always pins --activity-type campaign — since
+            # #1145, via `wave-status campaign-head` (__main__.py:_cmd_campaign_head),
+            # which delegates to this same main() precisely to keep this marker
+            # write; nothing else emits "float" today.
+            if args.kind == "activity_start" and args.activity_type == "campaign" and aid != "unknown":
+                _write_scope_marker(aid, event.get("agent"), event.get("session"))
+            elif args.kind == "activity_end" and aid:
+                _clear_scope_marker_if_matching(aid)
             print(json.dumps(event, separators=(",", ":"), ensure_ascii=False))
     except Exception:
         pass  # fire-and-forget: never fail the caller.
     return 0
 
 
+def _run_as_script() -> None:
+    """The real top-level entry-point body for this module's standalone form
+    (``python -m wave_status.events.emit ...``) — the one place it's safe to
+    both join outstanding shipper threads and skip normal interpreter
+    finalization. See `flush_pending_ships`'s docstring for why this must
+    never move into `main()` itself (it's called in-process elsewhere, and a
+    bad move here would either block those callers or kill a test run).
+
+    Factored out of the ``if __name__ == "__main__":`` guard so tests can
+    call it directly with ``os._exit`` mocked — actually invoking
+    ``os._exit`` would kill the test process, and the whole point of it is
+    that it can't be caught.
+    """
+    _code = 1
+    try:
+        _code = main()
+    finally:
+        flush_pending_ships()
+        _flush_std_streams()
+    # os._exit, not SystemExit/return: skips Py_Finalize's interpreter
+    # teardown entirely, which is what the daemon-thread-shutdown race needs
+    # to exist at all. Safe here specifically because flush_pending_ships()
+    # just ran — nothing this module does relies on atexit/GC finalizers
+    # (verified: no `atexit`, no `__del__`, no buffered writes other than the
+    # stdout/stderr just flushed above; the buffer append and scope-marker
+    # write are already fsync'd+closed before `main()` returns).
+    os._exit(_code)
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _run_as_script()

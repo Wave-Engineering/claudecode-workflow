@@ -586,7 +586,7 @@ The top-level loop gains three new step groups.
    - `commutativity_verify(base_ref=main, changesets=[{id:"kahuna", head_ref:<branch>}])`
    - `ci_wait_run(ref=<kahuna_branch>, timeout_sec=1800)`
    - `Agent(subagent_type=feature-dev:code-reviewer, prompt=<composed diff>)` — scoped review over the full kahuna-vs-main diff
-   - `Bash("trivy fs --scanners vuln --severity HIGH,CRITICAL --format json --quiet <repo_path>")`
+   - `Bash("trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet <repo_path>")` (cc-workflow#1169)
 5. Collect all four results. Do not short-circuit (per Procedure C).
 6. If all four pass: invoke `pr_merge({number: <kahuna_mr_number>, squash_message: <assembled>})`. Record disposition in wave state's `kahuna_branches` history. Delete kahuna branch. Emit `#wave-status` notification (R-19) and vox announcement.
 7. If any fail: transition wave state `action` → `gate_blocked` with per-signal detail. Emit `#wave-status` notification + vox alert per Procedure C. Preserve kahuna branch. Exit loop.

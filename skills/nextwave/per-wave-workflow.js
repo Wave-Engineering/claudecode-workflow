@@ -356,6 +356,39 @@ function teeAgent(prompt, opts) {
   return agent(prompt + '\n' + flightdeckTee(opts), opts)
 }
 
+// cc-workflow#1138 step 2 / #1170: idempotently own the FlightDeck
+// activity_start HEAD ROW for AID (distinct from `wave-status campaign-head`
+// — that command additionally declares activityType/label/planTotal; this
+// one deliberately never does, see below). Called ONCE per wave, from
+// rehydrate() only (the one node that runs exactly once per Workflow
+// PROCESS — cold start or resume) — deliberately NOT folded into
+// flightdeckTee/teeAgent's generic per-node helper, which fires on every
+// spine node and would re-fire this needlessly.
+// Root cause this closes: AID = PLAN_ID || WAVE_ID degrades to a wave-scoped
+// key on a bare/standalone run, and nothing ever emitted an activity_start
+// ROW for that degraded key at all — its steps rendered as an orphaned tail
+// with no head row (fold.ts backfills startedAt from whatever event happened
+// to arrive first instead). Unconditional (no branching on which value AID
+// resolved to) closes BOTH ways that happens: a real campaign's already-real
+// head (from `wave-status campaign-head`, now called from BOTH `/prepwaves`'s
+// persist step and `/wavemachine`'s launch sequence, cc-workflow#1171) gets
+// an idempotent no-op re-fire; a standalone `/nextwave` run — AID is now a
+// real plan id whenever `/prepwaves` prepped the plan (#1171) — gets a real
+// head row where none existed. `wave-begin`'s narrow CLI surface (no
+// --label/--detail-json/--activity-type) is what makes the re-fire case
+// safe — see _cmd_wave_begin's docstring in __main__.py. NOT claimed: this
+// function alone does not move a headless-classified activity (flightdeck's
+// fold.ts activityType, flightdeck#31/#42) out of the headless UI bucket —
+// that is #1171's fix, in `/prepwaves`, not here.
+function flightdeckWaveBegin() {
+  return [
+    ``,
+    `── FlightDeck telemetry: activity head row (fire-and-forget; do NOT report on it and do NOT let it affect your task) ──`,
+    `As a side action, run this best-effort command ONCE, ignore any error, then proceed with your real task:`,
+    `  wave-status wave-begin '${AID}' '${WAVE_ID}' || true`,
+  ].join('\n')
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SEAM STUBS — return obvious placeholders. The foundational wave-2 issues
 // replace each body with the real sdlc-server-backed implementation. The exact
@@ -372,7 +405,7 @@ function teeAgent(prompt, opts) {
 // resume.js parseRehydrate (unit-tested); the agent is the file read the script can't do itself.
 async function rehydrate() {
   const seed = await teeAgent(
-    rehydratePrompt({ waveId: WAVE_ID, allIssues: ALL_ISSUES, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR }),
+    rehydratePrompt({ waveId: WAVE_ID, allIssues: ALL_ISSUES, targetRepo: TARGET_REPO, targetRepoDir: TARGET_REPO_DIR }) + '\n' + flightdeckWaveBegin(),
     { label: 'rehydrate', phase: 'Rehydrate', schema: REHYDRATE, agentType: 'general-purpose' },
   ).catch((e) => {
     // A rehydrate failure must NOT kill the resume — degrade to cold start (re-do, never crash on

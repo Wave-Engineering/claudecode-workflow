@@ -354,6 +354,28 @@ def _all_issue_refs(plan_data: dict, default_repo: str | None = None) -> set[str
     return refs
 
 
+def _wave_work_item_counts(plan_data: dict) -> dict[str, int]:
+    """Return ``{wave_id: distinct issue-ref count}`` for every wave in the
+    plan (cc-workflow#1157).
+
+    Ref-based, like :func:`_all_issue_refs` — a cross-repo wave can
+    legitimately repeat an issue number across repos, and a bare-number
+    count would silently undercount that. A wave with zero issues is a
+    real ``0`` entry, not an absent key — the plan can legitimately carry
+    an empty wave, and that is a measurement ("we counted, it's zero"),
+    not a hole.
+    """
+    counts: dict[str, int] = {}
+    for phase in plan_data.get("phases", []):
+        for wave in phase.get("waves", []):
+            refs: set[str] = set()
+            for issue in wave.get("issues", []):
+                repo = _issue_repo(plan_data, issue)
+                refs.add(_compose_issue_key(issue["number"], repo))
+            counts[wave["id"]] = len(refs)
+    return counts
+
+
 def _resolve_issue_key(
     state_data: dict,
     ref: int | str,
@@ -431,6 +453,46 @@ def _resolve_issue_key(
     return None
 
 
+def resolve_issue_key(mapping: dict, num: int | str) -> str | None:
+    """Like :func:`resolve_issue_value`, but returns the RESOLVED KEY itself
+    (bare or qualified) rather than the value stored at it.
+
+    cc-workflow#1173: a caller that needs to NAME the key going forward — e.g.
+    baking it into a dashboard ``data-field`` live-poll binding, so a later
+    poll's client-side lookup targets the key that actually holds the value —
+    can't do that from :func:`resolve_issue_value` alone, which only hands
+    back the value. Same non-raising, first-qualified-match-on-conflict
+    semantics; returns ``None`` when nothing resolves.
+    """
+    key = str(num)
+    if key in mapping:
+        return key
+    suffix = f"#{key}"
+    for k in mapping:
+        if isinstance(k, str) and k.endswith(suffix):
+            return k
+    return None
+
+
+def future_issue_key(plan_data: dict | None, issue_plan: dict, num: int | str) -> str:
+    """Compose the key a NOT-YET-WRITTEN entry for *issue_plan* would use —
+    same ``_issue_repo`` + ``_compose_issue_key`` resolution `record_mr` and
+    `close_issue` apply once they actually write.
+
+    cc-workflow#1173 code review: :func:`resolve_issue_key` only finds a key
+    that's already IN the mapping. The dashboard's MR-link cell is rendered
+    before any MR exists — ``mr_urls`` starts empty from ``init_state`` — so
+    at that render there is nothing to resolve, and a bare-number guess
+    disagrees with the qualified key ``record_mr`` composes the moment an MR
+    actually lands, leaving the pre-baked ``data-field`` binding permanently
+    unable to find the value. This guesses the way the write path itself
+    will resolve it, so the two agree by construction, not by luck.
+    """
+    if plan_data is None:
+        return str(num)
+    return _compose_issue_key(num, _issue_repo(plan_data, issue_plan))
+
+
 def resolve_issue_value(mapping: dict, num: int | str, default=None):
     """Look up issue *num* in *mapping*, tolerating BOTH bare (``"13"``) and v3
     qualified (``"owner/repo#13"``) keys [ENG-7 / #849].
@@ -445,14 +507,15 @@ def resolve_issue_value(mapping: dict, num: int | str, default=None):
     where the same bare number exists in two repos (it returns the first qualified
     match). Generic over the value type: an ``issues`` entry dict OR an ``mr_urls``
     URL string — the caller supplies the matching *default* (``{}`` or ``""``).
+
+    Delegates key resolution to :func:`resolve_issue_key` — kept as two
+    functions rather than one returning a tuple, since every existing caller
+    here wants only the value, and threading an unused key through them would
+    be dead weight.
     """
-    key = str(num)
-    if key in mapping:
+    key = resolve_issue_key(mapping, num)
+    if key is not None:
         return mapping[key]
-    suffix = f"#{key}"
-    for k, v in mapping.items():
-        if isinstance(k, str) and k.endswith(suffix):
-            return v
     return default
 
 
@@ -1299,6 +1362,37 @@ def complete(root: Path, wave_id: str | None = None) -> dict:
     return state_data
 
 
+def _issue_wave_id(plan_data: dict, ref_num: int, ref_repo: str | None) -> str | None:
+    """Return the id of the wave containing issue *ref_num* (optionally
+    qualified by *ref_repo*), or ``None`` if not found.
+
+    Used to tag a FlightDeck close-issue event with the issue's OWN wave —
+    a static plan property — rather than the campaign's ``current_wave``
+    pointer, which can legitimately drift from the issue's actual wave: a
+    straggler close landing after the campaign has already advanced, a
+    human recovery via ``set_current_wave``, ``extend_state``'s
+    auto-advance, or the terminal wave completing (``current_wave`` goes
+    ``None``, per ``_find_next_pending_wave``). Code review on
+    cc-workflow#1157 caught this: the FlightDeck wave-scope work-item
+    numerator is only correct if the tag names the issue's real wave, not
+    wherever the pointer happened to be at close time.
+    """
+    for phase in plan_data.get("phases", []):
+        for wave in phase.get("waves", []):
+            wave_id = wave.get("id")
+            if wave_id is None:
+                continue  # #1157 review round 2: a wave.get("id") guard, not
+                # wave["id"] — this runs AFTER close_issue's save_json, so a
+                # KeyError here would raise on a mutation that already landed.
+            for issue in wave.get("issues", []):
+                if issue["number"] != ref_num:
+                    continue
+                if ref_repo and _issue_repo(plan_data, issue) != ref_repo:
+                    continue
+                return wave_id
+    return None
+
+
 def close_issue(n: int | str, root: Path) -> dict:
     """Set issue *n* to ``closed`` in ``state.json`` [R-07, R-14].
 
@@ -1371,10 +1465,30 @@ def close_issue(n: int | str, root: Path) -> dict:
     state_data["issues"][resolved]["status"] = "closed"
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    # The issue's OWN wave, not current_wave (cc-workflow#1157 code review) —
+    # see _issue_wave_id's docstring for why those can drift. Keyed off
+    # `resolved` (the key actually mutated above), NOT the raw (ref_num,
+    # ref_repo) input — round 2 of review: a bare close can dual-read-resolve
+    # into a DIFFERENT repo's issue than the raw input names (ambiguous
+    # bare+qualified match, "prefer qualified" in _resolve_issue_key), and
+    # keying the wave lookup off the pre-resolution input would then tag the
+    # event with the WRONG issue's wave. `is None`, not `or` — a wave id can
+    # legitimately be falsy (an empty string is still a real id in this
+    # module; nothing rejects one), and `or` would silently treat that as a
+    # miss and fall through to current_wave.
+    res_repo, res_num = _parse_issue_key(resolved)
+    issue_wave = _issue_wave_id(
+        plan_data, res_num if res_num is not None else ref_num, res_repo
+    )
+    if issue_wave is None:
+        # Falls back to current_wave only if the lookup somehow fails; the
+        # issue's existence in the plan was already validated above, so
+        # this should always find it in practice.
+        issue_wave = state_data.get("current_wave")
     _emit_event(
         root,
         "step",
-        wave=state_data.get("current_wave"),
+        wave=issue_wave,
         action="close-issue",
         label=str(resolved),
     )
@@ -1382,8 +1496,8 @@ def close_issue(n: int | str, root: Path) -> dict:
 
 
 def record_mr(issue: int | str, mr: str, root: Path) -> dict:
-    """Record an MR/PR reference for *issue* in the current wave's
-    ``mr_urls`` [R-08].
+    """Record an MR/PR reference for *issue* in ITS OWN wave's ``mr_urls``
+    [R-08].
 
     Accepts either a bare integer/digit-string or a qualified ref
     (``"owner/repo#N"``).  Dual-read lookup on existing ``mr_urls`` keys.
@@ -1391,14 +1505,15 @@ def record_mr(issue: int | str, mr: str, root: Path) -> dict:
     d = status_dir(root)
     state_data = load_state(d / "state.json")
     current_wave = state_data.get("current_wave")
-    if current_wave is None:
-        raise ValueError(
-            "Error: no current wave is set. "
-            "Run 'init' before recording an MR."
-        )
-
     waves = state_data.get("waves", {})
-    if current_wave not in waves:
+    # cc-workflow#1161: a non-None current_wave must still be a real wave —
+    # unchanged from before. A None current_wave is NOT refused here anymore;
+    # it legitimately happens once the terminal wave completes
+    # (_find_next_pending_wave), the MOST COMMON straggler shape for an MR,
+    # not an edge case — an MR merged and recorded after the campaign's final
+    # wave already finished. Whether that's resolvable is decided below, once
+    # the plan has been consulted via _issue_wave_id.
+    if current_wave is not None and current_wave not in waves:
         raise ValueError(
             f"Error: wave '{current_wave}' not found in state. "
             "Run 'init' before recording an MR."
@@ -1422,30 +1537,104 @@ def record_mr(issue: int | str, mr: str, root: Path) -> dict:
                 "Use an integer or 'owner/repo#N' form."
             )
 
+    # Loaded once, up front, so both the target-wave resolution below and the
+    # repo-inference fallback further down share one read (previously the
+    # fallback re-read this file itself).
+    try:
+        plan_data = load_json(d / "phases-waves.json")
+    except FileNotFoundError:
+        plan_data = None
+
+    # For a BARE ref (ref_repo is None), infer the repo from the plan BEFORE
+    # resolving the target wave — code review on cc-workflow#1158: the wave
+    # lookup (_issue_wave_id, first-match on a bare number) and the key
+    # composition below used to run as two SEPARATE scans over the same bare
+    # number, which can name DIFFERENT issues when that number appears in
+    # more than one wave under different repos (target_wave picks the FIRST
+    # match, the old inline repo scan picked the LAST). Deriving one
+    # (repo, wave) pair up front and reusing it for both makes them agree by
+    # construction — same discipline as #1157 round 2's "key the wave off
+    # the identity actually mutated, not the raw input" fix to close_issue.
+    lookup_repo = ref_repo
+    if lookup_repo is None and plan_data is not None:
+        plan_repo = _plan_default_repo(plan_data)
+        for phase in plan_data.get("phases", []):
+            for wave in phase.get("waves", []):
+                for iss in wave.get("issues", []):
+                    if iss["number"] == ref_num:
+                        plan_repo = _issue_repo(plan_data, iss) or plan_repo
+                        break
+        lookup_repo = plan_repo
+
+    # The PERSISTED write goes to the issue's OWN wave, not current_wave
+    # (cc-workflow#1158, the persisted-state sibling of #1157's close_issue
+    # fix — see _issue_wave_id's docstring for the four ways current_wave can
+    # legitimately drift from an issue's real wave). Scoped to the write
+    # only: `waves[wave_id].setdefault("mr_urls", {})` needs an id that is
+    # ACTUALLY a key in `waves`, so this falls back to current_wave both when
+    # the issue isn't in the plan (record_mr, unlike close_issue, never
+    # required plan membership — no fallback would strand a legitimately
+    # untracked issue with no error) and when a resolved wave id somehow
+    # isn't a real wave in state (defensive; every plan wave id should be).
+    #
+    # The EMITTED event's `wave` tag below is deliberately left as
+    # current_wave, NOT switched to target_wave — audited for cc-workflow#1158:
+    # flightdeck's fold.ts treats record-mr's wave tag as a genuine POSITION
+    # update (it is not in close-issue's exclusion list), so retagging it
+    # with the issue's static wave would silently snap FlightDeck's
+    # currentWave backward on a straggler MR — reintroducing the exact bug
+    # class #1157 fixed, one file over.
+    target_wave = current_wave
+    if plan_data is not None:
+        issue_wave = _issue_wave_id(plan_data, ref_num, lookup_repo)
+        if issue_wave is not None and issue_wave in waves:
+            target_wave = issue_wave
+
+    # cc-workflow#1161: current_wave was None AND the plan couldn't resolve
+    # the issue to any wave either — both signals genuinely absent, nothing
+    # to fall back to. Only raised here, after giving _issue_wave_id a
+    # chance, not before it. Two distinct causes need two distinct remedies
+    # (code review): plan_data is None means 'init' genuinely never ran —
+    # but once a plan exists, 'init' plain refuses (state.py's own
+    # "plan already initialized" guard), so telling an operator to run it
+    # again when the REAL problem is an issue absent from an existing plan
+    # would misdirect them toward a destructive `init --force`.
+    if target_wave is None:
+        if plan_data is None:
+            raise ValueError(
+                "Error: no current wave is set. "
+                "Run 'init' before recording an MR."
+            )
+        raise ValueError(
+            f"Error: no current wave is set, and issue #{ref_num} does not "
+            "belong to any wave in the plan. Run 'init --extend' to add it, "
+            "or check the issue number."
+        )
+
     resolved = _resolve_issue_key(
-        state_data, issue, container="mr_urls", wave_id=current_wave
+        state_data, issue, container="mr_urls", wave_id=target_wave
     )
     if resolved is None:
         if ref_repo:
             resolved = _compose_issue_key(ref_num, ref_repo)
+        elif lookup_repo is not None:
+            resolved = _compose_issue_key(ref_num, lookup_repo)
         else:
-            # Infer repo from plan for the preferred key shape.
-            try:
-                plan_data = load_json(d / "phases-waves.json")
-                plan_repo = _plan_default_repo(plan_data)
-                for phase in plan_data.get("phases", []):
-                    for wave in phase.get("waves", []):
-                        for iss in wave.get("issues", []):
-                            if iss["number"] == ref_num:
-                                plan_repo = _issue_repo(plan_data, iss) or plan_repo
-                                break
-                resolved = _compose_issue_key(ref_num, plan_repo)
-            except FileNotFoundError:
-                resolved = str(ref_num)
+            resolved = str(ref_num)
 
-    waves[current_wave].setdefault("mr_urls", {})[resolved] = mr
+    waves[target_wave].setdefault("mr_urls", {})[resolved] = mr
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    # cc-workflow#1161: when current_wave was None (the terminal-wave-
+    # complete straggler case above), this intentionally passes wave=None —
+    # emit() drops a None-valued field before it ever reaches build_event,
+    # so the event carries NO wave tag, rather than inventing one. Deliberate, not an
+    # accidental default: per #1158's own audit (see the target_wave
+    # comment above), fold.ts treats this tag as a genuine POSITION update,
+    # and there IS no live position once the campaign has already
+    # terminated — tagging it with the issue's static wave (target_wave)
+    # would misrepresent a finished campaign as having moved. An honest
+    # absence beats a fabricated position (AX-2).
     _emit_event(
         root,
         "step",
@@ -1567,4 +1756,62 @@ def show(root: Path) -> dict:
         "kahuna_branches": state_data.get("kahuna_branches", []) or [],
         "kahuna_flights_merged": kahuna_merged,
         "kahuna_flights_pending": kahuna_pending,
+    }
+
+
+def resolve_campaign_head_detail(root: Path) -> dict:
+    """Derive the FlightDeck campaign card's ``detail`` payload from the plan.
+
+    Returns ``{"planTotal": N, "workItemsTotal": M, "waveWorkItems": {...}}``
+    (the wave-count denominator, the campaign-scope work-item denominator,
+    and a per-wave work-item denominator map) plus ``"project"`` (the
+    card's fallback title) — read from ``phases-waves.json``, never
+    hand-typed (flightdeck#1145, cc-workflow#1146 step 4). Raises
+    ``ValueError`` with a message naming the specific problem when the plan
+    cannot be read or has no waves: a campaign head that cannot determine
+    its own totals must refuse rather than emit a card claiming an unknown
+    total silently (flightdeck#1145 AC).
+
+    ``workItemsTotal`` counts issue **refs** (``_all_issue_refs``), not bare
+    numbers — a cross-repo plan can legitimately carry the same issue number
+    in two repos, and a number-keyed set would silently undercount that case
+    the same way a number-keyed ``state.json`` key would collide (see
+    ``_compose_issue_key``). ``waveWorkItems`` (cc-workflow#1157) is the
+    same ref-based counting, per wave — see :func:`_wave_work_item_counts`.
+    Ships once here rather than per wave-transition: it is a static property
+    of the plan, unlike the numerator (which the consumer derives from the
+    already-flowing ``close-issue`` step events, filtered by wave — each
+    tagged with the CLOSED ISSUE'S OWN wave via :func:`_issue_wave_id`, not
+    the campaign's ``current_wave`` pointer, which can drift from it).
+    """
+    path = status_dir(root) / "phases-waves.json"
+    try:
+        plan_data = load_json(path)
+    except FileNotFoundError:
+        raise ValueError(
+            f"Error: no plan found at {path}. Run 'wave-status init' before "
+            "emitting the campaign head."
+        ) from None
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Error: plan at {path} is not valid JSON: {exc}.") from exc
+
+    plan_total = len(_all_wave_ids(plan_data))
+    if plan_total == 0:
+        raise ValueError(
+            f"Error: plan at {path} has zero waves. Cannot compute a campaign "
+            "planTotal denominator."
+        )
+
+    work_items_total = len(_all_issue_refs(plan_data))
+    if work_items_total == 0:
+        raise ValueError(
+            f"Error: plan at {path} has zero work items. Cannot compute a "
+            "campaign workItemsTotal denominator."
+        )
+
+    return {
+        "planTotal": plan_total,
+        "workItemsTotal": work_items_total,
+        "waveWorkItems": _wave_work_item_counts(plan_data),
+        "project": plan_data.get("project"),
     }

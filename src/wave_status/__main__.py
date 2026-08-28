@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import traceback
@@ -44,6 +45,7 @@ from wave_status.state import (
     promoting,
     read_trajectory,
     record_mr,
+    resolve_campaign_head_detail,
     review,
     save_json,
     set_current_wave,
@@ -367,6 +369,140 @@ def _cmd_emit(args: argparse.Namespace) -> None:
     from wave_status.events.emit import main as emit_main
 
     emit_main(args.emit_args)
+
+
+def _cmd_campaign_head(args: argparse.Namespace) -> None:
+    """Handle ``campaign-head`` — emit the FlightDeck campaign card's head.
+
+    Unlike ``emit`` (a generic, fire-and-forget event that never raises),
+    this command computes ``planTotal``/``workItemsTotal``/``waveWorkItems``/the project title
+    FROM THE PLAN (``resolve_campaign_head_detail``) rather than accepting
+    them as caller-supplied literals, and lets a ``ValueError`` propagate to
+    ``main()``'s handler — refusing loudly (non-zero exit, a message on
+    stderr) rather than emitting a card with an unknown/guessed total
+    (flightdeck#1145, cc-workflow#1146 step 4). The caller owns
+    ``--activity-id`` (the plan id) — ``/wavemachine``'s launch sequence
+    resolves it from its own shell's ``FLIGHTDECK_ACTIVITY_ID``;
+    ``/prepwaves``'s persist step (cc-workflow#1171) resolves it by reading
+    back the ``plan_id`` it just persisted to ``phases-waves.json`` — because
+    ``resolve_campaign_head_detail`` cannot key the event itself the way the
+    plain state mutators do.
+
+    Delegates the actual emit to the events emit CLI (`_cmd_emit`'s own
+    pattern) rather than calling ``emit()`` directly, so this call site gets
+    the SAME side effects a hand-typed ``wave-status emit`` gets for free —
+    most importantly the durable FlightDeck scope marker a campaign
+    ``activity_start`` writes (#1148/#1150), which the per-wave tee resolves
+    scope from. Reimplementing the emit here would silently lose that. Uses
+    ``--detail-json`` (not ``--detail``) so the buffered event carries
+    ``planTotal`` as an OBJECT, not a string — the flightdeck-side shim that
+    accepts a string is explicitly a compatibility shim for the OLD shape,
+    not the target (flightdeck fold.ts `asRecord`).
+    """
+    from wave_status.events.emit import main as emit_main
+
+    # An empty --activity-id is the SAME defect this command exists to fix,
+    # one field over: emit()'s own fallback chain reads a blank string as
+    # falsy and resolves it to "unknown", which the scope-marker allowlist
+    # then explicitly SKIPS (aid != "unknown") — so a card would render under
+    # a bogus id AND leave no marker for the per-wave tee to resolve scope
+    # from, silently, at exit 0. Refuse here instead, same as an unresolvable
+    # plan.
+    if not (args.activity_id or "").strip():
+        raise ValueError(
+            "Error: --activity-id is empty. Export FLIGHTDECK_ACTIVITY_ID=<plan_id> "
+            "before emitting the campaign head."
+        )
+
+    root = get_project_root()
+    resolved = resolve_campaign_head_detail(root)
+    argv = [
+        "activity_start",
+        "--activity-id", args.activity_id,
+        "--activity-type", "campaign",
+        "--detail-json", json.dumps({
+            "planTotal": resolved["planTotal"],
+            "workItemsTotal": resolved["workItemsTotal"],
+            "waveWorkItems": resolved["waveWorkItems"],
+        }),
+    ]
+    if resolved["project"]:
+        # `--flag=value` (one token), not `--flag value` (two) — a project
+        # name that happens to start with "-" would otherwise be parsed as a
+        # flag by the emit CLI's own argparse instance.
+        argv += [f"--label={resolved['project']}"]
+    if args.agent:
+        argv += [f"--agent={args.agent}"]
+    if args.session:
+        argv += [f"--session={args.session}"]
+    emit_main(argv)
+
+
+def _cmd_wave_begin(args: argparse.Namespace) -> None:
+    """Handle ``wave-begin <activity-id> <wave>`` — idempotently own the
+    FlightDeck ``activity_start`` head row for an activity id (cc-workflow#1138
+    step 2 / #1170).
+
+    Root cause this closes: ``skills/nextwave/per-wave-workflow.js``'s
+    ``AID = PLAN_ID || WAVE_ID`` degrades to a wave-scoped key whenever
+    ``planId`` isn't threaded through (a bare/standalone ``/nextwave`` run),
+    and nothing ever emitted an ``activity_start`` ROW for that key at all —
+    flightdeck's fold.ts backfilled ``startedAt`` from whichever event
+    happened to arrive first instead, an orphaned tail with no canonical
+    head. Calling this unconditionally, once, at the start of every wave
+    (from ``rehydrate()``) closes that regardless of whether ``AID``
+    resolved via the real plan id or the fallback: a real campaign's
+    already-real head gets an idempotent no-op re-fire; a bare/standalone
+    run gets a real head row where none existed.
+
+    NOT claimed: this command does not, by itself, move a headless-classified
+    activity (flightdeck's fold.ts ``activityType``, per flightdeck#31/#42)
+    out of the headless UI bucket — that classification latches on any
+    event declaring ``activityType: campaign|float``, which this command
+    deliberately never does (see the narrow-surface rationale below).
+    cc-workflow#1171 closes that gap on the ``/prepwaves`` side instead:
+    ``/prepwaves``'s own persist step now calls ``campaign-head`` right
+    after writing the plan, so a standalone run gets a real
+    ``activityType: campaign`` declaration (with real ``planTotal``/
+    ``workItemsTotal``) from the moment the plan is prepped, not just under
+    ``/wavemachine``. This command's own narrow surface is unchanged.
+
+    Deliberately narrow option surface — NO ``--label``/``--detail-json``/
+    ``--activity-type``, unlike ``campaign-head``. That narrowness IS the
+    idempotency mechanism, not an incidental omission: flightdeck's fold.ts
+    guards ``startedAt`` (a second ``activity_start`` is a no-op there), but
+    ``label`` and the ``detail`` progress fields (``planTotal`` etc.) are
+    last-write-wins across ``activity_start`` events specifically. A version
+    of this command that could pass those fields would risk clobbering a
+    real campaign's label/planTotal on a defensive re-fire; one that
+    structurally cannot, cannot. If a real head is needed with a
+    label/detail/type, that is ``campaign-head``'s job, not this one's.
+
+    Delegates through the events emit CLI (`_cmd_campaign_head`'s own
+    pattern), never calling ``emit()`` directly, so this gets the same
+    agent/session default-injection a hand-typed ``wave-status emit`` gets
+    for free. It does NOT get campaign-head's scope-marker write — that
+    write is allowlisted on ``activity_type == "campaign"``
+    (``events/emit.py``), which this command structurally never passes.
+    """
+    from wave_status.events.emit import main as emit_main
+
+    # Same defect class campaign-head's own guard exists to close, one field
+    # over (see its docstring/guard above): a blank --activity-id resolves
+    # to "unknown" in emit()'s own fallback, silently mislabeling the head
+    # row rather than refusing. Refuse here instead.
+    if not (args.activity_id or "").strip():
+        raise ValueError(
+            "Error: activity-id is empty. Pass the AID the wave's tee resolved to "
+            "(planId, or waveId on a bare/test run)."
+        )
+
+    argv = ["activity_start", "--activity-id", args.activity_id, "--wave", args.wave]
+    if args.agent:
+        argv += [f"--agent={args.agent}"]
+    if args.session:
+        argv += [f"--session={args.session}"]
+    emit_main(argv)
 
 
 def _cmd_show(args: argparse.Namespace) -> None:
@@ -698,6 +834,49 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_em.set_defaults(func=_cmd_emit)
 
+    # campaign-head (flightdeck#1145, cc-workflow#1154): computes
+    # planTotal/workItemsTotal/waveWorkItems/project from the plan itself rather than
+    # requiring the caller to hand-type them.
+    p_ch = sub.add_parser(
+        "campaign-head",
+        help="Emit the FlightDeck campaign card head, deriving planTotal/workItemsTotal/waveWorkItems from the plan",
+    )
+    p_ch.add_argument(
+        "--activity-id", dest="activity_id", required=True,
+        help="the plan id (e.g. $FLIGHTDECK_ACTIVITY_ID) — only the driver's shell has this",
+    )
+    p_ch.add_argument(
+        "--agent", default=None,
+        help="Dev-Name (card title); omit to resolve it from <cwd>/.claude/agent-identity.json "
+             "(cc-workflow#1163), falling back to the project label when no identity resolves",
+    )
+    p_ch.add_argument(
+        "--session", default=None,
+        help="AX-4 stable session identity, distinct from --agent (Dev-Name); omit to resolve "
+             "it from FLIGHTDECK_SESSION_ID/CLAUDE_CODE_SESSION_ID (cc-workflow#1146 step 3 / #1165)",
+    )
+    p_ch.set_defaults(func=_cmd_campaign_head)
+
+    # wave-begin (cc-workflow#1138 step 2, #1170): idempotently own the
+    # activity_start head for a wave's activity id — no --label/--detail-json/
+    # --activity-type, unlike campaign-head. See _cmd_wave_begin's docstring
+    # for why that narrowness is the idempotency guarantee.
+    p_wb = sub.add_parser(
+        "wave-begin",
+        help="Idempotently emit the FlightDeck activity_start head for a wave's activity id",
+    )
+    p_wb.add_argument("activity_id", help="the AID the wave's tee resolved to (planId, or waveId on a bare/test run)")
+    p_wb.add_argument("wave", help="the wave id")
+    p_wb.add_argument(
+        "--agent", default=None,
+        help="Dev-Name; omit to auto-resolve (same as emit/campaign-head, cc-workflow#1163)",
+    )
+    p_wb.add_argument(
+        "--session", default=None,
+        help="AX-4 stable session identity; omit to auto-resolve (cc-workflow#1146 step 3 / #1165)",
+    )
+    p_wb.set_defaults(func=_cmd_wave_begin)
+
     # show
     p_sh = sub.add_parser("show", help="Print status summary (read-only)")
     p_sh.set_defaults(func=_cmd_show)
@@ -733,5 +912,55 @@ def main() -> None:
         sys.exit(2)
 
 
+def _run_as_script() -> None:
+    """The real top-level entry-point body for the ``wave-status`` CLI
+    (#1149).
+
+    This is the TRUE top-level entry point — every subcommand (`emit`,
+    `campaign-head`, `close-issue`, ...) is dispatched from here, in-process,
+    via `main()`. That matters because some of them can start a FlightDeck
+    shipper daemon thread (`wave_status.events.emit._ship_async`) which must
+    never block its caller — so the bounded join that protects against the
+    daemon-thread/interpreter-shutdown segfault race belongs ONLY here,
+    never inside `main()` or any `_cmd_*` handler (which are also called
+    in-process by tests). See
+    `wave_status.events.emit.flush_pending_ships`'s docstring for the full
+    rationale — it is the same one this function exists to apply.
+
+    Factored out of the ``if __name__ == "__main__":`` guard so tests can
+    call it directly with ``os._exit`` mocked — actually invoking
+    ``os._exit`` would kill the test process. This function has a SECOND
+    caller beyond that guard: the zipapp shim ``scripts/ci/build.sh``
+    generates for the shipped ``wave-status`` binary calls it directly
+    (``getattr(_m, "_run_as_script", _m.main)()``), since that shim imports
+    this module rather than running it — the ``__main__`` guard never fires
+    there at all, and that gap was the original version of this fix's
+    critical bug (the join existed but was unreachable in production).
+    """
+    from wave_status.events.emit import _flush_std_streams, flush_pending_ships
+
+    _code = 0
+    try:
+        main()
+    except SystemExit as exc:
+        code = exc.code
+        if code is None:
+            _code = 0
+        elif isinstance(code, int):
+            _code = code
+        else:
+            print(str(code), file=sys.stderr)
+            _code = 1
+    finally:
+        flush_pending_ships()
+        _flush_std_streams()
+    # os._exit, not a bare return: skips Py_Finalize's interpreter teardown
+    # entirely, safe here specifically because flush_pending_ships() already
+    # ran. See emit.py's mirrored guard for the full "why os._exit, why here
+    # only" rationale — identical reasoning, same fix, the other true entry
+    # point.
+    os._exit(_code)
+
+
 if __name__ == "__main__":
-    main()
+    _run_as_script()
