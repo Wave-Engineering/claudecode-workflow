@@ -432,18 +432,29 @@ def test_ci_trivy_version_matches_the_container_image_pin() -> None:
 
 
 def _install_trivy_step_script() -> str:
-    """Pull the "Install trivy" step's `run:` script text out of the real
+    """Pull the "Install trivy" step's `run:` block scalar out of the real
     workflow YAML (not a hand-copied excerpt), so this test tracks the
-    actual file rather than a snapshot of it."""
-    import yaml
+    actual file rather than a snapshot of it.
 
-    workflow = yaml.safe_load(
-        (REPO_ROOT / ".github" / "workflows" / "validate.yml").read_text()
-    )
-    for step in workflow["jobs"]["validate"]["steps"]:
-        if step.get("name") == "Install trivy":
-            return step["run"]
-    raise AssertionError('no "Install trivy" step found in validate.yml')
+    Plain indentation-based extraction, not a YAML parser: PyYAML is not a
+    dependency of this repo's test suite anywhere else (CI's "Install test
+    dependencies" step installs only pytest/pytest-cov), and this step's
+    `run: |` block is a known, fixed shape — a general parser would be a new
+    dependency to buy nothing this doesn't already do. (This test itself
+    shipped broken to CI once already by importing yaml and passing only
+    because it happened to be installed on the machine that wrote it —
+    exactly the gap this file exists to catch elsewhere.)"""
+    lines = (REPO_ROOT / ".github" / "workflows" / "validate.yml").read_text().splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.strip() == "- name: Install trivy")
+    run_idx = next(i for i in range(start, len(lines)) if lines[i].strip() == "run: |")
+    block_indent = len(lines[run_idx]) - len(lines[run_idx].lstrip(" "))
+    body = []
+    for ln in lines[run_idx + 1 :]:
+        if ln.strip() and (len(ln) - len(ln.lstrip(" "))) <= block_indent:
+            break
+        body.append(ln)
+    assert body, "Install trivy step's run block appears empty — extraction is broken"
+    return "\n".join(body)
 
 
 def test_ci_trivy_checksum_check_targets_the_actual_downloaded_filename() -> None:
