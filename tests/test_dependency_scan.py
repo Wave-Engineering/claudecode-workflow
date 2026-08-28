@@ -429,3 +429,57 @@ def test_ci_trivy_version_matches_the_container_image_pin() -> None:
         f"CI pins trivy {workflow_match.group(1)!r} but the container image pins "
         f"{dockerfile_match.group(1)!r} — these must move together"
     )
+
+
+def _install_trivy_step_script() -> str:
+    """Pull the "Install trivy" step's `run:` script text out of the real
+    workflow YAML (not a hand-copied excerpt), so this test tracks the
+    actual file rather than a snapshot of it."""
+    import yaml
+
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github" / "workflows" / "validate.yml").read_text()
+    )
+    for step in workflow["jobs"]["validate"]["steps"]:
+        if step.get("name") == "Install trivy":
+            return step["run"]
+    raise AssertionError('no "Install trivy" step found in validate.yml')
+
+
+def test_ci_trivy_checksum_check_targets_the_actual_downloaded_filename() -> None:
+    """cc-workflow#1169 code review, critical finding: `sha256sum -c`
+    resolves the file to verify from the CHECKSUM LINE's filename, not from
+    the path curl wrote the download to. A mismatch (curl -o trivy.tar.gz,
+    checksum line naming trivy_<version>_Linux-64bit.tar.gz) makes every CI
+    run fail deterministically — sha256sum looks for a file that was never
+    created. A standalone manual test of the bare shell command passed only
+    because it happened to copy the file under the checksum line's name
+    first, which the actual workflow step never does; this test reads the
+    real step script instead of trusting that command in isolation.
+
+    Structural, not an execution test (the step also runs `sudo install` to
+    /usr/local/bin, which a test must not do to the real machine): asserts
+    the download target and the checksum-check target are driven by the
+    SAME variable, and that the old hardcoded mismatched name is gone."""
+    script = _install_trivy_step_script()
+    # Executable lines only — the fix's own explanatory comment names the
+    # pre-fix literal filename as history, which must not trip this check.
+    code_lines = [
+        ln for ln in script.splitlines() if ln.strip() and not ln.strip().startswith("#")
+    ]
+    code = "\n".join(code_lines)
+    assert "trivy.tar.gz" not in code, (
+        "found the literal pre-fix filename 'trivy.tar.gz' in executable code — "
+        "the download target must be named identically to what the checksums "
+        "file names, not a shorter alias"
+    )
+    curl_download_line = next(
+        ln for ln in code_lines if "-o " in ln and "checksums.txt" not in ln
+    )
+    checksum_line = next(ln for ln in code_lines if "sha256sum -c" in ln)
+    assert "${asset}" in curl_download_line, (
+        f"download line does not reference ${{asset}}: {curl_download_line!r}"
+    )
+    assert "${asset}" in checksum_line, (
+        f"checksum-check line does not reference ${{asset}}: {checksum_line!r}"
+    )

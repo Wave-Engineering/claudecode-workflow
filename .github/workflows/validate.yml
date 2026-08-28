@@ -38,30 +38,48 @@ jobs:
       # PR, silently, and the checklist item this exists to gate has never
       # actually run in the lane CI runs (cc-workflow#1169 code review) — the
       # exact "config exists, config does not work" gap this fleet treats as
-      # a defect class elsewhere. A GitHub release version tag is not itself
-      # an integrity guarantee (release assets are mutable), so this verifies
-      # the tarball against trivy's own published checksums file rather than
-      # trusting the pinned URL alone.
+      # a defect class elsewhere. The checksum step guards transport
+      # corruption/truncation, NOT a compromised release: checksums.txt is an
+      # asset of the same mutable release fetched over the same channel, with
+      # no signature check — anyone who could swap the tarball could swap the
+      # checksums file too. Worth having regardless; not the stronger claim.
       - name: Install trivy
         env:
           TRIVY_VERSION: "0.72.0"
         run: |
-          curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" -o /tmp/trivy.tar.gz
+          # Downloaded AS the exact name checksums.txt's line names — sha256sum -c
+          # resolves the file to check from the checksum LINE's filename, not from
+          # the path curl wrote it to. A mismatched local name (e.g. trivy.tar.gz)
+          # makes sha256sum -c look for a file that was never created and fail
+          # every run, deterministically (caught by review before this shipped:
+          # a standalone test of this exact command passed only because it
+          # happened to copy the file under checksums.txt's name first, which
+          # this step does not do).
+          asset="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${asset}" -o "/tmp/${asset}"
           curl -fsSL "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_checksums.txt" -o /tmp/trivy_checksums.txt
-          grep "trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" /tmp/trivy_checksums.txt | (cd /tmp && sha256sum -c -)
-          tar -C /tmp -xzf /tmp/trivy.tar.gz trivy
+          # Anchored to end-of-line so a version bump can't match a sibling
+          # asset (.sbom.json, .sig) and silently turn this into a multi-line
+          # (and therefore always-failing) check.
+          grep -E "  ${asset}\$" /tmp/trivy_checksums.txt | (cd /tmp && sha256sum -c -)
+          tar -C /tmp -xzf "/tmp/${asset}" trivy
           sudo install -m 0755 /tmp/trivy /usr/local/bin/trivy
-          rm -f /tmp/trivy.tar.gz /tmp/trivy /tmp/trivy_checksums.txt
+          rm -f "/tmp/${asset}" /tmp/trivy /tmp/trivy_checksums.txt
 
-      # Caches trivy's vulnerability DB so a PR isn't blocked by a cold,
-      # unauthenticated ghcr.io pull on every run — dependency-scan.sh's own
-      # timeout/no-output handling (rc=5) already anticipates this pull
-      # failing (first run, rate-limited, air-gapped); this reduces how often
-      # that path is hit for a reason that has nothing to do with the PR's
-      # actual code. The exact key is unique per run (so a fresh DB is always
-      # saved at the end), but `restore-keys` prefix-matches the most recent
-      # prior run's cache for a warm start — the standard actions/cache
-      # rolling-cache pattern, not a literal daily key.
+      # Caches trivy's vulnerability DB so a repeated push/re-run on the SAME
+      # PR isn't blocked by a cold, unauthenticated ghcr.io pull every time —
+      # dependency-scan.sh's own timeout/no-output handling (rc=5) already
+      # anticipates this pull failing (first run, rate-limited, air-gapped);
+      # this reduces how often that path is hit for a reason unrelated to the
+      # PR's actual code.
+      #
+      # Honest limit (cc-workflow#1169 code review): GitHub scopes a
+      # pull_request-triggered cache to that PR's merge ref — it cannot be
+      # read by a DIFFERENT PR or by main, and no OTHER workflow here writes
+      # a trivy-db-* entry to prime main's scope. So `restore-keys` can only
+      # ever warm-start a later run of the SAME PR; every new PR's first run
+      # is still cold. Not a no-op (multi-push PRs benefit), but narrower
+      # than "warm start" implies on first read.
       - name: Cache trivy vulnerability DB
         uses: actions/cache@v4
         with:

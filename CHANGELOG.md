@@ -71,9 +71,12 @@ are worth keeping apart:
   never actually run in the lane CI runs) — the scope limit above is about
   which repos carry the script, not about whether cc-workflow's own CI
   exercises it. Install is checksum-verified against trivy's own published
-  checksums (a version pin is not an integrity guarantee), and its DB is
-  cached (keyed per-run, `restore-keys`-warmed from the prior run) so a cold
-  ghcr.io pull can't fail a PR for a reason unrelated to its code.
+  checksums (guards transport corruption, not a compromised release — the
+  checksums file ships from the same mutable release with no signature
+  check), and its DB is cached to soften a cold ghcr.io pull on a repeated
+  push to the SAME PR. Honest limit: GitHub scopes a `pull_request` cache to
+  that PR's merge ref, so this cannot warm-start a *different* PR's first
+  run — every new PR still pays the cold pull once.
 
   **Made actually true, not just claimed:** the scan now runs with
   `--ignorefile /dev/null` — trivy auto-loads a `.trivyignore` from the
