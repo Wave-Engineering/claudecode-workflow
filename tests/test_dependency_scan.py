@@ -191,6 +191,45 @@ FINDING_JSON = (
 )
 
 
+def test_trivy_invoked_with_include_dev_deps_and_list_all_pkgs(tmp_path: Path):
+    """cc-workflow#1169, ported into this script rather than left in the old
+    prose-based Job C prompt it replaced: --include-dev-deps and
+    --list-all-pkgs are REQUIRED, not optional.
+
+    Without --include-dev-deps, a dev-only-deps manifest (a bun-based tools
+    repo is the measured case) doesn't just scan zero packages — it drops
+    out of Results entirely. Verified live against this repo's own two
+    bun.lock files: `manifests ingested` reads 1 (pip only) without the
+    flag and 3 (both bun.lock files too) with it, even though
+    check-scannable.sh correctly counts all three as scannable either way.
+    Without --list-all-pkgs (a trivy default only since v0.67.0, and this
+    fleet pins no minimum version), an older install leaves every
+    manifest's Packages array empty regardless of dev-deps.
+
+    Asserts the actual argv trivy receives, not just that the flags appear
+    somewhere in the script's source — a stub that ignores its arguments
+    would pass a substring-only test while the real regression shipped."""
+    repo = _scannable_repo(tmp_path)
+    bindir = tmp_path / "stubbin"
+    bindir.mkdir(exist_ok=True)
+    argv_log = tmp_path / "argv.log"
+    stub = bindir / "trivy"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "--version" ]; then echo "Version: 9.9.9-stub"; exit 0; fi\n'
+        f'echo "$@" > {argv_log}\n'
+        f"cat <<'JSON'\n{CLEAN_JSON}\nJSON\n"
+        "exit 0\n"
+    )
+    stub.chmod(0o755)
+    env = {"PATH": f"{bindir}:/usr/bin:/bin", "HOME": str(tmp_path)}
+    proc = _run_env(repo, env)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    argv = argv_log.read_text().split()
+    assert "--include-dev-deps" in argv, f"trivy invoked without --include-dev-deps: {argv}"
+    assert "--list-all-pkgs" in argv, f"trivy invoked without --list-all-pkgs: {argv}"
+
+
 def test_stub_clean_scan_passes_and_reports_its_denominator(tmp_path: Path):
     repo = _scannable_repo(tmp_path)
     proc = _run_env(repo, _stub_trivy(tmp_path, CLEAN_JSON))

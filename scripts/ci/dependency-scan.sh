@@ -139,7 +139,7 @@ lines = []
 for r in results:
     target, rtype = r.get("Target", "?"), r.get("Type", "?")
     # --list-all-pkgs is passed explicitly above (cc-workflow#1169) rather than
-    # relied on as a default: it only became trivy's default in v0.67.0, and
+    # relied on as a default: it only became a trivy default in v0.67.0, and
     # this fleet pins no minimum trivy version, so an older install would
     # otherwise leave Packages empty here on every repo, not just this one.
     pkgs = len(r.get("Packages") or [])
