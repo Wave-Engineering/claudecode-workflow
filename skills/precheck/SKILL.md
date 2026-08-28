@@ -77,10 +77,11 @@ prompt: "Run: bash <repo_root>/scripts/ci/dependency-scan.sh <repo_root>
            2  manifests present, ZERO ingested  -> checklist item FAILS
            3  trivy not installed               -> [SKIPPED]
            4  nothing scannable, absence not declared -> checklist item FAILS
-           5  scanner error (timeout/no output/unparseable) -> checklist item FAILS
-              — this is NOT a skip and NOT a pass. Ordinary triggers: first
-              run pulling trivy's DB, a rate-limited or air-gapped network.
-              Never treat an unmapped/unrecognized exit code as a pass.
+           5  scanner/tooling error (timeout/no output/unparseable/partial
+              install) -> checklist item FAILS — this is NOT a skip and NOT
+              a pass. Ordinary triggers: first run pulling trivy's DB, a
+              rate-limited or air-gapped network. Never treat an
+              unmapped/unrecognized exit code as a pass.
 
          If the output carries a `coverage:` line showing fewer ingested than
          scannable, report that shortfall explicitly — a PASS covering 1 of 2
@@ -177,8 +178,8 @@ Run **sandbox-context detection** (see "Sandbox Auto-Approval" below): if the cu
 Delegated to Job C (Haiku sub-agent) in the parallel batch. Interpret the result as:
 - **PASS** → checklist item passes.
 - **SKIP** → emit `[SKIPPED — trivy not installed]` on the checklist. Do not fail the gate.
-- **FINDINGS** (`dependency-scan.sh` exit 1) → report each finding (package, CVE, severity, fixed version if any) as a deferred checklist item. Do NOT auto-upgrade dependencies — the user approves the codebase state at the gate. **The checklist item FAILS on any HIGH/CRITICAL finding, with or without a fix available** — `dependency-scan.sh` does not distinguish them (no `--ignore-unfixed` support, no `.trivyignore` honored), which is stricter than this skill's own prose promised before this scan was a real tool rather than an agent's judgment call. Tracked for a policy decision: #1188.
-- **SCANNER ERROR** (`dependency-scan.sh` exit 5 — timeout, no output, or unparseable output) → the checklist item FAILS. This is not a skip: the scanner did not run to completion, which is not evidence of a clean dependency tree. Ordinary triggers (first DB pull, rate-limited/air-gapped network) are not a reason to wave it through.
+- **FINDINGS** (`dependency-scan.sh` exit 1) → report each finding (package, CVE, severity, fixed version if any) as a deferred checklist item. Do NOT auto-upgrade dependencies — the user approves the codebase state at the gate. **The checklist item FAILS on any HIGH/CRITICAL finding, with or without a fix available** — `dependency-scan.sh` does not distinguish them (no `--ignore-unfixed` support; `.trivyignore` is explicitly disabled via `--ignorefile /dev/null`, not merely undocumented), which is stricter than this skill's own prose promised before this scan was a real tool rather than an agent's judgment call. Tracked for a policy decision: #1188. **Escape hatch that exists today, undocumented until now:** `DEP_SCAN_SEVERITY` (env var, default `HIGH,CRITICAL`) overrides the severity filter — e.g. `DEP_SCAN_SEVERITY=CRITICAL ./scripts/ci/validate.sh` to stop blocking on HIGH while #1188 is unresolved. This is a manual, visible override for an operator to reach for, not something Job C or this skill invokes on its own.
+- **SCANNER/TOOLING ERROR** (`dependency-scan.sh` exit 5 — timeout, no scanner output, unparseable scanner output, OR a partial install missing `check-scannable.sh`) → the checklist item FAILS. This is not a skip: the scan did not run to completion, which is not evidence of a clean dependency tree. Ordinary triggers (first DB pull, rate-limited/air-gapped network) are not a reason to wave it through.
 
 ## The Checklist (full every time; a checkmark means VERIFIED by reading the codebase)
 **Context:** Project | Issue #N — title | Branch `feature/N-...` → `<live default>`

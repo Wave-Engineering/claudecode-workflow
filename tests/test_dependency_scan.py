@@ -6,11 +6,13 @@ the same stage, and two green checks either side of a stage prove nothing about
 the stage between them.
 
 flightdeck lives in that gap: manifests present and countable, trivy parsing none
-of them (bun.lock unsupported, flightdeck#8), both checks green. cc-workflow was a
-partial instance — 2 scannable, 1 ingested — before this script's own
---include-dev-deps fix (cc-workflow#1169): not a bun.lock parsing limitation, but
-trivy suppressing this repo's entirely-devDependencies bun.lock manifests by
-default, which nothing stated out loud until the coverage line existed.
+of them (bun.lock unsupported, flightdeck#8) — though flightdeck#8's own "unsupported"
+diagnosis may be the same flag artifact described below, worth re-measuring before
+#1141 commits to it as fact. cc-workflow was a partial instance — 2 scannable, 1
+ingested — before this script's own --include-dev-deps fix (cc-workflow#1169): not
+a bun.lock parsing limitation, but trivy suppressing this repo's entirely-devDependencies
+bun.lock manifests by default, which nothing stated out loud until the coverage line
+existed.
 
 The other half closed here: the kit never ran the scan at all. It lived only as
 prose in /precheck's Job C asking a sub-agent to report the denominator. An
@@ -19,6 +21,7 @@ instruction can be forgotten; a tool that emits the number cannot.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -403,3 +406,26 @@ def test_validate_survives_a_non_zero_scan_rc(tmp_path: Path):
         f"errexit\nstdout: {proc.stdout}\nstderr: {proc.stderr}"
     )
     assert "[SKIPPED]" in proc.stdout, "rc=3 must reach the skip branch"
+
+
+def test_ci_trivy_version_matches_the_container_image_pin() -> None:
+    """cc-workflow#1169 code review: .github/workflows/validate.yml and
+    containers/oakandwave-workflow/Dockerfile each pin their own
+    TRIVY_VERSION, with nothing enforcing they agree. A split scanner
+    version between CI and the fleet's runtime image is exactly the
+    "coverage shortfall could be an ecosystem limit OR a stale binary"
+    ambiguity dependency-scan.sh's own version-in-output line exists to
+    resolve — a mismatch here would reintroduce it one level up."""
+    workflow_text = (REPO_ROOT / ".github" / "workflows" / "validate.yml").read_text()
+    dockerfile_text = (
+        REPO_ROOT / "containers" / "oakandwave-workflow" / "Dockerfile"
+    ).read_text()
+
+    workflow_match = re.search(r'TRIVY_VERSION:\s*"([\d.]+)"', workflow_text)
+    dockerfile_match = re.search(r"ARG TRIVY_VERSION=([\d.]+)", dockerfile_text)
+    assert workflow_match, "TRIVY_VERSION pin not found in validate.yml"
+    assert dockerfile_match, "TRIVY_VERSION pin not found in the Dockerfile"
+    assert workflow_match.group(1) == dockerfile_match.group(1), (
+        f"CI pins trivy {workflow_match.group(1)!r} but the container image pins "
+        f"{dockerfile_match.group(1)!r} — these must move together"
+    )

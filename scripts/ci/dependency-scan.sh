@@ -35,12 +35,14 @@
 #   2  MANIFESTS PRESENT BUT ZERO INGESTED  <- the gap this script exists to close
 #   3  trivy not installed (skip; the caller decides whether that is acceptable)
 #   4  nothing scannable AND absence not declared (delegated to check-scannable.sh)
-#   5  SCANNER ERROR — timeout, no output, or unparseable output. Distinct from
-#      2 on purpose: a broken scanner is not an unparseable lockfile, and
-#      conflating them sends the operator hunting an ecosystem problem that
-#      does not exist. Ordinary triggers: first run pulling trivy's
-#      vulnerability DB, a rate-limited or air-gapped network — expect to hit
-#      this, and never treat an unmapped/unrecognized rc as a pass.
+#   5  SCANNER/TOOLING ERROR — timeout, no output, unparseable output, OR a
+#      partial install missing this script's own check-scannable.sh sibling.
+#      Distinct from 2 on purpose: a broken scanner is not an unparseable
+#      lockfile, and conflating them sends the operator hunting an ecosystem
+#      problem that does not exist. Ordinary triggers: first run pulling
+#      trivy's vulnerability DB, a rate-limited or air-gapped network —
+#      expect to hit this, and never treat an unmapped/unrecognized rc as a
+#      pass.
 set -uo pipefail
 
 ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
@@ -126,9 +128,17 @@ SKIP_DIRS=(--skip-dirs "**/node_modules" --skip-dirs "**/dist" --skip-dirs "**/b
 # script reads without the flag, which would make every scan on any repo
 # look like zero-packages-ingested and fail every precheck (cc-workflow#1169
 # code review, ported here from /precheck's own Job C prompt).
+#
+# --ignorefile /dev/null (cc-workflow#1169 code review): trivy auto-loads a
+# `.trivyignore` from the CURRENT WORKING DIRECTORY by default, which would
+# make this scan's strictness depend on where it happens to be invoked from
+# rather than on this script's own severity contract — and would let a
+# committed .trivyignore silently suppress findings with nothing here
+# checking for one. Forcing an empty ignore file makes "every HIGH/CRITICAL
+# blocks, no suppression channel" actually true rather than merely intended.
 trivy_err="$(mktemp)"
 raw="$(timeout "${DEP_SCAN_TIMEOUT:-300}" trivy fs --scanners vuln --severity "$SEVERITY" \
-	--include-dev-deps --list-all-pkgs \
+	--include-dev-deps --list-all-pkgs --ignorefile /dev/null \
 	"${SKIP_DIRS[@]}" --format json --quiet "$ROOT" 2>"$trivy_err")"
 trivy_rc=$?
 if ((trivy_rc == 124)); then

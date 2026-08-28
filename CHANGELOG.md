@@ -31,8 +31,9 @@ are worth keeping apart:
 
   Two green checks either side of a stage prove nothing about the stage between
   them. flightdeck sits in exactly that gap: manifests present and countable,
-  trivy parsing none of them (`bun.lock` unsupported, flightdeck#8), both checks
-  green. **cc-workflow turned out to be a partial instance of the same thing** —
+  trivy parsing none of them (`bun.lock` unsupported per flightdeck#8 — a
+  diagnosis worth re-measuring, see below), both checks green. **cc-workflow
+  turned out to be a partial instance of the same thing** —
   2 scannable manifests, 1 ingested. Root cause, confirmed by measurement rather
   than assumed: not a `bun.lock` parsing limitation, but trivy suppressing
   dev-only dependency trees by default (both bun.lock manifests here are
@@ -48,7 +49,10 @@ are worth keeping apart:
   itself (`PASS … (COVERS 1/2 — see WARNING above)`), so a copied PASS cannot
   quietly mean half a denominator. Exit codes distinguish conditions that used to
   look alike: **2 = manifests present but zero ingested** is not the same as
-  **4 = nothing scannable**, and they are worded differently on purpose. `trivy`
+  **4 = nothing scannable**, and **5 = scanner/tooling error** (timeout, no
+  output, unparseable output, or a partial install) is neither — a broken
+  scanner is not an unparseable lockfile, and conflating them sends the
+  operator hunting an ecosystem problem that does not exist. `trivy`
   absent is `3` / SKIP, because a hard dependency would make `validate.sh`
   unrunnable on a fresh box — which is how a check gets commented out rather than
   fixed.
@@ -66,7 +70,20 @@ are worth keeping apart:
   (previously absent, so this script returned 3/[SKIPPED] on every PR and had
   never actually run in the lane CI runs) — the scope limit above is about
   which repos carry the script, not about whether cc-workflow's own CI
-  exercises it.
+  exercises it. Install is checksum-verified against trivy's own published
+  checksums (a version pin is not an integrity guarantee), and its DB is
+  cached (keyed per-run, `restore-keys`-warmed from the prior run) so a cold
+  ghcr.io pull can't fail a PR for a reason unrelated to its code.
+
+  **Made actually true, not just claimed:** the scan now runs with
+  `--ignorefile /dev/null` — trivy auto-loads a `.trivyignore` from the
+  current working directory by default, which would otherwise make this
+  scan's strictness depend on invocation location and let a committed
+  ignore file silently suppress findings with nothing checking for one.
+  Escape hatch that already existed and is now documented in `/precheck`:
+  `DEP_SCAN_SEVERITY` overrides the severity filter for an operator who
+  needs to unblock on an unfixable finding before #1188 (whether the gate
+  should distinguish fixable from unfixable at all) is decided.
 
 - **`sleep infinity` as PID 1 never reaps zombies — fleet-wide network dropouts (#1179).**
   aoe never runs an entrypoint into the agent; it `docker exec`s `claude` into an
