@@ -154,7 +154,7 @@ else
 		# same structural risk, so it's replaced on the same reasoning.
 		old_exists=0
 		glab api "projects/$repo_encoded/labels/$old_encoded" >/dev/null 2>&1 && old_exists=1
-		if ((!old_exists)); then
+		if ((! old_exists)); then
 			continue # nothing to migrate — never bootstrapped, or already renamed
 		fi
 		new_encoded=$(url_encode "$new")

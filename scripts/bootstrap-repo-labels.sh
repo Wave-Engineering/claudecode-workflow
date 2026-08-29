@@ -133,7 +133,7 @@ else
 		# was 404 via list but 200 via direct GET seconds after creation.
 		old_exists=0
 		gh api "repos/$repo/labels/$old" >/dev/null 2>&1 && old_exists=1
-		if ((!old_exists)); then
+		if ((! old_exists)); then
 			continue # nothing to migrate — never bootstrapped, or already renamed
 		fi
 		new_exists=0
