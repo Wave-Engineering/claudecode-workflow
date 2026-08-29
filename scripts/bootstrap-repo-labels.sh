@@ -63,6 +63,7 @@ fi
 # uses a red→yellow→green gradient so the group reads at a glance.
 labels=(
 	"type::feature|0E8A16|New functionality"
+	"type::story|0E8A16|New functionality (feature alias)"
 	"type::bug|D93F0B|Defect"
 	"type::chore|FBCA04|Maintenance, refactoring, dependency updates"
 	"type::doc|0075CA|Documentation-only changes"
@@ -99,6 +100,44 @@ if ((dry_run)); then
 	echo "DRY RUN — no API calls will be made"
 fi
 echo
+
+# --- One-time label renames (old name -> new name), applied BEFORE the
+# create-or-update loop below (cc-workflow#1191 code review). `gh label
+# create --force` creates-or-updates BY NAME — it cannot rename, so an
+# already-bootstrapped repo re-run against a taxonomy change would
+# otherwise silently keep the old label (still attached to its issues)
+# alongside a freshly-created new one: a split taxonomy, not a migration.
+# Renaming first means the create-or-update loop's entry for the new name
+# just updates the color/description of the label the rename already
+# produced, and every existing issue's label assignment carries forward
+# (GitHub associates by label ID, not name).
+renames=(
+	"type::docs|type::doc"
+)
+if ((dry_run)); then
+	for pair in "${renames[@]}"; do
+		printf '  [dry-rename] %s -> %s (if present)\n' "${pair%%|*}" "${pair##*|}"
+	done
+else
+	for pair in "${renames[@]}"; do
+		old="${pair%%|*}"
+		new="${pair##*|}"
+		# Direct per-label existence probe via the REST API, NOT `gh label
+		# list`. `gh label list --json name` has a real, observed propagation
+		# lag after a label mutation (cc-workflow#1191 code review) — a label
+		# created/renamed moments earlier can be invisible to the list
+		# endpoint while `gh api repos/.../labels/<name>` (a single-resource
+		# GET) is immediately consistent. Verified live: a throwaway label
+		# was 404 via list but 200 via direct GET seconds after creation.
+		if gh api "repos/$repo/labels/$old" >/dev/null 2>&1; then
+			if gh label edit "$old" --name "$new" --repo "$repo" >/dev/null 2>&1; then
+				printf '  [renamed] %-22s -> %s\n' "$old" "$new"
+			else
+				printf '  [FAIL] could not rename %s -> %s\n' "$old" "$new" >&2
+			fi
+		fi
+	done
+fi
 
 applied=0
 failed=0

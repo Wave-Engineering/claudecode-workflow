@@ -172,7 +172,7 @@ Creates properly templated and labeled issues from a natural language prompt. De
 /issue                   # Infer from recent conversation context
 ```
 
-The first word selects the template (feature, bug, chore, docs, epic). If omitted, the type is inferred from the prompt. Issues are created immediately -- the skill does not ask for confirmation since issues are cheap to edit.
+The first word selects the template (feature, bug, chore, doc, epic). If omitted, the type is inferred from the prompt. Issues are created immediately -- the skill does not ask for confirmation since issues are cheap to edit.
 
 **Key detail:** The skill is self-contained -- it carries its own templates rather than depending on CLAUDE.md. Labels follow the `group::value` taxonomy with priority and urgency as orthogonal axes.
 

@@ -82,6 +82,7 @@ repo_encoded=$(url_encode "$repo")
 # Mirrors scripts/bootstrap-repo-labels.sh exactly.
 labels=(
 	"type::feature|0E8A16|New functionality"
+	"type::story|0E8A16|New functionality (feature alias)"
 	"type::bug|D93F0B|Defect"
 	"type::chore|FBCA04|Maintenance, refactoring, dependency updates"
 	"type::doc|0075CA|Documentation-only changes"
@@ -118,6 +119,46 @@ if ((dry_run)); then
 	echo "DRY RUN — no API calls will be made"
 fi
 echo
+
+# --- One-time label renames (old name -> new name), applied BEFORE the
+# create-or-update loop below (cc-workflow#1191 code review, mirrors the
+# GitHub script). The POST-then-PUT loop below is keyed by NAME on both
+# ends (PUT's own `new_name=$name` sets the target to the SAME name it
+# already tried), so it cannot migrate an old label to a new one — an
+# already-bootstrapped project re-run against a taxonomy change would
+# create the new label alongside the old one, still attached to its
+# issues: a split taxonomy, not a migration. GitLab's label PUT accepts a
+# DIFFERING new_name, so the rename itself is a normal PUT once directed
+# at the old name.
+renames=(
+	"type::docs|type::doc"
+)
+if ((dry_run)); then
+	for pair in "${renames[@]}"; do
+		printf '  [dry-rename] %s -> %s (if present)\n' "${pair%%|*}" "${pair##*|}"
+	done
+else
+	for pair in "${renames[@]}"; do
+		old="${pair%%|*}"
+		new="${pair##*|}"
+		old_encoded=$(url_encode "$old")
+		# Direct per-label existence probe (single-resource GET, supported
+		# since GitLab 12.4 with a URL-encoded title as the label_id), NOT a
+		# bulk `projects/:id/labels` list+grep. Mirrors the GitHub script's
+		# fix (cc-workflow#1191 code review): `gh label list` was proven live
+		# to lag a fresh mutation while the single-resource GET was
+		# immediately consistent — the bulk-list pattern here carries the
+		# same structural risk, so it's replaced on the same reasoning.
+		if glab api "projects/$repo_encoded/labels/$old_encoded" >/dev/null 2>&1; then
+			if glab api -X PUT "projects/$repo_encoded/labels/$old_encoded" \
+				-f "new_name=$new" --silent >/dev/null 2>&1; then
+				printf '  [renamed] %-22s -> %s\n' "$old" "$new"
+			else
+				printf '  [FAIL] could not rename %s -> %s\n' "$old" "$new" >&2
+			fi
+		fi
+	done
+fi
 
 created=0
 updated=0

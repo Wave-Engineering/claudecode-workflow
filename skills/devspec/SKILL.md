@@ -463,7 +463,7 @@ subagent_type: general-purpose
 model: sonnet
 prompt: "Create a <subtype> issue in repo <owner/repo> using mcp__sdlc-server__work_item.
 
-Type: <feature|bug|chore|docs>  (default: feature if not declared)
+Type: <feature|bug|chore|doc>  (default: feature if not declared)
 Title: <story.title>
 Labels: [<type::<subtype>>]
 

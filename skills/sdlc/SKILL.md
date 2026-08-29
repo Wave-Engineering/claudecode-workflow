@@ -9,7 +9,7 @@ Route all /sdlc intents to `sdlc_*` MCP tool calls. Do NOT use bash or shell com
 
 ## Available Tools
 
-- `work_item` — Create any work item (epic, story, bug, chore, docs, PR, MR) on GitHub or GitLab
+- `work_item` — Create any work item (epic, story, bug, chore, doc, PR, MR) on GitHub or GitLab
 - `ibm` — Check issue/branch/PR workflow compliance for the current branch
 
 ## Usage

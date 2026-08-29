@@ -77,7 +77,7 @@ Key features:
 | edit | `/edit` | Open file/URL in GUI editor |
 | engage | `/engage` | Load CLAUDE.md, confirm rules of engagement |
 | ibm | `/ibm` | Issue-Branch-PR/MR workflow reminder |
-| issue | `/issue` | Create structured issues (feature, bug, chore, docs, epic) with templates and labels |
+| issue | `/issue` | Create structured issues (feature, bug, chore, doc, epic) with templates and labels |
 | jfail | `/jfail` | CI job/workflow failure analysis |
 | lazyriver | `/lazyriver` | Goal-seek loop — probe, judge sufficiency, steer, journal until sufficient; escalation-corded; emits a plan (to `/devspec`) or a direct answer |
 | man | `/man` | Display usage information for any installed skill |

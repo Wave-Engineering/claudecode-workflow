@@ -48,6 +48,8 @@ This spec — and the wave-pattern pipeline it describes — distinguishes **six
 
 **Historical note:** prior versions of this Dev Spec used "epic" in pipeline-operational contexts (e.g., "per-epic integration branch", `epic_id` handler parameters, `kahuna/<epic-id>-<slug>` branch naming). Those usages have been renamed to "Plan" throughout. See `docs/phase-epic-taxonomy-devspec.md` for the rationale and the one-time rename scope.
 
+**Terminology update (cc-workflow#1191):** the Story row's `type::docs` label above is written as this Dev Spec originally approved it and is left frozen. The live taxonomy has since moved to singular `type::doc` (`docs` was an agent-introduced myth, not the canonical name — see mcp-server-sdlc#541/#540) — read every `type::docs` in this document's frozen prose as `type::doc`; `skills/issue/SKILL.md` and `.claude-project.md` carry the current, maintained label reference.
+
 ---
 
 ## 1. Problem Domain
