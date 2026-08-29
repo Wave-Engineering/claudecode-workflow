@@ -38,17 +38,21 @@ class _CaptureServer:
     relying on real network timing to land inside or outside a join window.
     """
 
-    def __init__(self, status: int = 202, port: int = 0, delay: float = 0.0):
+    def __init__(
+        self, status: int = 202, port: int = 0, delay: float = 0.0, fail_first_n: int = 0
+    ):
         self.received: list[tuple] = []
         self.status = status
         captured = self.received
         status_code = self.status
+        request_count = [0]
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *a):  # silence
                 pass
 
             def do_POST(self):
+                request_count[0] += 1
                 length = int(self.headers.get("Content-Length", 0))
                 raw = self.rfile.read(length).decode("utf-8") if length else ""
                 try:
@@ -58,7 +62,13 @@ class _CaptureServer:
                 if delay:
                     time.sleep(delay)
                 captured.append((self.path, body, self.headers.get("Authorization")))
-                self.send_response(status_code)
+                # #1189: simulate a scanner that transiently 5xx's the first
+                # N requests then recovers — real end-to-end exercise of
+                # _post()'s own retry loop, not a mocked control-flow stub.
+                if request_count[0] <= fail_first_n:
+                    self.send_response(503)
+                else:
+                    self.send_response(status_code)
                 self.end_headers()
 
         self._server = HTTPServer(("127.0.0.1", port), Handler)
@@ -430,6 +440,117 @@ class TestReplayAndResilience:
             assert ship(buf) == 2  # ordered replay on recovery
             assert live.wait_for(2)
             assert [b["wave"] for (_p, b, _a) in live.received] == ["w1", "w2"]
+        finally:
+            live.stop()
+
+
+class TestShipRetryAndLock:
+    """cc-workflow#1189 — a single transient POST failure must not wedge the
+    entire ordered replay indefinitely, and concurrent ship() calls sharing
+    one buffer/offset (every emitting process on a fleet machine) must not
+    race each other. Reproduces the exact live failure: FlightDeck delivery
+    on a real machine stalled for over a month after one blip, with the
+    endpoint reachable and the stuck payload accepted on manual retry."""
+
+    def test_ship_retries_a_transient_failure_and_succeeds(self, buf, monkeypatch):
+        # 503 once, then 202 — the real end-to-end shape of the live bug:
+        # a blip that resolves within the same call, not a dead endpoint.
+        server = _CaptureServer(fail_first_n=1).start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            emit("step", activity_id="c", wave="w1", ship_now=False)
+            assert ship(buf) == 1, "a single transient failure must still ship within one ship() call"
+            assert server.wait_for(2)  # the failed attempt + the retry that succeeded
+            assert len(server.received) == 2
+        finally:
+            server.stop()
+
+    def test_ship_gives_up_after_bounded_retries_on_persistent_failure(self, buf, monkeypatch):
+        # Always 503 — must still stop (not retry forever, not hang the caller).
+        server = _CaptureServer(fail_first_n=10_000).start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            emit("step", activity_id="c", wave="w1", ship_now=False)
+            assert ship(buf) == 0, "a persistently failing endpoint must still give up"
+            assert server.wait_for(4)
+            # 1 initial attempt + 3 retries (the default backoff schedule's
+            # length) — proves it retried, and that it stopped rather than
+            # retrying unboundedly.
+            assert len(server.received) == 4
+            assert emit_mod._read_offset(buf) == 0, "offset must not advance past an unshipped line"
+        finally:
+            server.stop()
+
+    def test_ship_retry_uses_backoff_not_a_tight_loop(self, buf, monkeypatch):
+        # Override the autouse fixture's zeroed backoff for this ONE test —
+        # the thing being proven here IS the sleep, so it can't be zeroed.
+        monkeypatch.setenv("FLIGHTDECK_POST_RETRY_BACKOFFS", "0.2,0.2,0.2")
+        server = _CaptureServer(fail_first_n=10_000).start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            emit("step", activity_id="c", wave="w1", ship_now=False)
+            t0 = time.monotonic()
+            assert ship(buf) == 0
+            elapsed = time.monotonic() - t0
+            assert elapsed >= 0.5, (
+                f"elapsed {elapsed}s — too fast for 3 real 0.2s backoffs; "
+                "looks like a tight retry loop with no real delay"
+            )
+        finally:
+            server.stop()
+
+    def test_concurrent_ship_calls_do_not_race_the_offset(self, buf, monkeypatch):
+        # Ten buffered lines; two threads call ship() against the SAME buffer
+        # at once, exactly like two agent processes on one fleet machine both
+        # firing _ship_async off unrelated emit() calls.
+        server = _CaptureServer(delay=0.05).start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            for i in range(10):
+                emit("step", activity_id="c", wave=f"w{i}", ship_now=False)
+
+            results: list[int] = []
+
+            def _run():
+                results.append(ship(buf))
+
+            t1 = threading.Thread(target=_run)
+            t2 = threading.Thread(target=_run)
+            t1.start()
+            t2.start()
+            t1.join(timeout=5)
+            t2.join(timeout=5)
+
+            assert server.wait_for(10, timeout=5)
+            # Exactly one thread must have won the lock and shipped all ten;
+            # the other must have found it held and backed off immediately
+            # (returned 0) rather than racing a second, overlapping replay.
+            assert sorted(results) == [0, 10], (
+                f"expected one ship() to do all the work and the other to "
+                f"no-op on lock contention, got {results}"
+            )
+            # No duplicate delivery — the loser never got far enough to send.
+            assert len(server.received) == 10
+            waves = sorted(b["wave"] for (_p, b, _a) in server.received)
+            assert waves == sorted(f"w{i}" for i in range(10))
+            assert emit_mod._read_offset(buf) == buf.stat().st_size
+        finally:
+            server.stop()
+
+    def test_offset_lock_is_released_on_failure(self, buf, monkeypatch):
+        # A ship() call against a persistently dead endpoint must not leave
+        # its lock held for the NEXT call once the endpoint recovers.
+        dead = _CaptureServer().start()
+        port = dead.port
+        dead.stop()
+        monkeypatch.setenv("FLIGHTDECK_INGEST_URL", f"http://127.0.0.1:{port}/ingest")
+        emit("step", activity_id="c", wave="w1", ship_now=False)
+        assert ship(buf) == 0  # fails, lock must be released on the way out
+
+        live = _CaptureServer(port=port).start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", live.url)
+            assert ship(buf) == 1, "lock from the failed call was not released"
         finally:
             live.stop()
 

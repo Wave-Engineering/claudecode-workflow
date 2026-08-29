@@ -168,6 +168,13 @@ def _isolate_flightdeck_buffer(tmp_path_factory, monkeypatch):
     # for FLIGHTDECK_AGENT/agent-identity.json.
     monkeypatch.delenv("FLIGHTDECK_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    # #1189: _post()'s retry backoff defaults to real sleeps (0.25/0.5/1.0s)
+    # so production stays resilient to a transient blip. A test exercising a
+    # persistently-failing endpoint would otherwise pay ~1.75s of real wall
+    # clock per assertion for no benefit — zero it here; a test that
+    # specifically verifies backoff TIMING overrides this via its own
+    # monkeypatch (which wins, running after this autouse fixture).
+    monkeypatch.setenv("FLIGHTDECK_POST_RETRY_BACKOFFS", "0,0,0")
     # #1166: TMUX_PANE is the SAME class of ambient leak — the flightdeck-
     # session-emit.sh fallback chain's third tier, genuinely set in every
     # tmux-based agent session on this fleet, absent in CI. Scrubbed globally

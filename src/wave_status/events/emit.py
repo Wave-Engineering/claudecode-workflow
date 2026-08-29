@@ -10,7 +10,10 @@ The lowest-deterministic-layer emitter. Every state change routes through
 3. ships it non-blocking to ``$FLIGHTDECK_INGEST_URL`` with bearer-token auth,
    in a daemon thread, off the caller's hot path [R-02];
 4. replays unsent buffered lines in order via an offset marker when the ingest
-   endpoint recovers [R-04].
+   endpoint recovers [R-04] — with a bounded per-line retry on a transient
+   failure, and a non-blocking cross-process lock around the replay so two
+   concurrent shippers on one machine (every emitting process fires this)
+   cannot race the shared offset marker (#1189).
 
 **Contract: never raises to the caller.** Emit is instrumentation; a bug here
 must never break a state mutation, a Stop hook, or a Workflow node. Every public
@@ -23,6 +26,10 @@ DI-seams (env vars):
   never raises (R-03 default).
 - ``FLIGHTDECK_INGEST_TOKEN`` — bearer token for the ``Authorization`` header.
 - ``FLIGHTDECK_INGEST_TIMEOUT`` — POST timeout seconds (default 2).
+- ``FLIGHTDECK_POST_RETRY_BACKOFFS`` — comma-separated seconds between
+  ``_post()`` retry attempts (default ``0.25,0.5,1.0`` — 3 retries after the
+  initial attempt). Test isolation; production should not normally need to
+  tune this (#1189).
 - ``FLIGHTDECK_EVENTS_PATH``  — override the buffer file (test isolation).
 - ``FLIGHTDECK_EMIT_DISABLED``— hard off switch (no-op emit).
 - ``FLIGHTDECK_ACTIVITY_ID`` / ``FLIGHTDECK_AGENT`` / ``FLIGHTDECK_SESSION_ID`` /
@@ -36,12 +43,15 @@ DI-seams (env vars):
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import tempfile
 import os
 import sys
 import threading
+import time
 import urllib.request
 from pathlib import Path
 
@@ -105,6 +115,56 @@ def buffer_path() -> Path:
 def _offset_path(buffer: Path) -> Path:
     """The offset-marker sidecar for *buffer* (records bytes already shipped)."""
     return Path(str(buffer) + ".offset")
+
+
+def _lock_path(buffer: Path) -> Path:
+    """The advisory-lock sidecar guarding *buffer*'s offset marker (#1189)."""
+    return Path(str(buffer) + ".offset.lock")
+
+
+@contextlib.contextmanager
+def _offset_lock(buffer: Path):
+    """Non-blocking advisory lock around a `ship()` replay of *buffer* (#1189).
+
+    Every emitting process on a shared machine fires `_ship_async` → `ship()`
+    against the SAME buffer/offset pair. Without this, two concurrent `ship()`
+    calls can both read the same starting offset and replay independently —
+    the loser's `_write_offset` can land after the winner's and regress the
+    recorded progress (replaying already-shipped lines again), or both can
+    double-POST the same span. Observed live: the offset did not advance
+    monotonically under concurrent `ship()` activity from other agent
+    processes on one machine.
+
+    Non-blocking (`LOCK_NB`) on purpose: `ship()` must never block its
+    caller (R-02/R-03). A call that loses the race yields ``False``
+    immediately rather than waiting for the lock — the buffer stays
+    untouched, and the next unrelated `emit()` anywhere on the machine will
+    trigger another `ship()` attempt shortly. Never raises.
+    """
+    lock_path = _lock_path(buffer)
+    fd = None
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def activity_id_for_root(root: object) -> str:
@@ -326,41 +386,82 @@ def _write_offset(buffer: Path, offset: int) -> None:
 # Shipper (fire-and-forget POST + ordered replay)
 # ---------------------------------------------------------------------------
 
+def _post_retry_backoffs() -> tuple[float, ...]:
+    """Backoff (seconds) between retry attempts inside a single `_post()`
+    call — default 3 retries after the initial attempt, capped under ~2s
+    total added latency so this stays fire-and-forget rather than blocking
+    the shipper thread.
+
+    Test-overridable via ``FLIGHTDECK_POST_RETRY_BACKOFFS`` (comma-separated
+    seconds, e.g. ``"0,0,0"`` for a test that exercises the retry COUNT/
+    control-flow but doesn't want to pay real sleep time) — mirrors this
+    module's existing ``FLIGHTDECK_INGEST_TIMEOUT`` DI-seam convention.
+    """
+    override = os.environ.get("FLIGHTDECK_POST_RETRY_BACKOFFS")
+    if override:
+        try:
+            return tuple(float(x) for x in override.split(","))
+        except ValueError:
+            pass
+    return (0.25, 0.5, 1.0)
+
+
 def _post(url: str, body: str) -> bool:
     """POST *body* to *url* with optional bearer auth. True on 2xx, else False.
 
-    Never raises — a down/unreachable ingest returns False so the caller keeps
-    the event buffered (R-03).
+    Retries a small, bounded number of times with short backoff before
+    giving up (#1189): a single transient failure — a network blip, a
+    momentarily refused connection — must not be able to wedge the entire
+    ordered replay for an unbounded period. Observed live: FlightDeck
+    delivery stalled on a real machine for over a month after exactly one
+    such blip, with the ingest endpoint reachable throughout and the exact
+    stuck payload accepted (202) moments later on manual retry. Bounded and
+    short on purpose: the common case (immediate 2xx) costs nothing extra,
+    and a persistently failing endpoint still gives up quickly rather than
+    blocking the caller.
+
+    Never raises — a down/unreachable ingest returns False so the caller
+    keeps the event buffered (R-03).
     """
     token = os.environ.get("FLIGHTDECK_INGEST_TOKEN")
     try:
         timeout = float(os.environ.get("FLIGHTDECK_INGEST_TIMEOUT", "2"))
     except (TypeError, ValueError):
         timeout = 2.0
-    try:
-        req = urllib.request.Request(
-            url,
-            data=body.encode("utf-8"),
-            method="POST",
-            headers={"Content-Type": "application/json"},
-        )
-        if token:
-            req.add_header("Authorization", f"Bearer {token}")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            status = getattr(resp, "status", None) or resp.getcode()
-            return 200 <= int(status) < 300
-    except Exception:
-        return False
+
+    backoffs = _post_retry_backoffs()
+    for attempt in range(len(backoffs) + 1):
+        try:
+            req = urllib.request.Request(
+                url,
+                data=body.encode("utf-8"),
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            if token:
+                req.add_header("Authorization", f"Bearer {token}")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                status = getattr(resp, "status", None) or resp.getcode()
+                if 200 <= int(status) < 300:
+                    return True
+        except Exception:
+            pass
+        if attempt < len(backoffs):
+            time.sleep(backoffs[attempt])
+    return False
 
 
 def ship(buffer: Path | None = None) -> int:
     """Replay unsent buffered lines to the ingest endpoint, in order.
 
-    Reads from the offset marker to EOF; POSTs each complete line; advances the
-    offset only past a line that shipped 2xx. On the first failure it STOPS,
-    leaving the offset at the unshipped line so the next call resumes in order
-    (R-04). Returns the number of lines shipped. No-op (0) when
-    ``FLIGHTDECK_INGEST_URL`` is unset (DI-seam, R-03). Never raises.
+    Reads from the offset marker to EOF; POSTs each complete line (with
+    _post()'s own bounded retry — see there); advances the offset only past
+    a line that shipped 2xx. On the first (retry-exhausted) failure it
+    STOPS, leaving the offset at the unshipped line so the next call resumes
+    in order (R-04). Returns the number of lines shipped. No-op (0) when
+    ``FLIGHTDECK_INGEST_URL`` is unset (DI-seam, R-03), or when a concurrent
+    `ship()` on this machine already holds the replay lock (#1189) — never
+    blocks waiting for it. Never raises.
     """
     url = os.environ.get("FLIGHTDECK_INGEST_URL")
     if not url:
@@ -370,25 +471,28 @@ def ship(buffer: Path | None = None) -> int:
     try:
         if not buf.exists():
             return 0
-        offset = _read_offset(buf)
-        with open(buf, "r", encoding="utf-8") as f:
-            try:
-                f.seek(offset)
-            except Exception:
-                f.seek(0)
-            while True:
-                line = f.readline()
-                if not line:
-                    break
-                if not line.endswith("\n"):
-                    # Partial line (a writer is mid-append) — retry next round.
-                    break
-                stripped = line.strip()
-                if stripped and not _post(url, stripped):
-                    break  # keep offset here; ordered replay on recovery.
-                _write_offset(buf, f.tell())
-                if stripped:
-                    shipped += 1
+        with _offset_lock(buf) as acquired:
+            if not acquired:
+                return 0
+            offset = _read_offset(buf)
+            with open(buf, "r", encoding="utf-8") as f:
+                try:
+                    f.seek(offset)
+                except Exception:
+                    f.seek(0)
+                while True:
+                    line = f.readline()
+                    if not line:
+                        break
+                    if not line.endswith("\n"):
+                        # Partial line (a writer is mid-append) — retry next round.
+                        break
+                    stripped = line.strip()
+                    if stripped and not _post(url, stripped):
+                        break  # keep offset here; ordered replay on recovery.
+                    _write_offset(buf, f.tell())
+                    if stripped:
+                        shipped += 1
     except Exception:
         return shipped
     return shipped
