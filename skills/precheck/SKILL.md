@@ -64,59 +64,54 @@ prompt: "Run the project's validation and test tooling in <repo_root>.
 ```
 subagent_type: general-purpose
 model: haiku
-prompt: "Run: trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet <repo_root>
+prompt: "Run: bash <repo_root>/scripts/ci/dependency-scan.sh <repo_root>
          Also run: git -C <repo_root> rev-parse HEAD
 
-         --include-dev-deps is REQUIRED, not optional (cc-workflow#1169): trivy
-         suppresses dev/test dependencies by default, and a project whose entire
-         dependency tree is dev-only (a bun-based tools repo is the measured
-         case — @types/*, typescript, nothing else) scans ZERO packages without
-         it, while still exiting clean — indistinguishable from a real pass
-         unless you check the package count.
+         Report the script's output VERBATIM, then its exit code, then the commit.
+         Do not summarise, do not re-derive the counts, do not substitute your own
+         judgement for the exit code.
 
-         --list-all-pkgs is ALSO required, not just include-dev-deps: it only
-         became trivy's default in v0.67.0, and this fleet pins no minimum
-         trivy version — an older install never emits the Results[].Packages
-         array this rule reads without the flag, which would make every scan
-         (on ANY repo) look like zero-packages-scanned and fail every precheck.
+         Exit codes:
+           0  scanned, zero HIGH/CRITICAL      -> checklist item PASSES
+           1  findings                          -> report each; do NOT auto-upgrade
+           2  manifests present, ZERO ingested  -> checklist item FAILS
+           3  trivy not installed               -> [SKIPPED]
+           4  nothing scannable, absence not declared -> checklist item FAILS
+           5  scanner/tooling error (timeout/no output/unparseable/partial
+              install) -> checklist item FAILS — this is NOT a skip and NOT
+              a pass. Ordinary triggers: first run pulling trivy's DB, a
+              rate-limited or air-gapped network. Never treat an
+              unmapped/unrecognized exit code as a pass.
 
-         Parse the JSON. FIRST report the denominator and the commit, ALWAYS, on one line:
-           scanned: <N> manifest(s) at <short-sha>   [list each Target and Type]
+         If the output carries a `coverage:` line showing fewer ingested than
+         scannable, report that shortfall explicitly — a PASS covering 1 of 2
+         manifests is a pass over half a denominator.
 
-         THEN return one of:
-           PASS — one or more manifests parsed, zero findings
-           NO MANIFESTS — trivy ran and either parsed ZERO manifests, OR parsed
-                          a real manifest but the Results carry zero packages
-                          (check for a missing Results key, or Results present
-                          with an empty/absent Packages list). This is NOT a
-                          pass and, as of #1073, NOT a deferral either: it FAILS
-                          the checklist item. Nothing was scanned. Say so; do
-                          not report PASS.
-                          The enforcing half lives in scripts/ci/check-scannable.sh
-                          (run by validate.sh), which exits 1 when nothing is
-                          scannable and absence is not declared — because an
-                          honest report that changes no outcome is
-                          indistinguishable from no report at all. cc-workflow
-                          emitted this verdict on every precheck for ELEVEN DAYS
-                          across FIVE filings before anyone acted on it.
-                          A repo with genuinely nothing to scan declares it in
-                          .no-scannable-dependencies with a reason; omitting the
-                          declaration is the failure, not having no dependencies.
-           SKIP — trivy not installed
-           FINDINGS — list each as: package | CVE | severity | fixed_version (or 'no fix available')
-         Do not auto-upgrade anything. Just report.
-
-         'Target: repository' / 'ArtifactType: repository' is NOT a real manifest —
-         it is trivy's own top-level scan-target metadata (what was scanned, a
-         directory), present on every run whether or not any dependency manifest
-         was found. Do not count it toward the denominator or report it as a
-         scanned manifest — read the actual 'Results[].Target'/'Results[].Type'
-         entries (a real manifest looks like 'requirements.txt | Type: pip', or
-         with --include-dev-deps, 'bun.lock | Type: bun'). Confirmed
-         (cc-workflow#1169): earlier precheck runs against bun-based repos misread
-         this metadata as 'PASS — 1 manifest scanned' when zero packages had
-         actually been scanned — a false pass, now closed by --include-dev-deps above."
+         If the script is MISSING (older checkout), say so and fall back to
+         `trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps
+         --list-all-pkgs --format json --quiet`, reporting the manifest count
+         first. Do not report a verdict without a denominator. Both flags are
+         REQUIRED on the fallback, not optional (cc-workflow#1169): trivy
+         suppresses dev/test dependencies by default (a project whose entire
+         dependency tree is dev-only scans ZERO packages without
+         --include-dev-deps, while still exiting clean), and --list-all-pkgs
+         only became trivy's default in v0.67.0, with this fleet pinning no
+         minimum trivy version. dependency-scan.sh itself already carries both
+         flags — this fallback exists only for a checkout that predates the
+         script."
 ```
+
+**The denominator is emitted by the tool, not requested from the agent (#1137).** This job used to be prose asking a sub-agent to report the count. It complied — and compliance is the problem: an instruction can be forgotten by the next agent, misread, or quietly dropped in a rewrite, and the resulting verdict looks identical to a real one. `dependency-scan.sh` emits the number on every path including the passing one, so the report survives the agent.
+
+**Reach, stated honestly: cc-workflow only, for now.** `install` excludes `ci/*`
+from distribution (four sites), so `dependency-scan.sh` exists in a cc-workflow
+checkout and nowhere else. In every other repo this job takes the fallback above —
+raw `trivy` with an agent asked to report the count, i.e. exactly the prose path
+this replaces. The structural guarantee is real where the script is; the fallback
+is what actually runs on flightdeck, mcp-server-sdlc and the rest until the kit
+ships it (#1141).
+
+It also closes a gap `check-scannable.sh` structurally cannot see. That check is **pre-scan** — it proves input exists. This one is **post-scan** — it proves the scanner ingested that input. Two green checks either side of a stage prove nothing about the stage between them, and flightdeck lives in exactly that gap: manifests present, trivy parsing none of them (`flightdeck#8`), both checks green — though `flightdeck#8`'s own root cause is worth re-measuring before it anchors a remedy (see below). cc-workflow was a partial instance of the same thing before `--include-dev-deps` above: 2 scannable, 1 ingested — not because this trivy build cannot read `bun.lock`, but because both of this repo's `bun.lock` manifests are entirely devDependencies, which trivy suppresses by default. With the flag, both parse cleanly (0 findings each). If flightdeck's tree is also dev-only, its "unsupported" diagnosis may be the same flag artifact, not a real parser gap — worth confirming before #1141 commits to "use a scanner that understands this ecosystem" as the remedy.
 
 **Report the denominator and the commit before the verdict — never the verdict alone.** Two failures on 2026-07-19 make this non-optional:
 
@@ -183,7 +178,8 @@ Run **sandbox-context detection** (see "Sandbox Auto-Approval" below): if the cu
 Delegated to Job C (Haiku sub-agent) in the parallel batch. Interpret the result as:
 - **PASS** → checklist item passes.
 - **SKIP** → emit `[SKIPPED — trivy not installed]` on the checklist. Do not fail the gate.
-- **FINDINGS** → report each finding (package, CVE, severity, fixed version if any) as a deferred checklist item. Do NOT auto-upgrade dependencies — the user approves the codebase state at the gate. Do NOT block the gate on vulnerabilities with no available fix.
+- **FINDINGS** (`dependency-scan.sh` exit 1) → report each finding (package, CVE, severity, fixed version if any) as a deferred checklist item. Do NOT auto-upgrade dependencies — the user approves the codebase state at the gate. **The checklist item FAILS on any HIGH/CRITICAL finding, with or without a fix available** — `dependency-scan.sh` does not distinguish them (no `--ignore-unfixed` support; `.trivyignore` is explicitly disabled via `--ignorefile /dev/null`, not merely undocumented), which is stricter than this skill's own prose promised before this scan was a real tool rather than an agent's judgment call. Tracked for a policy decision: #1188. **Escape hatch that exists today, undocumented until now:** `DEP_SCAN_SEVERITY` (env var, default `HIGH,CRITICAL`) overrides the severity filter — e.g. `DEP_SCAN_SEVERITY=CRITICAL ./scripts/ci/validate.sh` to stop blocking on HIGH while #1188 is unresolved. This is a manual, visible override for an operator to reach for, not something Job C or this skill invokes on its own.
+- **SCANNER/TOOLING ERROR** (`dependency-scan.sh` exit 5 — timeout, no scanner output, unparseable scanner output, OR a partial install missing `check-scannable.sh`) → the checklist item FAILS. This is not a skip: the scan did not run to completion, which is not evidence of a clean dependency tree. Ordinary triggers (first DB pull, rate-limited/air-gapped network) are not a reason to wave it through.
 
 ## The Checklist (full every time; a checkmark means VERIFIED by reading the codebase)
 **Context:** Project | Issue #N — title | Branch `feature/N-...` → `<live default>`
