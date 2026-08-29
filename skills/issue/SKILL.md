@@ -263,9 +263,12 @@ canonical Summary section.]
 ### Story Template
 
 The Story template is identical to the Feature template — `story` and
-`feature` are aliases. The underlying `mcp__sdlc-server__work_item` tool's
-`type` enum uses `story`; the `/issue` skill exposes both names so callers
-can use whichever matches their mental model.
+`feature` are aliases at the `/issue` invocation level (same template,
+same H2 sections). The underlying `mcp__sdlc-server__work_item` tool's
+`type` enum accepts BOTH `story` and `feature` natively — no aliasing,
+each produces its own `type::` label — so whichever name a caller uses
+passes straight through and matches its own row in the Automatic Labels
+table above.
 
 ### Bug Template
 
@@ -364,7 +367,7 @@ environment, or `N/A`]
 **Plan:** [#NNN or N/A]
 ```
 
-### Docs Template
+### Doc Template
 
 ```markdown
 ## Summary

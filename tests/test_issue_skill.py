@@ -466,7 +466,7 @@ TEMPLATE_HEADERS = {
     "feature": "Feature Template (alias: Story)",
     "bug": "Bug Template",
     "chore": "Chore Template",
-    "docs": "Docs Template",
+    "docs": "Doc Template",
 }
 
 

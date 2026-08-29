@@ -65,7 +65,7 @@ labels=(
 	"type::feature|0E8A16|New functionality"
 	"type::bug|D93F0B|Defect"
 	"type::chore|FBCA04|Maintenance, refactoring, dependency updates"
-	"type::docs|0075CA|Documentation-only changes"
+	"type::doc|0075CA|Documentation-only changes"
 	"type::epic|5319E7|Parent issue tracking a body of work"
 
 	"priority::critical|B60205|Drop everything"
