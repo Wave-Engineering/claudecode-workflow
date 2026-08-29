@@ -52,6 +52,7 @@ import os
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -146,11 +147,11 @@ def _offset_lock(buffer: Path):
     try:
         fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    except Exception:
         if fd is not None:
             try:
                 os.close(fd)
-            except OSError:
+            except Exception:
                 pass
         yield False
         return
@@ -159,11 +160,11 @@ def _offset_lock(buffer: Path):
     finally:
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
-        except OSError:
+        except Exception:
             pass
         try:
             os.close(fd)
-        except OSError:
+        except Exception:
             pass
 
 
@@ -376,15 +377,49 @@ def _clear_scope_marker_if_matching(activity_id: str) -> None:
 
 
 def _write_offset(buffer: Path, offset: int) -> None:
+    """Atomic write: temp file in the SAME directory, then ``os.replace()``
+    (mirrors ``_write_scope_marker``'s pattern, #1189 code review). Plain
+    ``write_text`` truncates before writing — a process ending mid-write
+    (crash, ``os._exit()``) leaves a 0-byte offset file, which ``_read_offset``
+    reads as 0 and re-delivers the ENTIRE buffer on the next `ship()`. Now
+    safe to fix cheaply: every write already happens inside `ship()`'s
+    `_offset_lock`, so there is no new race to reason about.
+    """
+    path = _offset_path(buffer)
+    fd = None
     try:
-        _offset_path(buffer).write_text(str(offset), encoding="utf-8")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=str(path.parent), suffix=".tmp", delete=False
+        )
+        fd.write(str(offset))
+        fd.flush()
+        os.fsync(fd.fileno())
+        fd.close()
+        os.replace(fd.name, path)
     except Exception:
-        pass
+        if fd is not None:
+            try:
+                fd.close()
+            except Exception:
+                pass
+            try:
+                os.unlink(fd.name)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
 # Shipper (fire-and-forget POST + ordered replay)
 # ---------------------------------------------------------------------------
+
+#: A single backoff is clamped into this range (seconds) — a malformed or
+#: adversarial FLIGHTDECK_POST_RETRY_BACKOFFS must never turn into an
+#: unbounded sleep (held while `ship()`'s lock is HELD, no-opping every other
+#: shipper on the machine for as long as the sleep runs) or a negative value
+#: raising out of `time.sleep` (code review, #1189).
+_MAX_POST_RETRY_BACKOFF = 5.0
+
 
 def _post_retry_backoffs() -> tuple[float, ...]:
     """Backoff (seconds) between retry attempts inside a single `_post()`
@@ -395,15 +430,23 @@ def _post_retry_backoffs() -> tuple[float, ...]:
     Test-overridable via ``FLIGHTDECK_POST_RETRY_BACKOFFS`` (comma-separated
     seconds, e.g. ``"0,0,0"`` for a test that exercises the retry COUNT/
     control-flow but doesn't want to pay real sleep time) — mirrors this
-    module's existing ``FLIGHTDECK_INGEST_TIMEOUT`` DI-seam convention.
+    module's existing ``FLIGHTDECK_INGEST_TIMEOUT`` DI-seam convention. The
+    var being SET to an empty string means "no retries" (an explicit,
+    deliberate override), distinct from being unset (default schedule);
+    a value that fails to parse falls back to the default rather than
+    raising, and every value is clamped to ``[0, _MAX_POST_RETRY_BACKOFF]``
+    regardless of source.
     """
     override = os.environ.get("FLIGHTDECK_POST_RETRY_BACKOFFS")
-    if override:
-        try:
-            return tuple(float(x) for x in override.split(","))
-        except ValueError:
-            pass
-    return (0.25, 0.5, 1.0)
+    if override is None:
+        return (0.25, 0.5, 1.0)
+    if not override.strip():
+        return ()
+    try:
+        values = tuple(float(x) for x in override.split(","))
+    except ValueError:
+        return (0.25, 0.5, 1.0)
+    return tuple(max(0.0, min(v, _MAX_POST_RETRY_BACKOFF)) for v in values)
 
 
 def _post(url: str, body: str) -> bool:
@@ -419,6 +462,24 @@ def _post(url: str, body: str) -> bool:
     short on purpose: the common case (immediate 2xx) costs nothing extra,
     and a persistently failing endpoint still gives up quickly rather than
     blocking the caller.
+
+    A 4xx response is NOT retried (code review, #1189): the server received
+    and definitively rejected the request for a reason retrying won't
+    change (bad auth, an oversized/malformed body, a tightened schema) —
+    retrying would only burn the whole backoff budget on a line that is
+    going to keep failing regardless, delaying `ship()`'s give-up on it for
+    no benefit. A 5xx IS retried (transient overload is exactly what that
+    status range means) as is every other exception (connection refused,
+    DNS failure, timeout) — this is deliberately still permissive there
+    rather than narrowed to only connection-establishment failures: this
+    events endpoint has no per-event dedup key, so a retried request that
+    the server actually processed can duplicate delivery either way, and
+    the live bug this fix closes was exactly an unpredictable connection
+    failure, not a clean timeout — narrowing the retriable set would risk
+    under-fixing the bug being closed to avoid a duplicate-delivery
+    tradeoff that already existed pre-fix (ship() itself already re-POSTs
+    an unadvanced line on the next round) and is a fold-side, not
+    shipper-side, question.
 
     Never raises — a down/unreachable ingest returns False so the caller
     keeps the event buffered (R-03).
@@ -444,6 +505,11 @@ def _post(url: str, body: str) -> bool:
                 status = getattr(resp, "status", None) or resp.getcode()
                 if 200 <= int(status) < 300:
                     return True
+                if not (500 <= int(status) < 600):
+                    return False  # permanent (4xx-shaped) — do not burn retries
+        except urllib.error.HTTPError as e:
+            if not (500 <= e.code < 600):
+                return False
         except Exception:
             pass
         if attempt < len(backoffs):
@@ -570,10 +636,12 @@ def flush_pending_ships(timeout: float | None = None) -> None:
     Bounded, not indefinite: an unbounded join would hang the CLI forever
     against a truly dead/hanging ingest endpoint — the same failure mode R-02
     was built to avoid, just moved to a different call site. *timeout*
-    defaults to ``FLIGHTDECK_INGEST_TIMEOUT`` (the same bound a single
-    in-flight POST is already allowed to take), so the worst case this adds
-    to a real process exit is one more instance of a cost the process was
-    already prepared to pay.
+    defaults to ``FLIGHTDECK_INGEST_TIMEOUT`` — one POST's timeout. Since
+    #1189 a single `_post()` may retry up to 4x that (bounded backoff), so a
+    slow/failing ingest now routinely exceeds this join and the thread gets
+    abandoned rather than finishing — safe, per the paragraph below, because
+    `os._exit()` always follows and the buffer is durable, so nothing is
+    lost, only delayed to the next `ship()`.
 
     Never raises (R-03). Clears :data:`_pending_ships` unconditionally —
     whether a thread finished, is still running past the timeout, or joining
@@ -590,6 +658,13 @@ def flush_pending_ships(timeout: float | None = None) -> None:
     ever "simplifies" a call site back to a bare return/`sys.exit()`, the
     abandoned-thread case reopens #1149 exactly as it was before this fix,
     even with this join still in place.
+
+    Since #1189, an abandoned thread can also be mid-`ship()` and holding
+    its offset-marker `flock` — likewise safe ONLY because `os._exit()`
+    follows: the kernel releases an `flock` when the holding process exits,
+    lock included. A call site that returned normally instead of exiting
+    would strand that lock for the rest of the process's life, not just
+    reopen #1149 — the same reasoning, one layer further.
     """
     if timeout is None:
         try:
