@@ -167,12 +167,12 @@ Creates properly templated and labeled issues from a natural language prompt. De
 /issue feature add retry logic to the upload endpoint
 /issue bug the login form crashes on empty password
 /issue chore update dependencies to latest patch versions
-/issue docs update the API reference for v2 endpoints
+/issue doc update the API reference for v2 endpoints
 /issue epic redesign the authentication system
 /issue                   # Infer from recent conversation context
 ```
 
-The first word selects the template (feature, bug, chore, docs, epic). If omitted, the type is inferred from the prompt. Issues are created immediately -- the skill does not ask for confirmation since issues are cheap to edit.
+The first word selects the template (feature, bug, chore, doc, epic). If omitted, the type is inferred from the prompt. Issues are created immediately -- the skill does not ask for confirmation since issues are cheap to edit.
 
 **Key detail:** The skill is self-contained -- it carries its own templates rather than depending on CLAUDE.md. Labels follow the `group::value` taxonomy with priority and urgency as orthogonal axes.
 
@@ -590,7 +590,7 @@ A structured workflow for domain modeling using event storming. Guides you throu
 
 Creates Development Specifications through an interactive, section-by-section workflow. Instead of generating a Dev Spec in one shot, it walks each section collaboratively -- drafting, presenting, and waiting for feedback before moving on. Appends a Decision-Ledger comment to the Plan tracking issue after each section the Pair approves. Manages a unified Deliverables Manifest (Tier 1 required defaults, Tier 2 conditional triggers, Tier 3 opt-in) and runs a mechanical finalization checklist. Includes an approval gate and backlog population (upshift) for the full concept-to-execution pipeline.
 
-**Pipeline taxonomy (locked 2026-04-26):** Plan (tracking issue, `type::plan`) → Phase (internal to `phases-waves.json`) → Wave (internal to `phases-waves.json`) → Story (issue with `type::feature`/`type::bug`/`type::chore`/`type::docs`). Epic is an optional PM-layer label only; the pipeline never reads it.
+**Pipeline taxonomy (locked 2026-04-26):** Plan (tracking issue, `type::plan`) → Phase (internal to `phases-waves.json`) → Wave (internal to `phases-waves.json`) → Story (issue with `type::feature`/`type::bug`/`type::chore`/`type::doc`). Epic is an optional PM-layer label only; the pipeline never reads it.
 
 **When to use it:**
 - After `/ddd accept` produces a domain model and you need to create a Dev Spec from it

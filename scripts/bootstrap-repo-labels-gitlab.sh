@@ -82,9 +82,10 @@ repo_encoded=$(url_encode "$repo")
 # Mirrors scripts/bootstrap-repo-labels.sh exactly.
 labels=(
 	"type::feature|0E8A16|New functionality"
+	"type::story|0E8A16|New functionality (feature alias)"
 	"type::bug|D93F0B|Defect"
 	"type::chore|FBCA04|Maintenance, refactoring, dependency updates"
-	"type::docs|0075CA|Documentation-only changes"
+	"type::doc|0075CA|Documentation-only changes"
 	"type::epic|5319E7|Parent issue tracking a body of work"
 
 	"priority::critical|B60205|Drop everything"
@@ -119,9 +120,71 @@ if ((dry_run)); then
 fi
 echo
 
+# --- One-time label renames (old name -> new name), applied BEFORE the
+# create-or-update loop below (cc-workflow#1191 code review, mirrors the
+# GitHub script). The POST-then-PUT loop below is keyed by NAME on both
+# ends (PUT's own `new_name=$name` sets the target to the SAME name it
+# already tried), so it cannot migrate an old label to a new one — an
+# already-bootstrapped project re-run against a taxonomy change would
+# create the new label alongside the old one, still attached to its
+# issues: a split taxonomy, not a migration. GitLab's label PUT accepts a
+# DIFFERING new_name, so the rename itself is a normal PUT once directed
+# at the old name.
+renames=(
+	"type::docs|type::doc"
+)
 created=0
 updated=0
 failed=0
+if ((dry_run)); then
+	for pair in "${renames[@]}"; do
+		printf '  [dry-rename] %s -> %s (if present)\n' "${pair%%|*}" "${pair##*|}"
+	done
+else
+	for pair in "${renames[@]}"; do
+		old="${pair%%|*}"
+		new="${pair##*|}"
+		old_encoded=$(url_encode "$old")
+		# Direct per-label existence probe (single-resource GET, supported
+		# since GitLab 12.4 with a URL-encoded title as the label_id), NOT a
+		# bulk `projects/:id/labels` list+grep. Mirrors the GitHub script's
+		# fix (cc-workflow#1191 code review): `gh label list` was proven live
+		# to lag a fresh mutation while the single-resource GET was
+		# immediately consistent — the bulk-list pattern here carries the
+		# same structural risk, so it's replaced on the same reasoning.
+		old_exists=0
+		glab api "projects/$repo_encoded/labels/$old_encoded" >/dev/null 2>&1 && old_exists=1
+		if ((! old_exists)); then
+			continue # nothing to migrate — never bootstrapped, or already renamed
+		fi
+		new_encoded=$(url_encode "$new")
+		new_exists=0
+		glab api "projects/$repo_encoded/labels/$new_encoded" >/dev/null 2>&1 && new_exists=1
+		if ((new_exists)); then
+			# Both names live on the project already — e.g. GitLab's issues
+			# API auto-creates unknown labels on issue creation, so an agent
+			# running `/issue doc` before this project's labels were
+			# migrated can leave both names present. PUT new_name=... would
+			# 409 here; a bare [FAIL] with no cause is exactly what
+			# cc-workflow#1191 code review flagged as reporting success
+			# (exit 0) on the split taxonomy this guard exists to prevent.
+			# Fail loud instead: this needs a human to move `$old`'s issues
+			# onto `$new` and delete `$old`.
+			printf '  [CONFLICT] both %s and %s exist — relabel issues off %s and delete it manually\n' "$old" "$new" "$old" >&2
+			failed=$((failed + 1))
+			continue
+		fi
+		rename_status=0
+		rename_err=$(glab api -X PUT "projects/$repo_encoded/labels/$old_encoded" \
+			-f "new_name=$new" --silent 2>&1 >/dev/null) || rename_status=$?
+		if ((rename_status == 0)); then
+			printf '  [renamed] %-22s -> %s\n' "$old" "$new"
+		else
+			printf '  [FAIL] could not rename %s -> %s: %s\n' "$old" "$new" "$rename_err" >&2
+			failed=$((failed + 1))
+		fi
+	done
+fi
 
 for entry in "${labels[@]}"; do
 	IFS='|' read -r name color desc <<<"$entry"

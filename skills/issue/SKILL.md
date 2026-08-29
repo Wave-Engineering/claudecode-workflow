@@ -8,7 +8,7 @@ usage: |
   /issue story <prompt>    Create a story Story (alias: feature)
   /issue bug <prompt>      Create a bug Story
   /issue chore <prompt>    Create a chore Story
-  /issue doc <prompt>     Create a doc Story
+  /issue doc <prompt>      Create a doc Story
   /issue <type> <prompt> --epic N  Attach epic::N PM-layer label to the Story
   /issue <prompt>          Infer type from the prompt (never infers "plan")
   /issue                   Infer from recent conversation context
@@ -263,9 +263,12 @@ canonical Summary section.]
 ### Story Template
 
 The Story template is identical to the Feature template — `story` and
-`feature` are aliases. The underlying `mcp__sdlc-server__work_item` tool's
-`type` enum uses `story`; the `/issue` skill exposes both names so callers
-can use whichever matches their mental model.
+`feature` are aliases at the `/issue` invocation level (same template,
+same H2 sections). The underlying `mcp__sdlc-server__work_item` tool's
+`type` enum accepts BOTH `story` and `feature` natively — no aliasing,
+each produces its own `type::` label — so whichever name a caller uses
+passes straight through and matches its own row in the Automatic Labels
+table above.
 
 ### Bug Template
 
@@ -364,7 +367,7 @@ environment, or `N/A`]
 **Plan:** [#NNN or N/A]
 ```
 
-### Docs Template
+### Doc Template
 
 ```markdown
 ## Summary
@@ -467,7 +470,7 @@ Labels use the `group::value` convention. Within each group, labels are mutually
 | story | `type::story` |
 | bug | `type::bug` |
 | chore | `type::chore` |
-| doc | `type::docs` (the canonical GitHub label is plural; the `/issue` user-facing alias `doc` is singular per CLAUDE.md branch-prefix convention) |
+| doc | `type::doc` |
 
 ### `--epic N` Flag — Optional PM-Layer Label (Dev Spec §5.5.4)
 
@@ -558,12 +561,14 @@ Create immediately — do not ask for approval. Issues are cheap to edit and clo
 3. Call `mcp__sdlc-server__work_item` with the drafted title, body, and the
    full label list (type label + `epic::N` if applicable + inferred labels).
    The tool handles platform detection and issue creation internally — no
-   `gh` or `glab` CLI calls. **Type alias mapping:** when the user-facing
-   invocation is `doc`, pass `docs` to `work_item` (the tool's `type` enum
-   uses `docs` plural to match the canonical `type::docs` label; the `/issue`
-   skill exposes singular `doc` to align with the singular branch prefix per
-   CLAUDE.md). Same pattern as `story` ↔ `feature`. `plan` needs no aliasing —
-   pass it through unchanged (see the callout below).
+   `gh` or `glab` CLI calls. Every type — including `doc` — passes straight
+   through to `work_item` unchanged; there is no alias mapping (`doc` is
+   the tool's own canonical `type` value as of mcp-server-sdlc v4.3.0,
+   cc-workflow#1191 — `docs` is a transitional value on its way out via
+   mcp-server-sdlc#540, never emitted here). Same pattern as `story` and
+   `feature`, which the tool's `type` enum has always accepted as two
+   distinct native values, no aliasing either. `plan` also passes through
+   unchanged (see the callout below).
 
 If `work_item` reports a missing label at create-time (race or pre-existing
 `epic::X` for a different `X`), surface the error; do not silently retry.

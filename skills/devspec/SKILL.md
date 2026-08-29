@@ -22,7 +22,7 @@ The wave-pattern pipeline is built from four primitives. This skill teaches them
 | **Plan** | GitHub/GitLab issue with `type::plan` label | The top-level container. One issue per Plan; its number is the `plan_id`. Its body holds frozen scope (Goal / Scope / DoD / Phases checklist); its comments hold the Decision Ledger and lifecycle events. `/devspec create` anchors its walk on the Plan issue. |
 | **Phase** | Internal to `phases-waves.json` — NO platform issue | A sequential ordering unit within a Plan. Phases partition the Dev Spec's §8 Implementation Plan. They exist only in `phases-waves.json`; they are not issues, not labels. |
 | **Wave** | Internal to `phases-waves.json` — NO platform issue | A concurrency unit within a Phase. Stories in the same Wave are parallelizable (by dependency); Waves within a Phase run in order. |
-| **Story** | GitHub/GitLab issue with `type::feature` / `type::bug` / `type::chore` / `type::docs` | The smallest execution unit. One issue per Story. Every Story declares its `depends_on` in `phases-waves.json`. |
+| **Story** | GitHub/GitLab issue with `type::feature` / `type::bug` / `type::chore` / `type::doc` | The smallest execution unit. One issue per Story. Every Story declares its `depends_on` in `phases-waves.json`. |
 
 **Epic is NOT a pipeline primitive.** Epic is an **optional PM-layer label** (`type::epic` on a parent tracker issue; `epic::N` label on child Stories) that a Pair may use to group Stories thematically for program-management rollups. The pipeline (`/prepwaves`, `/nextwave`, `/wavemachine`) does not read `type::epic` or `epic::N`; they read `phases-waves.json`. Treating "Epic" as a pipeline container is the old vocabulary and is explicitly retired.
 
@@ -437,7 +437,7 @@ Creates Story issues from an approved Dev Spec's Section 8 (Phased Implementatio
 
 An optional **PM-layer Epic** (the `type::epic` label, a thematic parent tracker) may be created if the Pair explicitly asks for one; this is purely a program-management convenience and is ignored by `/prepwaves`, `/nextwave`, and `/wavemachine`.
 
-**Tool chain:** `devspec_locate` → `devspec_verify_approved` → `devspec_parse_section_8` → **loop** `work_item` for each Story (type::feature / type::bug / type::chore / type::docs) → write `phases-waves.json` → backfill Story numbers into Dev Spec and Plan issue → post summary comment to Plan issue.
+**Tool chain:** `devspec_locate` → `devspec_verify_approved` → `devspec_parse_section_8` → **loop** `work_item` for each Story (type::feature / type::bug / type::chore / type::doc) → write `phases-waves.json` → backfill Story numbers into Dev Spec and Plan issue → post summary comment to Plan issue.
 
 ### Step 1: Locate and Verify
 
@@ -463,7 +463,7 @@ subagent_type: general-purpose
 model: sonnet
 prompt: "Create a <subtype> issue in repo <owner/repo> using mcp__sdlc-server__work_item.
 
-Type: <feature|bug|chore|docs>  (default: feature if not declared)
+Type: <feature|bug|chore|doc>  (default: feature if not declared)
 Title: <story.title>
 Labels: [<type::<subtype>>]
 

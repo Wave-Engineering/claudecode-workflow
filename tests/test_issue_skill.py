@@ -18,7 +18,7 @@ mcp-server-sdlc). This skill is the authoring side of that contract.
 
 These tests guard the contract:
 
-1. Frontmatter & usage block list `feature`, `story`, `chore`, `docs`, `bug`
+1. Frontmatter & usage block list `feature`, `story`, `chore`, `doc`, `bug`
    as supported types and reference the wave-pattern-ready guarantee.
 2. Each of the five sub-issue templates emits the six required H2 headings.
 3. The `epic` template is intentionally excluded — epics are parents, not
@@ -60,7 +60,7 @@ REQUIRED_H2_HEADINGS = (
 )
 
 # Sub-issue types that must be wave-pattern-ready.
-SUB_ISSUE_TYPES = ("feature", "story", "chore", "docs", "bug")
+SUB_ISSUE_TYPES = ("feature", "story", "chore", "doc", "bug")
 
 # Section-name → set of H2 headings that satisfy the parser contract,
 # mirroring spec_validate_structure / docs/issue-body-grammar.md.
@@ -302,7 +302,7 @@ Bump `requests` from 2.31.0 to 2.32.3 to pick up the urllib3 security fix.
 **Wave:** N/A
 **Parent Epic:** N/A
 """,
-    "docs": """## Summary
+    "doc": """## Summary
 
 Document the wave-pattern-ready output guarantee for the /issue skill.
 
@@ -384,12 +384,18 @@ class TestFrontmatter:
     """Frontmatter advertises wave-pattern-ready output and lists all types."""
 
     def test_frontmatter_lists_all_sub_issue_types(self, skill_text: str) -> None:
-        """The frontmatter description references every sub-issue type."""
+        """The frontmatter description references every sub-issue type.
+
+        Word-boundary match, not substring: "doc" is a literal substring of
+        "docs" (cc-workflow#1191 code review — this is the exact blind spot
+        that let the old doc/docs alias regress undetected), so a plain
+        `in` check cannot tell a correct singular "doc" apart from a
+        regression back to plural "docs" — it would pass on either.
+        """
         end = skill_text.index("---", 4)
         frontmatter = skill_text[:end + 3]
         for t in SUB_ISSUE_TYPES:
-            # canonical type is singular ("doc"); tolerate the plural in the constant
-            assert t in frontmatter.lower() or t.rstrip("s") in frontmatter.lower(), (
+            assert re.search(rf"\b{re.escape(t)}\b", frontmatter.lower()), (
                 f"frontmatter description omits sub-issue type {t!r}"
             )
 
@@ -448,10 +454,14 @@ class TestGuaranteeDocumented:
         )
 
     def test_introduction_lists_all_sub_issue_types(self, intro_text: str) -> None:
-        """introduction.md lists every sub-issue type."""
+        """introduction.md lists every sub-issue type.
+
+        Word-boundary match, not substring — see
+        test_frontmatter_lists_all_sub_issue_types's docstring for why a
+        plain `in` check can't distinguish "doc" from "docs".
+        """
         for t in SUB_ISSUE_TYPES:
-            # canonical type is singular ("doc"); tolerate the plural in the constant
-            assert t in intro_text.lower() or t.rstrip("s") in intro_text.lower(), (
+            assert re.search(rf"\b{re.escape(t)}\b", intro_text.lower()), (
                 f"introduction.md omits sub-issue type {t!r}"
             )
 
@@ -466,11 +476,11 @@ TEMPLATE_HEADERS = {
     "feature": "Feature Template (alias: Story)",
     "bug": "Bug Template",
     "chore": "Chore Template",
-    "docs": "Docs Template",
+    "doc": "Doc Template",
 }
 
 
-@pytest.mark.parametrize("issue_type", ["feature", "bug", "chore", "docs"])
+@pytest.mark.parametrize("issue_type", ["feature", "bug", "chore", "doc"])
 class TestSubIssueTemplateHeadings:
     """Every fenced sub-issue template in SKILL.md emits the six required
     H2 headings, in the canonical names this skill commits to."""

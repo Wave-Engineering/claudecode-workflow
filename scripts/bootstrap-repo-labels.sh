@@ -63,9 +63,10 @@ fi
 # uses a red→yellow→green gradient so the group reads at a glance.
 labels=(
 	"type::feature|0E8A16|New functionality"
+	"type::story|0E8A16|New functionality (feature alias)"
 	"type::bug|D93F0B|Defect"
 	"type::chore|FBCA04|Maintenance, refactoring, dependency updates"
-	"type::docs|0075CA|Documentation-only changes"
+	"type::doc|0075CA|Documentation-only changes"
 	"type::epic|5319E7|Parent issue tracking a body of work"
 
 	"priority::critical|B60205|Drop everything"
@@ -100,8 +101,65 @@ if ((dry_run)); then
 fi
 echo
 
+# --- One-time label renames (old name -> new name), applied BEFORE the
+# create-or-update loop below (cc-workflow#1191 code review). `gh label
+# create --force` creates-or-updates BY NAME — it cannot rename, so an
+# already-bootstrapped repo re-run against a taxonomy change would
+# otherwise silently keep the old label (still attached to its issues)
+# alongside a freshly-created new one: a split taxonomy, not a migration.
+# Renaming first means the create-or-update loop's entry for the new name
+# just updates the color/description of the label the rename already
+# produced, and every existing issue's label assignment carries forward
+# (GitHub associates by label ID, not name).
+renames=(
+	"type::docs|type::doc"
+)
 applied=0
 failed=0
+if ((dry_run)); then
+	for pair in "${renames[@]}"; do
+		printf '  [dry-rename] %s -> %s (if present)\n' "${pair%%|*}" "${pair##*|}"
+	done
+else
+	for pair in "${renames[@]}"; do
+		old="${pair%%|*}"
+		new="${pair##*|}"
+		# Direct per-label existence probe via the REST API, NOT `gh label
+		# list`. `gh label list --json name` has a real, observed propagation
+		# lag after a label mutation (cc-workflow#1191 code review) — a label
+		# created/renamed moments earlier can be invisible to the list
+		# endpoint while `gh api repos/.../labels/<name>` (a single-resource
+		# GET) is immediately consistent. Verified live: a throwaway label
+		# was 404 via list but 200 via direct GET seconds after creation.
+		old_exists=0
+		gh api "repos/$repo/labels/$old" >/dev/null 2>&1 && old_exists=1
+		if ((! old_exists)); then
+			continue # nothing to migrate — never bootstrapped, or already renamed
+		fi
+		new_exists=0
+		gh api "repos/$repo/labels/$new" >/dev/null 2>&1 && new_exists=1
+		if ((new_exists)); then
+			# Both names live on the repo — e.g. an agent already created the
+			# new label by hand, or GitHub auto-created it from an issue.
+			# `gh label edit --name` would 422 here; a bare [FAIL] with no
+			# cause is exactly what cc-workflow#1191 code review flagged as
+			# reporting success (exit 0) on the split taxonomy this guard
+			# exists to prevent. Fail loud instead: this needs a human to
+			# move `$old`'s issues onto `$new` and delete `$old`.
+			printf '  [CONFLICT] both %s and %s exist — relabel issues off %s and delete it manually\n' "$old" "$new" "$old" >&2
+			failed=$((failed + 1))
+			continue
+		fi
+		rename_status=0
+		rename_err=$(gh label edit "$old" --name "$new" --repo "$repo" 2>&1 >/dev/null) || rename_status=$?
+		if ((rename_status == 0)); then
+			printf '  [renamed] %-22s -> %s\n' "$old" "$new"
+		else
+			printf '  [FAIL] could not rename %s -> %s: %s\n' "$old" "$new" "$rename_err" >&2
+			failed=$((failed + 1))
+		fi
+	done
+fi
 for entry in "${labels[@]}"; do
 	IFS='|' read -r name color desc <<<"$entry"
 	if ((dry_run)); then

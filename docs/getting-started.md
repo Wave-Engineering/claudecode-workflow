@@ -115,7 +115,7 @@ or use the `/issue` skill to create a properly templated and labeled issue:
 /issue feature add retry logic to the upload endpoint
 ```
 
-This detects your platform, applies the correct template (feature, bug, chore, docs, epic), infers labels, and creates the issue. The issue must exist before any code is written -- this is a hard rule.
+This detects your platform, applies the correct template (feature, bug, chore, doc, epic), infers labels, and creates the issue. The issue must exist before any code is written -- this is a hard rule.
 
 ### 4b: Create a Branch
 
@@ -125,7 +125,7 @@ Claude creates a feature branch linked to the issue:
 git checkout -b feature/42-add-retry-logic
 ```
 
-The branch name includes the issue number so the system can trace work back to its origin. The naming convention is `<type>/<issue-number>-<description>` where type is one of `feature`, `fix`, `chore`, or `docs`.
+The branch name includes the issue number so the system can trace work back to its origin. The naming convention is `<type>/<issue-number>-<description>` where type is one of `feature`, `fix`, `chore`, or `doc`.
 
 ### 4c: Write Code
 

@@ -15,6 +15,10 @@ finalization_score: 7/7
 
 ---
 
+**Terminology update (cc-workflow#1191):** every `type::docs` / `/issue docs` occurrence anywhere in this document (R-13, §4.2, §5.5.1, §5.5.2, Appendix A) is written as this Dev Spec originally approved it and is left frozen — read it as `type::doc` / `/issue doc`. The live taxonomy has since moved to singular `type::doc` (`docs` was an agent-introduced myth, not the canonical name — see mcp-server-sdlc#541/#540). `skills/issue/SKILL.md` and `.claude-project.md` carry the current, maintained label reference.
+
+---
+
 ## Table of Contents
 
 1. [Problem Domain](#1-problem-domain)

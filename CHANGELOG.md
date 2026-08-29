@@ -21,6 +21,53 @@ are worth keeping apart:
 
 ### Fixed
 
+- **`/issue doc` and `/devspec upshift` now emit `type::doc`, matching what
+  `mcp-server-sdlc` v4.3.0 actually accepts (#1191).** `docs` (plural) was an
+  agent-introduced myth, not legacy — `work_item`'s `type` enum canonically
+  uses singular `doc` as of mcp-server-sdlc#541, with `docs` surviving only
+  as a transitional alias mcp-server-sdlc#540 is removing. `/issue`'s skill
+  body exposed the correct singular name to callers but silently aliased it
+  to `docs` internally; dropping that alias surfaced a real, verified break
+  — this GitHub repo's `type::doc` label never existed, only `type::docs`
+  did (47 issues carried it), so `/issue doc` would have failed at
+  label-application time. Fixed by renaming the live label in place (all
+  47 issues preserved — verified via the REST API directly, since
+  `gh issue list`'s own search index lags a rename by several seconds),
+  not by creating a second label and splitting the taxonomy.
+
+  Also fixed a second, independently-live emitter code review found:
+  `/devspec upshift`'s own sub-agent prompt template still instructed
+  `Type: <feature|bug|chore|docs>` — every doc-type Story created by that
+  path would have hit the same now-deleted label. Bootstrap scripts
+  (`scripts/bootstrap-repo-labels{,-gitlab}.sh`) now provision `type::doc`
+  and `type::story` (a matching, independently-discovered gap: `SKILL.md`
+  lists `type::story` under "Automatic Labels (always applied)" alongside
+  `feature`/`bug`/`chore`, but its "On-demand Label Creation" table only
+  covers `type::plan` and `epic::N` — every other `type::` label is assumed
+  to pre-exist, and nothing had ever created `type::story` on this repo —
+  fixed the same way, no split), and gained a one-time rename guard so an
+  already-bootstrapped repo migrates its old `type::docs` label instead of
+  ending up with both. The guard's existence check went through two rounds
+  of self-caught bugs: a `:`-delimited old\|new pair collided with the `::`
+  already inside GitHub/GitLab's `group::value` label names (fixed by
+  switching to `\|`), and `gh label list` was proven live to lag a fresh
+  label mutation by several seconds — replaced with a direct single-label
+  REST GET, which is immediately consistent. A follow-up code review then
+  caught the guard silently reporting success (exit 0) when both the old
+  and new label already existed on a repo — exactly the split taxonomy it
+  exists to prevent, since GitHub/GitLab reject a rename onto an existing
+  name and the failure went uncounted; it now detects that case explicitly,
+  fails loud, and exits non-zero.
+
+  `tests/test_issue_skill.py`'s type-checking assertions were also
+  regex-blind: a plain `t in frontmatter.lower()` substring check can't
+  distinguish "doc" from "docs" since "doc" is a literal substring of
+  "docs". Switched to word-boundary regex matching, verified against a real
+  mutation. `docs/phase-epic-taxonomy-devspec.md` — the file `/issue`'s
+  skill body names as its taxonomy's authoritative source — got the same
+  frozen-content terminology annotation already applied to
+  `docs/kahuna-devspec.md`, rather than an edit to its approved body.
+
 - **The kit proved input existed, never that the scanner ingested it (#1137).**
   `check-scannable.sh` is a **pre-scan** denominator — "is there anything to
   scan?" — and it is good at that. But nothing in the kit ran the scan itself:
