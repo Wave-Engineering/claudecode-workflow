@@ -79,8 +79,10 @@ declare -a REPORT=()
 # packages are all devDependencies scans as zero packages under trivy's DEFAULT
 # invocation (measured: scripts/wave-watcher) — not a trivy limitation, trivy
 # suppresses dev/test deps unless called with --include-dev-deps (fixed at the
-# call sites, cc-workflow#1169: skills/precheck/SKILL.md Job C and
-# skills/nextwave/gate.js's trivySignalPrompt). This script still counts the
+# call sites, cc-workflow#1169: scripts/ci/dependency-scan.sh — Job C's real
+# invocation as of #1137, superseding its own prose prompt — plus
+# skills/nextwave/gate.js's trivySignalPrompt and SKILL.md's fallback prose
+# for a checkout that predates the script). This script still counts the
 # lockfile's mere presence as scannable regardless — it answers "would a scan
 # have anything to look at", not "did the last scan use the right flags" — so
 # nothing here needed to change once the flag was added elsewhere.

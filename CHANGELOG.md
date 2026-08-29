@@ -21,6 +21,73 @@ are worth keeping apart:
 
 ### Fixed
 
+- **The kit proved input existed, never that the scanner ingested it (#1137).**
+  `check-scannable.sh` is a **pre-scan** denominator — "is there anything to
+  scan?" — and it is good at that. But nothing in the kit ran the scan itself:
+  the whole dependency check lived as **prose in `/precheck`'s Job C**, asking a
+  sub-agent to report the count. It complied, which is the problem — an
+  instruction can be forgotten by the next agent, misread, or dropped in a
+  rewrite, and the resulting verdict looks identical to a real one.
+
+  Two green checks either side of a stage prove nothing about the stage between
+  them. flightdeck sits in exactly that gap: manifests present and countable,
+  trivy parsing none of them (`bun.lock` unsupported per flightdeck#8 — a
+  diagnosis worth re-measuring, see below), both checks green. **cc-workflow
+  turned out to be a partial instance of the same thing** —
+  2 scannable manifests, 1 ingested. Root cause, confirmed by measurement rather
+  than assumed: not a `bun.lock` parsing limitation, but trivy suppressing
+  dev-only dependency trees by default (both bun.lock manifests here are
+  entirely devDependencies) — closed by passing `--include-dev-deps` and
+  `--list-all-pkgs` (cc-workflow#1169's fix, ported into this script). Nothing
+  had ever said so. flightdeck#8's own "unsupported" diagnosis may be the same
+  flag artifact rather than a real ecosystem gap — worth re-measuring before any
+  fleet-wide remedy assumes otherwise.
+
+  `scripts/ci/dependency-scan.sh` runs the scan and reports what it **actually
+  covered**, on every path including the passing one: manifests ingested, package
+  count, and a `coverage: N of M` line. A shortfall is stated in the verdict
+  itself (`PASS … (COVERS 1/2 — see WARNING above)`), so a copied PASS cannot
+  quietly mean half a denominator. Exit codes distinguish conditions that used to
+  look alike: **2 = manifests present but zero ingested** is not the same as
+  **4 = nothing scannable**, and **5 = scanner/tooling error** (timeout, no
+  output, unparseable output, or a partial install) is neither — a broken
+  scanner is not an unparseable lockfile, and conflating them sends the
+  operator hunting an ecosystem problem that does not exist. `trivy`
+  absent is `3` / SKIP, because a hard dependency would make `validate.sh`
+  unrunnable on a fresh box — which is how a check gets commented out rather than
+  fixed.
+
+  Wired into `validate.sh` (the lane CI runs) and into `/precheck` Job C, which
+  now **invokes the tool** instead of describing the report it wants.
+
+  **Scope, because the fix is narrower than the problem:** `install` excludes
+  `ci/*` from distribution, so this script lives in a cc-workflow checkout and
+  nowhere else. Every other repo still takes Job C's prose fallback — including
+  flightdeck, the case that motivated the issue. Shipping it fleet-wide is #1141.
+  Also emits the scanner version alongside the counts: a coverage shortfall could
+  be an ecosystem limit *or* a stale binary, and the output cannot distinguish
+  them without it. `.github/workflows/validate.yml` now installs trivy
+  (previously absent, so this script returned 3/[SKIPPED] on every PR and had
+  never actually run in the lane CI runs) — the scope limit above is about
+  which repos carry the script, not about whether cc-workflow's own CI
+  exercises it. Install is checksum-verified against trivy's own published
+  checksums (guards transport corruption, not a compromised release — the
+  checksums file ships from the same mutable release with no signature
+  check), and its DB is cached to soften a cold ghcr.io pull on a repeated
+  push to the SAME PR. Honest limit: GitHub scopes a `pull_request` cache to
+  that PR's merge ref, so this cannot warm-start a *different* PR's first
+  run — every new PR still pays the cold pull once.
+
+  **Made actually true, not just claimed:** the scan now runs with
+  `--ignorefile /dev/null` — trivy auto-loads a `.trivyignore` from the
+  current working directory by default, which would otherwise make this
+  scan's strictness depend on invocation location and let a committed
+  ignore file silently suppress findings with nothing checking for one.
+  Escape hatch that already existed and is now documented in `/precheck`:
+  `DEP_SCAN_SEVERITY` overrides the severity filter for an operator who
+  needs to unblock on an unfixable finding before #1188 (whether the gate
+  should distinguish fixable from unfixable at all) is decided.
+
 - **`sleep infinity` as PID 1 never reaps zombies — fleet-wide network dropouts (#1179).**
   aoe never runs an entrypoint into the agent; it `docker exec`s `claude` into an
   already-running container, so the top-level exec'd process is parentless from
