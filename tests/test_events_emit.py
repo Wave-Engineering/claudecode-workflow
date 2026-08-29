@@ -9,6 +9,7 @@ Stdlib-only mock ingest (http.server) — no third-party HTTP fixture.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import subprocess
@@ -38,17 +39,21 @@ class _CaptureServer:
     relying on real network timing to land inside or outside a join window.
     """
 
-    def __init__(self, status: int = 202, port: int = 0, delay: float = 0.0):
+    def __init__(
+        self, status: int = 202, port: int = 0, delay: float = 0.0, fail_first_n: int = 0
+    ):
         self.received: list[tuple] = []
         self.status = status
         captured = self.received
         status_code = self.status
+        request_count = [0]
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *a):  # silence
                 pass
 
             def do_POST(self):
+                request_count[0] += 1
                 length = int(self.headers.get("Content-Length", 0))
                 raw = self.rfile.read(length).decode("utf-8") if length else ""
                 try:
@@ -58,7 +63,13 @@ class _CaptureServer:
                 if delay:
                     time.sleep(delay)
                 captured.append((self.path, body, self.headers.get("Authorization")))
-                self.send_response(status_code)
+                # #1189: simulate a scanner that transiently 5xx's the first
+                # N requests then recovers — real end-to-end exercise of
+                # _post()'s own retry loop, not a mocked control-flow stub.
+                if request_count[0] <= fail_first_n:
+                    self.send_response(503)
+                else:
+                    self.send_response(status_code)
                 self.end_headers()
 
         self._server = HTTPServer(("127.0.0.1", port), Handler)
@@ -432,6 +443,260 @@ class TestReplayAndResilience:
             assert [b["wave"] for (_p, b, _a) in live.received] == ["w1", "w2"]
         finally:
             live.stop()
+
+
+class TestShipRetryAndLock:
+    """cc-workflow#1189 — a single transient POST failure must not wedge the
+    entire ordered replay indefinitely, and concurrent ship() calls sharing
+    one buffer/offset (every emitting process on a fleet machine) must not
+    race each other. Reproduces the exact live failure: FlightDeck delivery
+    on a real machine stalled for over a month after one blip, with the
+    endpoint reachable and the stuck payload accepted on manual retry."""
+
+    def test_ship_retries_a_transient_failure_and_succeeds(self, buf, monkeypatch):
+        # 503 once, then 202 — the real end-to-end shape of the live bug:
+        # a blip that resolves within the same call, not a dead endpoint.
+        server = _CaptureServer(fail_first_n=1).start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            emit("step", activity_id="c", wave="w1", ship_now=False)
+            assert ship(buf) == 1, "a single transient failure must still ship within one ship() call"
+            assert server.wait_for(2)  # the failed attempt + the retry that succeeded
+            assert len(server.received) == 2
+        finally:
+            server.stop()
+
+    def test_ship_gives_up_after_bounded_retries_on_persistent_failure(self, buf, monkeypatch):
+        # Always 503 — must still stop (not retry forever, not hang the caller).
+        server = _CaptureServer(fail_first_n=10_000).start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            emit("step", activity_id="c", wave="w1", ship_now=False)
+            assert ship(buf) == 0, "a persistently failing endpoint must still give up"
+            assert server.wait_for(4)
+            # 1 initial attempt + 3 retries (the default backoff schedule's
+            # length) — proves it retried, and that it stopped rather than
+            # retrying unboundedly.
+            assert len(server.received) == 4
+            assert emit_mod._read_offset(buf) == 0, "offset must not advance past an unshipped line"
+        finally:
+            server.stop()
+
+    def test_ship_retry_uses_backoff_not_a_tight_loop(self, buf, monkeypatch):
+        # Override the autouse fixture's zeroed backoff for this ONE test —
+        # the thing being proven here IS the sleep, so it can't be zeroed.
+        monkeypatch.setenv("FLIGHTDECK_POST_RETRY_BACKOFFS", "0.2,0.2,0.2")
+        server = _CaptureServer(fail_first_n=10_000).start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            emit("step", activity_id="c", wave="w1", ship_now=False)
+            t0 = time.monotonic()
+            assert ship(buf) == 0
+            elapsed = time.monotonic() - t0
+            assert elapsed >= 0.5, (
+                f"elapsed {elapsed}s — too fast for 3 real 0.2s backoffs; "
+                "looks like a tight retry loop with no real delay"
+            )
+        finally:
+            server.stop()
+
+    def test_concurrent_ship_calls_do_not_race_the_offset(self, buf, monkeypatch):
+        # Ten buffered lines; two threads call ship() against the SAME buffer
+        # at once, exactly like two agent processes on one fleet machine both
+        # firing _ship_async off unrelated emit() calls.
+        server = _CaptureServer(delay=0.05).start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            for i in range(10):
+                emit("step", activity_id="c", wave=f"w{i}", ship_now=False)
+
+            results: list[int] = []
+
+            def _run():
+                results.append(ship(buf))
+
+            t1 = threading.Thread(target=_run)
+            t2 = threading.Thread(target=_run)
+            t1.start()
+            t2.start()
+            t1.join(timeout=5)
+            t2.join(timeout=5)
+
+            assert server.wait_for(10, timeout=5)
+            # Exactly one thread must have won the lock and shipped all ten;
+            # the other must have found it held and backed off immediately
+            # (returned 0) rather than racing a second, overlapping replay.
+            assert sorted(results) == [0, 10], (
+                f"expected one ship() to do all the work and the other to "
+                f"no-op on lock contention, got {results}"
+            )
+            # No duplicate delivery — the loser never got far enough to send.
+            assert len(server.received) == 10
+            waves = sorted(b["wave"] for (_p, b, _a) in server.received)
+            assert waves == sorted(f"w{i}" for i in range(10))
+            assert emit_mod._read_offset(buf) == buf.stat().st_size
+        finally:
+            server.stop()
+
+    def test_offset_lock_is_released_on_failure(self, buf, monkeypatch):
+        # A ship() call against a persistently dead endpoint must not leave
+        # its lock held for the NEXT call once the endpoint recovers.
+        dead = _CaptureServer().start()
+        port = dead.port
+        dead.stop()
+        monkeypatch.setenv("FLIGHTDECK_INGEST_URL", f"http://127.0.0.1:{port}/ingest")
+        emit("step", activity_id="c", wave="w1", ship_now=False)
+        assert ship(buf) == 0  # fails, lock must be released on the way out
+
+        live = _CaptureServer(port=port).start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", live.url)
+            assert ship(buf) == 1, "lock from the failed call was not released"
+        finally:
+            live.stop()
+
+    def test_ship_noops_immediately_when_another_holder_has_the_lock(self, buf, monkeypatch):
+        """cc-workflow#1189 code review: the earlier concurrency test passes
+        identically with a BLOCKING flock (LOCK_EX alone) — a losing thread
+        just waits, then finds nothing left to ship. That doesn't prove
+        LOCK_NB, which is the half of the design that matters for R-02:
+        ship() must never block its caller. Holds an external lock on the
+        exact path _offset_lock uses (simulating another process) and
+        asserts ship() returns immediately rather than waiting for it.
+
+        Runs ship() in a background thread with a bounded join rather than
+        calling it directly: a real regression here (LOCK_NB silently
+        dropped) makes ship() block until the external holder releases,
+        which this test only does AFTER observing ship()'s result — a
+        direct call would deadlock the whole suite instead of failing one
+        test. Confirmed live: reverting to a blocking flock hangs a direct
+        call; this shape turns that same regression into a clean failure.
+        """
+        server = _CaptureServer().start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            emit("step", activity_id="c", wave="w1", ship_now=False)
+            fd = os.open(str(emit_mod._lock_path(buf)), os.O_CREAT | os.O_RDWR, 0o644)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                result: list[int] = []
+                t0 = time.monotonic()
+                t = threading.Thread(target=lambda: result.append(ship(buf)))
+                t.start()
+                t.join(timeout=1.0)
+                elapsed = time.monotonic() - t0
+                assert not t.is_alive(), (
+                    "ship() did not return within 1s against a held lock — it "
+                    "blocked instead of backing off immediately (LOCK_NB missing)"
+                )
+                assert result == [0]
+                assert elapsed < 0.5, f"ship() took {elapsed}s — too slow for a non-blocking no-op"
+            finally:
+                os.close(fd)  # releases the external hold
+            assert ship(buf) == 1, "did not recover once the external holder let go"
+        finally:
+            server.stop()
+
+    def test_unopenable_lock_file_degrades_to_a_noop_never_raises(self, buf, monkeypatch):
+        """cc-workflow#1189 code review: _offset_lock's open/create failure
+        path (permissions, full disk, read-only fs) had zero coverage — the
+        one path where a silent regression turns the shipper into a
+        permanent, silent, machine-wide no-op. A directory at the lock path
+        makes os.open(..., O_RDWR) fail with EISDIR: root-safe (unlike a
+        chmod'd parent, which root bypasses) and isolates the LOCK failure
+        from _write_offset, which a read-only parent would also break."""
+        server = _CaptureServer().start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            emit("step", activity_id="c", wave="w1", ship_now=False)
+            emit_mod._lock_path(buf).mkdir()
+            assert ship(buf) == 0, "must degrade to a no-op, not raise"
+            assert server.received == []
+            assert emit_mod._read_offset(buf) == 0
+        finally:
+            server.stop()
+
+
+class TestPostRetryBackoffs:
+    """cc-workflow#1189 code review: _post_retry_backoffs()'s default,
+    malformed-input fallback, explicit-disable, and clamp behavior had no
+    direct unit coverage — everything exercising it went through the
+    autouse fixture's "0,0,0" override, which pins conftest's schedule, not
+    production's."""
+
+    def test_default_when_unset(self, monkeypatch):
+        monkeypatch.delenv("FLIGHTDECK_POST_RETRY_BACKOFFS", raising=False)
+        assert emit_mod._post_retry_backoffs() == (0.25, 0.5, 1.0)
+
+    def test_malformed_value_falls_back_to_default(self, monkeypatch):
+        monkeypatch.setenv("FLIGHTDECK_POST_RETRY_BACKOFFS", "not,a,number")
+        assert emit_mod._post_retry_backoffs() == (0.25, 0.5, 1.0)
+
+    def test_explicit_empty_string_means_no_retries(self, monkeypatch):
+        # Distinct from unset: an operator setting it to "" is disabling
+        # retries on purpose, not asking for the default.
+        monkeypatch.setenv("FLIGHTDECK_POST_RETRY_BACKOFFS", "")
+        assert emit_mod._post_retry_backoffs() == ()
+
+    def test_values_are_clamped_non_negative_and_capped(self, monkeypatch):
+        monkeypatch.setenv("FLIGHTDECK_POST_RETRY_BACKOFFS", "-1,3600,2")
+        assert emit_mod._post_retry_backoffs() == (0.0, emit_mod._MAX_POST_RETRY_BACKOFF, 2.0)
+
+
+class TestPostDoesNotRetryPermanentFailures:
+    """cc-workflow#1189 code review: retrying a 4xx burns the whole backoff
+    budget on a line that will keep failing regardless (the server already
+    definitively rejected it), delaying ship()'s give-up for no benefit. A
+    5xx (and every other exception — connection refused, timeout) IS still
+    retried, deliberately: this endpoint has no per-event dedup key, so
+    narrowing retries to only "provably never reached the server" cases
+    risks under-fixing the live bug (an unpredictable connection failure)
+    to avoid a duplicate-delivery tradeoff that already existed pre-fix."""
+
+    def test_400_is_not_retried(self, buf, monkeypatch):
+        server = _CaptureServer(status=400).start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            emit("step", activity_id="c", wave="w1", ship_now=False)
+            assert ship(buf) == 0
+            assert server.wait_for(1)
+            time.sleep(0.1)  # let any (incorrect) retry land, if it would
+            assert len(server.received) == 1, "a 4xx must not be retried"
+        finally:
+            server.stop()
+
+    def test_503_is_still_retried_like_other_transient_failures(self, buf, monkeypatch):
+        server = _CaptureServer(status=503, fail_first_n=10_000).start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            emit("step", activity_id="c", wave="w1", ship_now=False)
+            assert ship(buf) == 0
+            assert server.wait_for(4)
+            assert len(server.received) == 4, "a 5xx must retry same as other transient failures"
+        finally:
+            server.stop()
+
+    @pytest.mark.parametrize("code", [408, 429])
+    def test_408_and_429_are_retried_despite_being_4xx(self, buf, monkeypatch, code):
+        """cc-workflow#1189 code review: 408/429 are the two standard 4xx
+        exceptions that mean "retry me anyway" — both are exactly the
+        transient-condition class this fix exists to survive, and a proxy
+        or ingress in front of this endpoint could plausibly emit either.
+
+        No fail_first_n here (unlike the 503 test above): that parameter's
+        "first N requests" branch in _CaptureServer hard-codes 503
+        regardless of `status`, so passing it here would silently test 503
+        handling again under a 408/429 label rather than 408/429 at all —
+        caught by mutation-testing this exact test."""
+        server = _CaptureServer(status=code).start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            emit("step", activity_id="c", wave="w1", ship_now=False)
+            assert ship(buf) == 0
+            assert server.wait_for(4)
+            assert len(server.received) == 4, f"{code} must retry, not be treated as permanent"
+        finally:
+            server.stop()
 
 
 # ---------------------------------------------------------------------------

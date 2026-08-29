@@ -10,7 +10,10 @@ The lowest-deterministic-layer emitter. Every state change routes through
 3. ships it non-blocking to ``$FLIGHTDECK_INGEST_URL`` with bearer-token auth,
    in a daemon thread, off the caller's hot path [R-02];
 4. replays unsent buffered lines in order via an offset marker when the ingest
-   endpoint recovers [R-04].
+   endpoint recovers [R-04] — with a bounded per-line retry on a transient
+   failure, and a non-blocking cross-process lock around the replay so two
+   concurrent shippers on one machine (every emitting process fires this)
+   cannot race the shared offset marker (#1189).
 
 **Contract: never raises to the caller.** Emit is instrumentation; a bug here
 must never break a state mutation, a Stop hook, or a Workflow node. Every public
@@ -23,6 +26,12 @@ DI-seams (env vars):
   never raises (R-03 default).
 - ``FLIGHTDECK_INGEST_TOKEN`` — bearer token for the ``Authorization`` header.
 - ``FLIGHTDECK_INGEST_TIMEOUT`` — POST timeout seconds (default 2).
+- ``FLIGHTDECK_POST_RETRY_BACKOFFS`` — comma-separated seconds between
+  ``_post()`` retry attempts (default ``0.25,0.5,1.0`` — 3 retries after the
+  initial attempt), each value clamped to ``[0, 5]``. Set to an EMPTY string
+  to disable retries entirely (distinct from unset, which uses the
+  default). Test isolation; production should not normally need to tune
+  this (#1189).
 - ``FLIGHTDECK_EVENTS_PATH``  — override the buffer file (test isolation).
 - ``FLIGHTDECK_EMIT_DISABLED``— hard off switch (no-op emit).
 - ``FLIGHTDECK_ACTIVITY_ID`` / ``FLIGHTDECK_AGENT`` / ``FLIGHTDECK_SESSION_ID`` /
@@ -36,12 +45,16 @@ DI-seams (env vars):
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import tempfile
 import os
 import sys
 import threading
+import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -105,6 +118,56 @@ def buffer_path() -> Path:
 def _offset_path(buffer: Path) -> Path:
     """The offset-marker sidecar for *buffer* (records bytes already shipped)."""
     return Path(str(buffer) + ".offset")
+
+
+def _lock_path(buffer: Path) -> Path:
+    """The advisory-lock sidecar guarding *buffer*'s offset marker (#1189)."""
+    return Path(str(buffer) + ".offset.lock")
+
+
+@contextlib.contextmanager
+def _offset_lock(buffer: Path):
+    """Non-blocking advisory lock around a `ship()` replay of *buffer* (#1189).
+
+    Every emitting process on a shared machine fires `_ship_async` → `ship()`
+    against the SAME buffer/offset pair. Without this, two concurrent `ship()`
+    calls can both read the same starting offset and replay independently —
+    the loser's `_write_offset` can land after the winner's and regress the
+    recorded progress (replaying already-shipped lines again), or both can
+    double-POST the same span. Observed live: the offset did not advance
+    monotonically under concurrent `ship()` activity from other agent
+    processes on one machine.
+
+    Non-blocking (`LOCK_NB`) on purpose: `ship()` must never block its
+    caller (R-02/R-03). A call that loses the race yields ``False``
+    immediately rather than waiting for the lock — the buffer stays
+    untouched, and the next unrelated `emit()` anywhere on the machine will
+    trigger another `ship()` attempt shortly. Never raises.
+    """
+    lock_path = _lock_path(buffer)
+    fd = None
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except Exception:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        yield False
+        return
+    try:
+        yield True
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            os.close(fd)
+        except Exception:
+            pass
 
 
 def activity_id_for_root(root: object) -> str:
@@ -316,51 +379,174 @@ def _clear_scope_marker_if_matching(activity_id: str) -> None:
 
 
 def _write_offset(buffer: Path, offset: int) -> None:
+    """Atomic write: temp file in the SAME directory, then ``os.replace()``
+    (mirrors ``_write_scope_marker``'s pattern, #1189 code review). Plain
+    ``write_text`` truncates before writing — a process ending mid-write
+    (crash, ``os._exit()``) leaves a 0-byte offset file, which ``_read_offset``
+    reads as 0 and re-delivers the ENTIRE buffer on the next `ship()`. Now
+    safe to fix cheaply: every write already happens inside `ship()`'s
+    `_offset_lock`, so there is no new race to reason about.
+    """
+    path = _offset_path(buffer)
+    fd = None
     try:
-        _offset_path(buffer).write_text(str(offset), encoding="utf-8")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=str(path.parent), suffix=".tmp", delete=False
+        )
+        fd.write(str(offset))
+        fd.flush()
+        os.fsync(fd.fileno())
+        fd.close()
+        os.replace(fd.name, path)
     except Exception:
-        pass
+        if fd is not None:
+            try:
+                fd.close()
+            except Exception:
+                pass
+            try:
+                os.unlink(fd.name)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
 # Shipper (fire-and-forget POST + ordered replay)
 # ---------------------------------------------------------------------------
 
+#: A single backoff is clamped into this range (seconds) — a malformed or
+#: adversarial FLIGHTDECK_POST_RETRY_BACKOFFS must never turn into an
+#: unbounded sleep (held while `ship()`'s lock is HELD, no-opping every other
+#: shipper on the machine for as long as the sleep runs) or a negative value
+#: raising out of `time.sleep` (code review, #1189).
+_MAX_POST_RETRY_BACKOFF = 5.0
+
+
+def _post_retry_backoffs() -> tuple[float, ...]:
+    """Backoff (seconds) between retry attempts inside a single `_post()`
+    call — default 3 retries after the initial attempt, capped under ~2s
+    total added latency so this stays fire-and-forget rather than blocking
+    the shipper thread.
+
+    Test-overridable via ``FLIGHTDECK_POST_RETRY_BACKOFFS`` (comma-separated
+    seconds, e.g. ``"0,0,0"`` for a test that exercises the retry COUNT/
+    control-flow but doesn't want to pay real sleep time) — mirrors this
+    module's existing ``FLIGHTDECK_INGEST_TIMEOUT`` DI-seam convention. The
+    var being SET to an empty string means "no retries" (an explicit,
+    deliberate override), distinct from being unset (default schedule);
+    a value that fails to parse falls back to the default rather than
+    raising, and every value is clamped to ``[0, _MAX_POST_RETRY_BACKOFF]``
+    regardless of source.
+    """
+    override = os.environ.get("FLIGHTDECK_POST_RETRY_BACKOFFS")
+    if override is None:
+        return (0.25, 0.5, 1.0)
+    if not override.strip():
+        return ()
+    try:
+        values = tuple(float(x) for x in override.split(","))
+    except ValueError:
+        return (0.25, 0.5, 1.0)
+    return tuple(max(0.0, min(v, _MAX_POST_RETRY_BACKOFF)) for v in values)
+
+
+def _retriable_status(code: int) -> bool:
+    """Whether an HTTP *code* is worth burning a retry attempt on (#1189).
+
+    5xx (transient server-side overload/error) is always retriable. Within
+    4xx, 408 (Request Timeout) and 429 (Too Many Requests) are the two
+    standard "retry me anyway" exceptions — both are exactly the transient
+    condition class this fix exists to survive, and a reverse proxy or
+    ingress in front of this endpoint could plausibly emit either. Every
+    other 4xx is a definitive rejection retrying cannot fix.
+    """
+    return (500 <= code < 600) or code in (408, 429)
+
+
 def _post(url: str, body: str) -> bool:
     """POST *body* to *url* with optional bearer auth. True on 2xx, else False.
 
-    Never raises — a down/unreachable ingest returns False so the caller keeps
-    the event buffered (R-03).
+    Retries a small, bounded number of times with short backoff before
+    giving up (#1189): a single transient failure — a network blip, a
+    momentarily refused connection — must not be able to wedge the entire
+    ordered replay for an unbounded period. Observed live: FlightDeck
+    delivery stalled on a real machine for over a month after exactly one
+    such blip, with the ingest endpoint reachable throughout and the exact
+    stuck payload accepted (202) moments later on manual retry. Bounded and
+    short on purpose: the common case (immediate 2xx) costs nothing extra,
+    and a persistently failing endpoint still gives up quickly rather than
+    blocking the caller.
+
+    A 4xx response is NOT retried (code review, #1189), with the two
+    standard exceptions that mean "retry me" even in that range: 408
+    (Request Timeout) and 429 (Too Many Requests) — both are exactly the
+    kind of transient condition this whole fix exists to survive, and a
+    reverse proxy or ingress in front of this endpoint could produce
+    either. Every OTHER 4xx means the server received and definitively
+    rejected the request for a reason retrying won't change (bad auth, an
+    oversized/malformed body, a tightened schema) — retrying would only
+    burn the whole backoff budget on a line that is going to keep failing
+    regardless, delaying `ship()`'s give-up on it for no benefit. A 5xx IS
+    retried (transient overload is exactly what that status range means)
+    as is every other exception (connection refused, DNS failure, timeout)
+    — this is deliberately still permissive there rather than narrowed to
+    only connection-establishment failures: this events endpoint has no
+    per-event dedup key, so a retried request that the server actually
+    processed can duplicate delivery either way, and the live bug this fix
+    closes was exactly an unpredictable connection failure, not a clean
+    timeout — narrowing the retriable set would risk under-fixing the bug
+    being closed to avoid a duplicate-delivery tradeoff that already
+    existed pre-fix (ship() itself already re-POSTs an unadvanced line on
+    the next round) and is a fold-side, not shipper-side, question.
+
+    Never raises — a down/unreachable ingest returns False so the caller
+    keeps the event buffered (R-03).
     """
     token = os.environ.get("FLIGHTDECK_INGEST_TOKEN")
     try:
         timeout = float(os.environ.get("FLIGHTDECK_INGEST_TIMEOUT", "2"))
     except (TypeError, ValueError):
         timeout = 2.0
-    try:
-        req = urllib.request.Request(
-            url,
-            data=body.encode("utf-8"),
-            method="POST",
-            headers={"Content-Type": "application/json"},
-        )
-        if token:
-            req.add_header("Authorization", f"Bearer {token}")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            status = getattr(resp, "status", None) or resp.getcode()
-            return 200 <= int(status) < 300
-    except Exception:
-        return False
+
+    backoffs = _post_retry_backoffs()
+    for attempt in range(len(backoffs) + 1):
+        try:
+            req = urllib.request.Request(
+                url,
+                data=body.encode("utf-8"),
+                method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            if token:
+                req.add_header("Authorization", f"Bearer {token}")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                status = getattr(resp, "status", None) or resp.getcode()
+                if 200 <= int(status) < 300:
+                    return True
+                if not _retriable_status(int(status)):
+                    return False  # permanent (4xx-shaped) — do not burn retries
+        except urllib.error.HTTPError as e:
+            if not _retriable_status(e.code):
+                return False
+        except Exception:
+            pass
+        if attempt < len(backoffs):
+            time.sleep(backoffs[attempt])
+    return False
 
 
 def ship(buffer: Path | None = None) -> int:
     """Replay unsent buffered lines to the ingest endpoint, in order.
 
-    Reads from the offset marker to EOF; POSTs each complete line; advances the
-    offset only past a line that shipped 2xx. On the first failure it STOPS,
-    leaving the offset at the unshipped line so the next call resumes in order
-    (R-04). Returns the number of lines shipped. No-op (0) when
-    ``FLIGHTDECK_INGEST_URL`` is unset (DI-seam, R-03). Never raises.
+    Reads from the offset marker to EOF; POSTs each complete line (with
+    _post()'s own bounded retry — see there); advances the offset only past
+    a line that shipped 2xx. On the first (retry-exhausted) failure it
+    STOPS, leaving the offset at the unshipped line so the next call resumes
+    in order (R-04). Returns the number of lines shipped. No-op (0) when
+    ``FLIGHTDECK_INGEST_URL`` is unset (DI-seam, R-03), or when a concurrent
+    `ship()` on this machine already holds the replay lock (#1189) — never
+    blocks waiting for it. Never raises.
     """
     url = os.environ.get("FLIGHTDECK_INGEST_URL")
     if not url:
@@ -370,25 +556,28 @@ def ship(buffer: Path | None = None) -> int:
     try:
         if not buf.exists():
             return 0
-        offset = _read_offset(buf)
-        with open(buf, "r", encoding="utf-8") as f:
-            try:
-                f.seek(offset)
-            except Exception:
-                f.seek(0)
-            while True:
-                line = f.readline()
-                if not line:
-                    break
-                if not line.endswith("\n"):
-                    # Partial line (a writer is mid-append) — retry next round.
-                    break
-                stripped = line.strip()
-                if stripped and not _post(url, stripped):
-                    break  # keep offset here; ordered replay on recovery.
-                _write_offset(buf, f.tell())
-                if stripped:
-                    shipped += 1
+        with _offset_lock(buf) as acquired:
+            if not acquired:
+                return 0
+            offset = _read_offset(buf)
+            with open(buf, "r", encoding="utf-8") as f:
+                try:
+                    f.seek(offset)
+                except Exception:
+                    f.seek(0)
+                while True:
+                    line = f.readline()
+                    if not line:
+                        break
+                    if not line.endswith("\n"):
+                        # Partial line (a writer is mid-append) — retry next round.
+                        break
+                    stripped = line.strip()
+                    if stripped and not _post(url, stripped):
+                        break  # keep offset here; ordered replay on recovery.
+                    _write_offset(buf, f.tell())
+                    if stripped:
+                        shipped += 1
     except Exception:
         return shipped
     return shipped
@@ -466,10 +655,12 @@ def flush_pending_ships(timeout: float | None = None) -> None:
     Bounded, not indefinite: an unbounded join would hang the CLI forever
     against a truly dead/hanging ingest endpoint — the same failure mode R-02
     was built to avoid, just moved to a different call site. *timeout*
-    defaults to ``FLIGHTDECK_INGEST_TIMEOUT`` (the same bound a single
-    in-flight POST is already allowed to take), so the worst case this adds
-    to a real process exit is one more instance of a cost the process was
-    already prepared to pay.
+    defaults to ``FLIGHTDECK_INGEST_TIMEOUT`` — one POST's timeout. Since
+    #1189 a single `_post()` may retry up to 4x that (bounded backoff), so a
+    slow/failing ingest now routinely exceeds this join and the thread gets
+    abandoned rather than finishing — safe, per the paragraph below, because
+    `os._exit()` always follows and the buffer is durable, so nothing is
+    lost, only delayed to the next `ship()`.
 
     Never raises (R-03). Clears :data:`_pending_ships` unconditionally —
     whether a thread finished, is still running past the timeout, or joining
@@ -486,6 +677,16 @@ def flush_pending_ships(timeout: float | None = None) -> None:
     ever "simplifies" a call site back to a bare return/`sys.exit()`, the
     abandoned-thread case reopens #1149 exactly as it was before this fix,
     even with this join still in place.
+
+    Since #1189, an abandoned thread can also be mid-`ship()` and holding
+    its offset-marker `flock` at the moment it's abandoned — not frozen
+    (the thread keeps running its own bounded retry/replay loop and its
+    `finally` releases the lock whenever `ship()` finishes, abandoned or
+    not), but a call site that returned normally instead of exiting would
+    now be racing a live daemon thread against interpreter teardown while
+    THAT thread still holds a lock other shippers on the machine are
+    waiting on — reopening #1149's crash class with an extra way to notice,
+    not a new failure mode of its own.
     """
     if timeout is None:
         try:
