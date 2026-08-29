@@ -8,7 +8,7 @@ usage: |
   /issue story <prompt>    Create a story Story (alias: feature)
   /issue bug <prompt>      Create a bug Story
   /issue chore <prompt>    Create a chore Story
-  /issue doc <prompt>     Create a doc Story
+  /issue doc <prompt>      Create a doc Story
   /issue <type> <prompt> --epic N  Attach epic::N PM-layer label to the Story
   /issue <prompt>          Infer type from the prompt (never infers "plan")
   /issue                   Infer from recent conversation context
