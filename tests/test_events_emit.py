@@ -676,6 +676,28 @@ class TestPostDoesNotRetryPermanentFailures:
         finally:
             server.stop()
 
+    @pytest.mark.parametrize("code", [408, 429])
+    def test_408_and_429_are_retried_despite_being_4xx(self, buf, monkeypatch, code):
+        """cc-workflow#1189 code review: 408/429 are the two standard 4xx
+        exceptions that mean "retry me anyway" — both are exactly the
+        transient-condition class this fix exists to survive, and a proxy
+        or ingress in front of this endpoint could plausibly emit either.
+
+        No fail_first_n here (unlike the 503 test above): that parameter's
+        "first N requests" branch in _CaptureServer hard-codes 503
+        regardless of `status`, so passing it here would silently test 503
+        handling again under a 408/429 label rather than 408/429 at all —
+        caught by mutation-testing this exact test."""
+        server = _CaptureServer(status=code).start()
+        try:
+            monkeypatch.setenv("FLIGHTDECK_INGEST_URL", server.url)
+            emit("step", activity_id="c", wave="w1", ship_now=False)
+            assert ship(buf) == 0
+            assert server.wait_for(4)
+            assert len(server.received) == 4, f"{code} must retry, not be treated as permanent"
+        finally:
+            server.stop()
+
 
 # ---------------------------------------------------------------------------
 # CLI surface (used by the session hook S1.7 + Workflow tee S1.6)

@@ -28,8 +28,10 @@ DI-seams (env vars):
 - ``FLIGHTDECK_INGEST_TIMEOUT`` — POST timeout seconds (default 2).
 - ``FLIGHTDECK_POST_RETRY_BACKOFFS`` — comma-separated seconds between
   ``_post()`` retry attempts (default ``0.25,0.5,1.0`` — 3 retries after the
-  initial attempt). Test isolation; production should not normally need to
-  tune this (#1189).
+  initial attempt), each value clamped to ``[0, 5]``. Set to an EMPTY string
+  to disable retries entirely (distinct from unset, which uses the
+  default). Test isolation; production should not normally need to tune
+  this (#1189).
 - ``FLIGHTDECK_EVENTS_PATH``  — override the buffer file (test isolation).
 - ``FLIGHTDECK_EMIT_DISABLED``— hard off switch (no-op emit).
 - ``FLIGHTDECK_ACTIVITY_ID`` / ``FLIGHTDECK_AGENT`` / ``FLIGHTDECK_SESSION_ID`` /
@@ -449,6 +451,19 @@ def _post_retry_backoffs() -> tuple[float, ...]:
     return tuple(max(0.0, min(v, _MAX_POST_RETRY_BACKOFF)) for v in values)
 
 
+def _retriable_status(code: int) -> bool:
+    """Whether an HTTP *code* is worth burning a retry attempt on (#1189).
+
+    5xx (transient server-side overload/error) is always retriable. Within
+    4xx, 408 (Request Timeout) and 429 (Too Many Requests) are the two
+    standard "retry me anyway" exceptions — both are exactly the transient
+    condition class this fix exists to survive, and a reverse proxy or
+    ingress in front of this endpoint could plausibly emit either. Every
+    other 4xx is a definitive rejection retrying cannot fix.
+    """
+    return (500 <= code < 600) or code in (408, 429)
+
+
 def _post(url: str, body: str) -> bool:
     """POST *body* to *url* with optional bearer auth. True on 2xx, else False.
 
@@ -463,23 +478,27 @@ def _post(url: str, body: str) -> bool:
     and a persistently failing endpoint still gives up quickly rather than
     blocking the caller.
 
-    A 4xx response is NOT retried (code review, #1189): the server received
-    and definitively rejected the request for a reason retrying won't
-    change (bad auth, an oversized/malformed body, a tightened schema) —
-    retrying would only burn the whole backoff budget on a line that is
-    going to keep failing regardless, delaying `ship()`'s give-up on it for
-    no benefit. A 5xx IS retried (transient overload is exactly what that
-    status range means) as is every other exception (connection refused,
-    DNS failure, timeout) — this is deliberately still permissive there
-    rather than narrowed to only connection-establishment failures: this
-    events endpoint has no per-event dedup key, so a retried request that
-    the server actually processed can duplicate delivery either way, and
-    the live bug this fix closes was exactly an unpredictable connection
-    failure, not a clean timeout — narrowing the retriable set would risk
-    under-fixing the bug being closed to avoid a duplicate-delivery
-    tradeoff that already existed pre-fix (ship() itself already re-POSTs
-    an unadvanced line on the next round) and is a fold-side, not
-    shipper-side, question.
+    A 4xx response is NOT retried (code review, #1189), with the two
+    standard exceptions that mean "retry me" even in that range: 408
+    (Request Timeout) and 429 (Too Many Requests) — both are exactly the
+    kind of transient condition this whole fix exists to survive, and a
+    reverse proxy or ingress in front of this endpoint could produce
+    either. Every OTHER 4xx means the server received and definitively
+    rejected the request for a reason retrying won't change (bad auth, an
+    oversized/malformed body, a tightened schema) — retrying would only
+    burn the whole backoff budget on a line that is going to keep failing
+    regardless, delaying `ship()`'s give-up on it for no benefit. A 5xx IS
+    retried (transient overload is exactly what that status range means)
+    as is every other exception (connection refused, DNS failure, timeout)
+    — this is deliberately still permissive there rather than narrowed to
+    only connection-establishment failures: this events endpoint has no
+    per-event dedup key, so a retried request that the server actually
+    processed can duplicate delivery either way, and the live bug this fix
+    closes was exactly an unpredictable connection failure, not a clean
+    timeout — narrowing the retriable set would risk under-fixing the bug
+    being closed to avoid a duplicate-delivery tradeoff that already
+    existed pre-fix (ship() itself already re-POSTs an unadvanced line on
+    the next round) and is a fold-side, not shipper-side, question.
 
     Never raises — a down/unreachable ingest returns False so the caller
     keeps the event buffered (R-03).
@@ -505,10 +524,10 @@ def _post(url: str, body: str) -> bool:
                 status = getattr(resp, "status", None) or resp.getcode()
                 if 200 <= int(status) < 300:
                     return True
-                if not (500 <= int(status) < 600):
+                if not _retriable_status(int(status)):
                     return False  # permanent (4xx-shaped) — do not burn retries
         except urllib.error.HTTPError as e:
-            if not (500 <= e.code < 600):
+            if not _retriable_status(e.code):
                 return False
         except Exception:
             pass
@@ -660,11 +679,14 @@ def flush_pending_ships(timeout: float | None = None) -> None:
     even with this join still in place.
 
     Since #1189, an abandoned thread can also be mid-`ship()` and holding
-    its offset-marker `flock` — likewise safe ONLY because `os._exit()`
-    follows: the kernel releases an `flock` when the holding process exits,
-    lock included. A call site that returned normally instead of exiting
-    would strand that lock for the rest of the process's life, not just
-    reopen #1149 — the same reasoning, one layer further.
+    its offset-marker `flock` at the moment it's abandoned — not frozen
+    (the thread keeps running its own bounded retry/replay loop and its
+    `finally` releases the lock whenever `ship()` finishes, abandoned or
+    not), but a call site that returned normally instead of exiting would
+    now be racing a live daemon thread against interpreter teardown while
+    THAT thread still holds a lock other shippers on the machine are
+    waiting on — reopening #1149's crash class with an extra way to notice,
+    not a new failure mode of its own.
     """
     if timeout is None:
         try:
