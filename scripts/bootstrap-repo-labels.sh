@@ -133,7 +133,12 @@ else
 		# was 404 via list but 200 via direct GET seconds after creation.
 		old_exists=0
 		gh api "repos/$repo/labels/$old" >/dev/null 2>&1 && old_exists=1
-		if ((! old_exists)); then
+		# Written as `== 0` rather than `((!old_exists))` deliberately: shfmt
+		# 3.8.x formats that negation as `((!x))` and shfmt 3.14+ as `(( ! x ))`,
+		# so the `!` form cannot satisfy both and flip-flops the file depending
+		# on who ran the formatter (cc-workflow#1193). This spelling is stable
+		# across both. Do not "simplify" it back.
+		if ((old_exists == 0)); then
 			continue # nothing to migrate — never bootstrapped, or already renamed
 		fi
 		new_exists=0

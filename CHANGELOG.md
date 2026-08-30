@@ -19,7 +19,218 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Changed
+
+- **`/precheck`'s code-review re-runs now review only what changed since the
+  last completed review (#1194).** Job D was invoked as "review all files
+  changed on the branch vs main" on *every* pass, including re-runs after a
+  fix — so verifying a two-line correction paid the full ~8-minute cost of
+  re-reading a diff that had already been cleared minutes earlier. Three
+  passes approaches 30 minutes, which is why a genuinely one-line fix could
+  cost 15+ minutes and why agents drift toward filing follow-up issues rather
+  than fixing inline (each new issue is another full cycle; the backlog
+  symptom and the review cost are the same problem).
+
+  Job D now has two prompts. The **first pass of every cycle is still the full
+  `<base>` diff, unconditionally** — the complete diff is reviewed
+  exactly once, as before. Re-runs use `git diff <snapshot>`, comparing a
+  snapshot of the working tree as the last reviewer saw it against the tree
+  as it stands now — so it covers *everything* changed since (uncommitted
+  fixes, new commits, and edits to untracked files alike, not only the
+  fixes), and carries the prior findings verbatim so the reviewer verifies each one —
+  citing `file:line` — rather than rediscovering it. Jobs A, B and C stay
+  unscoped on every pass, so the full test suite remains the backstop for
+  cross-file breakage.
+
+  Scope is decided by `scripts/ci/precheck-review-scope.sh`, not by prose in
+  the skill, and the regression test drives that same script — one
+  implementation, tested directly. The state is recorded **after** a pass
+  returns and **only** when it returned a parseable verdict; an errored,
+  refused, timed-out or empty return clears the marker instead, because a
+  sub-agent replying "I could not access the repository" has technically
+  *returned* and recording that as reviewed would permanently skip the range.
+  Every unresolvable condition — missing marker, garbage marker, garbage-
+  collected snapshot, rewritten history, or a state identical to the current
+  one — resolves to **full**. There is no code path that yields "review
+  nothing".
+
+  **The trap this went through first, recorded because it is the obvious
+  implementation.** The initial cut recorded `git rev-parse HEAD` and
+  re-reviewed `<prev>..HEAD`. Code review caught that `/precheck` runs *before*
+  the commit (`/scp` commits afterwards), so HEAD does not move between passes:
+  `prev == HEAD`, `merge-base --is-ancestor` returns 0 because ancestry is
+  reflexive so no guard fires, the diff is **empty**, and pass 2 reviews nothing
+  while reporting success — on every cycle, not as an edge case. A two-dot
+  commit range cannot contain uncommitted work. The shipped version snapshots
+  the working tree with `git stash create` (non-mutating) and diffs
+  `git diff <snapshot>`, which sees uncommitted fixes and new commits alike;
+  untracked files are listed separately because a snapshot cannot contain them.
+  The regression test asserts the non-empty delta directly against that
+  scenario, so the bug cannot return silently.
+
+  A second review pass then found the same *class* of hole one level down:
+  untracked files were tracked by NAME, so an untracked file that existed at
+  record time and was edited before the next pass was invisible in both
+  channels — `git diff <snapshot>` never shows untracked paths, and a by-name
+  set difference sees the name on both sides. Since `/precheck` is pre-commit
+  and `/scp` does the `git add`, every new file is untracked for the whole
+  cycle, so this was the normal case rather than a corner. Untracked files are
+  now recorded as `<blob-hash> <path>`, which makes an edit differ. The test
+  also gained a *narrowing* assertion: without one, regressing the snapshot
+  back to `rev-parse HEAD` kept every safety check green while the feature
+  quietly became a no-op that still cost the eight minutes it exists to save.
+
+  A third pass found the same class once more, one level up: the **full**
+  prompt never handed the reviewer untracked files, but `record` afterwards
+  wrote them into the reviewed set — so a new file was skipped by pass 1 and
+  then correctly omitted by the delta as "already cleared", shipping reviewed
+  by nobody. Bookkeeping asserting a coverage claim the prompt never made.
+  Both prompts now carry the untracked channel. Recording is pinned to
+  *immediately on return, before any edit*, because fix-round-A → record →
+  fix-round-B excludes round A from the next delta — the failure that looks
+  like it worked. Untracked keys now describe what git will actually store
+  rather than just file content: symlinks key on their target (`hash-object`
+  follows the link, so retargeting between two same-content files was
+  invisible), the exec bit is folded in (`chmod +x` changes what `git add`
+  commits), non-regular files are never hashed (`git hash-object` on a FIFO
+  blocks forever — a hung gate), and unhashable paths get a per-run nonce so
+  they cannot compare equal to themselves and read as reviewed.
+
+  A fourth pass then found the defect at the seam rather than in the logic:
+  **both prompts handed the reviewer commands it has no tool to run.**
+  `feature-dev:code-reviewer`'s tool list is `Glob, Grep, LS, Read, NotebookRead,
+  WebFetch, TodoWrite, WebSearch, KillShell, BashOutput` — no `Bash`. And the
+  delta's ref is a dangling `git stash create` SHA: zero refs point at it and it
+  has no readable path on disk, so `Read` and `Grep` cannot reach it by any
+  route. A reviewer told to fetch it would review nothing and report success —
+  the same failure the ref arithmetic was fixed to prevent, re-entering through
+  the prompt. (The plugin's own agent definition instructs "review unstaged
+  changes from `git diff`", which that agent likewise cannot do.) Both prompts
+  now **embed** the gathered content, matching `skills/review/SKILL.md`, with an
+  oversize guard that writes a large diff to a file under `<marker_dir>` and
+  hands the reviewer the absolute path to `Read` (falling back to `--stat` only
+  if that write fails), rather than silent truncation. The reviewer keeps its licence to read wider
+  than the diff — that is how it caught the `/devspec upshift` emitter in #1191,
+  a file sharing zero lines with the change.
+
+  Measured while diagnosing this: the reviewer reads the **full contents of
+  every touched file** (4 whole-file `Read` calls, no offset/limit, zero `Bash`),
+  ~47k tokens against a ~14k-token diff. Embedding the diff is therefore not
+  merely a workaround for the missing tool — it cuts reviewer input ~3.4x on
+  *every* pass including the first, where delta scoping only helps re-runs.
+
+  A fifth pass caught the worst one, in the fix for pass 4's own advice.
+  Switching the full prompt to `git diff <base>...HEAD` — to avoid phantom
+  deletions if `<base>` advanced mid-cycle — replaced a small problem with a
+  fatal one: **three-dot is a commit-to-commit range and excludes the working
+  tree by construction.** In a pre-commit gate the changeset IS the working
+  tree, so the embedded diff was empty. Measured on the branch itself:
+  `git diff main...HEAD` returned **0 bytes** where `git diff $(merge-base)`
+  returned **61,193**. The full pass would have handed the reviewer nothing and
+  received "No findings" — the very failure delta-scoping was built to prevent,
+  reappearing in the one channel delta-scoping does not touch. Fixed by
+  resolving the merge-base to a SHA and diffing *that* against the working
+  tree, which keeps merge-base semantics AND the uncommitted code.
+
+  Two more from the same pass. `install` excludes `ci/*` from distribution at
+  four sites, so `precheck-review-scope.sh` exists only in a cc-workflow
+  checkout while the skill ships fleet-wide — every other repo got a failed
+  invocation, empty stdout, and an empty "### Untracked files" heading that
+  reads as "there are none": the script's own fail-open, reintroduced at the
+  invocation boundary. A documented fallback now covers it (see #1141). And
+  `resolve` printing `full` did not clear the untracked marker, pairing a full
+  tracked diff with a still-delta-scoped untracked list; `full` now widens both
+  channels together. `marker_dir` placement is enforced in the tool rather than
+  asserted in prose.
+
+  The regression suite had pinned the broken shape for the **third** time, and
+  one new guard was itself blind (`[^>]*` terminates at the `>` inside
+  `<repo_root>`, so it could never match).
+
+  A sixth pass then found that the *replacement* guard was blind too, in a new
+  way: `grep -F 'merge-base <base> HEAD'` was file-wide, and the explanatory
+  blockquote above the prompt quotes that same command — so deleting the
+  `### Diff` channel outright, or reverting it to bare `git diff <base>`, left
+  the suite green. Verified by running both mutations. The guards are now
+  scoped to the prompt block itself rather than the prose describing it, which
+  is the same lesson the untracked-channel count already learned: **a guard on
+  a critical must read the artifact, not the documentation of the artifact.**
+
+  That pass also caught this entry overstating its own coverage — an earlier
+  draft claimed the diff-form invariant "carries a live execution assertion
+  instead of a grep". It does not. The live block exercises `git` against a
+  throwaway fixture, demonstrating *why* the merge-base form is required; no
+  edit to the skill can make it fail. The skill's use of that form is
+  grep-guarded, now slice-scoped. Congratulating yourself for catching an
+  overstated guard, in a paragraph that overstates a guard, is its own lesson.
+
+  Two more from the same pass: the `### Diff` channel was the only one with no
+  anti-empty rule — the very channel that failed at 0 bytes — so an unresolvable
+  `<base>` (both `gh pr view` and `branch_guard` return branch *names*, which
+  may not exist as local refs on a `kahuna/*` flight or a CI clone) would empty
+  it silently; and `resolve` must run before `new-untracked`, since the former
+  clears the markers that make the latter re-widen.
+
+  Passes 8 and 9 closed the loop on the root cause. Twice more the fix itself
+  shipped broken — `split` writing into a directory nothing created (so the
+  anti-truncation path produced zero files, every time, and fell through to a
+  degraded mode that looked like the design), and a size threshold sitting
+  *above* the Bash tool's ~30k output cap, so the transport truncated the diff
+  before any guard could fire. Both were **bash written as prose in a markdown
+  file that nothing ever executes** — the third instance of that exact cause.
+  It is now a tested `gather` subcommand: it writes the diff to disk (never
+  through stdout), measures it, splits at 1500 lines, and returns one of
+  `files <N> <paths…>` / `empty 0 <path>` / exit 2 with a reason. Four prose
+  greps became executed assertions, including a losslessness check.
+
+  Pass 9 then caught the one that mattered most: **the delta was a no-op.**
+  `git stash create` builds a commit whose first parent is `HEAD`, so
+  `merge-base(snapshot, HEAD)` returns `HEAD` — and `gather` applied merge-base
+  unconditionally, collapsing every delta into `git diff HEAD`, i.e. the entire
+  uncommitted changeset. The feature that exists to save eight minutes was
+  spending all eight while appearing to work. Not even a safe superset: a fix
+  that *reverts* a file to its committed content appears in
+  `git diff <snapshot>` and vanishes from `git diff HEAD`, escaping review
+  outright. It survived because every gather assertion passed the literal
+  `main`, exercising only the full path; the narrowing check now runs through
+  `gather` itself on a real delta ref.
+
+  **The standing lesson from nine passes:** the script's logic stabilised
+  early; almost every later defect lived in the *prompt seam*. A prompt is an
+  interface with no type system and no execution, so its only failure signal is
+  a reviewer saying "No findings" — indistinguishable from success. Validating
+  that seam properly needs the historical-PMR bench (arm A vs arm B over real
+  changesets), not hand-verification; a bench run would have caught the no-op
+  immediately, because the delta would not have been smaller than the full pass.
+
+  Three defects in this work were found only by mutating the tests rather than
+  reading them — including a hostile-filename test whose fixture recorded
+  *before* creating the files, so the very defects it targeted could not fire.
+  A green suite proves nothing until you have watched it go red on purpose.
+
+  **Deliberately NOT done:** making any part of precheck conditional or
+  skippable by issue type, label, or file extension. #1191 was labelled
+  `chore`, its own acceptance criteria said "no direct pytest coverage — it's
+  a prose skill file," and its diff still contained a real Bash defect that
+  only code review caught. Issue type is self-reported intent and says nothing
+  about what a diff contains. Scoping a *re-read* is safe because the skipped
+  code was genuinely reviewed; skipping a gate on a label is not.
+
+  Also fixes Job D's hardcoded `vs main`, which reviewed the wrong range on
+  repos whose default branch is `release/*` and on `kahuna/*` sandbox flights;
+  it now uses the live default branch already resolved in Step 1.5.
+
 ### Fixed
+
+- **`scripts/bootstrap-repo-labels{,-gitlab}.sh` no longer fail `shfmt`
+  depending on which version you have installed (#1194, follow-on to #1191).**
+  The rename guard added in #1191 used `((!old_exists))`. shfmt 3.8.x formats
+  that as `((!x))` and shfmt 3.14+ as `(( ! x ))` — mutually exclusive, so the
+  file could not satisfy both, and the fix that made CI green left `main`
+  failing local validation for anyone on 3.8.x. Rewritten as
+  `((old_exists == 0))`, which both versions format identically, with an
+  inline comment so it does not get "simplified" back. The underlying cause —
+  `validate.yml` installing `shfmt@latest` unpinned — is tracked in #1193.
 
 - **`/issue doc` and `/devspec upshift` now emit `type::doc`, matching what
   `mcp-server-sdlc` v4.3.0 actually accepts (#1191).** `docs` (plural) was an

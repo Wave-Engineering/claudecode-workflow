@@ -24,13 +24,13 @@ Parse `{{args}}` (default `branch`): `staged` (`git diff --cached`), `branch` (f
 ## Gather Context
 1. **Diff + file list by scope:**
    - `staged`: `git diff --cached`
-   - `branch`: determine base (`release/*` or `main`), run `git diff <base>...HEAD`
+   - `branch`: determine base (`release/*` or `main`), then `mb="$(git merge-base <base> HEAD)"; git diff "$mb"` — **not** `git diff <base>...HEAD`. Three-dot is a commit-to-commit range and excludes the working tree by construction, so on uncommitted work it returns 0 bytes; combined with the empty-diff rule below that turns this skill into a silent no-op exactly when there is most to review. Resolving the merge-base first keeps merge-base semantics *and* sees uncommitted changes. (cc-workflow#1194 — measured: `diff main...HEAD` 0 bytes vs `diff $(merge-base)` 61,193.)
    - `<filepath>`: `git diff HEAD -- <filepath>` plus read the full file
    - `mr <number>` / `pr <number>`: `pr_files({number})` for the path-level overview, then `pr_diff({number})` for the unified diff. Tools handle platform translation — no `gh`/`glab` calls.
 2. **Issue** — if branch name contains an issue number (e.g., `fix/76-description`), fetch via `spec_get({issue: N})`. The tool handles platform detection internally.
 3. **Intent** — `git log --oneline <base>...HEAD`.
 
-If the diff is empty, stop and tell the user there's nothing to review.
+If the diff is empty, stop and tell the user there's nothing to review — but first confirm it is *genuinely* empty rather than empty because the wrong diff form was used or `<base>` did not resolve as a local ref. An empty diff from a bad command is indistinguishable from a clean tree, and this skill's response to both is to do nothing.
 
 ## Dispatch Reviewer
 
