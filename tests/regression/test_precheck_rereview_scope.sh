@@ -25,7 +25,7 @@ set -uo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 SKILL="$REPO_DIR/skills/precheck/SKILL.md"
-SCOPE="$REPO_DIR/scripts/ci/precheck-review-scope.sh"
+SCOPE="$REPO_DIR/scripts/precheck-review-scope.sh"
 
 FAILS=0
 fail() {
@@ -558,13 +558,48 @@ expect full "reset clears the marker -> next pass is full"
 # the script lookup whenever the agent's cwd is not the repo root, and the
 # likely agent response to "file not found" is to skip the scoping step rather
 # than fail the gate.
-for sub in reset record resolve new-untracked; do
-	if grep -qF "bash <repo_root>/scripts/ci/precheck-review-scope.sh $sub" "$SKILL"; then
-		pass "skill invokes '$sub' via bash <repo_root>/... (cwd-independent)"
+# Assert the NEGATIVE: no PATH-qualified invocation anywhere. The positive
+# form was unanchored — `bash <repo_root>/scripts/precheck-review-scope.sh reset`
+# satisfied `grep -F "precheck-review-scope.sh reset"` identically, so the most
+# likely regression (reverting to a repo-path call at the NEW path) passed green.
+# That is the same unanchored-guard defect this file has now hit four times.
+if grep -qE '/precheck-review-scope\.sh' "$SKILL"; then
+	pass "[INFO] path-qualified references exist — expected only inside the Step 0 ladder"
+fi
+LADDER_LINES=$(grep -cE '/precheck-review-scope\.sh' "$SKILL")
+PROMPT_PATHS=$(awk '/\*\*Job D-full\*\*/,0' "$SKILL" | grep -cE 'bash [^ ]*/precheck-review-scope\.sh')
+if ((PROMPT_PATHS == 0)); then
+	pass "no PATH-qualified invocation in the prompts (resolves outside a checkout)"
+else
+	fail "$PROMPT_PATHS prompt invocation(s) use a repo path — inert outside a cc-workflow checkout"
+fi
+
+for sub in reset record resolve new-untracked gather; do
+	if grep -qF "precheck-review-scope.sh $sub" "$SKILL"; then
+		pass "skill invokes '$sub'"
 	else
-		fail "'$sub' is not invoked as 'bash <repo_root>/scripts/ci/...' — cwd-dependent or dropped"
+		fail "'$sub' invocation missing or dropped"
 	fi
 done
+
+# The distribution property itself — the exact predicate install's
+# enumerate_farm_targets uses, so it is pinned rather than hand-verified.
+if (cd "$REPO_DIR/scripts" && find . -maxdepth 1 -type f | grep -qx './precheck-review-scope.sh'); then
+	pass "tool sits where install's enumerate_farm_targets will find it"
+else
+	fail "tool is not a top-level scripts/ file — install would NOT distribute it"
+fi
+
+if grep -qF 'command -v precheck-review-scope.sh' "$SKILL"; then
+	pass "pre-flight probe present (fails loud instead of empty-channel)"
+else
+	fail "no command -v pre-flight — a missing tool would silently empty both channels"
+fi
+if [[ -x "$SCOPE" ]]; then
+	pass "tool is executable (required for PATH install)"
+else
+	fail "tool is not executable — breaks direct execution from a checkout (install chmods +x regardless)"
+fi
 
 # Both prompts must hand over untracked files. `git diff <base>` never shows
 # them, and /precheck runs before /scp's `git add`, so a new file can be
@@ -732,10 +767,15 @@ else
 	fail "no statement that A/B/C stay unscoped"
 fi
 
-if grep -qF 'missing-script fallback' "$SKILL" || grep -qF 'not distributed to this repo' "$SKILL"; then
-	pass "missing-script fallback documented (install excludes ci/* from distribution)"
+# The tool now ships on PATH with the kit, so "absent" means the kit is not
+# installed rather than "you are outside cc-workflow". The fallback still has
+# to exist and still has to be concrete — an agent that improvises here pastes
+# a diff that cannot survive the transport cap.
+if grep -qF 'delta scoping unavailable — kit not installed' "$SKILL" &&
+	grep -qF 'ls-files --others --exclude-standard' "$SKILL"; then
+	pass "kit-not-installed fallback is documented AND concrete (inline gather recipe)"
 else
-	fail "no fallback — outside cc-workflow the script is absent and the channel silently empties"
+	fail "no concrete fallback — an agent would improvise, most likely by pasting an untransportable diff"
 fi
 
 if grep -qE 'never a hardcoded .main.' "$SKILL"; then
