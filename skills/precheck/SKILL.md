@@ -23,6 +23,22 @@ Mandatory verification before any commit. Checks compliance, runs code review, p
 
 ## Procedure
 
+### Step 0 — Pre-flight: resolve the scope tool (refuse to guess)
+
+Before Step 1, resolve `precheck-review-scope.sh` once and reuse that path for every later call. Step 2 invokes it, so probing later in the Job D section is too late — an agent reading top-down would already have run it.
+
+```bash
+SCOPE=""
+for cand in \
+  "$(command -v precheck-review-scope.sh 2>/dev/null)" \
+  "<repo_root>/.claude/bin/precheck-review-scope.sh" \
+  "<repo_root>/scripts/precheck-review-scope.sh"; do
+  [[ -n "$cand" && -x "$cand" ]] && { SCOPE="$cand"; break; }
+done
+```
+
+`PATH` covers a normal install; `.claude/bin` covers `install --local` (which is deliberately NOT on `PATH`); `scripts/` covers a cc-workflow checkout. If all three miss, the kit is genuinely absent — take the fallback documented in the Job D section and say so on the checklist. Do not improvise.
+
 ### Step 1 — IBM gate (serial, hard stop)
 Call `mcp__sdlc-server__ibm` directly (no sub-agent — it's one MCP call). If it fails, stop immediately and do not proceed.
 
@@ -39,7 +55,7 @@ Call `mcp__sdlc-server__branch_guard({ role: "base" })`. It resolves the **live*
 **Transition fallback** — *only* until `branch_guard` is deployed on this host's sdlc-server (#465): resolve the live default inline (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name`, or GitLab `glab api "projects/:id" --jq .default_branch`). If an open PR exists, compare its base (`gh pr view --json baseRefName -q .baseRefName`) and STOP if that base is a protected branch that is neither the live default nor matches `^kahuna/[0-9]+-`. Delete this paragraph once `branch_guard` is universal.
 
 ### Step 2 — Parallel verification batch
-After `ibm()` passes: first run `bash <repo_root>/scripts/ci/precheck-review-scope.sh reset <repo_root> <marker_dir>` (this is what makes pass 1 of the cycle mechanically full), then `… resolve …` to learn which Job D prompt to compose, then launch all four jobs **in a single message** as parallel Agent calls. Do NOT wait for one before starting the next — they have no data dependencies on each other. See the Job D section below for both prompts and the full rule.
+After `ibm()` passes: first run `precheck-review-scope.sh reset <repo_root> <marker_dir>` (this is what makes pass 1 of the cycle mechanically full), then `… resolve …` to learn which Job D prompt to compose, then launch all four jobs **in a single message** as parallel Agent calls. Do NOT wait for one before starting the next — they have no data dependencies on each other. See the Job D section below for both prompts and the full rule.
 
 **Job A — Spec validation** `model: haiku`
 ```
@@ -186,7 +202,7 @@ prompt: "Review this changeset in <repo_root>.
          <the paths printed by: precheck-review-scope.sh gather <repo_root> <marker_dir> <base>>
 
          ### Untracked files — NOT in the diff above, read each IN FULL
-         <output of: bash <repo_root>/scripts/ci/precheck-review-scope.sh new-untracked <repo_root> <marker_dir>
+         <output of: precheck-review-scope.sh new-untracked <repo_root> <marker_dir>
           — prefix each line THAT IS A PATH with <repo_root>/ (Read rejects relative paths);
             pass any line beginning UNRESOLVABLE through verbatim, it is a warning not a file;
             and if the command exits NON-ZERO or writes to stderr, do NOT dispatch — most
@@ -214,7 +230,7 @@ prompt: "Review this changeset in <repo_root>.
 **Gathering the diff is `precheck-review-scope.sh gather`, not hand-written bash.** Two hand-written versions shipped broken: `split` does not create its destination directory (the anti-truncation path failed every time), and the size threshold sat *above* the Bash tool's ~30k output cap, so the transport truncated the diff before any guard fired. Prose-bash that nobody executes will be wrong. The subcommand is exercised by the regression suite.
 
 ```bash
-bash <repo_root>/scripts/ci/precheck-review-scope.sh gather <repo_root> <marker_dir> <base-or-ref>
+precheck-review-scope.sh gather <repo_root> <marker_dir> <base-or-ref>
 ```
 
 Fourth argument is `<base>` for a full pass, or the `<ref>` from `resolve` for a delta. It prints one of:
@@ -229,25 +245,21 @@ Fourth argument is `<base>` for a full pass, or the `<ref>` from `resolve` for a
 
 **Both prompts, same rules.** The delta channel empties identically, plus one of its own: `resolve` prints two tokens (`delta <ref>`), so parse them — `ref="$(… resolve … | awk '{print $2}')"`. Passing the whole line yields `git diff "delta abc123"`, exit 128, empty stdout.
 
-> **If `scripts/ci/precheck-review-scope.sh` is MISSING, you are not in a cc-workflow checkout.** `install` excludes `ci/*` from distribution (four sites), exactly as documented for Job C above — so this script exists in cc-workflow and nowhere else until #1141 ships `ci/*` with the kit. The skill itself is installed fleet-wide **today**, so this is the common case, not the edge case.
+> **Resolution ladder (the rationale; the probe itself runs in Step 0 above).** `command -v` alone is not enough, because a bare-name probe reports "missing" in two cases where the tool is present: `install --local` places scripts in `<repo_root>/.claude/bin`, which the installer deliberately keeps **off** `PATH`; and a cc-workflow checkout carries `scripts/precheck-review-scope.sh` directly. Treating either as "kit not installed" makes the feature inert exactly where it is most exercised, and prints a false diagnostic. Walk the rungs in order and use the first that resolves.
 >
-> When it is absent: treat scope as **`full`**, and gather the untracked list inline instead —
-> ```bash
-> git -C <repo_root> ls-files --others --exclude-standard
-> ```
-> — then note `[delta scoping unavailable — precheck-review-scope.sh not distributed to this repo (#1141)]` on the checklist. **Do not silently substitute an empty section.** A failed invocation produces empty stdout, and an empty "### Untracked files" heading reads as the affirmative "there are none" — the identical fail-open the script closes internally, reintroduced at the invocation boundary.
+> Only when all four fail is the kit genuinely absent. Then: treat scope as **`full`**, gather the untracked list with `git -C <repo_root> ls-files --others --exclude-standard`, and write the diff to disk yourself rather than pasting it (`mb="$(git -C <repo_root> merge-base <base> HEAD)"; git -C <repo_root> diff "$mb" > <marker_dir>/full.diff; split -l 1500 <marker_dir>/full.diff <marker_dir>/part-`), handing over the part paths plus a `wc -l` total. Note `[delta scoping unavailable — kit not installed]` on the checklist. **Never substitute an empty section** — empty reads as the affirmative "there is nothing here".
 
-**Scope is decided by `scripts/ci/precheck-review-scope.sh`, not by you.** The rule is small enough to look obvious and was wrong in a way that reviewed *nothing* while reporting success (see the script's header for the full post-mortem), so it lives in one tested implementation that both this skill and its regression test invoke. Do not re-derive it inline. `<marker_dir>` is this session's scratchpad directory — pass the literal absolute path; it must be outside `<repo_root>` so the marker can never be staged.
+**Scope is decided by `precheck-review-scope.sh`, not by you.** The rule is small enough to look obvious and was wrong in a way that reviewed *nothing* while reporting success (see the script's header for the full post-mortem), so it lives in one tested implementation that both this skill and its regression test invoke. Do not re-derive it inline. `<marker_dir>` is this session's scratchpad directory — pass the literal absolute path; it must be outside `<repo_root>` so the marker can never be staged.
 
 **At the start of every precheck cycle, before the parallel batch in Step 2 launches:**
 ```bash
-bash <repo_root>/scripts/ci/precheck-review-scope.sh reset <repo_root> <marker_dir>
+precheck-review-scope.sh reset <repo_root> <marker_dir>
 ```
 This is what makes "pass 1 is always full" mechanical rather than conventional. The marker is session-scoped and would otherwise survive into the *next* cycle, where it would scope that cycle's first pass to a stale range — the new work would be invisible. One line removes the possibility.
 
 **Before each Job D pass, ask the script which prompt to use:**
 ```bash
-bash <repo_root>/scripts/ci/precheck-review-scope.sh resolve <repo_root> <marker_dir>
+precheck-review-scope.sh resolve <repo_root> <marker_dir>
 # -> "full"          : use Job D-full
 # -> "delta <ref>"   : use Job D-delta, reviewing `git diff <ref>`
 ```
@@ -257,7 +269,7 @@ It prints exactly one verdict and every unresolvable condition prints `full`. Th
 
 **Record IMMEDIATELY when a Job D pass returns — before you edit a single file** — and only if it actually returned a review:
 ```bash
-bash <repo_root>/scripts/ci/precheck-review-scope.sh record <repo_root> <marker_dir>
+precheck-review-scope.sh record <repo_root> <marker_dir>
 ```
 The ordering is load-bearing: the snapshot must equal *what the reviewer saw*. Record → fix → resolve is correct. Fix → record merely wastes a pass (it resolves to `full`). But fix-round-A → record → fix-round-B → resolve **excludes round A from the delta**, so those fixes are never re-read — the unsafe direction, and the one that looks like it worked.
 
@@ -273,7 +285,7 @@ prompt: "Re-review after fixes in <repo_root>.
          <the paths printed by: precheck-review-scope.sh gather <repo_root> <marker_dir> <ref>>
 
          ### Untracked files changed or added since that review — read each IN FULL
-         <output of: bash <repo_root>/scripts/ci/precheck-review-scope.sh new-untracked <repo_root> <marker_dir>
+         <output of: precheck-review-scope.sh new-untracked <repo_root> <marker_dir>
           — prefix each line THAT IS A PATH with <repo_root>/ (Read rejects relative paths);
             pass any line beginning UNRESOLVABLE through verbatim, it is a warning not a file;
             and if the command exits NON-ZERO or writes to stderr, do NOT dispatch — most
@@ -303,7 +315,7 @@ prompt: "Re-review after fixes in <repo_root>.
 **Why this optimisation and not a conditional gate.** The expensive thing about precheck is review wall-clock (~8 min/pass; three passes approaches 30 min, which is why a one-line fix can cost 15+ minutes and why agents drift toward filing follow-up issues instead of fixing inline). The tempting "fix" is to skip review for doc-only or chore-labelled work. **Do not.** #1191 was labelled `chore`, its own acceptance criteria said "no direct pytest coverage — it's a prose skill file," and its diff contained a real Bash defect: a rename guard that reported success while doing nothing. Issue type is self-reported *intent* and says nothing about what the diff contains. Scoping a re-read is safe because the skipped code was genuinely reviewed; skipping a gate on a label is not.
 
 ### Step 3 — Fix high+ findings (serial)
-Wait for all four jobs to return. **The moment Job D returns, run `record` — before touching any file** (or `reset`, if it errored/timed out rather than returning a verdict). Then, if Job D returned critical or important findings, fix them. Re-run Job D after **any** fix — not only "non-trivial" ones. That escape hatch existed because a re-run cost a full ~8-minute re-read; the delta removes the cost, so the judgment call is no longer worth its risk (#1191 is the standing example of a "trivial" change carrying a real defect). Ask `bash <repo_root>/scripts/ci/precheck-review-scope.sh resolve <repo_root> <marker_dir>` which prompt to use; do not decide by eye. Both arguments are required — the script exits 2 with usage if either is missing. Carry the prior pass's findings into the re-run prompt verbatim so it can verify each one rather than rediscover it. Haiku job failures (B or C) block the checklist item but do not block the gate unless validation itself fails.
+Wait for all four jobs to return. **The moment Job D returns, run `record` — before touching any file** (or `reset`, if it errored/timed out rather than returning a verdict). Then, if Job D returned critical or important findings, fix them. Re-run Job D after **any** fix — not only "non-trivial" ones. That escape hatch existed because a re-run cost a full ~8-minute re-read; the delta removes the cost, so the judgment call is no longer worth its risk (#1191 is the standing example of a "trivial" change carrying a real defect). Ask `precheck-review-scope.sh resolve <repo_root> <marker_dir>` which prompt to use; do not decide by eye. Both arguments are required — the script exits 2 with usage if either is missing. Carry the prior pass's findings into the re-run prompt verbatim so it can verify each one rather than rediscover it. Haiku job failures (B or C) block the checklist item but do not block the gate unless validation itself fails.
 
 ### Step 4 — Assemble checklist and notify
 Collect results from all four jobs, assemble the checklist (see below), then **notify BJ**: `disc_send` to `#precheck`, **then `vox`** — **ALWAYS do both**. If `disc_send` fails (MCP unavailable, network), still do `vox`.

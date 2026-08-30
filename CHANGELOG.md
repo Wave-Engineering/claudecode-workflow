@@ -19,6 +19,32 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Fixed
+
+- **`precheck-review-scope.sh` now ships with the kit (#1197).** It
+  lived in `scripts/ci/`, which `install` excludes from distribution at four
+  sites — while `skills/precheck/SKILL.md`, which depends on it, ships
+  fleet-wide. Every agent outside a cc-workflow checkout would have received a
+  Job D whose primary path invokes a tool that is not there, with only prose
+  standing between that and a silently empty review channel. It was misfiled:
+  unlike `dependency-scan.sh` and `check-scannable.sh` (genuinely dual-use, run
+  by `validate.sh` *and* by skills — still #1141), this tool is invoked only by
+  the skill. Moved to `scripts/`, so `install` mirrors it to `~/.local/bin/`
+  like every other runtime helper. Verified by running install's own
+  enumeration predicate, not by reading it — and that predicate is now pinned
+  by a test rather than re-checked by hand.
+
+  Resolution is a **ladder**, not a bare `command -v`. A name-only probe reports
+  "missing" in two cases where the tool is present: `install --local` places
+  scripts in `<repo_root>/.claude/bin`, which the installer deliberately keeps
+  **off** `PATH`, and a cc-workflow checkout carries `scripts/` directly. A
+  boolean probe would therefore have made the feature inert precisely where it
+  is most exercised — including in this repo, which uses `--local` — while
+  printing a false "kit not installed". The ladder tries `PATH`, then
+  `.claude/bin`, then `scripts/`, and only then declares absence. It runs as a
+  Step 0 pre-flight, ahead of the Step 2 call site, because a probe documented
+  190 lines after first use is read too late.
+
 ### Changed
 
 - **`/precheck`'s code-review re-runs now review only what changed since the
