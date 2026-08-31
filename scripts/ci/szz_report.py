@@ -124,6 +124,37 @@ def is_compound(subject):
     return bool(COMPOUND_RE.match(subject)) or "cutover" in subject
 
 
+def root_commits():
+    """Every parentless commit reachable from HEAD.
+
+    One subprocess, not one per candidate: `--max-parents=0` asks git the
+    question directly instead of interrogating each culprit in turn.
+
+    RAISES rather than returning an empty set on failure. The shared `git()`
+    helper discards returncode and stderr, which is harmless for the
+    display-only calls in `worksheet` but not here -- this is the first call in
+    this file whose return value drives POLICY, and an empty set would make the
+    exclusion silently stop excluding. A filter that quietly stops filtering is
+    the exact "indistinguishable from success" shape the fixtures docstring says
+    it exists to remove.
+
+    KNOWN LIMIT: in a shallow clone the grafted boundary commit reports as
+    parentless, so a legitimate pair would be dropped. Blame is worthless in a
+    shallow clone anyway, so this is a note, not a defect to fix here.
+    """
+    proc = subprocess.run(
+        ["git", "rev-list", "--max-parents=0", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "szz-oracle: cannot enumerate root commits "
+            f"(git exited {proc.returncode}): {proc.stderr.strip()}"
+        )
+    return {line.strip() for line in proc.stdout.splitlines() if line.strip()}
+
+
 def fixtures(edges, universe, _fixes):
     """Emit the (fix, culprit) pairs a bench can actually use.
 
@@ -134,9 +165,11 @@ def fixtures(edges, universe, _fixes):
     to remove.
     """
     best = top_culprit(edges)
+    roots = root_commits()
     kept = 0
     dropped_compound = 0
     dropped_missing = 0
+    dropped_root = 0
     for fix in sorted(best):
         culprit, weight = best[fix]
         if culprit not in universe or fix not in universe:
@@ -145,12 +178,22 @@ def fixtures(edges, universe, _fixes):
         if is_compound(universe[culprit][1]) or is_compound(universe[fix][1]):
             dropped_compound += 1
             continue
+        # A ROOT commit has no parent, so there is no pre-state to reconstruct
+        # and no changeset a reviewer could ever have been shown -- the whole
+        # tree arrived at once. pmr-timebubble refuses it (exit 2), so leaving
+        # it here would mean this subcommand's promise ("the pairs a bench can
+        # actually use") is false for at least one row, and every consumer
+        # would have to re-derive the same exclusion. Observed on this repo:
+        # blame attributed a fix to `feat: initial commit`.
+        if culprit in roots:
+            dropped_root += 1
+            continue
         days = (universe[fix][0] - universe[culprit][0]) / 86400.0
         print(f"{fix}\t{culprit}\t{weight}\t{days:.1f}")
         kept += 1
     print(
         f"szz-oracle fixtures: kept {kept}; dropped {dropped_compound} compound, "
-        f"{dropped_missing} outside window",
+        f"{dropped_root} root-commit, {dropped_missing} outside window",
         file=sys.stderr,
     )
 

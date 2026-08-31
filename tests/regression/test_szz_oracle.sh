@@ -48,6 +48,17 @@ commit() { # subject  date
 	git -C "$repo" rev-parse HEAD
 }
 
+# C0 — a preamble commit whose only job is to make C1 NOT the root commit.
+#
+# Without it the "ordinary atomic culprit" of this fixture is also the repo's
+# parentless first commit, and the two properties are then impossible to test
+# apart: an exclusion aimed at root commits and a bug that drops ordinary ones
+# look identical. Real culprits are essentially never the root commit, so a
+# fixture where they are is the unrepresentative case, not the general one.
+printf '# fixture\n' >"$repo/README.md"
+git -C "$repo" add README.md
+C0=$(commit "docs: preamble so the culprit is not the root commit" "2025-12-31T00:00:00Z")
+
 # C1 — the CULPRIT. Writes a six-line file; lines 2, 4 and 5 are the ones the
 # fix will later delete.
 printf 'alpha\nBUGGY_LINE\ngamma\nBLOCK_A\nBLOCK_B\nomega\n' >"$repo/app.sh"
@@ -103,6 +114,16 @@ C6=$(commit "plan(#959): P1W1 — kahuna to main (#988)" "2026-01-09T00:00:00Z")
 printf 'one\nPROMOTED_OK\nthree\n' >"$repo/wave.sh"
 git -C "$repo" add wave.sh
 C7=$(commit "fix(wave): PROMOTED_BUG was wrong" "2026-01-10T00:00:00Z")
+
+# C8 — a fix whose culprit is the ROOT commit (C0). Blame is perfectly correct
+# here; the pair is still unusable, because a parentless commit has no pre-state
+# to reconstruct and no changeset any reviewer was ever shown — the whole tree
+# arrived at once. pmr-timebubble refuses it outright, so `fixtures` must not
+# offer it. Observed on this repo before the filter existed: a real fix blamed
+# `feat: initial commit`, and three such pairs sat in the fixture set.
+printf '# fixture, corrected\n' >"$repo/README.md"
+git -C "$repo" add README.md
+C8=$(commit "fix(docs): the preamble line was wrong" "2026-01-11T00:00:00Z")
 
 SINCE="2025-12-01"
 edges="$tmp/edges.tsv"
@@ -209,9 +230,20 @@ check 0 "$got" "fixtures EXCLUDES the wave-promotion culprit"
 got=$(grep -c "$C1" "$fx" || true)
 check 1 "$got" "fixtures KEEPS the ordinary atomic culprit"
 
+# The root-commit exclusion, asserted from BOTH sides. `edges` is the raw
+# primitive and must still make the attribution -- the blame is correct, and
+# hiding it there would be the oracle lying about what history says. Only
+# `fixtures`, where policy lives, may drop it.
+got=$(awk -v f="$C8" '$1 == f { print $2 }' "$edges")
+check "$C0" "$got" "edges (raw) DOES attribute the fix to the root commit"
+got=$(grep -c "$C8" "$fx" || true)
+check 0 "$got" "fixtures EXCLUDES the root-commit culprit"
+
 # A filter that shrinks its output silently reads as "nothing to exclude".
 got=$(grep -c "dropped 1 compound" "$tmp/fixtures.err" || true)
-check 1 "$got" "fixtures reports the exclusion count on stderr"
+check 1 "$got" "fixtures reports the compound exclusion count on stderr"
+got=$(grep -c "1 root-commit" "$tmp/fixtures.err" || true)
+check 1 "$got" "fixtures reports the root-commit exclusion count on stderr"
 
 # --- 9. Usage errors are loud -------------------------------------------------
 "$ORACLE" bogus --repo "$repo" >/dev/null 2>&1
