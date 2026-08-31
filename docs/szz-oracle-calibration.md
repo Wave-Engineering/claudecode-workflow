@@ -19,8 +19,9 @@ with a script attached. This is its accuracy, measured before use.
 | yield | **87%** (124/143) | share of bug-fix commits SZZ can attribute at all |
 | raw precision | **50%** (10/20) | hand-adjudicated, unfiltered |
 | filtered precision | **67%** (10/15) | after dropping compound changesets, mechanically |
+| root-commit pairs dropped | **3** | added after calibration: a parentless culprit has no pre-state to reconstruct, so `pmr-timebubble` refuses it and it can never be a fixture (#1195) |
 | ceiling | **77%** (10/13) | if non-defect `fix(` commits could also be excluded |
-| usable fixtures | **102 pairs** | `szz-oracle.sh fixtures` output for this window |
+| usable fixtures | **99 pairs** | `szz-oracle.sh fixtures` output for this window |
 
 67% is the number a consumer should plan against. It sits inside the 60–80%
 band published for SZZ, which is mild evidence the implementation is not
@@ -82,7 +83,7 @@ at n=30, and a paired McNemar test needs *discordant* pairs, which are rarer
 still — the design as written is under-powered by roughly an order of magnitude.
 
 The fix is not a bigger random sample; it is **case-control sampling**. Draw the
-positive stratum from the 102 pairs `fixtures` emits, draw a matched negative
+positive stratum from the 99 pairs `fixtures` emits, draw a matched negative
 stratum from changesets never blamed, and report per-stratum rates with
 reweighting. Base rate stops being a sampling risk and becomes a design
 parameter. This does mean the study can no longer report "recall in the wild"
