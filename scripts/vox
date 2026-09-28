@@ -366,37 +366,158 @@ if [[ -z "${TEXT//[$' \t\n\r']/}" ]]; then
 	exit 1
 fi
 
-# --- Identify + log the caller, then sign off ---------------------------------
-# Resolve who is speaking, LOG the call with full caller lineage (captured now so
-# a fire-and-exit caller is still traceable), then append the speaker to the
-# spoken text. VOX_NO_SIGNOFF=1 skips the sign-off; VOX_NO_LOG=1 skips the log.
+# --- Identify + log the caller ------------------------------------------------
+# Resolve who is speaking and LOG the call with full caller lineage (captured now
+# so a fire-and-exit caller is still traceable). The sign-off is appended after
+# chunking, below. VOX_NO_SIGNOFF=1 skips the sign-off; VOX_NO_LOG=1 skips the log.
 SPEAKER="$(resolve_speaker 2>/dev/null)" || SPEAKER=""
 vox_log "$SPEAKER" "$TEXT" || true
-if [[ "${VOX_NO_SIGNOFF:-0}" != "1" && -n "$SPEAKER" ]]; then
-	TEXT="${TEXT}. This is ${SPEAKER}."
-fi
 
-# --- Resolve + invoke provider ------------------------------------------------
+# --- Chunk long messages (#1214) ----------------------------------------------
+# TTS synthesis can run SLOWER than realtime (qwen3-tts clone voice: 108 chars →
+# ~12s, 326 chars → ~28s), while callers wrap vox in short timeouts and providers
+# cap their HTTP request (openai-qwen.sh: --max-time 30). A long message used to
+# die mid-synth with nothing played and nothing said about why. Split it at
+# sentence boundaries (then clause, then word) into parts of at most
+# VOX_CHUNK_CHARS (default 150; 0 disables), synthesize each part as its own
+# provider call, and concatenate them into one clip. The sign-off goes on the
+# LAST part only, so a multi-part message is signed exactly once, at the end.
+VOX_CHUNK_CHARS="${VOX_CHUNK_CHARS:-150}"
+[[ "$VOX_CHUNK_CHARS" =~ ^[0-9]+$ ]] || VOX_CHUNK_CHARS=150
 
-PROVIDER="$(resolve_provider)" || exit 1
-
-if [[ -n "$OUTPUT_FILE" ]]; then
-	audio_out="$OUTPUT_FILE"
-else
-	audio_out="$(mktemp --suffix=.wav)"
-	trap 'rm -f "$audio_out"' EXIT
-fi
-
-VOX_OUTPUT_FILE="$audio_out" VOX_VOICE="$VOICE" "$PROVIDER" "$TEXT" || {
-	echo "Error: provider '$PROVIDER' failed" >&2
-	exit 1
+split_text() {
+	python3 -c '
+import re, sys
+limit = int(sys.argv[1])
+text = " ".join(sys.stdin.read().split())
+PATS = [r"(?<=[.!?])\s+", r"(?<=[,;:])\s+", r"\s+"]
+def split(s, level=0):
+    if len(s) <= limit:
+        return [s]
+    if level >= len(PATS):
+        return [s[i:i + limit] for i in range(0, len(s), limit)]
+    parts = [p for p in re.split(PATS[level], s) if p]
+    if len(parts) == 1:
+        return split(s, level + 1)
+    out, cur = [], ""
+    for p in parts:
+        for q in split(p, level + 1):
+            if cur and len(cur) + 1 + len(q) > limit:
+                out.append(cur)
+                cur = q
+            else:
+                cur = f"{cur} {q}" if cur else q
+    if cur:
+        out.append(cur)
+    return out
+sys.stdout.write("\0".join(split(text)))
+' "$VOX_CHUNK_CHARS"
 }
 
-# If --output was requested, we're done (audio is already at OUTPUT_FILE)
-if [[ -n "$OUTPUT_FILE" ]]; then
-	trap - EXIT
-	exit 0
+CHUNKS=()
+if ((VOX_CHUNK_CHARS > 0)) && ((${#TEXT} > VOX_CHUNK_CHARS)) && command -v python3 >/dev/null 2>&1; then
+	mapfile -d '' CHUNKS < <(printf '%s' "$TEXT" | split_text 2>/dev/null) || CHUNKS=()
 fi
+((${#CHUNKS[@]})) || CHUNKS=("$TEXT")
+NCHUNKS=${#CHUNKS[@]}
+
+if [[ "${VOX_NO_SIGNOFF:-0}" != "1" && -n "$SPEAKER" ]]; then
+	CHUNKS[NCHUNKS-1]="${CHUNKS[NCHUNKS-1]}. This is ${SPEAKER}."
+fi
+
+# --- Synthesis ----------------------------------------------------------------
+
+PROVIDER="$(resolve_provider)" || exit 1
+VOX_ERR_LOG="${VOX_ERR_LOG:-$HOME/.claude/logs/vox-errors.log}"
+LENGTH_HINT="TTS synthesis can run slower than realtime (~1s per 10 chars); keep vox messages to 1-2 short sentences, and don't wrap vox in a tight timeout."
+
+# Tracked for diagnostics: which part is in flight and when it started.
+CUR_PART=0
+SYNTH_START=$SECONDS
+
+# explain_failure PART RC ELAPSED ERRFILE — say what failed and why, on stderr.
+explain_failure() {
+	local part="$1" rc="$2" elapsed="$3" errf="$4"
+	echo "vox: synthesis failed on part $part/$NCHUNKS of a ${#TEXT}-char message (after ${elapsed}s, exit $rc) — provider '$PROVIDER'" >&2
+	if [[ -s "$errf" ]]; then
+		sed 's/^/vox:   provider: /' "$errf" | head -n 10 >&2
+	fi
+	if grep -qiE 'timed out|timeout|\(28\)' "$errf" 2>/dev/null; then
+		echo "vox: the TTS request TIMED OUT — this is the message length, not a broken vox. $LENGTH_HINT" >&2
+	elif grep -qiE 'HTTP 5[0-9][0-9]|could not (connect|resolve)|connection refused|\(6\)|\(7\)' "$errf" 2>/dev/null; then
+		echo "vox: the TTS endpoint is unreachable or erroring — a server problem, not the message. Check the endpoint (VOX_ENDPOINT)." >&2
+	fi
+}
+
+# synth_one PART TEXT OUT — one provider call; provider stderr is replayed.
+synth_one() {
+	local part="$1" text="$2" out="$3" errf start rc=0
+	CUR_PART="$part"
+	errf="$(mktemp)"
+	start=$SECONDS
+	VOX_OUTPUT_FILE="$out" VOX_VOICE="$VOICE" "$PROVIDER" "$text" 2>"$errf" || rc=$?
+	if ((rc != 0)); then
+		explain_failure "$part" "$rc" "$((SECONDS - start))" "$errf"
+		rm -f "$errf"
+		return 1
+	fi
+	[[ -s "$errf" ]] && cat "$errf" >&2
+	rm -f "$errf"
+	return 0
+}
+
+# concat_wavs OUT IN... — join same-format WAVs into one file.
+concat_wavs() {
+	python3 -c '
+import sys, wave
+out, ins = sys.argv[1], sys.argv[2:]
+params, frames = None, []
+for f in ins:
+    with wave.open(f, "rb") as w:
+        p = w.getparams()
+        if params is None:
+            params = p
+        elif (p.nchannels, p.sampwidth, p.framerate) != (params.nchannels, params.sampwidth, params.framerate):
+            sys.exit(f"vox: cannot join parts — {f} has a different audio format")
+        frames.append(w.readframes(w.getnframes()))
+with wave.open(out, "wb") as w:
+    w.setparams(params)
+    for fr in frames:
+        w.writeframes(fr)
+' "$@"
+}
+
+# synthesize OUT — all parts → one WAV at OUT.
+synthesize() {
+	local out="$1" work i
+	if ((NCHUNKS == 1)); then
+		synth_one 1 "${CHUNKS[0]}" "$out"
+		return
+	fi
+	work="$(mktemp -d)"
+	local -a parts=()
+	for ((i = 0; i < NCHUNKS; i++)); do
+		synth_one "$((i + 1))" "${CHUNKS[i]}" "$work/$i.wav" || {
+			rm -rf "$work"
+			return 1
+		}
+		parts+=("$work/$i.wav")
+	done
+	concat_wavs "$out" "${parts[@]}" || {
+		rm -rf "$work"
+		return 1
+	}
+	rm -rf "$work"
+}
+
+# A caller's `timeout` (or Ctrl-C) during foreground synthesis used to kill vox
+# silently, and agents concluded "vox is broken". Say what happened instead.
+on_interrupt() {
+	trap - TERM INT
+	echo "vox: killed by SIG$1 after $((SECONDS - SYNTH_START))s while synthesizing part $CUR_PART/$NCHUNKS of a ${#TEXT}-char message. Nothing was played." >&2
+	echo "vox: this is almost always a caller timeout (e.g. 'timeout 15 vox …') — not a broken vox. $LENGTH_HINT" >&2
+	exit 124
+}
 
 # --- Wake noise preamble ------------------------------------------------------
 
@@ -425,7 +546,7 @@ with wave.open(sys.argv[1], "wb") as w:
 ' "$wavfile" 2>/dev/null || true
 }
 
-prepend_wake_noise "$audio_out"
+
 
 # --- Resolve + invoke player --------------------------------------------------
 
@@ -441,11 +562,6 @@ vox_play() {
 	fi
 }
 
-PLAYER=$(resolve_player)
-if [[ -z "$PLAYER" ]]; then
-	echo "Error: no audio player found. Set \$VOX_PLAYER, symlink ~/.config/vox/player, or install aplay/paplay/afplay/ffplay." >&2
-	exit 1
-fi
 
 # Bounded-playback prefix for the detached path. `timeout` is GNU coreutils /
 # BusyBox and is ABSENT on stock macOS — exactly like `flock`, which the block
@@ -464,6 +580,68 @@ if command -v timeout >/dev/null 2>&1; then
 	fi
 fi
 
+# bounded_prefix FILE — the detached player's timeout, sized to the clip so a
+# long multi-part message isn't cut at a fixed 60s (#1214). Never below 60s.
+bounded_prefix() {
+	[[ -n "$TIMEOUT_PREFIX" ]] || return 0
+	local secs
+	secs="$(python3 -c 'import sys, wave; w = wave.open(sys.argv[1]); print(int(w.getnframes() / w.getframerate()) + 30)' "$1" 2>/dev/null)" || secs=60
+	[[ "$secs" =~ ^[0-9]+$ ]] || secs=60
+	((secs < 60)) && secs=60
+	echo "${TIMEOUT_PREFIX% 60} $secs"
+}
+
+# --- Drive: synthesize, then play ---------------------------------------------
+
+if [[ -n "$OUTPUT_FILE" ]]; then
+	trap 'on_interrupt TERM' TERM
+	trap 'on_interrupt INT' INT
+	synthesize "$OUTPUT_FILE" || exit 1
+	exit 0
+fi
+
+PLAYER=$(resolve_player)
+if [[ -z "$PLAYER" ]]; then
+	echo "Error: no audio player found. Set \$VOX_PLAYER, symlink ~/.config/vox/player, or install aplay/paplay/afplay/ffplay." >&2
+	exit 1
+fi
+
+audio_out="$(mktemp --suffix=.wav)"
+
+# Long message (#1214): detach synthesis AND playback, so no caller timeout can
+# kill it mid-synth. The caller gets an immediate stderr notice (it's the agent
+# that needs to learn to be brief); background failures land in VOX_ERR_LOG.
+if ((NCHUNKS > 1)) && ! $FOREGROUND; then
+	echo "vox: long message (${#TEXT} chars) split into $NCHUNKS parts — synthesizing + playing in the background (~$((NCHUNKS * 4 + ${#TEXT} / 12))s before audio starts). $LENGTH_HINT Background failures are logged to $VOX_ERR_LOG" >&2
+	bgerr="$(mktemp)"
+	(
+		trap 'rm -f "$audio_out" "$bgerr"' EXIT
+		if ! synthesize "$audio_out" 2>"$bgerr"; then
+			mkdir -p "$(dirname "$VOX_ERR_LOG")" 2>/dev/null || true
+			{
+				echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) speaker=${SPEAKER:-?} chars=${#TEXT} parts=$NCHUNKS"
+				cat "$bgerr"
+			} >>"$VOX_ERR_LOG" 2>/dev/null || true
+			exit 1
+		fi
+		prepend_wake_noise "$audio_out"
+		# shellcheck disable=SC2046,SC2086
+		vox_play $(bounded_prefix "$audio_out") $PLAYER "$audio_out" || true
+	) &>/dev/null &
+	disown
+	exit 0
+fi
+
+trap 'rm -f "$audio_out"' EXIT
+trap 'on_interrupt TERM' TERM
+trap 'on_interrupt INT' INT
+SYNTH_START=$SECONDS
+synthesize "$audio_out" || exit 1
+trap - TERM INT
+
+prepend_wake_noise "$audio_out"
+
+
 # Playback. DETACHED by default (#952): a long body must not have its audio —
 # and thus its trailing sign-off, which is synthesized as part of the wav at the
 # `. This is <speaker>.` append above — cut mid-word when a caller wraps vox in a
@@ -477,15 +655,15 @@ fi
 # subshell, so concurrent agents still take the lock in turn (#895). --output
 # already exited above, so this path only runs when actually speaking.
 if $FOREGROUND; then
-	# shellcheck disable=SC2086
+	# shellcheck disable=SC2046,SC2086
 	vox_play $PLAYER "$audio_out"
 else
 	bgfile="$(mktemp --suffix=.wav)"
 	cp "$audio_out" "$bgfile"
 	(
 		trap 'rm -f "$bgfile"' EXIT
-		# shellcheck disable=SC2086
-		vox_play $TIMEOUT_PREFIX $PLAYER "$bgfile" || true
+		# shellcheck disable=SC2046,SC2086
+		vox_play $(bounded_prefix "$bgfile") $PLAYER "$bgfile" || true
 	) &>/dev/null &
 	disown
 fi
