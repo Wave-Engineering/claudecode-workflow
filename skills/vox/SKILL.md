@@ -157,6 +157,13 @@ Options:
 
 Keep it to 1-2 sentences. Summarize, don't enumerate.
 
+**Length is a hard constraint, not style.** Synthesis can run *slower than
+realtime* (~1s per 10 chars). A message over `VOX_CHUNK_CHARS` (150) is split
+into parts and synthesized + played **in the background** — vox returns at once
+with a `vox: long message … split into N parts` notice on stderr; that notice
+means you were too long. If vox prints `killed by SIGTERM` or `TIMED OUT`, the
+message was too long for your `timeout` — vox is not broken; shorten it.
+
 ## Best-Effort
 
 If `vox` fails (no backend, network down, no speakers), **continue normally**. Never block on audio. Never retry.
