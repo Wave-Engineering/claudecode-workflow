@@ -208,3 +208,28 @@ def test_caller_timeout_kill_is_explained(env, tmp_path):
     assert "killed by SIGTERM" in r.stderr
     assert "caller timeout" in r.stderr
     assert "part 1/1" in r.stderr
+
+
+def test_host_forward_provider_is_not_chunked(env, tmp_path):
+    """host-forward.sh spools text for the host vox (which chunks); don't split here."""
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    env["VOX_PROVIDER"] = str(REPO_ROOT / "scripts" / "vox-providers" / "host-forward.sh")
+    env["VOX_CHUNK_CHARS"] = "100"
+    env["OAW_VOX_SPOOL"] = str(spool)
+    r = _run([str(VOX), "--fg", LONG], env)
+    assert r.returncode == 0, r.stderr
+    assert "split into" not in r.stderr
+    assert len(list(spool.glob("*.msg"))) == 1
+
+
+def test_caller_timeout_kill_cleans_temp_files(env, tmp_path):
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
+    prov = _exe(tmp_path / "slow-provider.sh", "#!/usr/bin/env bash\nsleep 20\n")
+    env["VOX_PROVIDER"] = str(prov)
+    env["TMPDIR"] = str(tmpdir)
+    env["VOX_LOCK"] = str(tmp_path / "vox.lock")
+    r = _run(["timeout", "1", str(VOX), "a short message"], env)
+    assert r.returncode == 124
+    assert list(tmpdir.iterdir()) == []

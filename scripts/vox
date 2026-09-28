@@ -385,6 +385,12 @@ vox_log "$SPEAKER" "$TEXT" || true
 VOX_CHUNK_CHARS="${VOX_CHUNK_CHARS:-150}"
 [[ "$VOX_CHUNK_CHARS" =~ ^[0-9]+$ ]] || VOX_CHUNK_CHARS=150
 
+PROVIDER="$(resolve_provider)" || exit 1
+# A forwarding provider (host-forward.sh) makes no audio — it spools the text to
+# the host, whose own vox chunks it. Splitting here would spool N out-of-order
+# parts and try to concatenate N empty WAVs, so send it whole.
+[[ "$(basename "$(readlink -f "$PROVIDER" 2>/dev/null || echo "$PROVIDER")")" == host-forward.sh ]] && VOX_CHUNK_CHARS=0
+
 split_text() {
 	python3 -c '
 import re, sys
@@ -415,25 +421,31 @@ sys.stdout.write("\0".join(split(text)))
 }
 
 CHUNKS=()
-if ((VOX_CHUNK_CHARS > 0)) && ((${#TEXT} > VOX_CHUNK_CHARS)) && command -v python3 >/dev/null 2>&1; then
-	mapfile -d '' CHUNKS < <(printf '%s' "$TEXT" | split_text 2>/dev/null) || CHUNKS=()
+# mapfile -d needs bash >= 4.4; older bash (stock macOS 3.2) sends the text whole.
+if ((VOX_CHUNK_CHARS > 0)) && ((${#TEXT} > VOX_CHUNK_CHARS)) &&
+	((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4))) &&
+	command -v python3 >/dev/null 2>&1; then
+	mapfile -d '' CHUNKS < <(printf '%s' "$TEXT" | split_text 2>/dev/null) 2>/dev/null || CHUNKS=()
 fi
 ((${#CHUNKS[@]})) || CHUNKS=("$TEXT")
 NCHUNKS=${#CHUNKS[@]}
 
 if [[ "${VOX_NO_SIGNOFF:-0}" != "1" && -n "$SPEAKER" ]]; then
-	CHUNKS[NCHUNKS-1]="${CHUNKS[NCHUNKS-1]}. This is ${SPEAKER}."
+	LAST=$((NCHUNKS - 1))
+	CHUNKS[LAST]="${CHUNKS[LAST]}. This is ${SPEAKER}."
 fi
 
 # --- Synthesis ----------------------------------------------------------------
 
-PROVIDER="$(resolve_provider)" || exit 1
 VOX_ERR_LOG="${VOX_ERR_LOG:-$HOME/.claude/logs/vox-errors.log}"
 LENGTH_HINT="TTS synthesis can run slower than realtime (~1s per 10 chars); keep vox messages to 1-2 short sentences, and don't wrap vox in a tight timeout."
 
 # Tracked for diagnostics: which part is in flight and when it started.
 CUR_PART=0
 SYNTH_START=$SECONDS
+# In-flight temp paths, so on_interrupt can clean up after a caller-timeout kill.
+SYNTH_ERRF=""
+SYNTH_WORK=""
 
 # explain_failure PART RC ELAPSED ERRFILE — say what failed and why, on stderr.
 explain_failure() {
@@ -454,6 +466,7 @@ synth_one() {
 	local part="$1" text="$2" out="$3" errf start rc=0
 	CUR_PART="$part"
 	errf="$(mktemp)"
+	SYNTH_ERRF="$errf"
 	start=$SECONDS
 	VOX_OUTPUT_FILE="$out" VOX_VOICE="$VOICE" "$PROVIDER" "$text" 2>"$errf" || rc=$?
 	if ((rc != 0)); then
@@ -495,6 +508,7 @@ synthesize() {
 		return
 	fi
 	work="$(mktemp -d)"
+	SYNTH_WORK="$work"
 	local -a parts=()
 	for ((i = 0; i < NCHUNKS; i++)); do
 		synth_one "$((i + 1))" "${CHUNKS[i]}" "$work/$i.wav" || {
@@ -514,6 +528,7 @@ synthesize() {
 # silently, and agents concluded "vox is broken". Say what happened instead.
 on_interrupt() {
 	trap - TERM INT
+	rm -rf "$SYNTH_ERRF" "$SYNTH_WORK"
 	echo "vox: killed by SIG$1 after $((SECONDS - SYNTH_START))s while synthesizing part $CUR_PART/$NCHUNKS of a ${#TEXT}-char message. Nothing was played." >&2
 	echo "vox: this is almost always a caller timeout (e.g. 'timeout 15 vox …') — not a broken vox. $LENGTH_HINT" >&2
 	exit 124
@@ -546,8 +561,6 @@ with wave.open(sys.argv[1], "wb") as w:
 ' "$wavfile" 2>/dev/null || true
 }
 
-
-
 # --- Resolve + invoke player --------------------------------------------------
 
 # Serialize audio playback so concurrent agents don't talk over each other (#895).
@@ -561,7 +574,6 @@ vox_play() {
 		"$@"
 	fi
 }
-
 
 # Bounded-playback prefix for the detached path. `timeout` is GNU coreutils /
 # BusyBox and is ABSENT on stock macOS — exactly like `flock`, which the block
@@ -640,7 +652,6 @@ synthesize "$audio_out" || exit 1
 trap - TERM INT
 
 prepend_wake_noise "$audio_out"
-
 
 # Playback. DETACHED by default (#952): a long body must not have its audio —
 # and thus its trailing sign-off, which is synthesized as part of the wav at the
