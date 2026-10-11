@@ -187,6 +187,12 @@ mkfifo "$FIFO" || {
 "$WATCHER" doorbell >"$FIFO" 2>"$ERRLOG" &
 CHILD=$!
 
+# SC2329 is the function-level "never invoked" finding that ShellCheck 0.11
+# split out of SC2317. The per-line SC2317 disables in the body still serve
+# any older ShellCheck (CI installs it from apt, unpinned), so keep both for as
+# long as a supported version predates 0.11. Never begin a comment line here
+# with the bare tool name: that parses as a directive.
+# shellcheck disable=SC2329  # invoked indirectly via `trap cleanup EXIT` below
 cleanup() {
 	# shellcheck disable=SC2317  # invoked indirectly via `trap cleanup EXIT` below
 	kill "$CHILD" 2>/dev/null
