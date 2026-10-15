@@ -334,7 +334,7 @@ Call `devspec_locate` (with the user-provided `path` if given; otherwise it sear
 
 ### Step 2: Run the Checks (and commit on pass)
 
-Call `devspec_finalize(path)`. The tool runs all 7 checks and, **when they all pass, commits its own doc writes** (the `docs/*-devspec.md` Dev Spec + any decision-ledger / memory-file updates) as a single `docs(devspec): finalize Dev Spec for Plan #N` commit on the current branch — **no push**, and it **refuses to commit on a protected branch** (cc-workflow#604; so finalize writes never linger uncommitted and get swept into the next `/precheck`). Returns:
+Call `devspec_finalize(path)`. The tool runs all 7 checks and, **when they all pass, commits its own doc writes** (the `docs/*-devspec.md` Dev Spec + any decision-ledger / memory-file updates) as a single `doc(devspec): finalize Dev Spec for Plan #N` commit on the current branch — **no push**, and it **refuses to commit on a protected branch** (cc-workflow#604; so finalize writes never linger uncommitted and get swept into the next `/precheck`). Returns:
 
 ```jsonc
 { "ok", "passed", "total", "checks": [{ "id", "name", "passed", "evidence" }, ...],
@@ -347,7 +347,7 @@ Call `devspec_finalize(path)`. The tool runs all 7 checks and, **when they all p
 ### Step 3: Report
 
 Format the `checks` array into a table (columns: #, Check, Result, Evidence). Report `**Result: X/7 checks passed.**` then:
-- **All passing + `committed`** → report the commit: "✅ Committed the Dev Spec doc updates as `docs(devspec): finalize Dev Spec for Plan #N` (`<commit_sha>`, N files). **Not pushed** — it rides your next `/scp` / `/scpmr`. Dev Spec is ready for approval; run `/devspec approve`."
+- **All passing + `committed`** → report the commit: "✅ Committed the Dev Spec doc updates as `doc(devspec): finalize Dev Spec for Plan #N` (`<commit_sha>`, N files). **Not pushed** — it rides your next `/scp` / `/scpmr`. Dev Spec is ready for approval; run `/devspec approve`."
 - **All passing + `refused_reason:"protected_branch"`** → warn: "Checks pass, but finalize refused to commit on the protected branch. Switch to a feature branch and re-run `/devspec finalize` so the doc updates are committed there."
 - **All passing + `refused_reason:"no_changes"`** → "Dev Spec already committed/unchanged. Ready for approval; run `/devspec approve`."
 - **Any failing** → list each failure with the tool's evidence as the remediation starting point, then "Fix these issues and run `/devspec finalize` again." (No commit is attempted when checks fail.)

@@ -121,7 +121,7 @@ type(scope): brief description
 Closes #42
 ```
 
-Narration: "The commit message follows conventional commit format — `feat`, `fix`, `docs`, `chore`, etc. — with `Closes #<number>` to auto-close the linked issue on merge. Claude writes the commit message, stages specific files (never `git add -A`), and handles the push and PR creation."
+Narration: "The commit message follows conventional commit format — `feat`, `fix`, `doc`, `chore`, etc. — with `Closes #<number>` to auto-close the linked issue on merge. Claude writes the commit message, stages specific files (never `git add -A`), and handles the push and PR creation."
 
 ---
 

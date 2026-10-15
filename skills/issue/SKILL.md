@@ -564,10 +564,10 @@ Create immediately — do not ask for approval. Issues are cheap to edit and clo
    `gh` or `glab` CLI calls. Every type — including `doc` — passes straight
    through to `work_item` unchanged; there is no alias mapping (`doc` is
    the tool's own canonical `type` value as of mcp-server-sdlc v4.3.0,
-   cc-workflow#1191 — `docs` is a transitional value on its way out via
-   mcp-server-sdlc#540, never emitted here). Same pattern as `story` and
-   `feature`, which the tool's `type` enum has always accepted as two
-   distinct native values, no aliasing either. `plan` also passes through
+   cc-workflow#1191; `docs` is never correct, and the tool rejects it
+   from mcp-server-sdlc#540 on). Same pattern as `story` and `feature`,
+   which the tool's `type` enum has always accepted as two distinct
+   native values, no aliasing either. `plan` also passes through
    unchanged (see the callout below).
 
 If `work_item` reports a missing label at create-time (race or pre-existing

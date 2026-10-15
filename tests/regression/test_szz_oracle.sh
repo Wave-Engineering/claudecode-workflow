@@ -57,7 +57,7 @@ commit() { # subject  date
 # fixture where they are is the unrepresentative case, not the general one.
 printf '# fixture\n' >"$repo/README.md"
 git -C "$repo" add README.md
-C0=$(commit "docs: preamble so the culprit is not the root commit" "2025-12-31T00:00:00Z")
+C0=$(commit "doc: preamble so the culprit is not the root commit" "2025-12-31T00:00:00Z")
 
 # C1 — the CULPRIT. Writes a six-line file; lines 2, 4 and 5 are the ones the
 # fix will later delete.
@@ -123,7 +123,7 @@ C7=$(commit "fix(wave): PROMOTED_BUG was wrong" "2026-01-10T00:00:00Z")
 # `feat: initial commit`, and three such pairs sat in the fixture set.
 printf '# fixture, corrected\n' >"$repo/README.md"
 git -C "$repo" add README.md
-C8=$(commit "fix(docs): the preamble line was wrong" "2026-01-11T00:00:00Z")
+C8=$(commit "fix(doc): the preamble line was wrong" "2026-01-11T00:00:00Z")
 
 SINCE="2025-12-01"
 edges="$tmp/edges.tsv"
