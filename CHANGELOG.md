@@ -19,6 +19,8 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.5.0] - 2026-10-15
+
 ### Added
 
 - **`/autochain` lands in the repo, and its approval moves behind a fail-closed gate (#1224,
@@ -42,6 +44,29 @@ are worth keeping apart:
     once per session rather than left silently inert.
   - There is no age cutoff: an idle session's old reading is still exact, because remaining
     context only changes when a message renders the statusline.
+- **`vox` chunks long messages and explains synthesis failures (#1214).** Synthesis can run slower
+  than realtime (a cloned voice took ~28 s for 326 characters). Long messages hit the caller's
+  timeout or the provider's 30 s HTTP cap, and nothing played and nothing was reported.
+  - Text over `VOX_CHUNK_CHARS` (150) is split at sentence, clause or word boundaries and
+    synthesized one part at a time into one clip.
+  - Multi-part speech is detached from the caller; background failures go to
+    `~/.claude/logs/vox-errors.log`.
+  - A provider failure, or a kill during synthesis, now prints why: a caller timeout or an
+    over-long message, as distinct from an endpoint that is down.
+- **A review-protocol bench (#1195, #1199).** It is tooling to measure whether a Job D prompt
+  catches defects that history later proved were there. It does not measure agreement with
+  another review.
+  - An SZZ bug-origin oracle (`scripts/ci/szz-oracle.sh`), deliberately model-free. It was
+    calibrated by hand on 20 pairs before first use: 67% precision after dropping compound
+    changesets (`docs/szz-oracle-calibration.md`).
+  - Reconstruction of a historical changeset as uncommitted working-tree state, which is the
+    condition `/precheck` actually reviews. Fidelity is proven by a tree-hash match with the
+    original commit, not by comparison.
+  - A runner whose arms differ only in prompt. Tools are restricted with `--tools`, because
+    `--allowedTools` restricts nothing.
+  - The design record, reconstructed from transcripts after the fact, is
+    `docs/design/sketchbook-1195-pmr-bench.md` (#1203). The bench is incomplete: arm A has never
+    been run, and there is no judge yet.
 
 ### Fixed
 
@@ -60,30 +85,13 @@ are worth keeping apart:
   - The template is now relocated before the merge.
   - `install` runs `assert-no-duplicate-hooks.sh --fix` and then the plain check on every settings
     file it writes, collapsing existing duplicates and aborting on any that survive.
+- **`validate.sh` went red on any host with ShellCheck 0.11 (#1218).** 0.11 moved the
+  function-level "never invoked" finding from SC2317 to the new code SC2329. `cleanup()` in
+  `doorbell-oneshot.sh` runs only through `trap`, and nothing disabled SC2329. CI installs an
+  older ShellCheck from apt and stayed green, so the failure appeared only locally. Both disables
+  are now kept, and the file is verified clean under 0.9.0 and 0.11.0.
 
-- **`precheck-review-scope.sh` now ships with the kit (#1197).** It
-  lived in `scripts/ci/`, which `install` excludes from distribution at four
-  sites — while `skills/precheck/SKILL.md`, which depends on it, ships
-  fleet-wide. Every agent outside a cc-workflow checkout would have received a
-  Job D whose primary path invokes a tool that is not there, with only prose
-  standing between that and a silently empty review channel. It was misfiled:
-  unlike `dependency-scan.sh` and `check-scannable.sh` (genuinely dual-use, run
-  by `validate.sh` *and* by skills — still #1141), this tool is invoked only by
-  the skill. Moved to `scripts/`, so `install` mirrors it to `~/.local/bin/`
-  like every other runtime helper. Verified by running install's own
-  enumeration predicate, not by reading it — and that predicate is now pinned
-  by a test rather than re-checked by hand.
-
-  Resolution is a **ladder**, not a bare `command -v`. A name-only probe reports
-  "missing" in two cases where the tool is present: `install --local` places
-  scripts in `<repo_root>/.claude/bin`, which the installer deliberately keeps
-  **off** `PATH`, and a cc-workflow checkout carries `scripts/` directly. A
-  boolean probe would therefore have made the feature inert precisely where it
-  is most exercised — including in this repo, which uses `--local` — while
-  printing a false "kit not installed". The ladder tries `PATH`, then
-  `.claude/bin`, then `scripts/`, and only then declares absence. It runs as a
-  Step 0 pre-flight, ahead of the Step 2 call site, because a probe documented
-  190 lines after first use is read too late.
+## [8.4.0] - 2026-08-29
 
 ### Changed
 
@@ -287,6 +295,30 @@ are worth keeping apart:
   it now uses the live default branch already resolved in Step 1.5.
 
 ### Fixed
+
+- **`precheck-review-scope.sh` now ships with the kit (#1197).** It
+  lived in `scripts/ci/`, which `install` excludes from distribution at four
+  sites — while `skills/precheck/SKILL.md`, which depends on it, ships
+  fleet-wide. Every agent outside a cc-workflow checkout would have received a
+  Job D whose primary path invokes a tool that is not there, with only prose
+  standing between that and a silently empty review channel. It was misfiled:
+  unlike `dependency-scan.sh` and `check-scannable.sh` (genuinely dual-use, run
+  by `validate.sh` *and* by skills — still #1141), this tool is invoked only by
+  the skill. Moved to `scripts/`, so `install` mirrors it to `~/.local/bin/`
+  like every other runtime helper. Verified by running install's own
+  enumeration predicate, not by reading it — and that predicate is now pinned
+  by a test rather than re-checked by hand.
+
+  Resolution is a **ladder**, not a bare `command -v`. A name-only probe reports
+  "missing" in two cases where the tool is present: `install --local` places
+  scripts in `<repo_root>/.claude/bin`, which the installer deliberately keeps
+  **off** `PATH`, and a cc-workflow checkout carries `scripts/` directly. A
+  boolean probe would therefore have made the feature inert precisely where it
+  is most exercised — including in this repo, which uses `--local` — while
+  printing a false "kit not installed". The ladder tries `PATH`, then
+  `.claude/bin`, then `scripts/`, and only then declares absence. It runs as a
+  Step 0 pre-flight, ahead of the Step 2 call site, because a probe documented
+  190 lines after first use is read too late.
 
 - **`scripts/bootstrap-repo-labels{,-gitlab}.sh` no longer fail `shfmt`
   depending on which version you have installed (#1194, follow-on to #1191).**
