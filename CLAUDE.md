@@ -48,7 +48,7 @@ The "explicit user approval" requirement is **suspended** — and only suspended
 1. The Flight Agent is operating inside a **Kahuna sandbox** — i.e. the current branch's base ref matches the regex `^kahuna/[0-9]+-` (a per-wave integration branch, not `main`).
 2. The full `/precheck` checklist has passed end-to-end: validation, code-reviewer (no unresolved high+ findings), trivy dependency scan, plus the Discord `#precheck` post and `vox` announcement.
 
-When both conditions are met, `/precheck` emits the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invokes `/scpmmr` directly — no human STOP. The exception is enforced **by `/precheck`'s own detection logic, not by agent discretion**: an agent on a `main`-targeted feature branch never qualifies, regardless of context. Outside the sandbox the original rule is unchanged — checklist, STOP, wait for `/scp` / `/scpmr` / `/scpmmr` / affirmative.
+When both conditions are met, `/precheck` emits the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invokes `/scpmmr` directly — no human STOP. The exception is enforced **by `/precheck`'s own detection logic, not by agent discretion**: an agent on a `main`-targeted feature branch never qualifies for *this* exception, regardless of context. Outside the sandbox the original rule applies — checklist, STOP, wait for `/scp` / `/scpmr` / `/scpmmr` / affirmative — unless the separate Approved Autochain exception below holds.
 
 **Platform prerequisite** (load-bearing — without it, the auto-approval is unsafe):
 
@@ -58,6 +58,20 @@ When both conditions are met, `/precheck` emits the sentinel line `[AUTO-APPROVE
 If the platform-specific config is not in place, `/precheck` emits a `[WARNING: kahuna sandbox — ... not detected]` checklist line; the wave Orchestrator and operator are the final safety net for missing prerequisites.
 
 Authoritative rule: Dev Spec §5.2.1. Mechanical detection + sentinel + per-platform prerequisite check: `skills/precheck/SKILL.md` ("Sandbox Auto-Approval (KAHUNA Flight Agents)").
+
+### Exception: Approved Autochain
+
+The "explicit user approval" requirement is also **suspended** — and only suspended — when **all** of the following hold:
+
+1. **The user approved the chain's order.** An approved `/autochain` order is a real pre-approval for exactly the issues in it. The agent records that approval with `autochain-gate.sh arm <repo_root> <epic> --approval-file <path> <issue>...`, listing only the approved issues. The file holds the user's words verbatim and is written with the `Write` tool, never through a shell.
+2. **The gate says so.** `autochain-gate.sh check <repo_root> <N>` prints `approved <epic>` for the current issue. The gate **fails closed**: no state file, a malformed one, a missing approval quote, an approval older than `AUTOCHAIN_TTL_HOURS` (default 12), or an issue not in the list (including one already merged and `consume`d) all leave the human STOP in place.
+3. **The precheck passed, mechanically.** Every checklist item verified; zero unresolved critical/important findings from the latest code review; every validation and test lane exits 0 by its own exit code; the dependency scan exits 0.
+
+When all three hold, `/precheck` puts the gate's `armed_at` and approval quote on the checklist, emits `[AUTO-APPROVED: autochain #<epic>]`, and invokes `/scpmmr`. As with the Kahuna exception, this is **enforced by `/precheck`'s detection logic, not by agent discretion** — no skill text, including `/autochain`'s, can grant it.
+
+**Scope limits:** the approval covers the listed issues and nothing else. A change to the set — a new issue, a new blocker — needs a fresh approval and a fresh `arm`. **Any stop disarms the gate** (`autochain-gate.sh disarm`); a stopped chain resumes only on a new approval. `/autochain plan` refuses a chain whose repo does not report `pre_merge_authoritative` from `wave_ci_trust_level`, because with no human in the loop, CI is the only opinion between a change and the protected branch.
+
+Mechanical gate: `scripts/autochain-gate.sh`. Detection + sentinel: `skills/precheck/SKILL.md` Step 5. Chain procedure: `skills/autochain/SKILL.md`.
 
 ---
 

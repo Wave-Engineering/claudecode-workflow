@@ -156,7 +156,7 @@ class TestAutonomousPathsDependOnThisGate:
         assert block, "the autonomous-paths paragraph is missing"
         para = block.group(0)
 
-        for mode in ("wavemachine", "godspeed"):
+        for mode in ("wavemachine", "godspeed", "autochain"):
             assert mode in para, (
                 f"/{mode} merges without a human and must be named IN the "
                 f"paragraph documenting the CI gate as last control — a bare "
@@ -277,6 +277,12 @@ class TestDefaultDenyDoesNotBecomeATotalBlock:
         assert re.search(r"wave-hold", mmr_text), (
             "the halt must emit a structured blocker the wave gate can "
             "escalate, not merely stop"
+        )
+        halt = re.search(r"If there is no human — HALT.*?(?=\n\n)", mmr_text, re.S)
+        assert halt and "autochain" in halt.group(0), (
+            "an approved /autochain run merges without a human (#1224); the "
+            "no-human list must name it, or an autochain agent reading the "
+            "list concludes a human is present and improvises"
         )
 
     def test_escalation_survives_the_upstream_fix(self, mmr_text: str) -> None:

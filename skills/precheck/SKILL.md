@@ -69,12 +69,26 @@ prompt: "Run mcp__sdlc-server__spec_validate_structure for issue #<N> in repo <r
 ```
 subagent_type: general-purpose
 model: haiku
-prompt: "Run the project's validation and test tooling in <repo_root>.
-         First: read .claude-project.md if it exists — use whatever toolchain commands it declares.
-         If absent, probe in order: ./scripts/ci/validate.sh, ./scripts/ci/test.sh,
-         make test, python3 -m pytest tests/, npm test.
-         Run whatever exists. Return: PASS or FAIL, and any error output verbatim (truncated to 50 lines max)."
+prompt: "Run EVERY validation and test lane in <repo_root> — not the first one you find.
+         Lanes: every command .claude-project.md declares under Toolchain (Validation, Tests,
+         and any other runnable lane). If it declares none, run EACH of these that is present:
+         ./scripts/ci/validate.sh, ./scripts/ci/test.sh, make test, python3 -m pytest tests/,
+         npm test. No lane is a superset of another: validate.sh passing says nothing about
+         the test suite.
+
+         Run each lane to completion in the FOREGROUND and capture its real exit code:
+           <cmd> > <log> 2>&1; echo \"exit=$?\"
+         Never pipe a lane into tail/head/grep before taking $? — the pipe reports the
+         filter's exit, not the lane's. Never return while a lane is still running: a
+         lane that has not finished has no result, and it dies with you.
+
+         Return one line per lane, ALL lanes first, then the verdict:
+           LANE <command> | exit=<code> | <counts from its own summary line, e.g. '233 passed'>
+           VERDICT: PASS only if every lane exited 0; otherwise FAIL
+         Then, for each lane with a non-zero exit, its failing output verbatim (50 lines max)."
 ```
+
+**Lanes and exit codes, not a verdict (#1101).** This prompt used to say "probe in order … run whatever exists", which reads as first-match-wins. In cc-workflow that ran `validate.sh` alone (233/233), reported "Validation (actually ran)", and CI then failed on the pytest lane, which runs as a separate step. The per-lane line is the same denominator-before-verdict discipline Job C uses. Step 5's autochain path reads these `exit=` fields directly, because the gate cannot be met from a PASS/FAIL summary.
 
 **Job C — Dependency vulnerability scan** `model: haiku`
 ```
@@ -321,7 +335,19 @@ Wait for all four jobs to return. **The moment Job D returns, run `record` — b
 Collect results from all four jobs, assemble the checklist (see below), then **notify BJ**: `disc_send` to `#precheck`, **then `vox`** — **ALWAYS do both**. If `disc_send` fails (MCP unavailable, network), still do `vox`.
 
 ### Step 5 — Sandbox detection + gate
-Run **sandbox-context detection** (see "Sandbox Auto-Approval" below): if the current branch's base ref matches `^kahuna/[0-9]+-`, emit the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invoke `/scpmmr` immediately with no wait; otherwise **STOP.** Wait for `/scp`/`/scpmr`/`/scpmmr`/affirmative. Negative/rework → return to work. Never bypass the STOP on notification failure in non-sandbox contexts.
+Run **sandbox-context detection** (see "Sandbox Auto-Approval" below): if the current branch's base ref matches `^kahuna/[0-9]+-`, emit the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invoke `/scpmmr` immediately with no wait.
+
+Otherwise, check for an **approved autochain** (CLAUDE.md "Exception: Approved Autochain", #1224). Resolve `autochain-gate.sh` with the same ladder as Step 0 — `PATH`, then `<repo_root>/.claude/bin/`, then `<repo_root>/scripts/` — and run `autochain-gate.sh check <repo_root> <N>`, where `<N>` is the `issue_number` that `ibm()` returned in Step 1. Auto-approve **only** when it exits 0 printing `approved <epic> armed_at=<ts>` **and** this cycle meets the mechanical pass definition:
+- every checklist item verified;
+- zero unresolved critical/important findings from the latest Job D pass;
+- **every** `LANE … | exit=` line from Job B reads `exit=0`, and there is at least one. A missing lane line, a lane still running, or a bare PASS with no lane lines is not a pass;
+- Job C exit 0.
+
+Then put the gate's two output lines (`approved … armed_at=…` and `approval: …`) on the checklist, so the approval being relied on is visible at the moment it is used, emit `[AUTO-APPROVED: autochain #<epic>]`, and invoke `/scpmmr`. A gate that cannot be found, a `not-approved` (including an expired approval), or any item short of a pass → STOP below. The gate fails closed; so does this step.
+
+Notifications fire in both auto-approval paths exactly as they would before a STOP. A notification failure is reported on the checklist; it does not change the gate's answer in either direction.
+
+Otherwise **STOP.** Wait for `/scp`/`/scpmr`/`/scpmmr`/affirmative. Negative/rework → return to work. Never bypass the STOP on notification failure; outside the two auto-approval paths above, never bypass it at all.
 
 ## Dependency Vulnerability Scan
 Delegated to Job C (Haiku sub-agent) in the parallel batch. Interpret the result as:
@@ -397,7 +423,7 @@ an earlier draft of this paragraph got it wrong.
 
 Flight Agents working inside a KAHUNA sandbox push to a per-wave integration branch (`kahuna/<N>-<slug>`), not to `main`. In that context the human gate is a redundant pause — the wave Orchestrator has already decided the wave runs autonomously and reviews aggregated results at the wave gate, not per-flight. The full checklist (validation, code-reviewer, trivy) and Discord/`vox` notifications still run; only the STOP-and-wait step is bypassed.
 
-**Why this exists (narrative).** A wave can dispatch dozens of Flight Agents in parallel; a per-flight human STOP would serialise the wave back to one-at-a-time and defeat the orchestration. The Orchestrator's contract with the human is "I will surface the *wave* result, not every flight." Flight Agents inside the sandbox honour that contract by completing their own quality bar (the full checklist) and then auto-progressing; they never bypass quality, only the human pause. Outside the sandbox — i.e. an agent operating directly against `main` — the original rule applies in full and the STOP is non-negotiable. See Dev Spec §5.2.1 for the authoritative statement; the mechanical detection (regex `^kahuna/[0-9]+-`, sentinel `[AUTO-APPROVED: kahuna sandbox]`) lives below and in the procedure summary above.
+**Why this exists (narrative).** A wave can dispatch dozens of Flight Agents in parallel; a per-flight human STOP would serialise the wave back to one-at-a-time and defeat the orchestration. The Orchestrator's contract with the human is "I will surface the *wave* result, not every flight." Flight Agents inside the sandbox honour that contract by completing their own quality bar (the full checklist) and then auto-progressing; they never bypass quality, only the human pause. Outside the sandbox — i.e. an agent operating directly against `main` — the original rule applies in full and the STOP is non-negotiable, unless Step 5's autochain gate approves the issue (a separate exception, with its own conditions, described in Step 5 rather than here). See Dev Spec §5.2.1 for the authoritative statement; the mechanical detection (regex `^kahuna/[0-9]+-`, sentinel `[AUTO-APPROVED: kahuna sandbox]`) lives below and in the procedure summary above.
 
 **Platform-specific enforcement prerequisite.** The branch-name regex makes the *decision* to auto-approve, but the *safety* of that decision rests on platform-side configuration that constrains what a Flight Agent can actually push to. The two platforms model this differently — and the asymmetry is load-bearing:
 
@@ -426,12 +452,12 @@ else:
 The detection regex is `^kahuna/[0-9]+-`. Resolve `base_branch` from the most recent PR opened by this agent against the current branch (`gh pr view --json baseRefName`), or from the spawning Orchestrator's context when no PR exists yet.
 
 **Behavior matrix:**
-- `sandbox_context == false` (default — feature branch targeting `main`): existing behavior preserved — present checklist, notify, **STOP** and wait for `/scp` / `/scpmr` / `/scpmmr` / affirmative. This is the IT-09 negative case.
+- `sandbox_context == false` (default — feature branch targeting `main`): existing behavior preserved — present checklist, notify, **STOP** and wait for `/scp` / `/scpmr` / `/scpmmr` / affirmative. This is the IT-09 negative case. The one exception is an approved autochain, which Step 5 checks separately and which never changes this matrix entry.
 - `sandbox_context == true` (Flight Agent on a kahuna sandbox): full checklist runs, full notifications fire, then emit the sentinel line **`[AUTO-APPROVED: kahuna sandbox]`** on stdout, then invoke `/scpmmr` with no wait. The sentinel makes the auto-approval grep-able in transcripts and Discord scrollback.
 
 **Non-bypassable items:** validation, code-reviewer (high+ findings still block), trivy scan, Discord `#precheck` post, `vox` announcement, **and `/mmr`'s CI gate**. These run in full regardless of `sandbox_context`. Only the human-approval STOP is replaced by the sentinel + auto-`/scpmmr`.
 
-The CI gate is listed explicitly because **the kahuna sandbox is not the only path that merges without a human.** Autonomous merging also occurs under **`/wavemachine` in `auto` mode** — its promote node performs the kahuna→protected merge with no human halt (interactive mode routes that same merge *to* a human, so the exposure is mode-specific, not skill-wide) — and under an **armed `godspeed` mandate**, whose gated-action list covers force-push, push-to-protected, terraform/kubectl/helm/docker/systemctl and prod-shaped writes but **not merges**, so an armed agent carries straight through one. In both, once the human approval is gone, the CI gate is the *last* thing between a red build and the protected branch.
+The CI gate is listed explicitly because **the kahuna sandbox is not the only path that merges without a human.** Autonomous merging also occurs under **`/wavemachine` in `auto` mode** — its promote node performs the kahuna→protected merge with no human halt (interactive mode routes that same merge *to* a human, so the exposure is mode-specific, not skill-wide) — and under an **armed `godspeed` mandate**, whose gated-action list covers force-push, push-to-protected, terraform/kubectl/helm/docker/systemctl and prod-shaped writes but **not merges**, so an armed agent carries straight through one. **An approved `/autochain` run** is the third (#1224): its merges land on the *protected* branch directly, one per issue, with no human between them — which is why `/autochain plan` refuses a chain unless `wave_ci_trust_level` reports `pre_merge_authoritative`. In all three, once the human approval is gone, the CI gate is the *last* thing between a red build and the protected branch.
 
 *(`/lazyriver` is deliberately **not** in that list. It is a `probe → journal → judge → steer` goal-seek loop that terminates by emitting a plan or an answer — it has no merge path at all. It was named here in an earlier draft and the claim was wrong; naming a skill that cannot merge costs the paragraph its credibility with exactly the reader careful enough to check.)*
 
