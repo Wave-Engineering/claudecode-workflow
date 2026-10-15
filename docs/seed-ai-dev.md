@@ -145,6 +145,7 @@ Internalize these two; they resolve most "should I stop or continue?" questions:
 
 - **On `main`-targeted branches:** stops and waits for `/scp`, `/scpmr`, or `/scpmmr` from the human.
 - **On `kahuna/<N>-*` branches (KAHUNA sandbox):** emits `[AUTO-APPROVED: kahuna sandbox]` sentinel and auto-chains to `/scpmmr`. No human STOP.
+- **In an approved `/autochain` run:** if `autochain-gate.sh check` approves the issue (BJ approved the chain's order, the gate is armed with his words and has not expired) and the checklist passes mechanically, it emits `[AUTO-APPROVED: autochain #<epic>]` and auto-chains to `/scpmmr`. See CLAUDE.md "Exception: Approved Autochain".
 
 Reference:
 
@@ -287,7 +288,7 @@ Before your first commit in any session:
 And before your first **any action that touches remote**:
 
 - [ ] `/precheck` ran and passed
-- [ ] Human STOP honored (unless KAHUNA sandbox, which auto-approves)
+- [ ] Human STOP honored (unless KAHUNA sandbox or an approved autochain, which auto-approve)
 
 ---
 
