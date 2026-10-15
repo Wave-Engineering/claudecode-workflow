@@ -200,6 +200,28 @@
             "command": "~/.local/bin/flightdeck-session-emit.sh idle"
           }
         ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "_comment": "Context-threshold reseed gate (cc-workflow#1225). Blocks a turn's end when the session's remaining context (persisted per session by statusline-command.sh) is at or below RESEED_CONTEXT_THRESHOLD_PCT (default 15), telling the agent to /reseed. Loop guards: stop_hook_active, and an armed reseed in flight. A missing or malformed reading never blocks; it is reported once per session after three consecutive misses (no age cutoff: an idle session's reading is still exact). Kill-switch: RESEED_CONTEXT_GATE_DISABLED=1.",
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/context-reseed-gate.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "_comment": "Reseed revive acknowledgement (cc-workflow#1225). Removes <cwd>/.claude/reseed-ack when the submitted prompt is exactly /reseed revive, which is how reseed-kick.sh knows its keystrokes landed. Prints nothing, never blocks.",
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/reseed-ack.sh"
+          }
+        ]
       }
     ],
     "SessionEnd": [

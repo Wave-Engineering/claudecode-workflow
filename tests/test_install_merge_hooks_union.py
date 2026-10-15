@@ -576,3 +576,148 @@ def test_local_hook_path_resolution(sandbox_home: Path) -> None:
     assert "~/" not in merged["statusLine"]["command"], (
         "statusLine still has unexpanded ~/"
     )
+
+
+# ---------------------------------------------------------------------------
+# #1225: install is idempotent — no run may register a kit hook twice
+# ---------------------------------------------------------------------------
+
+_GUARD = _REPO_DIR / "scripts" / "ci" / "assert-no-duplicate-hooks.sh"
+
+# Path-rooted kit hooks, so the duplicate guard can judge them (bare commands
+# are "nothing judgeable" to it). Two events, two kit prefixes.
+_KIT_TEMPLATE = {
+    "hooks": {
+        "Stop": [
+            {"matcher": "*", "hooks": [{"type": "command", "command": "~/.claude/scripts/hooks/workflow/a.sh"}]},
+            {"matcher": "*", "hooks": [{"type": "command", "command": "~/.local/bin/b.sh"}]},
+        ],
+        "PreToolUse": [
+            {"matcher": "Bash", "hooks": [{"type": "command", "command": "~/.claude/scripts/hooks/workflow/c.sh"}]},
+        ],
+    }
+}
+
+
+def _sandbox_with_guard(home: Path, template: dict) -> Path:
+    install = _override_template(home, template)
+    shutil.copy(_GUARD, install.parent / "scripts" / "ci" / _GUARD.name)
+    return install
+
+
+def _guard(settings: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(_GUARD), str(settings)], capture_output=True, text=True, timeout=60
+    )
+
+
+def _registrations(settings: Path) -> list[str]:
+    data = _read_json(settings)
+    return sorted(
+        h["command"] for groups in data["hooks"].values() for g in groups for h in g["hooks"]
+    )
+
+
+@_SKIP_NO_BASH
+@_SKIP_NO_JQ
+def test_local_reinstall_registers_nothing_twice(sandbox_home: Path) -> None:
+    """The defect: a second ``install --local`` compared the template's ``~/``
+    paths against the local file's already-relocated absolute ones, matched
+    nothing, and appended the whole kit again — every kit hook doubled per run.
+
+    The second run must add NOTHING. Asserting only that the guard passes would
+    be too weak: ``--fix`` would collapse a still-broken merge's output and hide
+    it. So the run-2 output must not report a collapse, and the registrations
+    must be byte-identical to run 1's."""
+    project = sandbox_home.parent / "project"
+    project.mkdir(exist_ok=True)
+    proj_settings = project / ".claude" / "settings.json"
+    install = _sandbox_with_guard(sandbox_home, _KIT_TEMPLATE)
+
+    rc, out, err = _run_sandbox_install(install, ["--config", "--local"], sandbox_home, cwd=project)
+    assert _install_ok(rc, out, err), f"run 1 failed: {out}\n{err}"
+    first = _registrations(proj_settings)
+    assert len(first) == 3, f"fresh install should register the 3 kit hooks once: {first}"
+
+    rc, out, err = _run_sandbox_install(install, ["--config", "--local"], sandbox_home, cwd=project)
+    assert _install_ok(rc, out, err), f"run 2 failed: {out}\n{err}"
+    assert "collapsed" not in out, (
+        f"run 2 needed --fix to collapse duplicates — the merge itself still doubles:\n{out}"
+    )
+    assert _registrations(proj_settings) == first, "a re-run changed the hook registrations"
+    assert _guard(proj_settings).returncode == 0
+
+
+@_SKIP_NO_BASH
+@_SKIP_NO_JQ
+def test_local_install_collapses_a_predoubled_file(sandbox_home: Path) -> None:
+    """A project file already doubled by an older install (this repo carried 16
+    duplicates) collapses to one registration each on the next install."""
+    project = sandbox_home.parent / "project"
+    proj = str(project)
+    doubled = {
+        "hooks": {
+            "Stop": [
+                {"matcher": "*", "hooks": [{"type": "command", "command": f"{proj}/.claude/scripts/hooks/workflow/a.sh"}]},
+                {"matcher": "*", "hooks": [{"type": "command", "command": f"{proj}/.claude/scripts/hooks/workflow/a.sh"}]},
+            ],
+        }
+    }
+    _write_json(project / ".claude" / "settings.json", doubled)
+    assert _guard(project / ".claude" / "settings.json").returncode == 1, "fixture must start doubled"
+
+    install = _sandbox_with_guard(sandbox_home, _KIT_TEMPLATE)
+    rc, out, err = _run_sandbox_install(install, ["--config", "--local"], sandbox_home, cwd=project)
+    assert _install_ok(rc, out, err), f"install failed: {out}\n{err}"
+    assert "collapsed" in out, f"install did not report the collapse:\n{out}"
+    regs = _registrations(project / ".claude" / "settings.json")
+    assert regs.count(f"{proj}/.claude/scripts/hooks/workflow/a.sh") == 1, regs
+    assert _guard(project / ".claude" / "settings.json").returncode == 0
+
+
+@_SKIP_NO_BASH
+@_SKIP_NO_JQ
+def test_local_dependency_check_looks_in_the_project_not_home(sandbox_home: Path) -> None:
+    """``check-deps.sh`` expanded the template's ``~/`` hook paths against $HOME
+    even under --local, so a hook present in the PROJECT install but not (yet)
+    in the global one read as a missing dependency and ``install --local`` exited
+    non-zero. Found live on #1225: the two new hooks, freshly installed locally,
+    were reported NOT FOUND."""
+    project = sandbox_home.parent / "project"
+    hook = project / ".claude" / "scripts" / "hooks" / "workflow" / "a.sh"
+    hook.parent.mkdir(parents=True)
+    hook.write_text("#!/bin/sh\nexit 0\n")
+    install = _sandbox_with_guard(sandbox_home, {
+        "hooks": {"Stop": [{"matcher": "*", "hooks": [
+            {"type": "command", "command": "~/.claude/scripts/hooks/workflow/a.sh"}]}]}
+    })
+    # The real checker, not the sandbox's always-pass stub.
+    shutil.copy(_REPO_DIR / "scripts" / "ci" / "check-deps.sh",
+                install.parent / "scripts" / "ci" / "check-deps.sh")
+    rc, out, err = _run_sandbox_install(install, ["--config", "--local"], sandbox_home, cwd=project)
+    combined = out + err
+    assert f"hook: {hook}" in combined, f"hook not checked at its project path:\n{combined}"
+    assert "NOT FOUND" not in combined, f"a locally-installed hook read as missing:\n{combined}"
+
+
+@_SKIP_NO_BASH
+@_SKIP_NO_JQ
+def test_global_install_also_runs_the_guard(sandbox_home: Path) -> None:
+    """The guard runs on EVERY settings file install writes, not only --local:
+    a doubled global file collapses too."""
+    home = str(sandbox_home)
+    doubled = {
+        "hooks": {
+            "Stop": [
+                {"matcher": "*", "hooks": [{"type": "command", "command": "~/.claude/scripts/hooks/workflow/a.sh"}]},
+                {"matcher": "*", "hooks": [{"type": "command", "command": f"{home}/.claude/scripts/hooks/workflow/a.sh"}]},
+            ],
+        }
+    }
+    settings = sandbox_home / ".claude" / "settings.json"
+    _write_json(settings, doubled)
+    install = _sandbox_with_guard(sandbox_home, _KIT_TEMPLATE)
+    rc, out, err = _run_sandbox_install(install, ["--config"], sandbox_home)
+    assert _install_ok(rc, out, err), f"install failed: {out}\n{err}"
+    assert "collapsed" in out, f"global install did not run the guard:\n{out}"
+    assert _guard(settings).returncode == 0
