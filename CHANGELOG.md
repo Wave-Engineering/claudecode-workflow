@@ -19,7 +19,47 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Added
+
+- **`/autochain` lands in the repo, and its approval moves behind a fail-closed gate (#1224,
+  #1101).** The skill existed only at `~/.claude/skills/autochain/SKILL.md` and granted its own
+  approval ("a passing `/precheck` is automatic approval for `/scpmmr`"). That contradicted
+  `/precheck`'s STOP on every non-kahuna branch. The grant is now policy: CLAUDE.md's "Exception:
+  Approved Autochain", enforced by `/precheck` Step 5 through `scripts/autochain-gate.sh`.
+  - The gate answers "approved" only for an armed, unexpired (`AUTOCHAIN_TTL_HOURS`, default 12),
+    listed issue.
+  - `arm` reads BJ's quote from a file, because a shell argument would execute backticks in it.
+  - `consume` narrows the approval as each issue merges.
+
+  Job B now runs every validate and test lane and reports each lane's own exit code. Before, it
+  stopped at the first lane it found.
+- **A context-threshold Stop gate triggers `/reseed` (#1225).**
+  - `statusline-command.sh` now persists Claude Code's window-aware `remaining_percentage` per
+    session.
+  - `context-reseed-gate.sh` blocks a turn's end at ≤ `RESEED_CONTEXT_THRESHOLD_PCT` (default 15)
+    and says to reseed.
+  - A missing or malformed reading never blocks. Once it persists for three turns, it is reported
+    once per session rather than left silently inert.
+  - There is no age cutoff: an idle session's old reading is still exact, because remaining
+    context only changes when a message renders the statusline.
+
 ### Fixed
+
+- **Reseed auto-revive was a blind two-second keystroke (#1225).**
+  - **The kick.** It was `(sleep 2 && tmux send-keys … continue) & disown`: fire-and-forget, with
+    no check it landed and a "sent" log line either way, so revives were dropped whenever the TUI
+    was slow. `reseed-kick.sh` (launched with `setsid`) now types `/reseed revive` with backoff
+    until the `reseed-ack.sh` prompt hook acknowledges it. If nothing acknowledges it, it pages
+    BJ. The hook no longer injects the seed.
+  - **The seed path.** Seeds now live at one fixed, git-ignored path, `.claude/reseed-revive.md`.
+    `/reseed revive` is the single revive command, typed by the kicker or by hand.
+- **`install --local` doubled every kit hook on each re-run (#1225).** The settings merge compared
+  the template's `~/.claude/...` hook paths against the local file's already-relocated absolute
+  ones, never matched, and appended the whole kit again. This repo's local settings carried 16
+  duplicate registrations, so the push gate, the secrets gate and both Stop detectors fired twice.
+  - The template is now relocated before the merge.
+  - `install` runs `assert-no-duplicate-hooks.sh --fix` and then the plain check on every settings
+    file it writes, collapsing existing duplicates and aborting on any that survive.
 
 - **`precheck-review-scope.sh` now ships with the kit (#1197).** It
   lived in `scripts/ci/`, which `install` excludes from distribution at four

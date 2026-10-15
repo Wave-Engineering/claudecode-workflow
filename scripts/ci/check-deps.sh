@@ -75,6 +75,17 @@ _check_hook_scripts() {
 			script_path="$first_token"
 			;;
 		esac
+		# --local (#1225): kit hooks live under the PROJECT's .claude/, not $HOME.
+		# Same two prefixes install's rewrite_kit_hook_paths_to_local relocates;
+		# anything else (e.g. wtf-server's ~/.local/share hook) is genuinely global.
+		# Without this, every hook newer than the global install read as missing
+		# and `install --local` exited non-zero for it.
+		if [[ "${LOCAL_MODE:-false}" == true ]]; then
+			case "$script_path" in
+			\~/.claude/scripts/hooks/*) script_path="$CELLAR_DIR/hooks/${script_path#\~/.claude/scripts/hooks/}" ;;
+			\~/.local/bin/*) script_path="$SCRIPTS_DIR/${script_path#\~/.local/bin/}" ;;
+			esac
+		fi
 		script_path=$(_expand_home "$script_path")
 
 		if [[ -f "$script_path" ]]; then

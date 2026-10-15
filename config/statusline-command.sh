@@ -15,6 +15,28 @@ ctx_used_tokens=$(echo "$input" | jq -r '
     + (.context_window.total_output_tokens // 0)
 ' 2>/dev/null)
 
+# --- Persist remaining context per session (#1225) ---
+# Claude Code hands ONLY the statusline the authoritative, window-aware
+# remaining_percentage; nothing else can see it. Persist it so the reseed Stop
+# gate (context-reseed-gate.sh) and nerf can read it. Atomic (temp + mv) so a
+# reader never sees a half-written file. The session id becomes a filename, so
+# anything outside [A-Za-z0-9_-] is refused rather than sanitised. Best-effort:
+# a failure here must never cost the statusline its render.
+if [ -n "$remaining_pct" ] && [[ "$session_id" =~ ^[A-Za-z0-9_-]+$ ]]; then
+	{
+		ctx_state_dir="${CLAUDE_CONTEXT_STATE_DIR:-$HOME/.claude/state/context}"
+		ctx_tmp=""
+		if mkdir -p "$ctx_state_dir" &&
+			ctx_tmp="$(mktemp "$ctx_state_dir/.${session_id}.XXXXXX")" &&
+			jq -n --arg s "$session_id" --argjson p "$remaining_pct" --argjson t "$(date +%s)" \
+				'{session_id: $s, remaining_percentage: $p, ts: $t}' >"$ctx_tmp"; then
+			mv -f "$ctx_tmp" "$ctx_state_dir/${session_id}.json"
+		else
+			[ -n "$ctx_tmp" ] && rm -f "$ctx_tmp"
+		fi
+	} 2>/dev/null
+fi
+
 # ANSI colors
 c_purple='\033[38;5;97m'
 c_fuchsia='\033[38;5;13m'

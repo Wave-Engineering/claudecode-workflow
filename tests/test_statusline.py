@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,12 @@ import pytest
 STATUSLINE_SCRIPT = (
     Path(__file__).resolve().parent.parent / "config" / "statusline-command.sh"
 )
+
+
+# One throwaway context-state dir for the whole module, removed at exit (#1225):
+# the script persists per-session readings, and a test must never write into
+# the real ~/.claude/state/context.
+_CTX_STATE = tempfile.TemporaryDirectory(prefix="statusline-ctx-")
 
 
 def _strip_ansi(text: str) -> str:
@@ -38,6 +45,10 @@ def _run_statusline(
     Returns raw stdout (with ANSI codes intact).
     """
     env = os.environ.copy()
+    # The script persists remaining context per session (#1225). Without this,
+    # every test that passes a session_id would write into the REAL
+    # ~/.claude/state/context of whoever runs the suite.
+    env["CLAUDE_CONTEXT_STATE_DIR"] = _CTX_STATE.name
     if env_override:
         env.update(env_override)
 
@@ -363,3 +374,52 @@ class TestStatuslineColors:
         assert "\033[31m" in output, (
             f"Expected red ANSI code for critical ctx remaining, got: {output!r}"
         )
+
+
+class TestStatuslinePersistsContext:
+    """#1225: the statusline is the only thing Claude Code hands the window-aware
+    remaining_percentage to, so it persists it per session for the reseed Stop
+    gate and nerf to read."""
+
+    def _payload(self, tmp_path: Path, session_id: str, pct: float) -> dict:
+        return {
+            "cwd": str(tmp_path),
+            "session_id": session_id,
+            "context_window": {"remaining_percentage": pct},
+        }
+
+    def test_context_json_written_per_session(self, tmp_path: Path):
+        state = tmp_path / "state"
+        _run_statusline(self._payload(tmp_path, "abc-123", 42.5), cwd=tmp_path,
+                        env_override={"CLAUDE_CONTEXT_STATE_DIR": str(state)})
+        data = json.loads((state / "abc-123.json").read_text())
+        assert data["session_id"] == "abc-123"
+        assert data["remaining_percentage"] == 42.5
+        assert isinstance(data["ts"], int) and data["ts"] > 0
+        # Atomic write: no temp file left beside it.
+        assert sorted(p.name for p in state.iterdir()) == ["abc-123.json"]
+
+    def test_second_render_overwrites_not_appends(self, tmp_path: Path):
+        state = tmp_path / "state"
+        env = {"CLAUDE_CONTEXT_STATE_DIR": str(state)}
+        _run_statusline(self._payload(tmp_path, "s1", 80), cwd=tmp_path, env_override=env)
+        _run_statusline(self._payload(tmp_path, "s1", 12), cwd=tmp_path, env_override=env)
+        assert json.loads((state / "s1.json").read_text())["remaining_percentage"] == 12
+
+    def test_unsafe_session_id_is_refused_not_sanitised(self, tmp_path: Path):
+        """The session id becomes a filename — a traversal-shaped one must write
+        nothing anywhere, and the statusline must still render."""
+        state = tmp_path / "state"
+        output = _run_statusline(self._payload(tmp_path, "../../escape", 50), cwd=tmp_path,
+                                 env_override={"CLAUDE_CONTEXT_STATE_DIR": str(state)})
+        assert not state.exists() or not any(state.iterdir())
+        assert not (tmp_path / "escape.json").exists()
+        assert "ctx remaining: 50%" in _strip_ansi(output)
+
+    def test_unwritable_state_dir_does_not_break_the_render(self, tmp_path: Path):
+        blocker = tmp_path / "file-not-dir"
+        blocker.write_text("x")
+        output = _run_statusline(self._payload(tmp_path, "s2", 33), cwd=tmp_path,
+                                 env_override={"CLAUDE_CONTEXT_STATE_DIR": str(blocker / "sub")})
+        assert "ctx remaining: 33%" in _strip_ansi(output)
+        assert output.count("\n") == 2

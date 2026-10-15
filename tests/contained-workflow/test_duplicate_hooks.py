@@ -245,3 +245,67 @@ def test_the_build_runs_the_assertion_last_over_the_shipped_settings() -> None:
     assert "/home/ubuntu/.claude/settings.json" in directives[idx_assert], (
         "the assertion must name the settings file that ships"
     )
+
+
+# --- --fix (#1225): install collapses duplicates with the SAME identity -------
+
+
+def _fix(tmp_path: Path, settings: object) -> tuple[subprocess.CompletedProcess[str], dict]:
+    p = tmp_path / "settings.json"
+    p.write_text(json.dumps(settings, indent=2))
+    proc = subprocess.run(
+        ["bash", str(ASSERT), "--fix", str(p)],
+        capture_output=True,
+        text=True,
+        env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
+        timeout=60,
+    )
+    return proc, json.loads(p.read_text())
+
+
+def test_fix_keeps_the_first_spelling_and_drops_the_rest(tmp_path: Path) -> None:
+    proc, after = _fix(tmp_path, _one_group(f"~/{HOOK}", f"{tmp_path}/{HOOK}", f"~/{HOOK}"))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "collapsed 2 duplicate" in proc.stdout
+    cmds = [h["command"] for h in after["hooks"]["PostToolUse"][0]["hooks"]]
+    assert cmds == [f"~/{HOOK}"], cmds
+    assert _run(tmp_path, None).returncode == 0, "the plain check must agree with the fixer"
+
+
+def test_fix_drops_a_group_it_emptied_but_not_one_already_empty(tmp_path: Path) -> None:
+    """The real --local shape: each kit hook in its own group, the whole group
+    repeated. The repeat group is emptied and removed; a group that arrived
+    empty is not this fixer's business."""
+    settings = {
+        "hooks": {
+            "Stop": [
+                {"matcher": "*", "hooks": [{"type": "command", "command": f"~/{HOOK}"}]},
+                {"matcher": "*", "hooks": [{"type": "command", "command": f"~/{HOOK}"}]},
+                {"matcher": "x", "hooks": []},
+            ]
+        }
+    }
+    proc, after = _fix(tmp_path, settings)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert [g["matcher"] for g in after["hooks"]["Stop"]] == ["*", "x"]
+
+
+def test_fix_never_collapses_what_the_check_calls_distinct(tmp_path: Path) -> None:
+    """Different arguments are different hooks (flightdeck emit idle/close), and
+    a non-path-rooted command is not ours to judge — --fix must leave both."""
+    emit = "~/.local/bin/flightdeck-session-emit.sh"
+    settings = _one_group(f"{emit} idle", f"{emit} close", "python3 /a.py", "python3 /a.py")
+    proc, after = _fix(tmp_path, settings)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "collapsed" not in proc.stdout
+    assert len(after["hooks"]["PostToolUse"][0]["hooks"]) == 4
+
+
+def test_fix_on_a_clean_file_does_not_rewrite_it(tmp_path: Path) -> None:
+    p = tmp_path / "settings.json"
+    original = json.dumps(_one_group(f"~/{HOOK}"))  # deliberately NOT indent=2
+    p.write_text(original)
+    proc = subprocess.run(["bash", str(ASSERT), "--fix", str(p)], capture_output=True,
+                          text=True, env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert p.read_text() == original, "--fix rewrote a file that had nothing to fix"

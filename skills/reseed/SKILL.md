@@ -1,6 +1,6 @@
 ---
 name: reseed
-description: Context-window reduction via seed-and-clear — author a durable seed (point at state, carry volatile decisions), then clear and revive. For a cheap summarize, use /compact directly.
+description: Context-window reduction via seed-and-clear — author a durable seed (point at state, carry volatile decisions), then clear and revive. `/reseed revive` continues from the seed. For a cheap summarize, use /compact directly.
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
@@ -10,6 +10,23 @@ description: Context-window reduction via seed-and-clear — author a durable se
      Do this BEFORE executing any skill logic below. -->
 
 # Reseed: Seed-and-Clear Context Reduction
+
+## `/reseed revive` — continue from the seed
+
+**If invoked as `/reseed revive`, do only this section.** It is what the automatic kick
+types after `/clear`, and what BJ types by hand from a cold start — the same command either
+way.
+
+1. Read `<project_root>/.claude/reseed-revive.md`. If it does not exist, say so plainly and
+   stop — there is nothing to revive from.
+2. Print its age, its recorded branch and HEAD against the current `git branch --show-current`
+   and `git rev-parse --short HEAD`. A mismatch is information, not a reason to refuse: say
+   it, then carry on.
+3. Run `/engage`, then continue the work the seed names as its immediate next action.
+
+No freshness gate here: an explicit `/reseed revive` is the intent.
+
+## `/reseed` — seed and clear
 
 The window is filling up and work is mid-flight, and invoking `/reseed` *is* the
 choice to take the **careful** path: author a detailed seed → `/clear` → revive
@@ -84,24 +101,36 @@ seed under-captures on the first pass by construction, so the re-scan is not opt
 
 ## Step 2 — Write seed and arm the auto-revive hook
 
-Always write to a **durable path** (not `/tmp` — reboot-wiped per `lesson_tmp_identity_boot_wipe`):
+The seed has **one path**, always: `<project_root>/.claude/reseed-revive.md`, overwritten on
+every reseed. One path is what makes `/reseed revive` possible without anyone knowing a
+filename — free-form names left 14 seeds under two conventions in one repo, and BJ hunting
+for the right one by hand.
+
+First make sure the seed can never be committed. `info/exclude` is per-clone and untracked,
+so this adds no diff in any repo — and a seed carries session detail that, in a GitLab repo,
+is Analogic's:
 
 ```bash
-project_root=$(pwd)
-seed_path="${project_root}/.claude/<topic>-reseed.md"
+git check-ignore -q .claude/reseed-revive.md ||
+  printf '%s\n' '**/.claude/reseed-revive.md' >>"$(git rev-parse --git-path info/exclude)"
 ```
 
-After writing the seed, arm the hook so the next `/clear` auto-revives without any user action:
+(The `**/` matters: an exclude entry with a slash in it is anchored to the repo root, so a
+session rooted in a subdirectory would never match it — the seed would stay committable
+and every reseed would append another dead entry.)
+
+Write the seed with the `Write` tool (never a heredoc — a seed is full of backticks). Its
+first lines record where it was cut, so `/reseed revive` can show drift:
+
+```
+Branch: <git branch --show-current>   HEAD: <git rev-parse --short HEAD>   Written: <UTC timestamp>
+```
+
+Then arm the hook so the next `/clear` auto-revives without any user action:
 
 ```bash
-project_root=$(pwd)
-cat > "${project_root}/.claude/reseed-armed.json" << EOF
-{
-  "seed_path": "${project_root}/.claude/<topic>-reseed.md",
-  "armed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "tmux_pane": "${TMUX_PANE:-}"
-}
-EOF
+jq -n --arg a "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg p "${TMUX_PANE:-}" \
+  '{armed_at: $a, tmux_pane: $p}' >"$(pwd)/.claude/reseed-armed.json"
 ```
 
 ## Step 3 — Trigger the clear
@@ -116,11 +145,22 @@ Then end your turn with a brief note:
 
 > "Seed written and armed. Clearing now — I'll auto-revive and continue."
 
-The `SessionStart{clear}` hook (`reseed-revive.sh`) fires on the fresh session, injects the seed content, and sends a `continue` keystroke. The agent revives and picks up where it left off — no user action needed.
+The `SessionStart{clear}` hook (`reseed-revive.sh`) fires on the fresh session, points it at
+the seed, and launches `reseed-kick.sh`, which types `/reseed revive` into the pane until
+the session acknowledges it (the `reseed-ack.sh` prompt hook removes a nonce). If no
+acknowledgement arrives, the kicker pages BJ via vox and `#call-4-bj`, naming the pane.
+Outcomes are logged to `~/.claude/logs/reseed-kick.log`.
 
 **If tmux is not available** (`$TMUX_PANE` empty): fall back to the manual flow:
 
-> "Seed written to `<path>`. Run `/clear`, then paste: `Read <path> and revive`."
+> "Seed written. Run `/clear`, then `/reseed revive`."
+
+**The automatic trigger.** A Stop hook (`context-reseed-gate.sh`) blocks a turn's end when
+remaining context is at or below `RESEED_CONTEXT_THRESHOLD_PCT` (default 15) and says to run
+`/reseed`. When that happens, run this skill before anything else. The reading comes from the
+statusline, so headless (`claude -p`) sessions never have one and the gate never fires
+there. It reports a missing reading only after three turns without one, which most
+headless runs never reach, so there it is usually silent.
 
 ## Important
 

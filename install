@@ -718,6 +718,46 @@ detect_old_hook_paths_in_settings() {
 	' "$target" 2>/dev/null
 }
 
+# Collapse, then independently verify, duplicate hook registrations in a
+# settings file this install just wrote (#1225). A hook registered twice RUNS
+# twice — a --local install that doubled every kit hook went unnoticed because
+# the only duplicate check ran in the container build, never on a host. Identity
+# ("what is one hook") lives in assert-no-duplicate-hooks.sh alone; the fixer and
+# the checker are the same script, so they cannot disagree. A duplicate that
+# survives --fix aborts the install (set -e) rather than shipping a doubled file.
+assert_no_duplicate_hooks() {
+	local target="$1" guard="$REPO_DIR/scripts/ci/assert-no-duplicate-hooks.sh" out rc
+	if ! command -v python3 &>/dev/null || [[ ! -f "$guard" ]]; then
+		warn "cannot check $target for duplicate hook registrations (python3 or $guard missing)"
+		return 0
+	fi
+	# Exit 2 is "nothing judgeable" (no path-rooted hook commands) — reported, not
+	# fatal: there is no duplicate to ship. Exit 1 is a duplicate and IS fatal.
+	rc=0
+	out=$(bash "$guard" --fix "$target" 2>&1) || rc=$?
+	if [[ $rc -eq 2 ]]; then
+		warn "hooks — duplicate check had nothing to judge: ${out#assert-no-duplicate-hooks: }"
+		return 0
+	elif [[ $rc -ne 0 ]]; then
+		warn "duplicate-hook check failed on $target:"
+		printf '%s\n' "$out" >&2
+		return 1
+	fi
+	# if/fi, not `[[ ]] && drift`: under set -e a loop whose last body command
+	# is a false `[[ ]]` returns 1 and would abort the install.
+	while IFS= read -r line; do
+		if [[ "$line" == *collapsed* ]]; then
+			drift "${line#assert-no-duplicate-hooks: }"
+		fi
+	done <<<"$out"
+	if ! out=$(bash "$guard" "$target" 2>&1); then
+		warn "duplicate hook registrations remain in $target after --fix:"
+		printf '%s\n' "$out" >&2
+		return 1
+	fi
+	ok "hooks — ${out#assert-no-duplicate-hooks: }"
+}
+
 merge_settings() {
 	local template="$1" target="$2"
 
@@ -725,6 +765,22 @@ merge_settings() {
 	if ! command -v jq &>/dev/null; then
 		warn "jq not found — cannot merge settings.json"
 		return 1
+	fi
+
+	# --local: merge against a RELOCATED copy of the template (#1225). The local
+	# file holds kit hooks at absolute <cwd>/.claude/... paths (rewritten by the
+	# previous install), while the template spells them "~/.claude/...". Compared
+	# raw, no template signature ever matched a local one, so every re-run
+	# appended the whole kit again and the post-merge rewrite made the copies
+	# absolute too — every kit hook doubled per run. Relocating the template first
+	# compares like with like. The kit-ownership probe below ("\.claude/") still
+	# matches the absolute form.
+	local tpl_local=""
+	if [[ "$LOCAL_MODE" == true ]]; then
+		tpl_local="$(mktemp)"
+		cp "$template" "$tpl_local"
+		rewrite_kit_hook_paths_to_local "$tpl_local"
+		template="$tpl_local"
 	fi
 
 	cp "$target" "${target}.bak"
@@ -838,6 +894,10 @@ merge_settings() {
 		rewrite_kit_hook_paths_to_local "$target"
 	fi
 
+	# Collapse any duplicates already present (a file doubled by an older
+	# install) and fail on any that survive.
+	assert_no_duplicate_hooks "$target"
+
 	# Report what changed
 
 	# Report new hooks (and new matchers within shared event keys)
@@ -882,6 +942,8 @@ merge_settings() {
 	else
 		skip "permissions — no new entries"
 	fi
+
+	[[ -z "$tpl_local" ]] || rm -f "$tpl_local"
 }
 
 # --- Logrotate helpers --------------------------------------------------------
@@ -1447,6 +1509,7 @@ if [[ "$INSTALL_CONFIG" == true ]]; then
 				if [[ "$LOCAL_MODE" == true ]]; then
 					rewrite_kit_hook_paths_to_local "$CLAUDE_DIR/settings.json"
 				fi
+				assert_no_duplicate_hooks "$CLAUDE_DIR/settings.json"
 			fi
 		fi
 	fi

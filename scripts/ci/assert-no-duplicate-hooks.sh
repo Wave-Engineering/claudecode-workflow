@@ -28,10 +28,23 @@
 #     keying on its leading `[` would call a guarded and a bare spelling of one
 #     hook two different hooks and report all-clear.
 #
-# Usage: assert-no-duplicate-hooks.sh [settings.json]   (default: ~/.claude/settings.json)
-# Exit:  0 no duplicates; 1 a duplicate registration exists; 2 unusable input.
+# --fix (#1225) COLLAPSES duplicates instead of only reporting them: the first
+# registration of each identity is kept, later ones are removed, and a matcher
+# group left with no hooks is dropped. `install` runs it on every settings file
+# it writes. It lives HERE rather than in install's jq so that "what is one hook"
+# has exactly one definition — a fixer and a checker that disagree would leave a
+# file the fixer calls clean and the checker calls doubled.
+#
+# Usage: assert-no-duplicate-hooks.sh [--fix] [settings.json]   (default: ~/.claude/settings.json)
+# Exit:  0 no duplicates (after --fix: none remain); 1 a duplicate registration
+#        exists; 2 unusable input.
 set -euo pipefail
 
+FIX=0
+if [[ "${1:-}" == "--fix" ]]; then
+	FIX=1
+	shift
+fi
 SETTINGS="${1:-$HOME/.claude/settings.json}"
 
 if [[ ! -f "$SETTINGS" ]]; then
@@ -39,13 +52,14 @@ if [[ ! -f "$SETTINGS" ]]; then
 	exit 2
 fi
 
-python3 - "$SETTINGS" <<'PY'
+python3 - "$SETTINGS" "$FIX" <<'PY'
 import json
 import os
 import re
 import sys
 
 path = os.path.abspath(sys.argv[1])
+fix = sys.argv[2] == "1"
 
 # The home to expand `~` against is derived from the FILE, not the environment.
 # `<home>/.claude/settings.json` -> `<home>`. Reading it from $HOME instead makes
@@ -107,6 +121,7 @@ if not isinstance(hooks, dict) or not hooks:
 
 seen = {}
 dupes = []
+emptied = set()
 checked = 0
 for event, groups in hooks.items():
     if not isinstance(groups, list):
@@ -115,11 +130,14 @@ for event, groups in hooks.items():
         if not isinstance(group, dict):
             continue
         matcher = group.get("matcher") or ""
+        kept = []
         for hook in group.get("hooks") or []:
             if not isinstance(hook, dict) or not isinstance(hook.get("command"), str):
+                kept.append(hook)
                 continue
             script = resolved(hook["command"])
             if script is None:
+                kept.append(hook)
                 continue
             checked += 1
             key = (event, matcher, script)
@@ -127,6 +145,25 @@ for event, groups in hooks.items():
                 dupes.append((event, matcher, script, seen[key], hook["command"]))
             else:
                 seen[key] = hook["command"]
+                kept.append(hook)
+        if fix and isinstance(group.get("hooks"), list):
+            if group["hooks"] and not kept:
+                emptied.add(id(group))  # only groups THIS pass emptied are dropped
+            group["hooks"] = kept
+    if fix:
+        hooks[event] = [g for g in groups if id(g) not in emptied]
+
+if fix and dupes:
+    # Atomic replace: a half-written settings.json is a session that will not start.
+    tmp = f"{path}.dedupe.{os.getpid()}"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, path)
+    print(f"assert-no-duplicate-hooks: collapsed {len(dupes)} duplicate registration(s) in {path}")
+    for event, matcher, script, _first, _second in dupes:
+        print(f"  {event} matcher={matcher!r} kept one of {script}")
+    dupes = []
 
 if not checked:
     # Same doctrine as the no-hooks case, one level down: a hooks block whose
