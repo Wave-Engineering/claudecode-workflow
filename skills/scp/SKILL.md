@@ -62,6 +62,8 @@ Git plumbing stays as git:
 2. `git commit` with the drafted message.
 3. `git push` to the feature branch (with `-u origin <branch>` if it has no upstream).
 
+**If the secret-scan gate blocks the commit or push** (`secret-scan-gate.sh`, #1234): it names each finding's file, line, rule and, for a push, the commit. It never shows the value. A real secret: remove it, and if it is already in a commit, rewrite that commit, because a later commit that deletes it still pushes it. A false positive: add the finding's allowlist key (`<file>:<rule>:<line>`, printed in the block message) to `.gitleaksignore` at the repository root, commit that, and retry. A rule-level allowlist goes in `.gitleaks.toml`. There is no bypass flag, and a missing gitleaks blocks too: install it with the kit's `./install`.
+
 Then route PR handling through MCP tools:
 4. `pr_list({head: "<current-branch>"})` — check whether a PR already exists for this branch.
 5. If the list is empty, **resolve the intended base, then validate it before creating.** The base is the **live** default branch (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name` / GitLab `glab api "projects/:id" --jq .default_branch`) unless you are intentionally targeting a non-default branch (e.g. a `kahuna/*` integration branch on a sandbox flight). Call `branch_guard({ role: "target", branch: <that resolved base> })` — passing the concrete base so the guard actually inspects it — and on `verdict == "warn"` **STOP**, surfacing `reason` (the base is a protected branch that is neither the live default nor a `kahuna/*` sandbox). On `pass`, call `pr_create({title, body, base, head, draft?})` with that validated `base` (never a cached value); `head` is the current branch.

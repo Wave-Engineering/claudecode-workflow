@@ -163,6 +163,7 @@ Rules in `CLAUDE.md` are prose — agents can drift from them. The enforcement l
 | Hook | Type | What it does |
 |------|------|-------------|
 | `pre-push-test-gate.sh` | PreToolUse (Bash) | Blocks `git push` unless tests were run this session; a plain push of a working branch (`feature/`, `fix/`, `chore/`, `doc/`, or `PUSH_GATE_EXTRA_BRANCH_RE`) is exempt. Kill switch: `PUSH_GATE_DISABLED=1` |
+| `secret-scan-gate.sh` | PreToolUse (Bash) | Runs gitleaks before `git commit` (everything the commit could include) and `git push` (the commits it would push that are not yet on a remote); blocks on a finding without showing the value. Fails closed, no bypass flag. Allowlist via `.gitleaksignore` / `.gitleaks.toml` |
 | `pre-stage-secrets-gate.sh` | PreToolUse (Bash) | Warns on `git add` of secret-pattern filenames (.env, .pem, credentials.json, etc.) |
 | `post-tool-test-sentinel.sh` | PostToolUse (Bash) | Records successful test runs — creates the sentinel that unblocks the push gate |
 | `post-tool-context-tracker.sh` | PostToolUse (Skill\|ToolSearch) | Logs skill invocations and tool-schema loads for context-diet monitoring |

@@ -46,6 +46,11 @@
           {
             "type": "command",
             "command": "~/.claude/scripts/hooks/workflow/pre-stage-secrets-gate.sh"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/secret-scan-gate.sh",
+            "onFailure": "block"
           }
         ]
       }

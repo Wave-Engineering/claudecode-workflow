@@ -168,6 +168,8 @@ build:
 
 Before staging a file that may contain secrets, WARN the user and get explicit confirmation. Watch for: `.env*`, `*.secret`, `*.key`, `*.pem`, `*.p12`, `*.pfx`, `credentials.json`, `service-account*.json`, `*-credentials.*`, `*.tfvars`, or anything with API keys / tokens / passwords. Flag the filename, wait for confirmation, then proceed. Safety net, not a hard block — trust the user after warning.
 
+The hard block is mechanical: `secret-scan-gate.sh` runs gitleaks before every `git commit` (on everything the commit could include) and every `git push` (on the commits it would push that are not yet on a remote). It fails closed, including when gitleaks is missing. To allowlist a false positive, see `/scp` Step 4.
+
 ---
 
 ## Commit Message Format

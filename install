@@ -1644,6 +1644,28 @@ if [[ "$LOCAL_MODE" != true && ("$INSTALL_CONFIG" == true || "$LOGROTATE_MODE" !
 	fi
 fi
 
+# --- Install gitleaks (secret-scan gate, #1234) -------------------------------
+# secret-scan-gate.sh blocks every commit and push when gitleaks is missing (it fails
+# closed), so the kit ships its pinned version into the symlink farm: ~/.local/bin, or
+# .claude/bin under --local, where the hook also looks. A gitleaks of the user's own on
+# PATH is left alone (the hook supports both the current CLI and the pre-8.19 one); the
+# kit's own copy is always handed to the installer, which is a no-op at the pinned
+# version and an upgrade when the pin moves.
+echo ""
+echo "gitleaks (secret-scan gate)"
+echo "──────────────────────────────────────────"
+gl_path="$(command -v gitleaks 2>/dev/null || true)"
+if [[ -n "$gl_path" && ! "$gl_path" -ef "$SCRIPTS_DIR/gitleaks" ]]; then
+	skip "gitleaks already on PATH ($gl_path, $(gitleaks version 2>/dev/null))"
+elif [[ "$DRY_RUN" == true ]]; then
+	info "(dry-run) Would run scripts/ci/install-gitleaks.sh $SCRIPTS_DIR"
+elif gl_out="$("$REPO_DIR/scripts/ci/install-gitleaks.sh" "$SCRIPTS_DIR" 2>&1)"; then
+	ok "${gl_out#install-gitleaks: }"
+else
+	warn "gitleaks install failed; the secret-scan gate blocks every commit and push until gitleaks is installed:"
+	warn "  ${gl_out}"
+fi
+
 # --- Summary ------------------------------------------------------------------
 echo ""
 echo "──────────────────────────────────────────"

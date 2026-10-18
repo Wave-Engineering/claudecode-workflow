@@ -182,6 +182,9 @@ _check_commands() {
 
 		if command -v "$cmd_name" &>/dev/null; then
 			ok "$cmd_name ($(command -v "$cmd_name"))"
+		elif [[ -n "${SCRIPTS_DIR:-}" && -x "$SCRIPTS_DIR/$cmd_name" ]]; then
+			# install --local puts kit-shipped tools (gitleaks) in .claude/bin, off PATH.
+			ok "$cmd_name ($SCRIPTS_DIR/$cmd_name)"
 		elif [[ "$cmd_optional" == "true" ]]; then
 			skip "$cmd_name — not installed (optional, needed for: $cmd_required_by)"
 		else

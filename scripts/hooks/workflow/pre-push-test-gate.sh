@@ -37,32 +37,17 @@ if [[ -z "$SESSION_ID" ]]; then
 fi
 
 # --- Question 2 first (cheap): is there a `git … push` anywhere? ----------------------
-# `git` as a word (bare, or a path like /usr/bin/git, or quoted as in `bash -c "git …"`),
-# then any of git's GLOBAL options — `-C <dir>` / `-c <k=v>` and the value-taking long
-# options with a plain, double- or single-quoted value; the `--opt=value` forms; the
-# flag-only ones — then the `push` subcommand. Only real global options, so a subcommand's
-# own flags (`git log --grep push`) are not mistaken for them. Not a push → nothing to gate.
-# An option value is one shell word built from adjacent segments: plain characters, a
-# backslash escape, a double- or single-quoted string, an unquoted `$( … )`, or a
-# backtick substitution. So `core.sshCommand="ssh -i key"` (plain + quoted), `~/my\ repo`
-# (plain + escape + plain), `$(git rev-parse --show-toplevel)` and `` `pwd -P` `` are each
-# one value. `"$(dirname "$f")"` is one value as quoted `"$(dirname "` + plain `$f` +
-# quoted `")"` — adjacency, not the `$( … )` segment, is what holds it together.
-_dq='"'
-_sq="'"
-_bt='`'
-# shellcheck disable=SC1003 # two literal backslashes: the ERE for one literal backslash
-_bs='\\'
-_optval="((${_bs}.|[^[:space:]${_dq}${_sq}${_bs}${_bt}]|${_dq}[^${_dq}]*${_dq}|${_sq}[^${_sq}]*${_sq}|${_bt}[^${_bt}]*${_bt}|\\\$\\([^)]*\\))+)"
-_gopt_names="git-dir|work-tree|namespace|exec-path|config-env|super-prefix|shallow-file|attr-source"
-_gopt_val="-[Cc]|--(${_gopt_names})"
-_gopt_eq="--(${_gopt_names})=(${_optval})?"
-_gopt_flag="-[pP]|--(no-pager|paginate|bare|no-replace-objects|no-lazy-fetch|no-optional-locks|no-advice|literal-pathspecs|glob-pathspecs|noglob-pathspecs|icase-pathspecs|exec-path)"
-_gitopt="([[:space:]]+((${_gopt_val})[[:space:]]+${_optval}|${_gopt_eq}|${_gopt_flag}))*"
-_detect_re="(^|[^[:alnum:]_.-])git${_gitopt}[[:space:]]+push([^[:alnum:]_-]|$)"
-# Detect on the command as bash will run it: a backslash-newline continuation joins lines.
-_detect_in="${COMMAND//$'\\\n'/ }"
-if ! [[ "$_detect_in" =~ $_detect_re ]]; then
+# The detector is shared with secret-scan-gate.sh; see git-detect.sh for what it matches.
+# Not a push → nothing to gate. A detector that fails to load must not read as "not a
+# push" (exit 0, gate silently off): without it, any command mentioning git is blocked.
+if ! source "$(dirname "$0")/git-detect.sh" 2>/dev/null || ! declare -F git_invokes >/dev/null; then
+	case "$COMMAND" in *git*)
+		jq -cn '{decision: "block", reason: "Push gate cannot run: its git-detect.sh helper did not load, so this command is blocked. Re-run the kit'"'"'s ./install, then retry."}'
+		;;
+	esac
+	exit 0
+fi
+if ! git_invokes "$COMMAND" push; then
 	exit 0
 fi
 
