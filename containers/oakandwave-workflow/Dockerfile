@@ -191,6 +191,16 @@ RUN curl -fsSL "https://github.com/openbao/openbao/releases/download/v${BAO_VERS
 	&& install -m 0755 /tmp/bao /usr/local/bin/bao \
 	&& rm -f /tmp/bao.tar.gz /tmp/bao
 
+# --- gitleaks (secret-scan gate, #1234) ----------------------------------------
+# Not an ARG like the tools above: the version AND each tarball's sha256 are pinned in
+# scripts/ci/install-gitleaks.sh, which ./install and CI run too. One pin, so the image
+# cannot drift from the hosts. Only that one file is copied here, so this layer stays
+# cached until the pin changes.
+COPY scripts/ci/install-gitleaks.sh /tmp/install-gitleaks.sh
+RUN /tmp/install-gitleaks.sh /usr/local/bin \
+	&& rm -f /tmp/install-gitleaks.sh \
+	&& gitleaks version
+
 # --- aws CLI v2 ---------------------------------------------------------------
 RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64-${AWSCLI_VERSION}.zip" -o /tmp/awscli.zip \
 	&& unzip -q /tmp/awscli.zip -d /tmp \

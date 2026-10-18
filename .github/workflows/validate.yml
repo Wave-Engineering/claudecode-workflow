@@ -88,6 +88,13 @@ jobs:
           restore-keys: |
             trivy-db-
 
+      # secret-scan-gate.sh fails closed without gitleaks, and its tests drive the real
+      # scanner (#1234). Same pinned version + sha256 as ./install and the image.
+      - name: Install gitleaks
+        run: |
+          ./scripts/ci/install-gitleaks.sh "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Run validation
         run: ./scripts/ci/validate.sh
 

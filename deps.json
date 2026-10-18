@@ -49,6 +49,10 @@
       "required_by": "Script formatting"
     },
     {
+      "name": "gitleaks",
+      "required_by": "Secret scan at commit and push (secret-scan-gate.sh fails closed without it); ./install ships the pinned version"
+    },
+    {
       "name": "trivy",
       "required_by": "Dependency vulnerability scan (precheck)",
       "optional": true
