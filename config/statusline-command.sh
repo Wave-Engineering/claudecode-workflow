@@ -115,6 +115,18 @@ if [ -n "$dev_name" ]; then
 		if [ -n "$indicators" ]; then
 			indicators_str="$(printf '%b' "${c_yellow}")${indicators}$(printf '%b' "${c_reset}") "
 		fi
+		# nerf shows `ctx ?` after a compaction (its SessionStart:compact hook
+		# rejects the pre-compact reading), and only nerf repaints its own
+		# indicator. This render just persisted a fresh reading, so ask nerf to
+		# repaint now rather than leave `ctx ?` up until the next nerf call.
+		# Background and best-effort: the render never waits on it.
+		if [ -n "$remaining_pct" ] && [[ "$session_id" =~ ^[A-Za-z0-9_-]+$ ]] &&
+			jq -e '(.indicators // []) | index("nerf:ctx ?")' "$session_file" >/dev/null 2>&1; then
+			nerf_bin="${NERF_BIN:-$HOME/.local/bin/nerf-server}"
+			if [ -x "$nerf_bin" ]; then
+				(cd "${project_root:-.}" 2>/dev/null && "$nerf_bin" refresh-indicator --session-id "$session_id" >/dev/null 2>&1 &)
+			fi
+		fi
 	fi
 fi
 
@@ -206,6 +218,8 @@ fi
 # --- Context remaining indicator ---
 # Colors key off nerf dart zones when a nerf config exists for this session;
 # otherwise fall back to the legacy 13%/25% thresholds against the full window.
+# Current nerf (mcp-server-nerf#32) stores darts as percent of the window used
+# under `darts_pct`; an older nerf stores absolute token counts under `darts`.
 ctx_str=""
 if [ -n "$remaining_pct" ]; then
 	remaining_int=${remaining_pct%.*}
@@ -217,7 +231,25 @@ if [ -n "$remaining_pct" ]; then
 		[ -f "$candidate" ] && nerf_config="$candidate"
 	fi
 
-	if [ -n "$nerf_config" ] && [ -n "$ctx_used_tokens" ] && [ "$ctx_used_tokens" -gt 0 ] 2>/dev/null; then
+	nerf_pct_soft="" nerf_pct_hard="" nerf_pct_ouch=""
+	if [ -n "$nerf_config" ]; then
+		nerf_pct_soft=$(jq -r '.darts_pct.soft // empty' "$nerf_config" 2>/dev/null)
+		nerf_pct_hard=$(jq -r '.darts_pct.hard // empty' "$nerf_config" 2>/dev/null)
+		nerf_pct_ouch=$(jq -r '.darts_pct.ouch // empty' "$nerf_config" 2>/dev/null)
+	fi
+
+	if [[ "$nerf_pct_soft" =~ ^[0-9]+$ && "$nerf_pct_hard" =~ ^[0-9]+$ && "$nerf_pct_ouch" =~ ^[0-9]+$ ]]; then
+		used_int=$((100 - remaining_int))
+		if ((used_int >= nerf_pct_ouch)); then
+			ctx_color="$c_red"
+		elif ((used_int >= nerf_pct_hard)); then
+			ctx_color="$c_orange"
+		elif ((used_int >= nerf_pct_soft)); then
+			ctx_color="$c_yellow"
+		else
+			ctx_color="$c_green"
+		fi
+	elif [ -n "$nerf_config" ] && [ -n "$ctx_used_tokens" ] && [ "$ctx_used_tokens" -gt 0 ] 2>/dev/null; then
 		nerf_soft=$(jq -r '.darts.soft // empty' "$nerf_config" 2>/dev/null)
 		nerf_hard=$(jq -r '.darts.hard // empty' "$nerf_config" 2>/dev/null)
 		nerf_ouch=$(jq -r '.darts.ouch // empty' "$nerf_config" 2>/dev/null)

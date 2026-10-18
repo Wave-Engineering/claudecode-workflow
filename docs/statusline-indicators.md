@@ -89,9 +89,10 @@ rm -f "/tmp/claude-statusline-${dev_name}.json"
 | Wave progress | `W2 3/5` | Wave 2, issue 3 of 5 |
 | Recording | `● REC` | Session is being recorded/replayed |
 | Context budget | `🔥 DOOM` | Nerf system in ultraviolence mode |
-| Nerf soft dart | `⚡ 120k` | Approaching soft context limit |
-| Nerf hard dart | `🔥 160k` | Hit hard context limit |
-| Nerf ouch dart | `💀 180k` | At maximum context budget |
+| Nerf soft dart | `⚡ 55%` | Past the soft dart (percent of window used) |
+| Nerf hard dart | `🔶 70%` | Past the hard dart |
+| Nerf ouch dart | `🚨 88%` | Past the ouch dart: compact or die |
+| Nerf unknown | `ctx ?` | No usable context reading (missing, stale, or from before a compaction); `nerf_status` says why. The statusline asks nerf to repaint once a fresh reading lands |
 | Nerf mode | `🎯 HMP` | Current nerf mode (hurt-me-plenty) |
 | Timer | `⏱ 12m` | Time remaining on a task |
 | Build status | `✓ BUILD` | Last build passed |

@@ -7,8 +7,8 @@ usage: |
   /nerf mode                     Show current behavior mode
   /nerf mode <mode>              Set mode: not-too-rough | hurt-me-plenty | ultraviolence
   /nerf darts                    Show current dart thresholds
-  /nerf darts <soft> <hard> <o>  Set all three dart thresholds (e.g. 150k 180k 200k)
-  /nerf <limit>                  Set ouch dart, scale soft/hard proportionally
+  /nerf darts <soft> <hard> <o>  Set all three darts, percent of window used (e.g. 51 63 85)
+  /nerf <ouch>                   Set ouch dart (percent used), scale soft/hard proportionally
   /nerf scope                    Launch context monitor in new terminal
 ---
 
@@ -37,14 +37,15 @@ Parse the user's input and call the corresponding MCP tool:
 | `/nerf mode <mode>` | `nerf_mode` | `{ "mode": "<mode>", "session_id": "<current session ID>" }` |
 | `/nerf darts` | `nerf_darts` | `{ "session_id": "<current session ID>" }` |
 | `/nerf darts <s> <h> <o>` | `nerf_darts` | `{ "soft": <s>, "hard": <h>, "ouch": <o>, "session_id": "<current session ID>" }` |
-| `/nerf <limit>` | `nerf_budget` | `{ "ouch": <limit>, "session_id": "<current session ID>" }` |
+| `/nerf <ouch>` | `nerf_budget` | `{ "ouch": <ouch>, "session_id": "<current session ID>" }` |
 | `/nerf scope` | `nerf_scope` | `{ "session_id": "<current session ID>" }` |
 
 ## Parsing Rules
 
-- Accept `k` suffix: `200k` → `200000`, `1.5m` → `1500000`
-- A bare number (e.g., `/nerf 200k`) routes to `nerf_budget`, not `nerf_darts`
-- Mode names are exact: `not-too-rough`, `hurt-me-plenty`, `ultraviolence`
+- **Darts are percentages of the context window used**: integers from 1 to 99, with soft < hard < ouch. They're correct on any window size (200k or 1M). A trailing `%` is allowed and stripped: `85%` → `85`.
+- Token counts (`200k`, `150000`) are **not** accepted. The server rejects them. If the user gives one, say that darts are now percentages and ask what percentage they mean. Do not convert it yourself: you don't know the window size.
+- A bare number (e.g., `/nerf 85`) routes to `nerf_budget`, not `nerf_darts`.
+- Mode names are exact: `not-too-rough`, `hurt-me-plenty`, `ultraviolence`.
 
 ## Session ID (required for all calls)
 
@@ -62,9 +63,18 @@ concurrent CC sessions and would silently feed the wrong UUID). Falling
 through to the server's resolver chain is safe; injecting a wrong value
 is not.
 
+## Where the context reading comes from
+
+Claude Code gives the window-aware context figure only to the statusline. The
+kit's statusline (`config/statusline-command.sh`) persists it for each session
+at `~/.claude/state/context/<session_id>.json`, and nerf reads that file. If
+there's no reading, it's unreadable, or it's stale, nerf reports **unknown,
+with the reason**. The indicator shows `ctx ?`. Pass that reason on to the
+user; never present it as a healthy reading.
+
 ## Important
 
-- **Do NOT perform arithmetic** — the MCP server handles all calculations
-- **Do NOT read or write config files** — the MCP server manages config state
-- **Do NOT estimate context usage** — the MCP server shells out to the analyzer
-- **Present the MCP tool's response as-is** — it returns pre-formatted output
+- **Do NOT perform arithmetic.** The MCP server handles all calculations.
+- **Do NOT read or write config files.** The MCP server manages config state.
+- **Do NOT estimate context usage.** The server reads the statusline's persisted reading.
+- **Present the MCP tool's response as-is.** It returns pre-formatted output.

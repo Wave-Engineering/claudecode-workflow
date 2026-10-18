@@ -196,12 +196,12 @@ Routes to the `nerf-server` MCP for deterministic context budget control. Manage
 /nerf mode                     # Show current behavior mode
 /nerf mode hurt-me-plenty      # Set mode
 /nerf darts                    # Show current dart thresholds
-/nerf darts 120k 160k 180k    # Set all three thresholds
-/nerf 200k                     # Set ouch dart, scale soft/hard proportionally
+/nerf darts 51 63 85           # Set all three darts (percent of window used)
+/nerf 85                       # Set ouch dart, scale soft/hard proportionally
 /nerf scope                    # Launch context monitor in new terminal
 ```
 
-All operations are handled by the MCP server -- the skill is a thin routing stub that parses input and calls the appropriate MCP tool. Accepts `k` suffix (e.g., `200k` = 200000).
+All operations are handled by the MCP server -- the skill is a thin routing stub that parses input and calls the appropriate MCP tool. Darts are percentages of the context window used (1-99), so they are correct on any window size; token counts are rejected. The context reading comes from the statusline's persisted per-session file, and a missing or stale one shows as `ctx ?` with a reason.
 
 **Modes:** `not-too-rough` (gentle reminders), `hurt-me-plenty` (firm limits), `ultraviolence` (aggressive compaction pressure).
 

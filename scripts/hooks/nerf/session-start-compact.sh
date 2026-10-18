@@ -28,12 +28,19 @@ if [[ ! -x "$NERF_BIN" ]]; then
 	exit 0
 fi
 
+# nerf reads the context reading the statusline persists, and the statusline
+# has not redrawn since the compaction yet: the newest reading on disk is the
+# pre-compact figure, seconds old. --not-before makes nerf treat anything
+# written before this hook ran as unknown (`ctx ?`) instead of repainting it
+# as current (mcp-server-nerf#32). An older nerf ignores the flag.
+NOT_BEFORE=$(date +%s)
+
 if [[ -n "$SESSION_ID" ]]; then
-	if ! "$NERF_BIN" refresh-indicator --session-id "$SESSION_ID" 2>/dev/null; then
+	if ! "$NERF_BIN" refresh-indicator --session-id "$SESSION_ID" --not-before "$NOT_BEFORE" 2>/dev/null; then
 		LOG "refresh-indicator failed (session_id=$SESSION_ID)"
 	fi
 else
-	if ! "$NERF_BIN" refresh-indicator 2>/dev/null; then
+	if ! "$NERF_BIN" refresh-indicator --not-before "$NOT_BEFORE" 2>/dev/null; then
 		LOG "refresh-indicator failed (no session_id in stdin)"
 	fi
 fi
