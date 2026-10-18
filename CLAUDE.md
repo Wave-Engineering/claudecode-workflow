@@ -25,9 +25,9 @@ gh project item-add <project-number> --owner <owner> --url <issue-url>
 
 ---
 
-## MANDATORY: Local Testing Before Push
+## MANDATORY: Local Testing Before a Protected Push or a PR/MR
 
-**NEVER push untested code.** Before any `git push`, discover and run the project's tooling: validation (`./scripts/ci/validate.sh`, `make lint`, etc.), tests (`./scripts/ci/test.sh`, `pytest`, `npm test`, etc.), Docker build if Dockerfile changed, infra synth/plan if infra changed. If no test tooling exists, say so — do NOT silently skip.
+**Testing gates the PR/MR, not the push.** Push your own working branch (`feature/`, `fix/`, `chore/`, `doc/`) freely: to back up work, test in another sandbox, or pair on one branch. Push it as a plain, separate `git push <remote> <branch>`; the pre-push hook exempts only that shape, and any compound or unusual push still needs a test run first. **NEVER push untested code to a protected or release branch, and never open a PR/MR on untested code.** Before either, discover and run the project's tooling: validation (`./scripts/ci/validate.sh`, `make lint`, etc.), tests (`./scripts/ci/test.sh`, `pytest`, `npm test`, etc.), Docker build if Dockerfile changed, infra synth/plan if infra changed. If no test tooling exists, say so — do NOT silently skip. A project with another branch convention adds it via `PUSH_GATE_EXTRA_BRANCH_RE`.
 
 ---
 

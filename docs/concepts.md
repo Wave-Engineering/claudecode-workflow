@@ -115,9 +115,9 @@ The kit enforces several workflows that cannot be skipped. These exist because o
 
 **Why it exists:** Untracked work creates invisible state. If Claude starts implementing a feature without an issue, there is no record of what was requested, no acceptance criteria to verify against, and no way for other team members (human or agent) to know what is in progress. The issue is the contract -- it defines what "done" looks like.
 
-### Test Before Push
+### Test Before a Protected Push or a PR/MR
 
-**The rule:** Local tests must pass before any `git push`. This is non-negotiable regardless of time pressure or session state.
+**The rule:** Testing gates the PR/MR, not the push. An agent pushes its own working branch (`feature/`, `fix/`, `chore/`, `doc/`) freely, as a plain `git push <remote> <branch>`. Local tests must pass before any push to a protected or release branch, before any compound or unusual push, and before opening a PR/MR. This is non-negotiable regardless of time pressure or session state.
 
 **Why it exists:** Pushing untested code wastes CI resources, blocks shared pipelines, and creates false signal for other developers. A failed CI run that could have been caught locally costs the team far more time than the seconds it takes to run `./scripts/ci/validate.sh`. Claude enforces this by running validation as part of both `/precheck` and `/scp`.
 
@@ -125,7 +125,7 @@ The kit enforces several workflows that cannot be skipped. These exist because o
 
 **The rule:** After any context compaction, Claude must immediately re-read `CLAUDE.md` and confirm the mandatory rules before doing any other work.
 
-**Why it exists:** Compaction is lossy. Claude's summary of a long conversation may drop critical details like "we are on a feature branch" or "tests must pass before push." The `/engage` skill exists specifically to restore this context. Running it after compaction is the safety net that prevents compaction-induced rule violations.
+**Why it exists:** Compaction is lossy. Claude's summary of a long conversation may drop critical details like "we are on a feature branch" or "tests must pass before a protected push or a PR/MR." The `/engage` skill exists specifically to restore this context. Running it after compaction is the safety net that prevents compaction-induced rule violations.
 
 ---
 
@@ -219,7 +219,7 @@ The rules in `CLAUDE.md` are loaded into Claude's context at session start and t
 | Section | Controls |
 |---------|----------|
 | Platform Detection | Which CLI and terminology to use |
-| Mandatory: Local Testing | Test-before-push enforcement |
+| Mandatory: Local Testing | Tests before a protected push or a PR/MR |
 | Mandatory: Pre-Commit Gate | The `/precheck` workflow |
 | Mandatory: Story Completion | Acceptance criteria verification |
 | Mandatory: Issue Tracking | Issue-branch-PR/MR workflow |
