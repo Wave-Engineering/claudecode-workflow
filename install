@@ -41,7 +41,8 @@
 #   MCPs         → user-scope MCP servers (installed via each MCP's install-remote.sh)
 #   Deprecated   → Automatically removed from target machine on install
 #
-# Existing files are backed up to <file>.bak before overwriting.
+# Existing files are backed up to <file>.bak before overwriting; a skill file's
+# backup goes to ~/.claude/backups/skills/ instead, outside the skills tree (#1238).
 
 set -euo pipefail
 
@@ -294,8 +295,41 @@ write_manifest() {
 	} >"$MANIFEST_FILE"
 }
 
+# backup_path <dest>: where do_copy backs up <dest> before overwriting it. Next to
+# the file, except under $SKILLS_DIR: a backup there sits in the tree the skill loader
+# and every grep audit of the installed kit read, carrying stale text (#1238: 45
+# SKILL.md.bak files, two still saying `type::docs`). Those go to a mirror path under
+# $CLAUDE_DIR/backups/skills/, one per file, overwritten each time as before.
+backup_path() {
+	case "$1" in
+	"$SKILLS_DIR"/*) echo "$CLAUDE_DIR/backups/skills/${1#"$SKILLS_DIR"/}.bak" ;;
+	*) echo "$1.bak" ;;
+	esac
+}
+
+# relocate_skill_baks: move every *.bak an older install left under $SKILLS_DIR to
+# its backup_path, so the rollback copy survives and the skills tree is clean.
+relocate_skill_baks() {
+	local bak orig dest moved=0
+	[[ -d "$SKILLS_DIR" ]] || return 0
+	while IFS= read -r bak; do
+		orig="${bak%.bak}"
+		dest="$(backup_path "$orig")"
+		if [[ "$DRY_RUN" == true ]]; then
+			info "(dry-run) Would move $bak → $dest"
+		else
+			mkdir -p "$(dirname "$dest")"
+			mv -f "$bak" "$dest"
+		fi
+		moved=$((moved + 1))
+	done < <(find -H "$SKILLS_DIR" -type f -name '*.bak' 2>/dev/null) # -H: a symlinked skills dir too
+	if [[ $moved -gt 0 ]]; then
+		info "Moved $moved skill backup(s) out of $SKILLS_DIR → $CLAUDE_DIR/backups/skills/"
+	fi
+}
+
 do_copy() {
-	local src="$1" dest="$2"
+	local src="$1" dest="$2" bak
 	if [[ "$DRY_RUN" == true ]]; then
 		info "(dry-run) $src → $dest"
 		return
@@ -305,8 +339,10 @@ do_copy() {
 			skip "$dest (unchanged)"
 			return
 		fi
-		cp "$dest" "${dest}.bak"
-		warn "Backed up existing: ${dest}.bak"
+		bak="$(backup_path "$dest")"
+		mkdir -p "$(dirname "$bak")"
+		cp "$dest" "$bak"
+		warn "Backed up existing: $bak"
 	fi
 	mkdir -p "$(dirname "$dest")"
 	cp "$src" "$dest"
@@ -335,8 +371,9 @@ do_check() {
 #   - $CELLAR_DIR/skills/<name>/ : non-.md helper scripts (the Cellar is wiped
 #     wholesale only when --scripts runs; on --skills-alone it is not, so its
 #     stale helpers — and their farm symlinks — would otherwise linger)
-# *.bak rollback artifacts are ALWAYS preserved. Whole-skill removal stays the
-# job of DEPRECATED_PATHS; this prunes WITHIN an installed skill only.
+# *.bak rollback artifacts are never pruned; relocate_skill_baks has already moved
+# them out of $SKILLS_DIR by now (#1238), so this only skips a stray one. Whole-skill
+# removal stays the job of DEPRECATED_PATHS; this prunes WITHIN an installed skill only.
 prune_orphaned_skill_files() {
 	local skill_name="$1" src_dir="${2%/}"
 
@@ -1421,6 +1458,7 @@ if [[ "$INSTALL_SKILLS" == true ]]; then
 	# When --skills runs in isolation, INSTALL_SCRIPTS hasn't created the
 	# Cellar — ensure it exists so we can write into it.
 	[[ "$DRY_RUN" != true && "$INSTALL_SCRIPTS" != true ]] && mkdir -p "$CELLAR_DIR"
+	relocate_skill_baks
 	for skill_dir in "$REPO_DIR"/skills/*/; do
 		skill_name="$(basename "$skill_dir")"
 		# Install SKILL.md
@@ -1457,7 +1495,7 @@ if [[ "$INSTALL_SKILLS" == true ]]; then
 			done
 		done
 		# Prune installed files this skill no longer ships (#714 — e.g. a removed
-		# introduction.md). Mirrors the scripts-farm Cellar wipe; preserves *.bak.
+		# introduction.md). Mirrors the scripts-farm Cellar wipe; never prunes *.bak.
 		prune_orphaned_skill_files "$skill_name" "$skill_dir"
 	done
 fi

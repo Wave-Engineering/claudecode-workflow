@@ -188,6 +188,27 @@ cellar_install_skill_helper() {
 	chmod +x "$dest"
 }
 
+# Move every *.bak an older ./install left under $SKILLS_DIR to the mirror path
+# ./install now uses, $CLAUDE_DIR/backups/skills/<rel>.bak, so the skills tree the
+# loader and greps read stays clean (#1238). This installer writes no skill backups.
+relocate_skill_baks() {
+	local bak dest moved=0
+	[[ -d "$SKILLS_DIR" ]] || return 0
+	while IFS= read -r bak; do
+		dest="$CLAUDE_DIR/backups/skills/${bak#"$SKILLS_DIR"/}"
+		if [[ "$DRY_RUN" == true ]]; then
+			info "(dry-run) Would move $bak -> $dest"
+		else
+			mkdir -p "$(dirname "$dest")"
+			mv -f "$bak" "$dest"
+		fi
+		moved=$((moved + 1))
+	done < <(find -H "$SKILLS_DIR" -type f -name '*.bak' 2>/dev/null) # -H: a symlinked skills dir too
+	if [[ $moved -gt 0 ]]; then
+		info "Moved $moved skill backup(s) out of $SKILLS_DIR -> $CLAUDE_DIR/backups/skills/"
+	fi
+}
+
 # If $SCRIPTS_DIR/<name> exists as a plain file (not a symlink), back it up
 # before replacing with a symlink. Pre-Cellar layouts have plain files here.
 safeguard_user_file() {
@@ -574,6 +595,7 @@ do_install() {
 	echo "--------------------------------------------"
 	# Ensure Cellar exists (cellar_deploy may not have run if no scripts/).
 	mkdir -p "$CELLAR_DIR"
+	relocate_skill_baks
 	for skill_dir in "$release_dir"/skills/*/; do
 		[[ -d "$skill_dir" ]] || continue
 		local skill_name

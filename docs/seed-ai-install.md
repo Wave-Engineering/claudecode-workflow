@@ -197,7 +197,7 @@ This installs:
 - MCP servers from the `mcps.json` manifest
 
 If this is a **re-install** (updating an existing installation), the installer automatically:
-- Backs up changed files to `.bak`
+- Backs up changed files to `.bak` (skill files to `~/.claude/backups/skills/`, and moves any old `.bak` out of `~/.claude/skills/`)
 - Skips unchanged files
 - Removes deprecated components
 - Smart-merges new settings without overwriting customizations
