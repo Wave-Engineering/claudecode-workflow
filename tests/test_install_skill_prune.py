@@ -14,7 +14,8 @@ known-stale ``test_install.py``.
 Acceptance criteria (#714):
 - AC1 — orphaned installed skill files are pruned: ``test_orphaned_skill_file_pruned``,
   ``test_orphaned_subdir_file_pruned``, ``test_orphaned_cellar_helper_and_symlink_pruned``
-- AC2 — ``.bak`` rollback artifacts preserved: ``test_bak_preserved``
+- AC2 — ``.bak`` rollback artifacts preserved: ``test_bak_preserved`` (since #1238
+  preserved OUTSIDE the skills tree, under ``~/.claude/backups/skills/``)
 - No-op re-install leaves the tree unchanged: ``test_reinstall_is_stable``
 """
 
@@ -156,7 +157,82 @@ def test_bak_preserved(tmp_path: Path) -> None:
     p = _plant_orphans(home)
     rc, out, err = _run_install(repo, home)
     assert rc == 0, f"install failed: {out}\n{err}"
-    assert p["bak"].exists(), ".bak rollback artifact must be preserved by prune"
+    # Kept, but moved out of the skills tree (#1238), content intact.
+    moved = home / ".claude" / "backups" / "skills" / "demo" / "SKILL.md.bak"
+    assert not p["bak"].exists(), ".bak left inside the skills tree"
+    assert moved.read_text() == "# old SKILL backup\n", ".bak rollback artifact must be preserved"
+
+
+@_SKIP
+def test_no_bak_under_skills_after_reinstalling_a_changed_skill(tmp_path: Path) -> None:
+    """#1238: installing twice, with the skill changed in between, leaves no *.bak
+    anywhere under skills/; the overwritten copy is backed up under backups/skills/."""
+    repo = _build_synthetic_repo(tmp_path)
+    home = _build_sandbox_home(tmp_path)
+    rc, out, err = _run_install(repo, home)
+    assert rc == 0, f"install failed: {out}\n{err}"
+    (repo / "skills" / "demo" / "SKILL.md").write_text("# Demo skill, v2\n")
+    (repo / "skills" / "demo" / "tours" / "intro.md").write_text("# Intro tour, v2\n")
+    rc, out, err = _run_install(repo, home)
+    assert rc == 0, f"install failed: {out}\n{err}"
+
+    skills = home / ".claude" / "skills"
+    assert list(skills.rglob("*.bak")) == [], "a .bak was written inside the skills tree"
+    assert (skills / "demo" / "SKILL.md").read_text() == "# Demo skill, v2\n"
+    backups = home / ".claude" / "backups" / "skills" / "demo"
+    assert (backups / "SKILL.md.bak").read_text() == "# Demo skill\n"
+    assert (backups / "tours" / "intro.md.bak").read_text() == "# Intro tour\n"
+
+
+@_SKIP
+def test_preseeded_baks_are_swept_at_any_depth(tmp_path: Path) -> None:
+    """#1238: backups an older install left anywhere under skills/ (a top-level helper's,
+    a content subdir's, a skill this repo no longer ships) are moved out on install."""
+    repo = _build_synthetic_repo(tmp_path)
+    home = _build_sandbox_home(tmp_path)
+    skills = home / ".claude" / "skills"
+    planted = [
+        skills / "demo" / "introduction.md.bak",
+        skills / "demo" / "tours" / "intro.md.bak",
+        skills / "gone" / "SKILL.md.bak",
+    ]
+    for f in planted:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(f"old {f.name}\n")
+    rc, out, err = _run_install(repo, home)
+    assert rc == 0, f"install failed: {out}\n{err}"
+    assert list(skills.rglob("*.bak")) == []
+    backups = home / ".claude" / "backups" / "skills"
+    for f in planted:
+        assert (backups / f.relative_to(skills)).read_text() == f"old {f.name}\n"
+
+
+@_SKIP
+def test_baks_swept_when_the_skills_dir_is_a_symlink(tmp_path: Path) -> None:
+    """A dotfiles-style ~/.claude/skills that is itself a symlink is still swept."""
+    repo = _build_synthetic_repo(tmp_path)
+    home = _build_sandbox_home(tmp_path)
+    skills = home / ".claude" / "skills"
+    real = tmp_path / "dotfiles-skills"
+    shutil.move(str(skills), str(real))
+    skills.symlink_to(real)
+    (real / "demo" / "SKILL.md.bak").write_text("old\n")
+    rc, out, err = _run_install(repo, home)
+    assert rc == 0, f"install failed: {out}\n{err}"
+    assert list(real.rglob("*.bak")) == []
+    assert (home / ".claude" / "backups" / "skills" / "demo" / "SKILL.md.bak").read_text() == "old\n"
+
+
+@_SKIP
+def test_dry_run_moves_nothing(tmp_path: Path) -> None:
+    repo = _build_synthetic_repo(tmp_path)
+    home = _build_sandbox_home(tmp_path)
+    p = _plant_orphans(home)
+    rc, out, err = _run_install(repo, home, ["--skills", "--dry-run"])
+    assert rc == 0, f"install failed: {out}\n{err}"
+    assert p["bak"].exists()
+    assert "Would move" in out
+    assert not (home / ".claude" / "backups").exists()
 
 
 @_SKIP

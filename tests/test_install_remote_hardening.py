@@ -16,6 +16,7 @@ implementation.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 _REPO_DIR = Path(__file__).resolve().parent.parent
@@ -178,3 +179,43 @@ def test_logrotate_dry_run_honored() -> None:
         src,
         re.DOTALL,
     ), "install_logrotate_config must check $DRY_RUN before mutating /etc (#540)"
+
+
+# ---------------------------------------------------------------------------
+# #1238 skill backups moved out of the skills tree
+# ---------------------------------------------------------------------------
+
+
+def test_relocate_skill_baks_runs_before_skills_install() -> None:
+    src = _read()
+    assert re.search(r"relocate_skill_baks\n\tfor skill_dir in \"\$release_dir\"/skills/\*/", src), (
+        "install-remote.sh must sweep skill .bak files before installing skills (#1238)"
+    )
+
+
+def test_relocate_skill_baks_moves_every_bak_out(tmp_path: Path) -> None:
+    """Behavioral: the function itself, extracted from install-remote.sh and run, on a
+    skills dir that is a symlink (dotfiles-style), which the sweep must still enter."""
+    func = re.search(r"^relocate_skill_baks\(\) \{.*?^\}$", _read(), re.MULTILINE | re.DOTALL)
+    assert func, "relocate_skill_baks() not found in install-remote.sh"
+    real = tmp_path / "dotfiles-skills"
+    real.mkdir()
+    (tmp_path / ".claude").mkdir()
+    skills = tmp_path / ".claude" / "skills"
+    skills.symlink_to(real)
+    planted = [skills / "a" / "SKILL.md.bak", skills / "b" / "tours" / "t.md.bak"]
+    for f in planted:
+        f.parent.mkdir(parents=True)
+        f.write_text(f"old {f.name}\n")
+    (skills / "a" / "SKILL.md").write_text("live\n")
+    script = (
+        'info() { echo "$*"; }\n'
+        f'SKILLS_DIR="{skills}"\nCLAUDE_DIR="{tmp_path / ".claude"}"\nDRY_RUN=false\n'
+        f"{func.group(0)}\nrelocate_skill_baks\n"
+    )
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert list(skills.rglob("*.bak")) == []
+    assert (skills / "a" / "SKILL.md").read_text() == "live\n"
+    for f in planted:
+        assert (tmp_path / ".claude" / "backups" / "skills" / f.relative_to(skills)).read_text() == f"old {f.name}\n"

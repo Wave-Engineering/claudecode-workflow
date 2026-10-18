@@ -169,7 +169,7 @@ This will:
 - Copy scripts to `~/.local/bin/`
 - Install statusline to `~/.claude/statusline-command.sh`
 - Smart-merge `settings.template.json` into `~/.claude/settings.json` — missing hooks, plugins, and permissions are added while your existing customizations are preserved. If no settings file exists yet, the template is installed directly (with internal comment keys stripped).
-- Back up existing files before overwriting (`.bak`)
+- Back up existing files before overwriting (`.bak`; skill files back up to `~/.claude/backups/skills/`, outside the skills tree)
 - Skip unchanged files
 - Report missing dependencies
 
