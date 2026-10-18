@@ -19,6 +19,42 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.6.0] - 2026-10-18
+
+### Changed
+
+- **nerf's darts are percentages, and the kit follows (#1237, mcp-server-nerf#32).** nerf had
+  measured no session's context since 2026-05-12, while reporting every session as healthy.
+  `context.ts` shelled out to context-crystallizer's analyzer, which #647 deleted, and a null
+  reading rendered as "under every threshold".
+
+  **What changes for you:**
+  - `/nerf 85`, `/nerf darts 51 63 85`. Token counts (`/nerf 200k`) are rejected now.
+  - On the statusline, `ctx ?` means nerf has no usable context reading; `nerf_status` says why.
+  - The `ctx` segment of the statusline takes its colors from nerf's new percentage darts.
+
+  **How it works now:**
+  - nerf v2.0.0 reads the per-session reading the statusline persists (#1225). A missing or
+    stale reading shows as `ctx ?`, with a reason in `nerf_status`.
+  - Darts are percentages of the window used, stored under `darts_pct`, so the same darts are
+    correct on a 200k window and a 1M one.
+  - The `/nerf` skill and `docs/skill-reference.md` now teach percentages.
+  - The statusline colors the `ctx` segment by `darts_pct`. It keeps the older token `darts`
+    branch and the 13%/25% fallback.
+  - `session-start-compact.sh` passes `--not-before`, so a pre-compaction reading is never
+    repainted as current. When a render lands a fresh reading while the indicator shows
+    `nerf:ctx ?`, the statusline asks nerf (in the background) to repaint.
+  - The dead pre-MCP `skills/nerf/lib/nerf_config.py` is gone, along with its tests and
+    `tests/test_cc_context.py`.
+
+  **Install this kit and nerf v2.0.0 together; one `./install` pulls both.**
+  - **This kit with an older nerf fails silently.** The hook and statusline cope, but `/nerf 85`
+    would set darts of 85 *tokens*, leaving `ctx` red for the rest of the session.
+  - **nerf v2.0.0 with an older kit fails loudly.** It rejects token arguments with an explicit
+    error. That's why nerf was released first.
+- **`doc`, never `docs` (#1231, #1230).** The commit-type template and the kit spell the type
+  `doc(scope):`, to match the branch prefix, issue type and label.
+
 ## [8.5.0] - 2026-10-15
 
 ### Added
