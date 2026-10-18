@@ -19,6 +19,48 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.7.0] - 2026-10-18
+
+### Added
+
+- **A secret scan at every commit and push (#1234).** Since #1232, a plain push of an agent's
+  working branch no longer waits for a test run. Every OaW repo is public, and a pushed branch is
+  published even if it never merges, so the secrets check now sits where that risk is. A
+  `PreToolUse` hook, `secret-scan-gate.sh`, runs gitleaks before each `git commit` and `git push`
+  and blocks on a finding.
+  - **It fails closed.** No gitleaks, no repository, a scan error, a failed `rev-list` or a
+    detector that did not load all block, and the hook is registered `"onFailure": "block"`. A
+    finding is reported with `--redact`: file, line, rule and commit only, never the secret.
+  - **Allowlisting** goes through `.gitleaksignore` (`<file>:<rule>:<line>`) or `.gitleaks.toml`.
+    There is no bypass flag.
+  - **`./install` provides gitleaks.** `scripts/ci/install-gitleaks.sh` installs a pinned 8.30.1
+    (sha256 per platform) for `./install`, CI and the container image. When `PATH` finds a
+    gitleaks other than the kit's own copy, `./install` leaves it alone.
+  - `git-detect.sh` holds the commit/push detector, shared with `pre-push-test-gate.sh` so the two
+    hooks cannot disagree about what is a commit or a push.
+
+### Changed
+
+- **The pre-push gate lets a plain working-branch push through (#1232).** `/precheck` gates the
+  PR/MR, not the push. A plain `git push <remote> <branch>` of an agent's own working branch
+  (`feature/`, `fix/`, `chore/`, `doc/`) no longer waits for a test run. A project with another
+  branch convention adds it as an extended regex in the new `PUSH_GATE_EXTRA_BRANCH_RE`. A
+  protected ref is never exempt, whatever that regex says. Apart from those and the existing
+  integration-ref exemptions (`kahuna/*`, `wave-*/*`, the active wave's flight branches), every
+  push still gates, and a command that is not obviously plain is gated rather than parsed.
+- **Skill backups leave the skills tree (#1238).** `./install` writes skill backups to a mirror
+  path under `backups/skills/` in the install's `.claude` directory (`~/.claude/`, or the
+  project's for `--local`) instead of next to the skill, and moves any `.bak` an older install
+  left in the skills tree there. Backups are still kept, never deleted (#714);
+  they no longer sit where the skill loader and every grep audit read.
+
+### Image
+
+- **This release's `oakandwave-workflow` image bakes in today's MCP releases:**
+  mcp-server-sdlc v4.4.1, mcp-server-wtf v1.5.2, mcp-server-discord v1.4.2 and
+  mcp-server-discord-watcher v1.6.1. Their HIGH/CRITICAL advisories are cleared, and sdlc's
+  GitLab adapters no longer need glab >= 1.37.0 (autochain #1243).
+
 ## [8.6.0] - 2026-10-18
 
 ### Changed

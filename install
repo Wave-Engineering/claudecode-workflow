@@ -42,7 +42,7 @@
 #   Deprecated   → Automatically removed from target machine on install
 #
 # Existing files are backed up to <file>.bak before overwriting; a skill file's
-# backup goes to ~/.claude/backups/skills/ instead, outside the skills tree (#1238).
+# backup goes to $CLAUDE_DIR/backups/skills/ instead, outside the skills tree (#1238).
 
 set -euo pipefail
 
