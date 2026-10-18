@@ -56,12 +56,18 @@ def _run(argv: list[str], env: dict[str, str], stdin: str | None = None) -> subp
     )
 
 
-def _poll(pred, timeout: float = 5.0, interval: float = 0.05):
+def _poll(pred, timeout: float = 45.0, interval: float = 0.05):
     """Return the first truthy value of pred() within `timeout`, else its last.
 
     Playback is detached by default since #952, so vox returns before the player
     runs; assertions that observe the player's side effects must poll rather than
     read immediately.
+
+    The timeout is generous on purpose: a passing poll returns the moment pred() is
+    true, so only a real failure waits it out. At 5s this test failed twice in the
+    full pytest lane on a busy shared host (cc-workflow#1232's precheck, 2026-10-18)
+    while passing 9/9 alone. The likely cause was the shared /tmp/vox-speak.lock (now
+    private, see the env fixture); 45s (BJ) also absorbs heavy load.
     """
     import time
 
@@ -87,6 +93,10 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
         "HOME": str(tmp_path / "home"),
         "XDG_CONFIG_HOME": str(xdg),
         "VOX_PLAYER": "/bin/true",
+        # A private playback lock, as test_vox_chunking.py and test_vox_playback_budget.py
+        # use. The default /tmp/vox-speak.lock is shared with every agent's real speech on
+        # the host, so a test's detached player could queue behind seconds of real audio.
+        "VOX_LOCK": str(tmp_path / "vox.lock"),
     }
     (tmp_path / "home").mkdir(exist_ok=True)
     return e

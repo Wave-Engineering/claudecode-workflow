@@ -67,7 +67,7 @@ Narration: "The branch name format is `<type>/<issue-number>-<description>`. Whe
 
 Narration: "Step three: write the implementation. This is where the actual work happens. You write code, Claude assists — or Claude drives and you review. Either way, the acceptance criteria from the issue define what 'done' means."
 
-### Show the test-before-push rule
+### Show the testing gate
 
 ```bash
 # Check what test tooling exists
@@ -75,7 +75,7 @@ test -f ./scripts/ci/validate.sh && echo "validate.sh: found" || echo "validate.
 test -f ./Makefile && echo "Makefile: found" || echo "Makefile: not found"
 ```
 
-Narration: "Before any push, local tests must pass. This is non-negotiable. The kit looks for `./scripts/ci/validate.sh`, Makefile targets, pytest, npm test — whatever the project provides. If you push untested code, you've wasted CI resources and blocked the pipeline."
+Narration: "Testing gates the PR/MR, not the push. Your own working branch — `feature/`, `fix/`, `chore/`, `doc/` — pushes freely as a plain `git push <remote> <branch>`. Before a push to a protected or release branch, or before opening a PR/MR, local tests must pass. This is non-negotiable. The kit looks for `./scripts/ci/validate.sh`, Makefile targets, pytest, npm test — whatever the project provides. If you push untested code, you've wasted CI resources and blocked the pipeline."
 
 ---
 
