@@ -3,7 +3,7 @@
 # secret-scan-gate.sh — PreToolUse hook (Bash matcher) that runs gitleaks before a
 # `git commit` or `git push` (#1234).
 #
-# Commits and pushes to working branches no longer wait for a precheck (#1232), so the
+# Plain pushes of working branches no longer wait for a test run (#1232), so the
 # secrets check sits where the risk is. Every OaW repo is public: a pushed branch is
 # published even if it never merges, and a secret added then deleted is still in history.
 #
