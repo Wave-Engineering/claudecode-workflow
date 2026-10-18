@@ -16,7 +16,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
-# wave_status / campaign_status / nerf_config live under src/ with no installed
+# wave_status / campaign_status live under src/ with no installed
 # package — mirror tests/conftest.py's PYTHONPATH injection so module-level
 # `from wave_status import ...` resolves in the test process.
 export PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}"

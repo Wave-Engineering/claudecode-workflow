@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 import pytest
@@ -374,6 +375,128 @@ class TestStatuslineColors:
         assert "\033[31m" in output, (
             f"Expected red ANSI code for critical ctx remaining, got: {output!r}"
         )
+
+
+class TestStatuslineNerfDarts:
+    """mcp-server-nerf#32: nerf stores darts as percent of the window used under
+    `darts_pct`. The ctx segment colors by them when present, still honours an
+    older nerf's absolute-token `darts`, and falls back to 13%/25% otherwise."""
+
+    GREEN, YELLOW, ORANGE, RED = "\033[01;32m", "\033[33m", "\033[38;5;208m", "\033[31m"
+
+    def _render(self, tmp_path: Path, nerf: dict | None, remaining: float, used_tokens: int = 0) -> str:
+        sid = f"nerf-darts-{uuid.uuid4().hex[:12]}"
+        cfg = Path(f"/tmp/nerf-{sid}.json")
+        if nerf is not None:
+            cfg.write_text(json.dumps(nerf))
+        try:
+            output = _run_statusline(
+                {
+                    "cwd": str(tmp_path),
+                    "session_id": sid,
+                    "context_window": {
+                        "remaining_percentage": remaining,
+                        "total_input_tokens": used_tokens,
+                        "total_output_tokens": 0,
+                    },
+                },
+                cwd=tmp_path,
+            )
+        finally:
+            cfg.unlink(missing_ok=True)
+        # The ctx segment is the color code immediately before "ctx remaining".
+        return output.split("ctx remaining")[0][-16:]
+
+    PCT = {"darts_pct": {"soft": 51, "hard": 63, "ouch": 85}}
+
+    def test_darts_pct_green_below_soft(self, tmp_path: Path):
+        assert self.GREEN in self._render(tmp_path, self.PCT, remaining=60)  # 40% used
+
+    def test_darts_pct_yellow_at_soft(self, tmp_path: Path):
+        assert self.YELLOW in self._render(tmp_path, self.PCT, remaining=40)  # 60% used
+
+    def test_darts_pct_orange_at_hard(self, tmp_path: Path):
+        assert self.ORANGE in self._render(tmp_path, self.PCT, remaining=30)  # 70% used
+
+    def test_darts_pct_red_at_ouch(self, tmp_path: Path):
+        assert self.RED in self._render(tmp_path, self.PCT, remaining=10)  # 90% used
+
+    def test_darts_pct_is_window_size_independent(self, tmp_path: Path):
+        # 70% used is "hard" whether the window is 200k (140k tokens) or 1M (700k).
+        for tokens in (140_000, 700_000):
+            assert self.ORANGE in self._render(tmp_path, self.PCT, remaining=30, used_tokens=tokens)
+
+    def test_legacy_token_darts_still_honoured(self, tmp_path: Path):
+        legacy = {"darts": {"soft": 120_000, "hard": 150_000, "ouch": 200_000}}
+        assert self.ORANGE in self._render(tmp_path, legacy, remaining=50, used_tokens=160_000)
+
+    def test_no_nerf_config_uses_legacy_thresholds(self, tmp_path: Path):
+        # 20% remaining is yellow under the 13%/25% fallback, though 80% used
+        # would be orange against the default darts_pct.
+        assert self.YELLOW in self._render(tmp_path, None, remaining=20)
+
+
+class TestStatuslineRepaintsNerfUnknown:
+    """After a compaction nerf shows `nerf:ctx ?` and nothing but nerf repaints
+    it. When a render persists a fresh reading while that marker is up, the
+    statusline asks nerf (in the background) to repaint (mcp-server-nerf#32)."""
+
+    def _setup(self, tmp_path: Path, indicators: list[str]) -> tuple[Path, Path, Path]:
+        dev = f"repaint-{uuid.uuid4().hex[:8]}"
+        (tmp_path / ".claude").mkdir()
+        (tmp_path / ".claude" / "agent-identity.json").write_text(
+            json.dumps({"dev_team": "t", "dev_name": dev, "dev_avatar": "🧪"})
+        )
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+        session_file = Path(f"/tmp/claude-statusline-{dev}.json")
+        session_file.write_text(json.dumps({"indicators": indicators}))
+        calls = tmp_path / "nerf-calls.log"
+        stub = tmp_path / "nerf-server"
+        stub.write_text(f'#!/usr/bin/env bash\nprintf "%s|%s\\n" "$PWD" "$*" >> "{calls}"\n')
+        stub.chmod(0o755)
+        return session_file, stub, calls
+
+    def _render(self, tmp_path: Path, stub: Path, pct: float | None = 55.0) -> None:
+        payload: dict = {"cwd": str(tmp_path), "session_id": "sess-repaint-1"}
+        if pct is not None:
+            payload["context_window"] = {"remaining_percentage": pct}
+        _run_statusline(payload, cwd=tmp_path, env_override={"NERF_BIN": str(stub)})
+
+    @staticmethod
+    def _wait_for(path: Path, timeout: float = 3.0) -> str:
+        import time
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if path.exists() and path.read_text().strip():
+                return path.read_text()
+            time.sleep(0.05)
+        return ""
+
+    def test_ctx_unknown_with_fresh_reading_triggers_repaint(self, tmp_path: Path):
+        session_file, stub, calls = self._setup(tmp_path, ["nerf:ctx ?"])
+        try:
+            self._render(tmp_path, stub)
+            log = self._wait_for(calls)
+            assert f"{tmp_path}|refresh-indicator --session-id sess-repaint-1" in log
+        finally:
+            session_file.unlink(missing_ok=True)
+
+    def test_no_repaint_when_nerf_indicator_is_known(self, tmp_path: Path):
+        session_file, stub, calls = self._setup(tmp_path, ["nerf:⚡ 55%"])
+        try:
+            self._render(tmp_path, stub)
+            assert self._wait_for(calls, timeout=0.5) == ""
+        finally:
+            session_file.unlink(missing_ok=True)
+
+    def test_no_repaint_without_a_fresh_reading(self, tmp_path: Path):
+        session_file, stub, calls = self._setup(tmp_path, ["nerf:ctx ?"])
+        try:
+            self._render(tmp_path, stub, pct=None)
+            assert self._wait_for(calls, timeout=0.5) == ""
+        finally:
+            session_file.unlink(missing_ok=True)
 
 
 class TestStatuslinePersistsContext:
