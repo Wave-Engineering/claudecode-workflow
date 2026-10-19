@@ -146,6 +146,8 @@ Internalize these two; they resolve most "should I stop or continue?" questions:
 - **On `main`-targeted branches:** stops and waits for the human's merge call: `/mmr`, `/scpmmr`, or an affirmative.
 - **On `kahuna/<N>-*` branches (KAHUNA sandbox):** emits `[AUTO-APPROVED: kahuna sandbox]` sentinel and invokes `/mmr`. No human STOP.
 - **In an approved `/autochain` run:** if `autochain-gate.sh check` approves the issue (BJ approved the chain's order, the gate is armed with his words and has not expired) and the checklist passes mechanically, it emits `[AUTO-APPROVED: autochain #<epic>]` and invokes `/mmr`. See CLAUDE.md "Exception: Approved Autochain".
+- **Under a standing merge grant** (BJ's own words, for a bounded effort, recorded in memory) with this PR/MR plainly inside it, it puts the grant on the checklist and invokes `/mmr`. See CLAUDE.md "Exception: Standing Merge Grant".
+- **For the named lead agent** (Dev-Name and organization matched to a lead-agent grant in memory), it puts the grant on the checklist, emits `[AUTO-APPROVED: lead-agent grant]` and invokes `/mmr`. A grunt's PR/MR merges only on the lead's own precheck of that head. See CLAUDE.md "Exception: Lead-Agent Grant".
 
 A push after the pass makes the status stale; `/precheck rearm` (a review of only the new commits plus a green pipeline) renews it, and `/mmr` runs it for you.
 
@@ -291,7 +293,7 @@ Before your first commit in any session:
 And before you **mark a PR/MR ready or merge**:
 
 - [ ] `/precheck` ran and passed on the PR/MR's head
-- [ ] Human merge STOP honored (unless KAHUNA sandbox, an approved autochain, or a standing grant, which auto-approve)
+- [ ] Human merge STOP honored (unless KAHUNA sandbox, an approved autochain, a standing merge grant, or the named lead's lead-agent grant, which auto-approve)
 
 ---
 

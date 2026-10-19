@@ -7,8 +7,9 @@ description: Stand up a scoped-operations "grunt" — a dedicated aoe agent that
 
 Hand a bounded operational backlog to a dedicated aoe agent (the **grunt**) so THIS session's
 context stays clean for forward-looking work. The main agent authors the grunt **once**; from
-then on the operator drives her directly with `aoe send`, and the main session never sees the
-grind. Context isolation is the entire point.
+then on she is dispatched directly (`SendMessage` from her lead, `aoe send` from the operator),
+and the main session never sees the grind, only her parks and her ready PRs/MRs. Context
+isolation is the entire point.
 
 Field-validated in production use: **focus** protection near-total, **token** protection
 partial-but-amortizing after the one-time authoring. The hardening below comes from that use.
@@ -25,7 +26,8 @@ e.g. `/grunt any tasks updating/deploying services or site configs in the existi
 
 ## The ONE thing the main agent keeps — the prod gate (read first)
 
-Isolation removes a prod backstop: **the main agent never sees the grunt's PRs/MRs.** So for an
+Isolation removes a prod backstop: **the main agent never sees the grunt's work as she does it.**
+It sees her PR/MR only at the merge handoff, after the change is written. So for an
 edit to **shared config that renders to more than one target**, there is nothing between the
 grunt's charter and a merged *prod-priming* change — and editing prod's declared/desired state is
 a prod-rule violation *whether or not it deploys*.
@@ -49,13 +51,16 @@ shared fragments — under isolation, yours is the only backstop there.
 
 ## Procedure (main agent — runs once per grunt, then steps out)
 
-1. **Scope.** Mint a `<uuid>`. Derive a short `<slug>` and `<domain>` from the mission. Pick her
-   halt side-channel (default: her roll-call Discord channel + a voice/notify hook if you have one).
+1. **Scope.** Mint a `<uuid>`. Derive a short `<slug>` and `<domain>` from the mission. Name her
+   `<lead>`: you, by the session name `ListAgents` shows for you, which is the address her
+   `SendMessage` uses. Fill `<lead-dev-name>` with your Dev-Name, the name the Discord watcher
+   routes on, and pick her fallback `<side-channel>` for when `SendMessage` fails (default: her
+   roll-call Discord channel, addressed `@<lead-dev-name>`).
    Identify her `<render-roots>` (where shared fragments render to — e.g. `sites/`) for the
    blast-radius rule.
 2. **Author the charter at an ABSOLUTE path, not in the repo tree.** `mkdir -p
    ~/.claude/grunt/<uuid>/`. Write `seed-mission.md` from this skill's `seed-mission.template.md`
-   (fill `<domain>`, lane, side-channel, render-roots). Write an empty `live-context.md`.
+   (fill `<domain>`, lane, `<lead>`, `<lead-dev-name>`, `<side-channel>`, render-roots). Write an empty `live-context.md`.
    *(Absolute, not `./.claude/grunt/`, so she can read it regardless of which worktree she lands in.)*
 3. **Safety substrate.** Confirm her repo has a checked-in `CLAUDE.md` + `.claude-project.md`; the
    global `~/.claude/CLAUDE.md` applies automatically. Copy the main session's in if her repo lacks them.
@@ -75,9 +80,11 @@ shared fragments — under isolation, yours is the only backstop there.
    per-mission branch off
    `origin/<default-branch>` inside that worktree — shared `.git`, independent HEAD, zero collision
    with the main agent.
-6. **Report + step out.** Tell the operator: grunt `grunt-<slug>` is up in the `grunts` group;
-   dispatch with `aoe send grunt-<slug> "<task>"`; she pings + parks at any wall. The main agent
-   takes no further part beyond the shared-fragment gate above.
+6. **Report + step out of her missions.** Tell the operator: grunt `grunt-<slug>` is up in the
+   `grunts` group; dispatch with `SendMessage` or `aoe send grunt-<slug> "<task>"`; she parks and
+   messages you at any wall. You stay her escalation point: answer her parks, and take to the
+   human only what needs the human. Beyond that, the shared-fragment gate above and the merge
+   handoff below, you take no part in her missions.
 
 ## Operating discipline for the main agent
 
@@ -89,7 +96,13 @@ shared fragments — under isolation, yours is the only backstop there.
   leaks the tokens.)
 - **Treat her reports as signal, not detail.** "landed ✅" / "parked ⛔ — <why>" is all the forward
   thread needs. Do NOT pull her digests, SHAs, or PR numbers back into your context — that
-  re-imports exactly what you deflected.
+  re-imports exactly what you deflected. **The one exception is the merge handoff.** Her PR/MR
+  stops at ready and she sends you its URL and head. You run your own `/precheck` on that head,
+  then merge under your grant or take it to the human's merge call. Her precheck is evidence,
+  not the pass. **Run it in her worktree** (`git worktree list` finds it), which is clean and
+  idle at handoff, and first check that its HEAD matches the `<sha7>` she sent. Never check out
+  her branch in your own tree: git refuses a branch another worktree holds, and a detached
+  checkout breaks `ibm` and the PR lookup.
 
 ## Notes / invariants
 
@@ -99,13 +112,17 @@ shared fragments — under isolation, yours is the only backstop there.
   charter, so pair `--yolo` with the tightest charter (the blast-radius/prod-path park rules) and
   treat it as a soft guarantee, not a guaranteed block.
 - **She's Discord *outbound-only*** (launched without `--channels`, to avoid the doorbell-storm
-  cost) — she *posts* but never *receives* `@`-mentions, so **dispatch is `aoe send` only.** If a
+  cost) — she *posts* but never *receives* `@`-mentions, so **inbound is `SendMessage` from her
+  lead or `aoe send` from the operator, never Discord.** If a
   requester needs her confirmation ("ping me when live"), that contract must be encoded in her
   mission, because an `@grunt` reaches nobody.
 - **Dispatch is lead or operator → grunt** (`SendMessage` or `aoe send`). **Escalation is grunt →
   lead only.** Her concerns, questions and decisions go to the lead that stood her up, never to the
   human in her own session; the lead decides what reaches the human (BJ, 2026-10-19). Fill the
-  charter's `<lead>` slot when you author it.
+  charter's `<lead>` slot when you author it. `SendMessage` reaches another local Claude session
+  by the name `ListAgents` prints, which is how her messages find you across `aoe` sessions. If
+  it fails, her charter falls back to `<side-channel>`, addressed `@<lead-dev-name>`, so a park is never
+  silent.
 - **She runs unsupervised**, so her charter makes her *park + ping her lead* at any prod boundary
   or judgment wall rather than proceed. She cannot manufacture an approval.
 - **Persistence = the two files + aoe session revive.** Revive isn't 100% reliable; iterate if a

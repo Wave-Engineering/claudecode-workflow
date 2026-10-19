@@ -18,7 +18,7 @@ Precheck is **the gate into a release branch** (#1233, #1235). Commits and pushe
 | commit | secret scan of what is staged (`secret-scan-gate.sh`) |
 | push | secret scan of the range being pushed; no push to protected or release refs; working-branch pushes are free (`pre-push-test-gate.sh`) |
 | **MR (this skill)** | review, acceptance criteria, lanes (CI first), dependency scan, issue spec; posts `precheck` = success and marks ready |
-| merge | BJ's approval, or an exception (kahuna and autochain, detected mechanically; a standing grant, applied by you); CI green on the merge result (`/mmr`) |
+| merge | BJ's approval, or an exception (kahuna and autochain, detected mechanically; a standing merge grant or a lead-agent grant, applied by you); CI green on the merge result (`/mmr`) |
 
 **Drafts are free.** A draft PR/MR can't merge, so `/scpmr` opens one before precheck runs, and CI runs on it. Making it **ready** needs the `precheck` status on its head. `pr-ready-gate.sh` refuses otherwise on the CLI. On the MCP path, sdlc's `pr_create`/`pr_ready`/`pr_merge` refuse from the mcp-server-sdlc release that carries #592. On an older server, nothing on that path checks it except this skill and `/mmr`. The contract is `docs/precheck-status.md`.
 
@@ -415,7 +415,14 @@ Then put the gate's two output lines (`approved … armed_at=…` and `approval:
 
 Otherwise, a **standing merge grant** (CLAUDE.md "Exception: Standing Merge Grant") also skips the STOP, under all of its conditions: BJ's own words, given directly and recorded in memory; a **bounded, named effort** (a grant for "all PRs", or an old grant that only skipped `/mmr`'s second ask, does not qualify) with this PR plainly inside it; the same mechanical pass as the autochain bullets above; and nothing the prod rule gates, nor any tag, release or install. Put the memory file, BJ's words verbatim, the scope, and one sentence on why this PR is inside it on the checklist, then invoke `/mmr`. This path is applied by you, not detected by a script, so a grant whose scope you have to stretch does not apply. When in doubt, STOP.
 
-Otherwise, a **lead-agent grant** (CLAUDE.md "Exception: Lead-Agent Grant") skips the STOP too, but only in the session of the agent it names. It requires BJ's own words, given directly to you and recorded in your memory; the same mechanical pass; and nothing the prod rule gates. It is never relayed, so a grunt or peer you tasked never applies it. Put the memory file and BJ's words verbatim on the checklist, then invoke `/mmr`.
+Otherwise, a **lead-agent grant** (CLAUDE.md "Exception: Lead-Agent Grant") skips the STOP too, but only in the session of the agent it names. It requires all of these:
+- BJ's own words, given directly to you and recorded in your memory.
+- The Dev-Name in `.claude/agent-identity.json` matches the name in the grant. The memory loads in every session in this checkout, so its presence proves nothing.
+- The repo's origin is in the grant's organization.
+- The same mechanical pass, on this exact head.
+- Nothing the prod rule gates.
+
+It is never relayed, so a grunt or peer you tasked never applies it. Their PR/MR stops at ready, and you merge it only on your own `/precheck` run on its head. Their precheck, and any `precheck` status it posted, is evidence, not the pass. Put on the checklist the memory file, BJ's words verbatim, the Dev-Name match, and one sentence on why this origin is inside the organization. Then emit `[AUTO-APPROVED: lead-agent grant]` and invoke `/mmr`. When in doubt, STOP.
 
 Notifications fire in every auto-approval path exactly as they would before a STOP. A notification failure is reported on the checklist; it does not change the gate's answer in either direction.
 

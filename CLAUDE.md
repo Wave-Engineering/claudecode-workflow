@@ -87,7 +87,7 @@ Mechanical gate: `scripts/autochain-gate.sh`. Detection + sentinel: `skills/prec
 The user may give a **standing merge grant** for a named effort, such as "auto-merge the wave-engine fixes on a passing precheck". Under it, the merge STOP is skipped when **all** of the following hold:
 
 1. **The grant is the user's own words, given directly** in a session, not relayed, and recorded in a memory file with its scope and any expiry.
-2. **The grant names a bounded effort, and this PR/MR is plainly inside it.** A grant scoped to "all PRs/MRs", or to everything after a clean precheck, does not qualify: it would remove the merge call itself, the one place the user approves. A grant given before #1235 that skipped a *second* "may I merge?" after the user had already approved at the old precheck STOP is not a merge grant either. If the scope has to be stretched to fit, the grant does not apply.
+2. **The grant names a bounded effort, and this PR/MR is plainly inside it.** A grant scoped to "all PRs/MRs", or to everything after a clean precheck, does not qualify: it would remove the merge call itself, the one place the user approves. A grant given before #1235 that skipped a *second* "may I merge?" after the user had already approved at the old precheck STOP is not a merge grant either. If the scope has to be stretched to fit, the grant does not apply. (The Lead-Agent Grant below is the one deliberate exception, with its own conditions.)
 3. **The precheck passed, mechanically**, by the same definition as the autochain exception's item 3.
 4. **Nothing the ABSOLUTE prod rule gates is in the change.** The same goes for tags, releases and fleet installs. A grant covers merging only.
 
@@ -97,13 +97,14 @@ The user may give a **standing merge grant** for a named effort, such as "auto-m
 
 ### Exception: Lead-Agent Grant
 
-The user may name **one agent as lead** for an organization and grant it self-approval: it merges its own PRs/MRs on a clean precheck, and it tags and releases when it judges the time is right. Unlike a standing merge grant, this one is scoped to **an agent, not an effort**, so the bounded-effort test in item 2 above does not apply to it. Everything else does:
+The user may name **one agent as lead** for an organization and grant it self-approval: it approves the merge on a clean precheck, and it tags and releases when it judges the time is right. Unlike a standing merge grant, this one is scoped to **an agent, not an effort**, so the bounded-effort test and the tags-and-releases ban of the standing merge grant do not apply to it. It applies when all of the following hold:
 
-1. **The user's own words, given directly to that agent** in its session, and recorded in its memory with the organization and any expiry. The grant belongs to that agent alone: it is never relayed, and grunts or peers the lead tasks don't inherit it. They stop at a ready PR/MR, and the lead verifies their evidence before merging.
-2. **The precheck passed, mechanically**, by the same definition as the autochain exception's item 3.
-3. **The ABSOLUTE prod rule still binds.** A tag or release that changes what production runs, such as an image a live service follows, still needs the user's yes-prod. So do fleet installs.
+1. **The user's own words, given directly to that agent** in its session, and recorded in its memory with the organization and any expiry. The grant belongs to that agent alone: it is never relayed, and grunts or peers the lead tasks don't inherit it.
+2. **This agent is the one named, in the organization named.** The Dev-Name in `.claude/agent-identity.json` matches the grant. Memory loads for every session in a checkout, so this match is the check, not the memory's presence. The repo's origin is in the grant's organization: on a forge the organization doesn't own, the grant does not exist.
+3. **The precheck passed, mechanically**, by the same definition as the autochain exception's item 3, **on the exact head being merged.** A grunt's or peer's PR/MR stops at ready. The lead merges it only on its own `/precheck` run on that head. Their precheck, and any `precheck` status it posted, is evidence, not the pass.
+4. **The ABSOLUTE prod rule still binds.** A tag or release that changes what production runs, such as an image a live service follows, still needs the user's yes-prod. So do fleet installs.
 
-`/precheck` puts the grant on the checklist (the memory file and the user's words verbatim), then invokes `/mmr`. Like the standing merge grant, it is applied by the agent, not detected mechanically.
+`/precheck` puts the grant on the checklist (the memory file, the user's words verbatim, the Dev-Name match, and one sentence on why this repo's origin is inside the organization), then invokes `/mmr`. Like the standing merge grant, it is applied by the agent, not detected mechanically. When in doubt, STOP.
 
 ---
 

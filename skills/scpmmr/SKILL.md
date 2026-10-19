@@ -16,7 +16,7 @@ description: Commit, push, open + precheck the PR/MR, then merge it — /scpmr t
 ## Two ways in
 
 - **BJ types it after a precheck STOP.** The PR/MR is already prechecked and ready, so `/scpmmr` **is the merge call**. Skip straight to `/mmr`. Do not re-run `/scp` or `/precheck`; nothing changed. (If HEAD moved since the pass, `/mmr` runs `/precheck rearm` itself.)
-- **Typed with nothing prechecked yet** (work done, nothing pushed or no ready PR): run `/scpmr`. Its `/precheck` STOPs for the merge call as usual, **unless** an exception applies (kahuna sandbox, armed autochain, standing grant), in which case `/precheck` invokes `/mmr` itself. **`/scpmmr` typed *before* a precheck is not approval of a merge nobody has seen.** It means "take it all the way to the gate."
+- **Typed with nothing prechecked yet** (work done, nothing pushed or no ready PR): run `/scpmr`. Its `/precheck` STOPs for the merge call as usual, **unless** an exception applies (kahuna sandbox, armed autochain, standing merge grant, lead-agent grant), in which case `/precheck` invokes `/mmr` itself. **`/scpmmr` typed *before* a precheck is not approval of a merge nobody has seen.** It means "take it all the way to the gate."
 
 ## Procedure
 

@@ -38,7 +38,7 @@ The PR/MR gate in one command (#1235): `/scp`, then `/precheck`, which opens the
 
      Otherwise omit it, and `/mmr` drafts the squash message at merge, as before.
    - A draft needs no precheck: it can't merge, and opening it is what starts CI on repos that run CI only for PRs/MRs.
-3. **`/precheck`**: reviews the pushed commits and reads CI. On a pass it posts the `precheck` status and marks the PR/MR **ready**, then STOPs for the merge call (or, under a kahuna, autochain or standing-grant exception, invokes `/mmr` itself).
+3. **`/precheck`**: reviews the pushed commits and reads CI. On a pass it posts the `precheck` status and marks the PR/MR **ready**, then STOPs for the merge call (or, under a kahuna, autochain, standing-merge-grant or lead-agent-grant exception, invokes `/mmr` itself).
 4. Report the PR/MR URL and its state: ready and waiting for the merge call, or a draft with what failed.
 
 Do NOT merge. That is the distinction from `/scpmmr`.
