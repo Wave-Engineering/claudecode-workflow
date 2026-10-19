@@ -149,8 +149,11 @@ def test_ccfold_path_opens_one_refresh_and_survives_a_missing_claude_md():
     # A refresh waits for its merge call; until then every onboarding agent sees the same staleness.
     assert "Don't open a second refresh" in body
     assert "git ls-remote --heads origin 'chore/*-ccfold'" in body
-    # /ccfold Step 2 copies the template and stops; Steps 9 and 10 must still run.
+    # /ccfold stops before Step 9 on a missing or an already-current CLAUDE.md; Steps 9 and 10
+    # must still run, or a stale .claude-project.md alone yields an empty refresh.
+    assert "stops early in two cases" in body and "already matches upstream" in body
     assert "Steps 9 and 10" in body and "Dev-Team:" in body
+    assert "nothing to commit" in body
     assert "git check-ignore -q .claude/agent-identity.json" in body
 
 
@@ -351,6 +354,8 @@ def test_clean_tree_check_tolerates_only_the_identity_file(temp_git_repo):
 
     def dirt() -> str:
         run = subprocess.run(["bash", "-c", check], cwd=repo, capture_output=True, text=True, env=_hermetic(repo))
+        # A clean tree must not look like a failed command to the agent reading the result.
+        assert run.returncode == 0, run.stderr
         return run.stdout
 
     assert dirt() == ""

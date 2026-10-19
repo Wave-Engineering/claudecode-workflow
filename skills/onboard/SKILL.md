@@ -139,7 +139,7 @@ or added. If neither file is stale, go to step 8.
    prints nothing when it is:
 
    ```bash
-   git status --porcelain --untracked-files=all | grep -v '^?? \.claude/agent-identity\.json$'
+   git status --porcelain --untracked-files=all | grep -v '^?? \.claude/agent-identity\.json$' || true
    ```
 
    If it prints anything, leave the tree alone and report the stale files at tag-up. Never
@@ -153,9 +153,12 @@ or added. If neither file is stale, go to step 8.
    branch `chore/<N>-ccfold` off the protected branch, resolved live (it is not always `main`).
 4. **Run `/ccfold`** and apply its changes without stopping at its confirmations: they land on a
    branch, and reach the protected branch only through the gates below.
-   - If `CLAUDE.md` was missing, its Step 2 copies the template and stops. Set the copy's
-     `Dev-Team:` to the team `/name` used, then carry on with its Steps 9 and 10, which write
-     `.claude-project.md` and pin the committer identity.
+   - `/ccfold` stops early in two cases: `CLAUDE.md` was missing, so its Step 2 copies the
+     template, or `CLAUDE.md` already matches upstream. Either way, still run its Steps 9 and 10,
+     which write `.claude-project.md` and pin the committer identity. For a copied template,
+     first set its `Dev-Team:` to the team `/name` used.
+   - If that leaves nothing to commit, the files weren't stale after all: delete the branch,
+     close the issue as not planned, and report it at tag-up.
    - Update `.gitignore` as part of this. If `git check-ignore -q .claude/agent-identity.json`
      fails, add that path, so no commit can pick the identity file up.
 5. **Run `/scpmr`.** It commits, pushes, opens the PR/MR with `Closes #<N>` and runs `/precheck`,
