@@ -218,7 +218,12 @@ try {
   assert.doesNotMatch(broken.detail, /ERRORED/)
   const partialBroken = trivyCoverage({ signal: 'trivy', passed: false, detail: 'trivy DB pull failed: 429', found: 2, ingested: 1, unscanned: ['b'], declared: false })
   assert.match(partialBroken.detail, /^PARTIAL COVERAGE \(HOLD\): 1 of 2 lockfile\(s\) ingested; UNSCANNED: b\. trivy DB pull failed: 429$/)
-  assert.match(trivyCoverage({ signal: 'trivy', passed: true, detail: 'agent said ok', found: 2 }).detail, /^signal ERRORED — conservative-fail \(HOLD\): coverage counts missing or inconsistent \(found=2, ingested=undefined\); agent detail: agent said ok$/)
+  assert.match(trivyCoverage({ signal: 'trivy', passed: true, detail: 'agent said ok', found: 2 }).detail, /^signal ERRORED — conservative-fail \(HOLD\): coverage counts missing or inconsistent \(found=2, ingested=undefined, unscanned=0\); agent detail: agent said ok$/)
+  // found 0 beside a named unscanned lock contradicts itself (delta 4 note, babelfish: do it). found
+  // alone unlocks the declaration, so a declared tree must not ride through on the bad count.
+  const contradicted = trivyCoverage({ signal: 'trivy', passed: true, detail: 'nothing to scan', found: 0, ingested: 0, unscanned: ['bun.lockb'], declared: true })
+  assert.equal(contradicted.passed, false, 'found 0 with a named unscanned lock must HOLD, even declared')
+  assert.match(contradicted.detail, /^signal ERRORED — conservative-fail \(HOLD\): coverage counts missing or inconsistent \(found=0, ingested=0, unscanned=1\); agent detail: nothing to scan$/)
   for (const counts of [{}, { found: 2 }, { found: 2, ingested: 3 }, { found: 2, ingested: -1 }, { found: 1.5, ingested: 1 }]) {
     const r = trivyCoverage({ signal: 'trivy', passed: true, unscanned: [], ...counts })
     assert.equal(r.passed, false, `missing or inconsistent counts must conservative-fail: ${JSON.stringify(counts)}`)

@@ -84,9 +84,12 @@ function trivyHold(sig, why) {
 export function trivyCoverage(sig) {
   const { found, ingested } = sig ?? {}
   const unscanned = Array.isArray(sig?.unscanned) ? sig.unscanned : []
-  if (!Number.isInteger(found) || !Number.isInteger(ingested) || ingested < 0 || ingested > found) {
+  // A lock named unscanned is a found lock, so found 0 beside one is a count that cannot be
+  // squared. Since found alone unlocks the declaration, trust the named path over the count.
+  if (!Number.isInteger(found) || !Number.isInteger(ingested) || ingested < 0 || ingested > found
+    || (found === 0 && unscanned.length > 0)) {
     const own = sig?.detail ? `; agent detail: ${sig.detail}` : ''
-    return conservativeFail('trivy', `coverage counts missing or inconsistent (found=${found}, ingested=${ingested})${own}`)
+    return conservativeFail('trivy', `coverage counts missing or inconsistent (found=${found}, ingested=${ingested}, unscanned=${unscanned.length})${own}`)
   }
   if (found === 0 && sig.declared !== true) {
     return trivyHold(sig, 'NOTHING FOUND (HOLD): no lockfile found and no .no-scannable-dependencies declaration')

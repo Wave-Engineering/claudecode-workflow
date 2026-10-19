@@ -104,7 +104,8 @@ when `0 < ingested < found`, when `ingested > 0` and `unscanned` names a path, w
 found and none ingested, and when nothing was found without a `.no-scannable-dependencies`
 declaration (`declared`). A declaration applies only when no lock is found, as in
 `scripts/ci/check-scannable.sh`. Each HOLD keeps the agent's own `detail` after its rule. Only
-missing or inconsistent counts conservative-fail. It never turns a fail into a pass. The
+missing or inconsistent counts conservative-fail, and `found` 0 beside a named `unscanned` lock
+is inconsistent. It never turns a fail into a pass. The
 persisted signal is still projected to `{signal, passed, detail}`.
 
 **Order (live-gate finding #5 — reorders §3.4):** the gate FIRST opens the kahuna→**integration

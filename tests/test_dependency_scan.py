@@ -352,8 +352,43 @@ def test_a_declaration_does_not_rescue_a_lone_bun_lockb(tmp_path: Path):
     combined = proc.stdout + proc.stderr
     assert proc.returncode == 2, combined
     assert "ingested ZERO" in combined
-    assert "declaration\n  does not apply: it covers only a repo where no lock is found" in proc.stderr, proc.stderr
+    assert "bun's text lockfile, bun.lock" in proc.stderr, proc.stderr
+    assert "delete the empty lockfile" not in proc.stderr, "a bun.lockb is not an empty lock"
+    assert "declaration does not rescue a lock that is still\n  here: it covers only a repo where no lock is found" in proc.stderr, proc.stderr
     assert "PASS" not in proc.stdout
+
+
+def test_a_dependency_free_lock_names_the_real_escape(tmp_path: Path):
+    """#1247 (babelfish: 2a). trivy 0.74.0 emits no Result at all for a
+    dependency-free package-lock.json (measured), so it exits 2 like an
+    unparseable lock. The old advice, "use bun.lock, not bun.lockb", sent the
+    operator nowhere. The escape is deleting the empty lockfile, and the next
+    test proves that escape passes."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "package.json").write_text('{"name":"y","version":"1.0.0"}\n')
+    (repo / "package-lock.json").write_text(
+        '{"name":"y","version":"1.0.0","lockfileVersion":3,"requires":true,'
+        '"packages":{"":{"name":"y","version":"1.0.0"}}}\n'
+    )
+    proc = _run_env(repo, _stub_trivy(tmp_path, '{"Results":[]}'))
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "If the package has no dependencies,\n  delete the empty lockfile: there is nothing to lock." in proc.stderr, proc.stderr
+    assert "bun.lockb is bun's old binary format" not in proc.stderr, "no bun.lockb here"
+
+
+def test_the_named_escape_passes(tmp_path: Path):
+    """The escape the exit-2 message names works: with the empty lockfile
+    deleted, check-scannable finds no lock, so a declaration applies and the
+    run passes. Advice that leads to another failure is not an escape."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "package.json").write_text('{"name":"y","version":"1.0.0"}\n')
+    (repo / ".no-scannable-dependencies").write_text("No dependencies; package.json carries metadata only.\n")
+    proc = _run_env(repo, _stub_trivy(tmp_path, '{"Results":[]}'))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "absence is DECLARED" in proc.stdout, proc.stdout
+    assert "dependency-scan: PASS" in proc.stdout, proc.stdout
 
 
 def test_stub_partial_coverage_exits_6(tmp_path: Path):

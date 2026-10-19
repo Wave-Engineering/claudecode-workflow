@@ -325,18 +325,40 @@ fi
 # Manifests exist (check-scannable passed above) but the scanner covered none.
 # Worded distinctly from "nothing scannable" because they are opposite conditions
 # and previously both surfaced as an unremarkable green.
+#
+# The remedy depends on the lock, so name the one that fits (#1247). trivy cannot
+# parse bun.lockb at all. Any other lock that yields nothing is malformed or has
+# nothing in it: trivy 0.74.0 emits no Result for a dependency-free
+# package-lock.json (measured), and the escape there is deleting the lockfile,
+# never a declaration beside it.
 if ((manifests == 0)) && ((declared == 0)); then
 	cat >&2 <<-MSG
 		dependency-scan: FAIL — manifests are present but the scanner ingested ZERO of them.
 
 		  This is NOT "nothing to scan" (check-scannable.sh passed, so input exists).
 		  It is the scanner covering none of it — e.g. a lockfile format this trivy
-		  build cannot parse. A pass here would be a scan over an empty denominator,
-		  which is indistinguishable from a clean one.
+		  build cannot parse, or a lock with nothing in it. A pass here would be a
+		  scan over an empty denominator, which is indistinguishable from a clean one.
 
-		  Use a lockfile this scanner reads (bun.lock, not bun.lockb) or a scanner
-		  that understands this ecosystem. A .no-scannable-dependencies declaration
-		  does not apply: it covers only a repo where no lock is found.
+	MSG
+	locks="$(sed -n 's/^  \[scannable\] //p' <<<"$scannable_out" | sed 's/ — .*//')"
+	if grep -q '/bun\.lockb$' <<<"$locks"; then
+		cat >&2 <<-MSG
+			  bun.lockb is bun's old binary format, which trivy cannot parse. Switch to
+			  bun's text lockfile, bun.lock (bun 1.2+ writes it).
+		MSG
+	fi
+	if [[ -z "$locks" ]] || grep -qv '/bun\.lockb$' <<<"$locks"; then
+		cat >&2 <<-MSG
+			  A lock trivy reads gave it no packages. If the package has no dependencies,
+			  delete the empty lockfile: there is nothing to lock. If that leaves nothing
+			  scannable, declare it in .no-scannable-dependencies with a reason.
+			  Otherwise the lock is malformed, or this trivy build cannot parse it.
+		MSG
+	fi
+	cat >&2 <<-MSG
+		  A .no-scannable-dependencies declaration does not rescue a lock that is still
+		  here: it covers only a repo where no lock is found.
 	MSG
 	exit 2
 fi
