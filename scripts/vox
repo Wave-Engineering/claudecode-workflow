@@ -22,6 +22,7 @@
 # Resolution (first match wins):
 #   Provider: $VOX_PROVIDER → ~/.config/vox/provider → bundled silent.sh
 #   Player:   $VOX_PLAYER   → ~/.config/vox/player   → autodetect (afplay/paplay/aplay/ffplay)
+#   Wake:     $VOX_WAKE     → ~/.config/vox/wake     → noise   (values: noise | none)
 #
 # Environment passed through to the provider:
 #   VOX_VOICE, VOX_MODEL, VOX_ENDPOINT, VOX_* (anything else prefixed VOX_)
@@ -157,6 +158,45 @@ resolve_speaker() {
 # the caller's lineage AT CALL TIME (parent cmdline + cwd + a 6-deep ancestor
 # cmdline chain) — so a fire-and-exit caller is still traceable after it's gone.
 # VOX_NO_LOG=1 to skip. Best-effort; never breaks vox.
+#
+# Every cmdline is logged REDUCED, through vox_cmdline (#1248): the program and its first
+# argument, masked, then a count of the arguments dropped. An ancestor's argv can carry
+# credentials, and /proc/<pid>/cmdline is world-readable: an aoe tmux server is started with
+# the whole environment on its command line (`-e NAME=value` per variable), and it is an
+# ancestor of every pane, so the full chain wrote every exported token into this log on
+# every call (keymaker, 2026-10-18). Pattern-masking the whole argv was tried first, and
+# its review found five more leaking shapes (a quoted value in a `bash -c` body, a flag
+# and its value as two arguments, `Name: value` headers, unlisted token prefixes, URL
+# passwords); a list of bad shapes never closes. Every one of them sat at index 2 or later,
+# where shells and interpreters put their payload (`bash -c <body>`). Two arguments still
+# name the hop (`bash ./scripts/ci/validate.sh`, `tmux -L`), which is what provenance needs.
+# The two kept arguments are still masked, for a program whose first argument is itself a
+# credential:
+#   - an argument starting NAME= loses everything after the `=`;
+#   - a secret-looking NAME=value inside an argument loses its value, quoted or not;
+#   - a URL password (scheme://user:pw@) is masked;
+#   - a well-known token shape (ghp_, github_pat_, glpat-/glrt-/…, sk-, xox?-, hvs., AKIA…)
+#     is masked.
+# Each kept argument is then cut at 160 characters.
+# GNU sed (-z, the I flag) and mapfile -d are fine here: without /proc (macOS) this
+# returns before either runs.
+vox_cmdline() {
+	local -a argv=()
+	[[ -r "/proc/$1/cmdline" ]] || return 0
+	mapfile -d '' -t argv 2>/dev/null <"/proc/$1/cmdline" || return 0
+	((${#argv[@]})) || return 0
+	printf '%s\0' "${argv[@]:0:2}" | sed -z -E \
+		-e 's/^([A-Za-z_][A-Za-z0-9_]*)=.*/\1=<masked>/' \
+		-e 's/([A-Za-z0-9_]*(TOKEN|KEY|PAT|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)[A-Za-z0-9_]*=)("[^"]*"?|'"'"'[^'"'"']*'"'"'?|[^[:space:]"'"'"']*)/\1<masked>/gI' \
+		-e 's#(://[^/:@[:space:]]*:)[^@/[:space:]]+@#\1<masked>@#g' \
+		-e 's/\b(gh[oprsu]_|github_pat_|gl(pat|rt|dt|ptt|cbt|oas|imt|soat|ft|agent)-|sk-|xox[abeoprs]-|hv[sbr]\.|dckr_pat_|npm_|pypi-|hf_)[A-Za-z0-9_.-]+/\1<masked>/g' \
+		-e 's/(A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z2-7]{16}/<masked>/g' \
+		-e 's/^(.{160}).+/\1…/' |
+		tr '\0' ' '
+	if ((${#argv[@]} > 2)); then printf '[+%d args]' "$((${#argv[@]} - 2))"; fi
+	return 0
+}
+
 vox_log() {
 	if [[ "${VOX_NO_LOG:-0}" == "1" ]]; then return 0; fi
 	command -v jq >/dev/null 2>&1 || return 0
@@ -164,17 +204,21 @@ vox_log() {
 	local -a chain=()
 	logf="$logdir/vox.jsonl"
 	mkdir -p "$logdir" 2>/dev/null || return 0
+	# Owner-only: the log records caller command lines, and one written before the
+	# masking fix (#1248) may still hold secrets.
+	(umask 077 && : >>"$logf") 2>/dev/null || true
+	chmod 600 "$logf" 2>/dev/null || true
 	ts="$(date -u +%Y-%m-%dT%H:%M:%S.%3NZ 2>/dev/null || true)"
 	ppid="${PPID:-0}"
 	[[ "$ppid" =~ ^[0-9]+$ ]] || ppid=0
-	pcmd="$(tr '\0' ' ' <"/proc/$ppid/cmdline" 2>/dev/null || true)"
+	pcmd="$(vox_cmdline "$ppid" || true)"
 	pcmd="${pcmd% }"
 	pcwd="$(readlink "/proc/$ppid/cwd" 2>/dev/null || true)"
 	pid="$ppid"
 	hop=0
 	while [[ "$pid" =~ ^[0-9]+$ ]] && ((pid > 1)) && ((hop < 6)); do
 		hop=$((hop + 1))
-		cmd="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+		cmd="$(vox_cmdline "$pid" || true)"
 		cmd="${cmd% }"
 		if [[ -n "$cmd" ]]; then
 			chain+=("$cmd")
@@ -215,6 +259,7 @@ usage() {
 
 		Provider: see ~/.config/vox/provider; contract in scripts/vox-providers/README.md.
 		Set VOX_DISABLED=1 to no-op cleanly (for CI / headless).
+		Set VOX_WAKE=none (or put "none" in ~/.config/vox/wake) to skip the Bluetooth wake noise.
 	USAGE
 }
 
@@ -538,9 +583,34 @@ on_interrupt() {
 
 # Prepend ~500ms of low-amplitude white noise to a WAV file. This wakes up
 # Bluetooth audio sinks that sleep when idle, preventing the first syllable
-# from being clipped.
+# from being clipped. `none` skips it (#1254): a host whose Bluetooth sinks never
+# suspend has nothing to wake, and a player that loudness-normalizes boosts the
+# noise along with the speech, into a startling burst of static. Such a player can
+# add its own cue after it normalizes. The setting is a file as well as an env var
+# because every caller reaches the file: a container's vox drains to the host's.
+resolve_wake() {
+	local wake="${VOX_WAKE:-}"
+	# USER_CONFIG_DIR, like the provider and player: ${XDG_CONFIG_HOME:-$HOME/.config}/vox.
+	if [[ -z "$wake" && -r "$USER_CONFIG_DIR/wake" ]]; then
+		wake="$(tr -d '[:space:]' <"$USER_CONFIG_DIR/wake")"
+	fi
+	wake="${wake:-noise}"
+	case "$wake" in
+	none | noise) ;;
+	*)
+		echo "vox: unknown wake setting '$wake' (want noise|none); using noise" >&2
+		wake=noise
+		;;
+	esac
+	echo "$wake"
+}
+
+# Reads WAKE, resolved once in the main flow before any fork: the long-message
+# path runs this in a subshell whose stderr is discarded, so a warning raised
+# here would never be seen.
 prepend_wake_noise() {
 	local wavfile="$1"
+	[[ "$WAKE" == none ]] && return 0
 	python3 -c '
 import wave, random, sys
 with wave.open(sys.argv[1], "rb") as w:
@@ -617,6 +687,8 @@ if [[ -z "$PLAYER" ]]; then
 	echo "Error: no audio player found. Set \$VOX_PLAYER, symlink ~/.config/vox/player, or install aplay/paplay/afplay/ffplay." >&2
 	exit 1
 fi
+
+WAKE="$(resolve_wake)"
 
 audio_out="$(mktemp --suffix=.wav)"
 
