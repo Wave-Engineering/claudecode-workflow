@@ -19,6 +19,61 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.8.0] - 2026-10-19
+
+### Changed
+
+- **`/precheck` becomes the PR/MR gate, and approval moves to the merge (#1235).** This changes
+  how a session runs. Commit and push are now free on an agent's working branch; the secret scan
+  is what still runs there. `/precheck` reviews the pushed commits, reads CI's verdict for the
+  pushed HEAD, posts a `precheck` commit status on that exact SHA, and marks the draft PR/MR
+  ready. BJ's approval is the merge call (`/mmr`, `/scpmmr` or an affirmative), not the precheck.
+  - **The status contract** is in `docs/precheck-status.md`: context, state, description, SHA,
+    and who produces and consumes it. `scripts/precheck-status.sh` posts and reads it, and its
+    `mark-ready` refuses unless the head carries a pass.
+  - **`pr-ready-gate.sh`** (a new `PreToolUse` hook) blocks `gh pr create`/`ready`, a non-draft
+    `glab mr create`, and every `glab mr update` without `--draft`, unless the head carries a
+    pass. Integration pairs are exempt: a `kahuna/*` or `campaign/*` head, or a `kahuna/*` base.
+  - **`/precheck rearm`** renews a stale pass after a later push. It reviews only the commits
+    since the last pass, plus a green pipeline, and survives a reseed.
+  - **A new CLAUDE.md exception, Standing Merge Grant**, covers a merge grant the user gives for a
+    named, bounded effort. Unlike the Kahuna and autochain exceptions, the agent applies it, so
+    the grant and its reasoning go on the checklist.
+- **Kit callers pass `squash_message`, and `/mmr` merges from the `## Squash commit` block
+  (#1257).** This is the kit half of mcp-server-sdlc #592. `/scpmr` and `/precheck` pass
+  `squash_message` to `pr_create` only when its schema lists the field, and never on an
+  integration pair. On a gated server, `/mmr` merges from the stored block with no
+  `squash_message`. On an older server, or on an integration pair, it drafts as before.
+- **Release order: this kit ships before the mcp-server-sdlc #592 tag.** It works against both
+  server versions. The server is what enforces the `precheck` status on
+  `pr_create`/`pr_ready`/`pr_merge`. Until that release is installed, the gate is `/precheck`
+  and `/mmr` checking the status.
+
+### Fixed
+
+- **A reseed revive no longer false-pages "auto-revive FAILED" (#1244).** `reseed-kick.sh` read
+  only its prompt-hook nonce, so a session that revived through the Skill tool, or inside a turn a
+  peer message started, was paged as failed, and its typed sends queued up as stale turns. The
+  kicker now reads the session transcript for the revive itself and for whether a turn is
+  running. It never types into a busy session, and it waits `RESEED_KICK_LIVE_WAIT` (600 s) for a
+  live one before paging.
+- **vox's provenance log no longer records credentials from ancestor command lines (#1248).**
+  Each logged hop keeps only argv[0] and argv[1], masked (`NAME=value`, secret-named flags, URL
+  passwords, token and key shapes) and cut at 160 characters, and the rest is counted. The log is
+  created owner-only (0600), and an existing 0644 log is tightened on the next call. Lines
+  already written are not scrubbed.
+- **`VOX_WAKE` (`noise` | `none`) can turn off vox's Bluetooth wake-noise preamble (#1254).** A
+  loudness-normalizing player had turned it into a burst of static. The setting comes from
+  `$VOX_WAKE`, then `${XDG_CONFIG_HOME:-$HOME/.config}/vox/wake`, then defaults to `noise`.
+
+### Image
+
+- **The MCP servers in this release's `oakandwave-workflow` image are unchanged from 8.7.0:**
+  mcp-server-sdlc v4.4.1, mcp-server-wtf v1.5.2, mcp-server-discord v1.4.2,
+  mcp-server-discord-watcher v1.6.1 and mcp-server-nerf v2.0.0. `install-remote.sh` bakes each
+  server's latest release at tag time. sdlc is still pre-#592, so inside the image the precheck
+  status is checked by the kit, not yet enforced by the server.
+
 ## [8.7.0] - 2026-10-18
 
 ### Added
