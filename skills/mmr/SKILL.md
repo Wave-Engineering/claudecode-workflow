@@ -32,7 +32,7 @@ Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix)
    - **After a rearm, read the head again and `get` its status again.** Continue only if the head is the SHA rearm posted on and it reads `success`. Anything else → STOP. Rearm reporting success is not the check; the status on the PR/MR's head is.
    - Exit 3 (the head or the status could not be read) → STOP. Never merge on an unreadable gate.
 
-   Once sdlc#592 ships, `pr_merge` refuses a head without the status by itself. This step is what keeps that refusal from being the first you hear of it.
+   From the mcp-server-sdlc release that carries #592, `pr_merge` refuses a head without the status by itself. This step is what keeps that refusal from being the first you hear of it.
 2. If `checks.summary == "pending"` → `pr_wait_ci(number, poll_interval_sec: 30, timeout_sec: 1800)`. On `timed_out` ask whether to wait longer. On `failed` STOP.
 3. **DEFAULT-DENY — merge only on an explicit pass.** Proceed **only** if `checks.summary == "all_passed"`. **Any other value STOPs**, including values that do not exist yet.
 
@@ -72,14 +72,27 @@ Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix)
    **If there is no human — HALT, do not improvise.** On a `kahuna/*` sandbox, under `/wavemachine` in `auto` mode, with an armed `godspeed` mandate, or in an approved `/autochain` run, "a human decides" has no addressee. Do **not** resolve it yourself: **do not merge**, emit a structured blocker (`wave-hold` shape on wave paths) naming the PR and the unresolved cause, and let the wave gate escalate it. An autochain run has no wave gate, so it stops the chain and gets loud per `/autochain`'s Stopping section, which also disarms its approval. An autonomous agent that reaches an underspecified branch will improvise, and improvising toward *proceed* is the exact failure this gate exists to prevent — the more so because `/precheck` lists this gate as non-bypassable *precisely because* it is the last control once the human is gone.
 
    Verify with `gh pr checks <number>` (no `--json`) or `gh run list --branch <head>`. **Do not read a bare "no output" as a pass** — that is the same failure one layer down.
-4. `pr_diff(number)` → use the diff content (plus `git log target..source`) to draft the squash commit message.
-5. **Draft the squash commit message** (agent reasoning — this is the judgment layer):
+4. **Decide where the squash commit comes from.** Ask three questions, in order, and take the first branch that matches:
+   - **Is it an integration pair?** That means head `kahuna/*` or `campaign/*`, or base `kahuna/*`; step 1.5's `pr-head` prints the head and the base. If so, the gate exempts it and the server never reads a block. **Draft** the message (step 5), and pass it in step 7 as `pr_merge(number, squash_message)`, as before.
+   - **Is the server gated?** It is when `pr_create`'s schema lists `squash_message` (the mcp-server-sdlc release that carries #592). If it isn't, **draft** and pass, as before. An older server never reads a block, so a block in the body changes nothing.
+   - **Gated PR/MR on a gated server.** Read the body (`gh pr view <N> --json body -q .body` / `glab api "projects/:id/merge_requests/<N>" --jq .description`).
+     - **It has a `## Squash commit` block:** that block IS the squash commit. `/scpmr` composed it and BJ's merge call approved it as written. **Don't draft one;** skip step 5. In step 7, call `pr_merge(number)` with **no** `squash_message`. The server squashes from the block and refuses a `squash_message` that differs from it (`squash_message_mismatch`). If what lands has changed, edit the block in the body, never the call.
+     - **It has no block** (opened before the gate shipped): the server refuses the merge (`squash_block_missing`). Draft the message (step 5) and add it to the body, laid out exactly as below. Then call `pr_merge(number)` with no `squash_message`. Never bypass the refusal.
+       - a line that is exactly `## Squash commit`
+       - optionally, empty lines (not even spaces)
+       - an opening fence ```` ```text ```` at column 0
+       - the message
+       - a closing ```` ``` ```` at column 0
+
+       The body must hold no other `## Squash commit` line. If the message itself contains backticks, the fence must be longer than its longest backtick run, and the closing fence must be exactly the same length as the opening one.
+5. **Draft the squash commit message** (only when step 4 says to). Use `pr_diff(number)` plus `git log target..source`. This is agent reasoning, the judgment layer:
    - Title: conventional commits `type(scope): description`
    - Body: what changed and why; key implementation decisions or trade-offs; notable side effects
    - Footer: `Closes #issue-number` for any linked issues (check the PR/MR description)
    - Comprehensive enough that `git log` alone tells the full story without opening the PR
-6. **The approval is how you got here.** Since #1235 BJ's approval is the merge call itself. `/mmr` or `/scpmmr` typed after a precheck STOP, or an affirmative to it, IS the approval, and so is an exception path (`[AUTO-APPROVED: kahuna sandbox]`, `[AUTO-APPROVED: autochain #<epic>]`, or a standing grant named on the checklist). Show the PR/MR number, title, source→target branches and the drafted squash message, and proceed. **Reached any other way** (an agent deciding on its own to merge, with no STOP answered and no exception), ask "May I merge this PR/MR?" and WAIT.
-7. `pr_merge(number, squash_message)` — squash merge. Returns `merge_method`, `merge_commit_sha`, `url`.
+   - **A draft that goes into a block** (step 4's last case) is checked by the server. It must meet every `squash_message` rule in `/scpmr` step 2: a subject of 72 characters or fewer with one of the listed types, `Closes #N`, and the `Co-Authored-By: Name <email>` trailer. Otherwise the merge is refused just as the missing block was.
+6. **The approval is how you got here.** Since #1235 BJ's approval is the merge call itself. `/mmr` or `/scpmmr` typed after a precheck STOP, or an affirmative to it, IS the approval, and so is an exception path (`[AUTO-APPROVED: kahuna sandbox]`, `[AUTO-APPROVED: autochain #<epic>]`, or a standing grant named on the checklist). Show the PR/MR number, title, source→target branches and the squash message (the block, or the one drafted in step 5), and proceed. **Reached any other way** (an agent deciding on its own to merge, with no STOP answered and no exception), ask "May I merge this PR/MR?" and WAIT.
+7. `pr_merge(number)` for a gated PR/MR on a gated server (step 4's last case); otherwise `pr_merge(number, squash_message)`. It's a squash merge, and it returns `merge_method`, `merge_commit_sha` and `url`.
 8. **Post-merge**: switch to target branch, pull, delete local source branch if present. Optionally `ci_wait_run(ref: <PR/MR target from step 1>, expected_sha: <merge_commit_sha from step 7>, timeout_sec: 1800)` to confirm the target-branch pipeline lands clean — skip if the user wants to move on immediately.
 
    **Always pass `expected_sha`, sourced from step 7's `merge_commit_sha`.** Without it, `ci_wait_run` picks whatever run is newest *in the list at that moment* — if GitHub/GitLab hasn't dispatched the new run for the commit that just landed yet (there is always some propagation delay after a merge), it can silently grade a PREVIOUS merge's already-completed run instead, returning `ok:true, final_status:"success"` for a commit nobody asked about. Reproduced live (`mcp-server-sdlc#523`): `waited_sec:0` with the wrong `sha` in the response was the only tell — no error, no warning. `expected_sha` closes this by filtering to the exact commit before grading anything.
@@ -98,6 +111,7 @@ Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix)
 - NEVER merge into a protected, non-default, non-`kahuna/*` branch — `branch_guard` STOPs this (target must be the live default or a `kahuna/*` sandbox)
 - Post-merge `ci_wait_run` (step 8) MUST pass `expected_sha` (from `merge_commit_sha`) and MUST use the same target ref as step 1's `branch_guard` call, never a hardcoded `"main"` — without `expected_sha` a propagation race can silently grade a stale run (`mcp-server-sdlc#523`); a hardcoded `main` fails outright on the `kahuna/*` sandbox path, with no human present to notice
 - Always squash + delete source branch
+- On a gated server, a gated PR/MR's `## Squash commit` block IS the squash commit: merge with no `squash_message`, and never draft a competing one (step 4)
 - Squash message replaces the entire commit history — make it comprehensive
 - Merge conflicts → STOP and report, do NOT attempt to resolve
 - Tool failure → report the `{ok: false, code, error}` envelope and suggest resolution

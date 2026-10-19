@@ -6,7 +6,7 @@
 # and a PR/MR becomes READY (reviewable, mergeable) only on a precheck pass, recorded as
 # the `precheck` commit status on its head (scripts/precheck-status.sh,
 # docs/precheck-status.md). This hook is the gate for the CLI path. mcp-server-sdlc's
-# pr_create / pr_ready will be the same gate for the MCP path once sdlc#592 ships. Gated:
+# pr_create / pr_ready are the same gate for the MCP path, from the release carrying #592. Gated:
 #   gh pr create            unless --draft / -d
 #   gh pr ready             unless --undo (that converts back to a draft)
 #   glab mr create          unless --draft
@@ -23,8 +23,8 @@
 # WHAT IT IS NOT. A guard rail for the spellings agents write, not a parser of every
 # argv gh and glab accept. It reads the separate, `=` and attached-value forms of the
 # flags it needs; a stranger spelling, `gh api`, or a script it can't see goes past it.
-# The backstops are at merge: /mmr checks the status on the head, and so will sdlc's
-# pr_merge once sdlc#592 ships. A required `precheck` check is the platform-side end
+# The backstops are at merge: /mmr checks the status on the head, and so does sdlc's
+# pr_merge from the release carrying #592. A required `precheck` check is the platform-side end
 # state. Seven review passes (#1235) each found another argv edge; past this point, a
 # new one belongs at those layers, not here.
 #

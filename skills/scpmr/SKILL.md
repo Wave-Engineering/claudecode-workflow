@@ -25,7 +25,18 @@ The PR/MR gate in one command (#1235): `/scp`, then `/precheck`, which opens the
 2. **Open the draft PR/MR**, if none exists (`pr_list({head: "<branch>"})`):
    - **Resolve the base, then validate it.** The base is the **live** default branch (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name` / GitLab `glab api "projects/:id" --jq .default_branch`), unless you are deliberately targeting a non-default branch such as a `kahuna/*` integration branch on a sandbox flight. Call `branch_guard({ role: "target", branch: <that base> })` and on `verdict == "warn"` **STOP**, surfacing `reason`.
    - On `pass`, **mark the issue in review FIRST**, per the lifecycle table (mark when you start a step): GitLab Status → `In Test`, then read it back. On GitHub the linked PR with `Closes #N` is the marker, so there's nothing to set.
-   - Then call `pr_create({title, body, base, head, draft: true})`. The title is 72 characters or fewer, in `type(scope): description` form. The body is in the CLAUDE.md PR/MR format: `## Summary`, `## Changes`, `## Linked Issues` with `Closes #N`, `## Test Plan` (what actually ran). Once sdlc#592 ships, `pr_create` also takes the `squash_message`, the exact commit that will land. If `pr_create` fails, put the issue back to `In progress`.
+   - Then call `pr_create({title, body, base, head, draft: true, squash_message})`. The title is 72 characters or fewer, in `type(scope): description` form. The body is in the CLAUDE.md PR/MR format: `## Summary`, `## Changes`, `## Linked Issues` with `Closes #N`, `## Test Plan` (what actually ran). If `pr_create` fails, put the issue back to `In progress`.
+   - **`squash_message` is the exact commit that will land** (mcp-server-sdlc#592). The server stores it in the body as a `## Squash commit` block, and `pr_merge` squashes from that block verbatim, so write it as the commit you want in `git log`:
+     - a subject in `type(scope): description` form, 72 characters or fewer, type one of `feat`, `fix`, `doc`, `style`, `refactor`, `test`, `chore` (never `docs`);
+     - a blank line;
+     - a body saying what lands and why, then `Closes #N` (or `Closes owner/repo#N`), then the trailer, in the form `Co-Authored-By: Name <email>`.
+
+     Don't put a `## Squash commit` heading in `body` yourself; the server refuses an ambiguous body (`squash_block_ambiguous`). If later commits change what lands, edit the block in the PR/MR body before the merge.
+   - **Pass it only where it governs.** Two conditions, and both must hold:
+     - `pr_create`'s schema lists `squash_message`. An older server's schema rejects the unknown field.
+     - The pair is NOT an integration pair (head `kahuna/*` or `campaign/*`, or base `kahuna/*`). The gate exempts those and never reads their block, so a block there would be a squash commit that doesn't land.
+
+     Otherwise omit it, and `/mmr` drafts the squash message at merge, as before.
    - A draft needs no precheck: it can't merge, and opening it is what starts CI on repos that run CI only for PRs/MRs.
 3. **`/precheck`**: reviews the pushed commits and reads CI. On a pass it posts the `precheck` status and marks the PR/MR **ready**, then STOPs for the merge call (or, under a kahuna, autochain or standing-grant exception, invokes `/mmr` itself).
 4. Report the PR/MR URL and its state: ready and waiting for the merge call, or a draft with what failed.

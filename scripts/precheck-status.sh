@@ -6,8 +6,8 @@
 #   - it is keyed on the SHA, so a new push moves HEAD and the mark goes stale by itself;
 #   - it works across worktrees, sessions and repos (sdlc's pr_create will read it remotely);
 #   - a reviewer sees it on the MR, and it can later become a required check.
-# The pr-ready-gate.sh hook consumes it, and so will mcp-server-sdlc's pr_create,
-# pr_ready and pr_merge once sdlc#592 ships. The contract — context, states, description — is docs/precheck-status.md;
+# The pr-ready-gate.sh hook consumes it, and so do mcp-server-sdlc's pr_create,
+# pr_ready and pr_merge from the release carrying #592. The contract — context, states, description — is docs/precheck-status.md;
 # change it there first.
 #
 # GitLab: the status is attached to the SHA's EXISTING pipeline (pipeline_id). A bare
