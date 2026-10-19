@@ -147,9 +147,14 @@ Then end your turn with a brief note:
 
 The `SessionStart{clear}` hook (`reseed-revive.sh`) fires on the fresh session, points it at
 the seed, and launches `reseed-kick.sh`, which types `/reseed revive` into the pane until
-the session acknowledges it (the `reseed-ack.sh` prompt hook removes a nonce). If no
-acknowledgement arrives, the kicker pages BJ via vox and `#call-4-bj`, naming the pane.
-Outcomes are logged to `~/.claude/logs/reseed-kick.log`.
+the session acknowledges it. Either signal counts: the `reseed-ack.sh` prompt hook removes
+a nonce when `/reseed revive` is submitted, or the session's transcript shows the agent's own
+tool call on the seed. So a revive through the Skill tool, or inside a turn that a peer
+message or task notification started, needs no prompt. While the session is busy with a turn,
+the kicker does not type, because a send would only queue behind the turn. When the session is
+idle and still hasn't revived, it sends once. If no acknowledgement arrives, it pages BJ via vox
+and `#call-4-bj`, naming the pane. Outcomes are logged to
+`~/.claude/logs/reseed-kick.log`.
 
 **If tmux is not available** (`$TMUX_PANE` empty): fall back to the manual flow:
 
