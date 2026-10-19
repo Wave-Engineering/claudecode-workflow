@@ -236,7 +236,7 @@ try {
     assert.match(src, /label: 'gate:trivy', phase: 'Trust gate', schema: TRIVY_SIG,/, `${f}: trivy signal must use TRIVY_SIG`)
     assert.match(src, /\)\.then\(trivyCoverage\)\.catch\(\(e\) => conservativeFail\('trivy', e\)\)/, `${f}: trivyCoverage must run on the agent result`)
   }
-  ok('trivy coverage: 2-of-4 HOLDs, a named unscanned lock HOLDs, a lone bun.lockb HOLDs declared or not, full passes through, a fail never becomes a pass and keeps its cause, bad counts conservative-fail, wired in source and bundle (#1247)')
+  ok('trivy coverage: 2-of-4 HOLDs, a named unscanned lock HOLDs, a lone bun.lockb HOLDs declared or not, full passes through, a fail never becomes a pass and keeps its cause, bad counts (and found 0 beside a named unscanned lock) conservative-fail, wired in source and bundle (#1247)')
 } catch (e) { bad('trivy coverage (#1247)', e) }
 
 // ── 3. promotion is CODE: mark-ready → pr_merge → delete-branch (#5) ──────────────────

@@ -377,6 +377,25 @@ def test_a_dependency_free_lock_names_the_real_escape(tmp_path: Path):
     assert "bun.lockb is bun's old binary format" not in proc.stderr, "no bun.lockb here"
 
 
+def test_a_mixed_zero_ingested_repo_names_both_escapes(tmp_path: Path):
+    """A lone bun.lockb in one package and a dependency-free package-lock.json
+    in another: each lock gets its own remedy, so both blocks print."""
+    repo = tmp_path / "repo"
+    (repo / "a").mkdir(parents=True)
+    (repo / "b").mkdir()
+    (repo / "a" / "package.json").write_text('{"name":"a","dependencies":{"left-pad":"1.3.0"}}\n')
+    (repo / "a" / "bun.lockb").write_bytes(b"\x00binary\x00")
+    (repo / "b" / "package.json").write_text('{"name":"b","version":"1.0.0"}\n')
+    (repo / "b" / "package-lock.json").write_text(
+        '{"name":"b","version":"1.0.0","lockfileVersion":3,"requires":true,'
+        '"packages":{"":{"name":"b","version":"1.0.0"}}}\n'
+    )
+    proc = _run_env(repo, _stub_trivy(tmp_path, '{"Results":[]}'))
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "bun's text lockfile, bun.lock" in proc.stderr, proc.stderr
+    assert "delete the empty lockfile: there is nothing to lock." in proc.stderr, proc.stderr
+
+
 def test_the_named_escape_passes(tmp_path: Path):
     """The escape the exit-2 message names works: with the empty lockfile
     deleted, check-scannable finds no lock, so a declaration applies and the

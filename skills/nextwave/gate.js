@@ -76,7 +76,7 @@ export const TRIVY_SIG = {
 // The agent reports whether the declaration exists, and the rule is applied here, not in the prompt.
 // Every HOLD names the rule that fired and keeps the agent's own detail AFTER it, never in place of
 // it: a scan that already failed (trivy missing, a DB pull that did not finish) must keep its cause,
-// and must not be relabelled ERRORED. Only a result whose counts cannot be read is an error.
+// and must not be relabelled ERRORED. Only a result whose counts cannot be read or squared is an error.
 function trivyHold(sig, why) {
   return { ...sig, signal: 'trivy', passed: false, detail: `${why}. ${sig.detail ?? ''}`.trim() }
 }
