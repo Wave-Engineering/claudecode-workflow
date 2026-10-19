@@ -4,17 +4,43 @@
 #
 #   sqtk lists                                     list all squawk lists
 #   sqtk show   <list>                             show a list + its squawks + glyph counts
-#   sqtk add    <list> "<text>"                    log a squawk (creates the list if new)
-#   sqtk set    <list> <seq> [--state S] [--text T]  update a squawk (S: open|confirmed|rejected|retired|recorded)
+#   sqtk add    <list> "<text>" [--no-prefix] [--force]
+#                                                  log a squawk (creates the list if new)
+#   sqtk set    <list> <seq> [--state S] [--text T] [--force]
+#                                                  update a squawk (S: open|confirmed|rejected|retired|recorded)
+#   sqtk attach <list> <seq> <file>…               attach images (jpeg/png/webp, ≤2 MB each, ≤5 per squawk)
+#   sqtk mine                                      this checkout's squawks, with their current state + text
+#   sqtk walk   <list>                             the list's open squawks, oldest first: "#seq  <text>"
 #   sqtk new    <name>                             create an empty list
 #   sqtk rmlist <name> --yes                        delete a list (cascades — ALL its squawks go)
 #
 # Config (env):
 #   SQUAWK_URL        base URL of the instance   (REQUIRED; no default — e.g. http://localhost:7700)
-#   SQUAWK_INITIALS   your initials; else derived from ./.claude/agent-identity.json; else "AI"
+#   SQUAWK_INITIALS   your initials; else derived from ./.claude/agent-identity.json (or the
+#                     git toplevel's); else "AI"
 #
 # Flags:
 #   --json            emit raw API JSON instead of formatted text
+#
+# add (#141):
+#   - Context prefix. The text becomes "[<dev-name>·<repo>] <text>", so a shared list says who
+#     wrote each line and from where. <dev-name> is .dev_name in ./.claude/agent-identity.json,
+#     else in the git toplevel's, else SQUAWK_INITIALS, else "AI"; <repo> is the git checkout's
+#     folder name (the main checkout's, from a linked worktree), else the cwd's basename. Text
+#     already starting "[<dev-name>·" is left alone. --no-prefix skips the prefix.
+#   - Dedup. add refuses (exit 3, naming the #seq) when an OPEN squawk on the list has the
+#     identical text after prefixing. --force adds it anyway.
+#   - The record of mine — a CONTRACT. Every successful add appends one entry to
+#     .claude/sqtk-mine.json at the git toplevel (else the cwd), a JSON array created if missing:
+#       [{"list": "<list name>", "seq": <per-list #seq>, "id": <squawk id>, "created_at": "<server timestamp>"}, …]
+#     written atomically (temp file, then mv). claudecode-workflow's drain hook reads this file
+#     (claudecode-workflow#1236): never change its shape without changing the hook. `mine` reads it.
+#     It must never be committed: unless git already ignores it, add appends
+#     `**/.claude/sqtk-*.json` (once) to the clone's info/exclude — per-clone, so no diff. The
+#     drain hook does the same for its .claude/sqtk-seen.json, with the same pattern.
+#
+# set --text refuses a new text that drops the existing text's trailing "→ …" answer (the new
+# text must still contain it); --force overrides.
 #
 # Note: squawks are never deleted — they change state (open → confirmed/rejected/retired/
 # recorded). confirmed (✓) and rejected (✗) are a yes/no verdict; to "remove" a squawk with
@@ -28,6 +54,9 @@ set -euo pipefail
 JSON_OUT=0
 
 die() { printf 'sqtk: %s\n' "$*" >&2; exit 1; }
+# Keep set -e on inside $(...) too, so a die() in a helper nested in a command substitution
+# stops the command rather than only its own subshell (one error, never a cascade).
+shopt -s inherit_errexit 2>/dev/null || die "bash 4.4 or newer is required"
 command -v curl >/dev/null || die "curl not found on PATH"
 command -v jq   >/dev/null || die "jq not found on PATH"
 
@@ -41,34 +70,84 @@ BASE="${SQUAWK_URL:-}"
 # Match the server's normalizeInitials: uppercase, alphanumerics only, <=3 chars.
 norm_initials() { printf '%s' "${1:-}" | tr '[:lower:]' '[:upper:]' | tr -cd 'A-Z0-9' | cut -c1-3; }
 
+# The agent identity's .dev_name, from ./.claude/agent-identity.json, else from the git
+# toplevel's (an agent that cd'd into a subdirectory is still itself); empty when neither has one.
+identity_name() {
+  local f name=""
+  for f in "./.claude/agent-identity.json" "$(toplevel)/.claude/agent-identity.json"; do
+    [[ -f "$f" ]] && name="$(jq -r '.dev_name // empty' "$f" 2>/dev/null || true)"
+    [[ -z "$name" ]] || break
+  done
+  printf '%s' "$name"
+}
+
 resolve_initials() {
   if [[ -n "${SQUAWK_INITIALS:-}" ]]; then norm_initials "$SQUAWK_INITIALS"; return; fi
-  local f="./.claude/agent-identity.json" name=""
-  [[ -f "$f" ]] && name="$(jq -r '.dev_name // empty' "$f" 2>/dev/null || true)"
-  local i; i="$(norm_initials "$name")"
+  local i; i="$(norm_initials "$(identity_name)")"
   if [[ -n "$i" ]]; then printf '%s' "$i"; else printf 'AI'; fi
+}
+
+# The git toplevel of the cwd, or the cwd itself outside a repo.
+toplevel() { git rev-parse --show-toplevel 2>/dev/null || pwd; }
+
+# The dev-name for add's context prefix: the agent identity, else SQUAWK_INITIALS, else "AI".
+resolve_dev_name() {
+  local name; name="$(identity_name)"
+  printf '%s' "${name:-${SQUAWK_INITIALS:-AI}}"
+}
+
+# The repo name for add's context prefix: the main checkout's folder, read from the common git
+# dir, so a linked worktree names its repo rather than its own folder. Else the cwd's basename.
+repo_name() {
+  local common
+  # --git-common-dir may answer relative to the cwd; cd + pwd makes it absolute on any git.
+  if ! common="$(git rev-parse --git-common-dir 2>/dev/null)" || ! common="$(CDPATH='' cd -- "$common" && pwd)"; then
+    basename "$PWD"; return 0
+  fi
+  if [[ "$common" == */.git ]]; then basename "${common%/.git}"; else basename "${common%.git}"; fi
+}
+
+# prefix_text TEXT -> "[<dev-name>·<repo>] TEXT", or TEXT as-is if it already carries this dev-name's prefix.
+prefix_text() {
+  local text="$1" dev repo
+  dev="$(resolve_dev_name)"
+  repo="$(repo_name)"
+  if [[ "$text" == "[$dev·"* ]]; then printf '%s' "$text"; else printf '[%s·%s] %s' "$dev" "$repo" "$text"; fi
+}
+
+# The record of mine (see the header — its shape is a contract).
+mine_file() { printf '%s/.claude/sqtk-mine.json' "$(toplevel)"; }
+
+# http METHOD PATH [CURL_ARGS…] -> prints the response body, a newline, then the HTTP status.
+# Dies only when the server can't be reached; unwrap() judges the status.
+http() {
+  [[ -n "$BASE" ]] || die "SQUAWK_URL is not set — point it at your instance, e.g. export SQUAWK_URL=http://localhost:7700 (local dev) or your deployed URL"
+  local method="$1" path="$2"; shift 2
+  curl -sS -X "$method" "$@" -w $'\n%{http_code}' "$BASE$path" \
+    || die "cannot reach $BASE — is the server running? (set SQUAWK_URL)"
+}
+
+# unwrap METHOD PATH RESPONSE -> prints the body of an http() response; dies on non-2xx.
+unwrap() {
+  local code="${3##*$'\n'}" out="${3%$'\n'*}"
+  if (( code < 200 || code >= 300 )); then
+    local msg; msg="$(printf '%s' "$out" | jq -r '.error // empty' 2>/dev/null || true)"
+    die "$1 $2 -> HTTP $code${msg:+: $msg}"
+  fi
+  printf '%s' "$out"
 }
 
 # api METHOD PATH [JSON_BODY] -> prints the response body; dies on non-2xx or network error.
 # Call it via `local x; x="$(api ...)"` (own line) so a die() propagates through set -e —
 # in argument position (`f "$(api ...)"`) the subshell's exit is swallowed.
 api() {
-  [[ -n "$BASE" ]] || die "SQUAWK_URL is not set — point it at your instance, e.g. export SQUAWK_URL=http://localhost:7700 (local dev) or your deployed URL"
-  local method="$1" path="$2" body="${3:-}" resp code out
+  local method="$1" path="$2" body="${3:-}" resp
   if [[ -n "$body" ]]; then
-    resp="$(curl -sS -X "$method" -H 'Content-Type: application/json' -d "$body" -w $'\n%{http_code}' "$BASE$path")" \
-      || die "cannot reach $BASE — is the server running? (set SQUAWK_URL)"
+    resp="$(http "$method" "$path" -H 'Content-Type: application/json' -d "$body")"
   else
-    resp="$(curl -sS -X "$method" -w $'\n%{http_code}' "$BASE$path")" \
-      || die "cannot reach $BASE — is the server running? (set SQUAWK_URL)"
+    resp="$(http "$method" "$path")"
   fi
-  code="${resp##*$'\n'}"
-  out="${resp%$'\n'*}"
-  if (( code < 200 || code >= 300 )); then
-    local msg; msg="$(printf '%s' "$out" | jq -r '.error // empty' 2>/dev/null || true)"
-    die "$method $path -> HTTP $code${msg:+: $msg}"
-  fi
-  printf '%s' "$out"
+  unwrap "$method" "$path" "$resp"
 }
 
 urienc() { jq -rn --arg s "${1:-}" '$s|@uri'; }
@@ -94,6 +173,82 @@ emit() {
 # Resolve a list name to its full record (list + squawks); dies on 404.
 get_list() { api GET "/api/lists/by-name?name=$(urienc "$1")"; }
 
+# find_list NAME -> like get_list, but prints nothing (instead of dying) when no such list exists.
+find_list() {
+  local resp; resp="$(http GET "/api/lists/by-name?name=$(urienc "$1")")"
+  [[ "${resp##*$'\n'}" == 404 ]] && return 0
+  unwrap GET /api/lists/by-name "$resp"
+}
+
+# squawk_at LIST SEQ -> the squawk at a list's per-list #seq (resolving it to the record, and so
+# the internal id, the API needs); dies when there is none.
+squawk_at() {
+  local data; data="$(get_list "$1")"
+  local sq; sq="$(jq -c --argjson q "$2" 'first(.squawks[] | select(.seq==$q)) // empty' <<<"$data")"
+  [[ -n "$sq" ]] || die "no squawk #$2 in list \"$1\""
+  printf '%s' "$sq"
+}
+
+# The info/exclude entry that keeps sqtk's per-clone records (sqtk-mine.json, and the kit drain
+# hook's sqtk-seen.json) out of commits. The hook writes the same pattern, so the two agree.
+MINE_EXCLUDE='**/.claude/sqtk-*.json'
+
+# ensure_ignored FILE : unless git already ignores FILE, append MINE_EXCLUDE to this clone's
+# info/exclude (per-clone, so it adds no diff), once. A no-op outside a git repo.
+ensure_ignored() {
+  local top; top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 0
+  git -C "$top" check-ignore -q "$1" && return 0
+  local ex; ex="$(git -C "$top" rev-parse --git-path info/exclude)" || return 1
+  [[ "$ex" == /* ]] || ex="$top/$ex"   # --git-path may answer relative to the toplevel
+  grep -qxF "$MINE_EXCLUDE" "$ex" 2>/dev/null && return 0
+  mkdir -p "${ex%/*}" || return 1
+  local sep=""; [[ -s "$ex" && -n "$(tail -c1 "$ex")" ]] && sep=$'\n'   # don't glue onto an unterminated last line
+  printf '%s%s\n' "$sep" "$MINE_EXCLUDE" >>"$ex"
+}
+
+# record_mine LIST SQUAWK_JSON : append {list, seq, id, created_at} to the record of mine,
+# atomically (a temp file in the same directory, then mv), after making sure git ignores it.
+# Dies, naming the squawk, on failure.
+record_mine() {
+  local f dir tmp seq
+  f="$(mine_file)"; dir="${f%/*}"
+  seq="$(jq -r '.seq' <<<"$2")"
+  local fail="squawk #$seq was added to \"$1\", but recording it in $f failed"
+  mkdir -p "$dir" || die "$fail: cannot create $dir"
+  # Serialize concurrent adds in this checkout (an agent's parallel tool calls): unlocked, two
+  # read-modify-writes lose an entry and two ignore checks both append. The lock is the .claude
+  # dir itself, so there is no lock file to leave behind; it is released when sqtk exits.
+  # The wait is bounded, so a lock held by a stray child process is an error, not a hang; it
+  # polls with -n because busybox's flock has no -w. The lock is best-effort: flock is Linux
+  # (util-linux or busybox), and where it is missing or cannot lock at all (e.g. a .claude dir
+  # on NFS) the write is still atomic, just unserialized. A real conflict is silent on both
+  # flocks, so any message from flock is such a failure.
+  if command -v flock >/dev/null; then
+    local lock waited=0 err
+    exec {lock}<"$dir" || die "$fail: cannot open $dir to lock it"
+    until err="$(flock -n "$lock" 2>&1)"; do
+      if [[ -n "$err" ]]; then
+        printf 'sqtk: warning: cannot lock %s (%s); recording without the lock\n' "$dir" "$err" >&2
+        break
+      fi
+      (( waited++ < 100 )) || die "$fail: could not lock $dir within 10s"
+      sleep 0.1
+    done
+  fi
+  if [[ -s "$f" ]] && ! jq -e 'type == "array"' "$f" >/dev/null 2>&1; then
+    die "$fail: the file is not a JSON array (left untouched)"
+  fi
+  ensure_ignored "$f" || die "$fail: cannot add $MINE_EXCLUDE to this clone's info/exclude"
+  tmp="$(mktemp "$dir/.sqtk-mine.XXXXXX")" || die "$fail: cannot write in $dir"
+  local entry; entry="$(jq -c --arg l "$1" '{list: $l, seq, id, created_at}' <<<"$2")"
+  if { if [[ -s "$f" ]]; then cat "$f"; else printf '[]'; fi; } \
+      | jq --argjson e "$entry" '. + [$e]' >"$tmp" && mv "$tmp" "$f"; then
+    return 0
+  fi
+  rm -f "$tmp"
+  die "$fail"
+}
+
 cmd_lists() {
   local data; data="$(api GET /api/lists)"
   emit "$data" 'if length==0 then "(no lists)" else (.[] | "#\(.id)  \(.name)") end'
@@ -109,34 +264,149 @@ cmd_show() {
 }
 
 cmd_add() {
-  [[ $# -ge 2 && -n "${1:-}" ]] || die "usage: sqtk add <list> \"<text>\""
+  local pos=() prefix=1 force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --no-prefix) prefix=0 ;;
+      --force)     force=1 ;;
+      *)           pos+=("$1") ;;
+    esac
+    shift
+  done
+  [[ ${#pos[@]} -ge 2 && -n "${pos[0]}" ]] || die "usage: sqtk add <list> \"<text>\" [--no-prefix] [--force]"
+  local list="${pos[0]}" text="${pos[1]}"
+  if (( prefix )); then text="$(prefix_text "$text")"; fi
+  if (( ! force )); then
+    local existing; existing="$(find_list "$list")"
+    if [[ -n "$existing" ]]; then
+      local dup; dup="$(jq -r --arg t "$text" \
+        'first(.squawks[] | select(.state=="open" and .text==$t) | .seq) // empty' <<<"$existing")"
+      if [[ -n "$dup" ]]; then
+        printf 'sqtk: open squawk #%s on "%s" already has this text — not adding a duplicate (--force to add it anyway)\n' \
+          "$dup" "$list" >&2
+        exit 3
+      fi
+    fi
+  fi
   local ini; ini="$(resolve_initials)"
-  local body; body="$(jq -n --arg l "$1" --arg t "$2" --arg i "$ini" '{list_name:$l,text:$t,initials:$i}')"
+  local body; body="$(jq -n --arg l "$list" --arg t "$text" --arg i "$ini" '{list_name:$l,text:$t,initials:$i}')"
   local data; data="$(api POST /api/squawks "$body")"
   emit "$data" '"squawked #\(.seq) \(.state|glyph) [\(.state)] \(.text)  (\(.initials))"'
+  record_mine "$list" "$data"
 }
+
+# The trailing "→ …" answer of a squawk's text ("" when it has none): from its last "→" to the
+# end, trailing whitespace trimmed. `set --text` must keep it unless --force.
+# shellcheck disable=SC2016
+ANSWER_JQ='(.text | split("→")) as $p
+  | if ($p | length) > 1 and ($p[-1] | test("\\S")) then "→" + ($p[-1] | sub("\\s+$"; "")) else "" end'
 
 cmd_set() {
   [[ $# -ge 2 && -n "${1:-}" && "${2:-}" =~ ^[0-9]+$ ]] \
-    || die "usage: sqtk set <list> <seq> [--state open|confirmed|rejected|retired|recorded] [--text \"<t>\"]"
+    || die "usage: sqtk set <list> <seq> [--state open|confirmed|rejected|retired|recorded] [--text \"<t>\"] [--force]"
   local list="$1" seq="$2"; shift 2
-  local state="" text="" have=0
+  local state="" text="" have=0 force=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --state) [[ $# -ge 2 ]] || die "--state needs a value"; state="$2"; shift 2; [[ -z "$state" ]] || have=1 ;;
       --text)  [[ $# -ge 2 ]] || die "--text needs a value";  text="$2";  shift 2; [[ -z "$text" ]]  || have=1 ;;
+      --force) force=1; shift ;;
       *) die "unknown flag for set: $1" ;;
     esac
   done
   (( have )) || die "provide --state and/or --text"
-  # Resolve the per-list #seq the caller sees to the internal squawk id the API needs.
-  local id; id="$(get_list "$list" | jq -r --argjson q "$seq" 'first(.squawks[] | select(.seq==$q) | .id) // empty')"
-  [[ -n "$id" ]] || die "no squawk #$seq in list \"$list\""
+  local sq; sq="$(squawk_at "$list" "$seq")"
+  if [[ -n "$text" ]] && (( ! force )); then
+    local answer; answer="$(jq -r "$ANSWER_JQ" <<<"$sq")"
+    if [[ -n "$answer" && "$text" != *"$answer"* ]]; then
+      die "set: the new --text drops #$seq's answer \"$answer\" — keep it in the text, or re-run with --force"
+    fi
+  fi
+  local id; id="$(jq -r '.id' <<<"$sq")"
   local ini; ini="$(resolve_initials)"
   local body; body="$(jq -n --arg i "$ini" --arg s "$state" --arg t "$text" \
     '{initials:$i} + (if $s!="" then {state:$s} else {} end) + (if $t!="" then {text:$t} else {} end)')"
   local data; data="$(api PATCH "/api/squawks/$id" "$body")"
   emit "$data" '"updated #\(.seq) \(.state|glyph) [\(.state)] \(.text)  (\(.initials))"'
+}
+
+# The server's image caps (MAX_IMAGE_BYTES in src/server/api.ts, MAX_IMAGES_PER_SQUAWK in
+# src/server/types.ts), checked here first so a refusal names the limit before any upload.
+MAX_IMAGE_BYTES=$(( 2 * 1024 * 1024 ))
+MAX_IMAGES=5
+
+# image_mime FILE -> image/jpeg, image/png or image/webp by magic bytes (never the extension);
+# nothing for any other content, SVG included.
+image_mime() {
+  local hex; hex="$(head -c 12 "$1" | od -An -tx1 | tr -d ' \n')"
+  case "$hex" in
+    ffd8ff*)                  printf 'image/jpeg' ;;
+    89504e470d0a1a0a*)        printf 'image/png' ;;
+    52494646????????57454250) printf 'image/webp' ;;   # "RIFF" <size> "WEBP"
+  esac
+}
+
+cmd_attach() {
+  [[ $# -ge 3 && -n "${1:-}" && "${2:-}" =~ ^[0-9]+$ ]] || die "usage: sqtk attach <list> <seq> <file>…"
+  local list="$1" seq="$2"; shift 2
+  local files=("$@") mimes=() f mime size
+  local sq; sq="$(squawk_at "$list" "$seq")"
+  jq -e 'has("image_ids")' <<<"$sq" >/dev/null \
+    || die "attach: image attachments are not supported by this server ($BASE)"
+  # Every check runs before any upload, so a refusal never leaves a partial attach.
+  for f in "${files[@]}"; do
+    [[ -f "$f" && -r "$f" ]] || die "attach: cannot read $f"
+    mime="$(image_mime "$f")"
+    [[ -n "$mime" ]] \
+      || die "attach: $f is not a jpeg, png or webp image — only those are accepted (checked by content, not extension; SVG is refused)"
+    size="$(wc -c <"$f" | tr -d ' ')"
+    (( size <= MAX_IMAGE_BYTES )) \
+      || die "attach: $f is $(( (size + 1023) / 1024 )) KB, over the 2 MB limit per image — downscale it first, e.g. magick in.png -resize 1600x1600\> out.webp"
+    mimes+=("$mime")
+  done
+  local have; have="$(jq '.image_ids | length' <<<"$sq")"
+  (( have + ${#files[@]} <= MAX_IMAGES )) \
+    || die "attach: #$seq already has $have image(s); ${#files[@]} more would pass the limit of $MAX_IMAGES per squawk"
+  local id; id="$(jq -r '.id' <<<"$sq")"
+  local i resp data="" path="/api/squawks/$id/images"
+  for i in "${!files[@]}"; do
+    resp="$(http POST "$path" -H "Content-Type: ${mimes[i]}" --data-binary "@${files[i]}")"
+    data="$(unwrap POST "$path" "$resp")"
+    if (( ! JSON_OUT )); then
+      printf 'attached %s to #%s (%s/%s images)\n' "${files[i]}" "$seq" "$(jq '.image_ids | length' <<<"$data")" "$MAX_IMAGES"
+    fi
+  done
+  if (( JSON_OUT )); then printf '%s\n' "$data" | jq .; fi
+}
+
+# mine: the record of mine joined to each squawk's current state + text on the server (one
+# fetch per list). A squawk whose list or record is gone shows as gone.
+cmd_mine() {
+  local f; f="$(mine_file)"
+  local mine='[]'
+  if [[ -s "$f" ]]; then
+    jq -e 'type == "array"' "$f" >/dev/null 2>&1 || die "$f is not a JSON array — fix or remove it"
+    mine="$(cat "$f")"
+  fi
+  local name rec lists=""
+  while IFS= read -r name; do
+    rec="$(find_list "$name")"
+    lists+="$(jq -c --arg n "$name" '{($n): .}' <<<"${rec:-null}")"$'\n'
+  done < <(jq -r '[.[].list] | unique[]' <<<"$mine")
+  local data; data="$(jq -c --slurpfile L <(printf '%s' "$lists") '($L | add // {}) as $lists
+    | map(. as $r | ([$lists[$r.list].squawks[]? | select(.id == $r.id)] | first) as $sq
+          | $r + {state: $sq.state, text: $sq.text})' <<<"$mine")"
+  emit "$data" 'if length == 0 then "(no squawks recorded in this checkout yet)"
+    else .[] | if .state == null then "\(.list) #\(.seq) (gone from the server)"
+               else "\(.list) #\(.seq) \(.state|glyph) [\(.state)] \(.text)" end end'
+}
+
+# walk: the list's open squawks, oldest first, one "#seq  <text>" per line, for batch decisions.
+cmd_walk() {
+  [[ $# -ge 1 && -n "${1:-}" ]] || die "usage: sqtk walk <list>"
+  local data; data="$(get_list "$1")"
+  local open; open="$(jq -c '[.squawks[] | select(.state == "open")] | sort_by(.seq)' <<<"$data")"
+  emit "$open" 'if length == 0 then "(no open squawks)" else .[] | "#\(.seq)  \(.text)" end'
 }
 
 cmd_new() {
@@ -164,14 +434,22 @@ sqtk — client CLI for Squawkie-Talkie
 
   sqtk lists                                       list all squawk lists
   sqtk show   <list>                               show a list + its squawks + glyph counts
-  sqtk add    <list> "<text>"                      log a squawk (creates the list if new)
-  sqtk set    <list> <seq> [--state S] [--text T]  update a squawk
+  sqtk add    <list> "<text>" [--no-prefix] [--force]
+                                                   log a squawk (creates the list if new)
+  sqtk set    <list> <seq> [--state S] [--text T] [--force]
+                                                   update a squawk
                                                    (S: open|confirmed|rejected|retired|recorded)
+  sqtk attach <list> <seq> <file>…                 attach images: jpeg/png/webp, ≤2 MB each, ≤5 per squawk
+  sqtk mine                                        this checkout's squawks, with their current state + text
+  sqtk walk   <list>                               the list's open squawks, oldest first: "#seq  <text>"
   sqtk new    <name>                               create an empty list
   sqtk rmlist <name> --yes                          delete a list (cascades)
 
   --json    emit raw API JSON
 
+add prefixes the text "[<dev-name>·<repo>] " (--no-prefix skips it), refuses an open duplicate
+  (exit 3; --force adds anyway) and records the squawk in .claude/sqtk-mine.json, which `mine` reads.
+set --text refuses to drop the existing text's trailing "→ …" answer, unless --force.
 env: SQUAWK_URL (REQUIRED — e.g. http://localhost:7700) · SQUAWK_INITIALS (else from agent identity)
 squawks are referenced by their per-list #seq (what show/add print), and change state, never delete.
 states: ○ open · ✓ confirmed · ✗ rejected · ◌ retired · ↗ recorded
@@ -191,6 +469,9 @@ main() {
     show)   cmd_show   "${rest[@]}" ;;
     add)    cmd_add    "${rest[@]}" ;;
     set)    cmd_set    "${rest[@]}" ;;
+    attach) cmd_attach "${rest[@]}" ;;
+    mine)   cmd_mine   "${rest[@]}" ;;
+    walk)   cmd_walk   "${rest[@]}" ;;
     new)    cmd_new    "${rest[@]}" ;;
     rmlist) cmd_rmlist "${rest[@]}" ;;
     help|-h|--help) usage ;;
