@@ -425,8 +425,8 @@ def test_a_result_with_no_packages_does_not_ingest_its_lock(tmp_path: Path):
 
 def test_a_go_module_is_ingested_under_its_go_mod(tmp_path: Path):
     """check-scannable.sh counts the go.sum, and trivy names the module by the
-    go.mod beside it (measured, trivy 0.74.0: Target `gomod/go.mod`). Either
-    name covers the lock."""
+    go.mod beside it (measured, trivy 0.74.0: the Target is the go.mod path,
+    never the go.sum). Either name covers the lock."""
     repo = tmp_path / "repo"
     (repo / "svc").mkdir(parents=True)
     (repo / "svc" / "go.mod").write_text("module example.com/m\n\ngo 1.21\n")

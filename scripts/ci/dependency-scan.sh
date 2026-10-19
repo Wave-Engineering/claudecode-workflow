@@ -91,9 +91,11 @@ if ((scannable_rc != 0)); then
 	exit 4
 fi
 
-# How many the PRE-scan found. Compared against the ingested count below, because
-# "zero ingested" is only the extreme case: PARTIAL coverage is the same defect
-# wearing a pass. cc-workflow itself was an instance before the --include-dev-deps
+# How many the PRE-scan found. Not the coverage test: coverage is matched lock by
+# lock, by name, against trivy's Results below (#1247), and this number only checks
+# that the `[scannable]` names read there are the whole counted set. "Zero
+# ingested" is the extreme case: PARTIAL coverage is the same defect wearing a
+# pass. cc-workflow itself was an instance before the --include-dev-deps
 # fix below: 2 scannable (3 in a checkout carrying the gitignored .claude/ copy),
 # only 1 ingested — not because trivy cannot parse bun.lock, but because both
 # bun.lock manifests here are entirely devDependencies, which trivy suppresses
@@ -103,13 +105,13 @@ scannable_n="$(printf '%s' "$scannable_out" |
 scannable_n="${scannable_n:-0}"
 
 # --- the scan ------------------------------------------------------------------
-# --skip-dirs MIRRORS check-scannable.sh's PRUNE list. Without it the two counts
-# are over DIFFERENT file sets — it prunes node_modules/vendor/dist/... and trivy
-# does not — so `coverage: N of M` would compare populations that do not
-# correspond. In an npm repo with a populated node_modules, ingested VENDORED
-# lockfiles could push N >= M while zero of the repo's own manifests were parsed,
-# masking exactly the defect this script exists to find. It can also print the
-# nonsense `coverage: 3 of 2`. Keep this list in step with check-scannable.sh.
+# --skip-dirs MIRRORS check-scannable.sh's PRUNE list, so trivy reads the file set
+# check-scannable.sh counts: it prunes node_modules/vendor/dist/... and trivy,
+# unasked, does not. Since coverage is matched by name (#1247), a VENDORED lockfile
+# can no longer stand in for one of the repo's own (its Result is outside the
+# denominator and covers nothing), but without this list its Results, and their
+# findings, would still decide a verdict about dependencies the repo does not
+# declare. Keep this list in step with check-scannable.sh.
 SKIP_DIRS=(--skip-dirs "**/node_modules" --skip-dirs "**/dist" --skip-dirs "**/build"
 	--skip-dirs "**/vendor" --skip-dirs "**/.venv" --skip-dirs "**/venv" --skip-dirs "**/target")
 
@@ -122,12 +124,13 @@ SKIP_DIRS=(--skip-dirs "**/node_modules" --skip-dirs "**/dist" --skip-dirs "**/b
 # suppresses dev/test dependencies by default, and a project whose entire
 # dependency tree is dev-only (a bun-based tools repo is the measured case —
 # @types/*, typescript, nothing else) scans ZERO packages without it, while
-# still exiting clean and still emitting a Results entry for the manifest —
-# so `manifests` below reads nonzero and the "zero ingested" guard never
-# fires. That is a silent false PASS, indistinguishable from a real one
-# unless you check the package count, which is exactly the defect class
-# this whole script exists to close. check-scannable.sh documents this same
-# gap and explicitly leaves closing it to whatever runs the actual scan.
+# still exiting clean and still emitting a Results entry for the manifest.
+# Counted as a Result, that read as ingested: a silent false PASS, which is
+# exactly the defect class this whole script exists to close. Matched by
+# name below, a Result with no packages leaves its lock UNSCANNED, so
+# without the flag every such repo would FAIL instead, on a lock that is
+# fine. check-scannable.sh documents this same gap and explicitly leaves
+# closing it to whatever runs the actual scan.
 #
 # --list-all-pkgs is ALSO required, not just --include-dev-deps: it only
 # became trivy's default in v0.67.0, and this fleet pins no minimum trivy

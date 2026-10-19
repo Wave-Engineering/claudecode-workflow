@@ -136,8 +136,7 @@ done
 # Every requirements file REQ_FIND matches counts, though trivy's pip analyzer
 # reads only a file named exactly `requirements.txt` (#1247). dependency-scan.sh
 # closes that by scanning each of the others alone under the name trivy reads,
-# and it takes the list from the `[scannable] … pinned entr…` lines below, so
-# keep their shape.
+# and it takes the list from the `[scannable] … pinned entr…` lines below.
 while IFS= read -r req; do
 	[[ -n "$req" ]] || continue
 	pinned="$(grep -cE '^[[:space:]]*[A-Za-z0-9._-]+[[:space:]]*===?[[:space:]]*[0-9]' "$req" 2>/dev/null || true)"
@@ -154,6 +153,11 @@ done < <(find_reqs)
 # DENOMINATOR FIRST, ALWAYS — before any verdict, and on every path including the
 # passing one. The entire failure this guards against is a verdict printed
 # without the count that qualifies it.
+#
+# dependency-scan.sh PARSES this output (#1247): every `  [scannable] ./<path>`
+# line is its coverage denominator, by name, and their number must equal the
+# count on the summary line. Keep both shapes. A reshaped line still fails
+# safe there (exit 5, or the lock reported UNSCANNED), but it fails every scan.
 echo "check-scannable: ${scannable} scannable manifest(s) in $ROOT"
 ((${#REPORT[@]})) && printf '%s\n' "${REPORT[@]}"
 
