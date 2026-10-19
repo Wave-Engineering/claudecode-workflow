@@ -75,13 +75,31 @@ def test_precheck_fallback_scans_siblings_like_the_script():
     m = re.search(r"pinned=\"\$\(grep -cE '([^']+)' \"\$req\"", script)
     assert m, "check-scannable.sh pin test not found; update this extraction with it"
     body = (REPO_ROOT / "skills" / "precheck" / "SKILL.md").read_text()
-    assert f"grep -cE '{m.group(1)}' '<sibling>'" in body, (
-        "the fallback must test sibling pins with check-scannable.sh's own regex"
+    assert f"grep -cE '{m.group(1)}' '<that file>'" in body, (
+        "the fallback must test pins with check-scannable.sh's own regex"
     )
     flat = " ".join(body.split())
     assert "leave it out of the denominator and name it as unpinned" in flat
     assert "findings count toward the verdict exactly like the main scan's" in flat
     assert "<same flags>" not in body, "a placeholder for flags is not runnable"
+    # The FULL denominator (babelfish's #1269 review): the fallback runs the trust
+    # gate's own find, byte for byte, so a lone bun.lockb or a pinned lock trivy
+    # read nothing from enters it and can be named UNSCANNED. The gate's find is
+    # taken from gate.js's source and un-escaped, so the two cannot drift.
+    gate = (REPO_ROOT / "skills" / "nextwave" / "gate.js").read_text()
+    g = re.search(r"^    `  (find \$\{targetRepoDir\} .+ -print)`,$", gate, re.M)
+    assert g, "gate.js trivy find not found; update this extraction with it"
+    gate_find = g.group(1).replace("${targetRepoDir}", "<repo_root>").replace("\\\\", "\\")
+    assert f"  {gate_find}\n" in body, "the fallback must run the trust gate's own find"
+    # Its requirements predicate is check-scannable.sh's REQ_FIND, so all three agree.
+    r = re.search(r"^REQ_FIND=\(\\\( (.+) \\\)\)$", script, re.M)
+    assert r, "check-scannable.sh REQ_FIND not found; update this extraction with it"
+    assert r.group(1) in gate_find, "gate.js's find must carry check-scannable.sh's REQ_FIND"
+    for layout in ("'*requirements*.txt'", "'*/requirements/*.txt'"):
+        assert layout in r.group(1), f"REQ_FIND lost {layout}"
+    assert "Any UNSCANNED lock -> the checklist item FAILS" in flat
+    assert "a bun.lockb with a bun.lock in the same directory" in flat
+    assert re.search(r"^\s+6\s+PARTIAL COVERAGE .*-> checklist$", body, re.M), "exit 6 must be in Job C's table"
 
 
 @trivy_required
@@ -297,9 +315,13 @@ def test_stub_present_but_uningested_exits_2(tmp_path: Path):
     assert "ingested ZERO" in proc.stdout + proc.stderr
 
 
-def test_stub_partial_coverage_warns_but_still_passes(tmp_path: Path):
+def test_stub_partial_coverage_exits_6(tmp_path: Path):
     """SOME manifests ingested, not all — the common case, distinct from the
     zero-ingested extreme above.
+
+    #1247: this used to exit 0 with a COVERS note, but Job C and the autochain
+    gate both read exit 0 as PASS, so /precheck passed the very shape the trust
+    gate's trivyCoverage() HOLDs. A partial run now exits 6, which fails.
 
     cc-workflow's own bun.lock manifests used to demonstrate this for free
     (1 of 2 ingested) until the --include-dev-deps fix closed that gap —
@@ -314,14 +336,28 @@ def test_stub_partial_coverage_warns_but_still_passes(tmp_path: Path):
     # only one of them, mirroring a scanner that silently skips one manifest.
     payload = '{"Results":[{"Target":"requirements.txt","Type":"pip","Packages":[{"Name":"flask"}]}]}'
     proc = _run_env(repo, _stub_trivy(tmp_path, payload))
-    assert proc.returncode == 0, (
-        f"partial coverage must still PASS (it is not zero-ingested) — "
-        f"the warning carries the shortfall, not a failing exit code\n"
+    assert proc.returncode == 6, (
+        f"partial coverage must FAIL with its own code, not pass with a note\n"
         f"{proc.stdout}{proc.stderr}"
     )
     assert "coverage: 1 of 2" in proc.stdout, proc.stdout
     assert "WARNING" in proc.stdout + proc.stderr, "shortfall must not be silent"
-    assert "COVERS 1/2" in proc.stdout, "the verdict itself must carry the shortfall"
+    assert "FAIL — PARTIAL COVERAGE: 1 of 2 scannable manifest(s) ingested, 1 pinned pip lock(s) UNSCANNED" in proc.stderr, proc.stderr
+    assert "PASS" not in proc.stdout, "a partial run must print no PASS verdict"
+
+
+def test_a_lone_bun_lockb_beside_a_pip_lock_exits_6(tmp_path: Path):
+    """babelfish's #1269 review case: trivy cannot parse bun.lockb, so a pinned
+    requirements.txt beside one used to read `PASS … (COVERS 1/2)` with rc 0.
+    The shortfall is not a pip lock, so the FAIL line must not claim to name one."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("flask==3.0.0\n")
+    (repo / "package.json").write_text('{"name":"p","dependencies":{"left-pad":"1.3.0"}}\n')
+    (repo / "bun.lockb").write_bytes(b"\x00binary\x00")
+    proc = _run_env(repo, _stub_trivy(tmp_path, CLEAN_JSON))
+    assert proc.returncode == 6, proc.stdout + proc.stderr
+    assert "FAIL — PARTIAL COVERAGE: 1 of 2 scannable manifest(s) ingested. An unscanned lock is not a clean one." in proc.stderr, proc.stderr
 
 
 def test_stub_scanner_error_exits_5_NOT_2(tmp_path: Path):
@@ -476,7 +512,7 @@ def test_a_finding_in_a_sibling_lock_fails_the_scan(tmp_path: Path):
 
 
 def test_a_pinned_lock_trivy_ingests_nothing_from_is_named_unscanned(tmp_path: Path):
-    """The honest denominator: the shortfall names the file, and the verdict says so."""
+    """The honest denominator: the shortfall names the file, and the run fails."""
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "requirements.txt").write_text("flask==3.0.0\n")
@@ -484,10 +520,36 @@ def test_a_pinned_lock_trivy_ingests_nothing_from_is_named_unscanned(tmp_path: P
     main = f'{{"Results":[{_pip("requirements.txt", "flask")}]}}'
     proc = _run_env(repo, _routing_stub(tmp_path, main, SIBLING_TWO))
     out = proc.stdout + proc.stderr
-    assert proc.returncode == 0, out
+    assert proc.returncode == 6, out
     assert "coverage: 1 of 2" in proc.stdout, out
     assert "UNSCANNED — 1 pinned pip lock(s) trivy ingested nothing from:\n  - requirements-odd.txt" in proc.stderr, out
-    assert "(1 pip lock(s) UNSCANNED — see above)" in proc.stdout, out
+    assert "1 pinned pip lock(s) UNSCANNED (named above)" in proc.stderr, out
+
+
+@pytest.mark.parametrize(
+    "layout",
+    ["dev-requirements.txt", "requirements/base.txt", "app/requirements/test.txt"],
+)
+def test_other_pip_lock_layouts_are_counted_and_scanned_alone(tmp_path: Path, layout: str):
+    """#1247: the prefix form and the pip-tools requirements/<name>.txt layout
+    were invisible on every path (no count, no scan, no report) because the
+    match was the basename glob `requirements*.txt`. check-scannable.sh's
+    REQ_FIND now matches them, so each is counted and scanned alone like any
+    other pip lock trivy will not read under its own name."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("flask==3.0.0\n")
+    lock = repo / layout
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("pytest==8.0.0\nwheel==0.43.0\n")
+    main = f'{{"Results":[{_pip("requirements.txt", "flask")}]}}'
+    proc = _run_env(repo, _routing_stub(tmp_path, main, SIBLING_TWO))
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 0, out
+    assert "coverage: 2 of 2 scannable manifest(s) ingested" in proc.stdout, out
+    assert f"{layout}  (pip, 2 packages, 0 finding(s); scanned alone as requirements.txt)" in proc.stdout, out
+    calls = (tmp_path / "calls.log").read_text()
+    assert "SIBLING\npytest==8.0.0\nwheel==0.43.0\n" in calls, calls
 
 
 def test_a_sibling_trivy_reads_in_place_is_not_counted_twice(tmp_path: Path):

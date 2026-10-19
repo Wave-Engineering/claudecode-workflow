@@ -146,7 +146,7 @@ try {
   // #1247: trivy reads only the exact name requirements.txt, so siblings are scanned alone under it,
   // a partial run fails, and the agent returns the counts the code-side rule below re-checks.
   assert.match(tv, /pip analyzer reads ONLY a file named exactly requirements\.txt/)
-  assert.match(tv, /cp <that file> \$d\/requirements\.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet \$d; rm -rf \$\{d:\?\}/)
+  assert.match(tv, /cp '<that file>' \$d\/requirements\.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet \$d; rm -rf \$\{d:\?\}/)
   assert.match(tv, /PARTIAL COVERAGE\s+FAILS/)
   assert.match(tv, /rm -rf \$\{d:\?\}\nIts HIGH\/CRITICAL findings count toward the verdict exactly like the main scan's\./) // as in SKILL.md's fallback
   assert.match(tv, /found \(the denominator: lines the find printed, less the two exclusions above\), ingested\s+\(how many of those are INGESTED\), unscanned/)
@@ -165,6 +165,11 @@ try {
   const pinRe = cs.match(/pinned="\$\(grep -cE '([^']+)' "\$req"/)?.[1]
   assert.ok(pinRe, 'check-scannable.sh pin test not found; update this extraction with it')
   assert.ok(tv.includes(`grep -cE '${pinRe}' <that file>`), 'trivy prompt must test pins with check-scannable.sh\'s own regex')
+  // The requirements PATTERNS are single-sourced the same way: check-scannable.sh's REQ_FIND,
+  // which also reaches dev-requirements.txt and the pip-tools requirements/<name>.txt layout.
+  const reqFind = cs.match(/^REQ_FIND=\(\\\( (.+) \\\)\)$/m)?.[1]
+  assert.ok(reqFind, 'check-scannable.sh REQ_FIND not found; update this extraction with it')
+  assert.ok(tv.includes(` -o ${reqFind} \\) -print`), 'trivy find must carry check-scannable.sh\'s REQ_FIND')
   assert.match(tv, /where it prints 0, leave that file OUT of the denominator/)
   ok('trivy prompt: pip siblings scanned alone, partial coverage fails, unpinned requirements out of the denominator as in check-scannable.sh, counts returned (#1247)')
 } catch (e) { bad('signal prompts', e) }
@@ -186,15 +191,21 @@ try {
   assert.match(named.detail, /PARTIAL COVERAGE \(HOLD\): counts claim full coverage \(3 of 3\) yet name unscanned lock\(s\); UNSCANNED: requirements-dev\.txt/)
   const failing = { signal: 'trivy', passed: false, detail: 'CVE-1 fixable', found: 4, ingested: 4, unscanned: [] }
   assert.equal(trivyCoverage(failing).passed, false, 'the rule never turns a fail into a pass')
-  // Zero ingested stays the prompt's call: only the agent can see a .no-scannable-dependencies.
-  const declared = { signal: 'trivy', passed: true, detail: 'declared', found: 1, ingested: 0, unscanned: ['requirements.txt'] }
-  assert.deepEqual(trivyCoverage(declared), declared)
+  // Zero ingested passes ONLY with a declaration, checked here in code: a lone bun.lockb (found 1,
+  // ingested 0) cannot ride through on an agent's reading of the prompt.
+  const declared = { signal: 'trivy', passed: true, detail: 'declared', found: 1, ingested: 0, unscanned: ['bun.lockb'], declared: true }
+  assert.deepEqual(trivyCoverage(declared), declared, 'a declared zero-ingested repo passes through to the prompt verdict')
+  const lone = trivyCoverage({ ...declared, declared: false })
+  assert.equal(lone.passed, false, 'a lone bun.lockb with no declaration must HOLD')
+  assert.match(lone.detail, /nothing ingested \(1 lockfile\(s\) found\) and no \.no-scannable-dependencies declaration; UNSCANNED: bun\.lockb/)
+  assert.equal(trivyCoverage({ ...declared, found: 0, unscanned: [], declared: undefined }).passed, false, 'nothing found and nothing declared HOLDs')
+  assert.equal(trivyCoverage({ ...declared, found: 0, unscanned: [] }).passed, true, 'nothing found, but declared, passes through')
   for (const counts of [{}, { found: 2 }, { found: 2, ingested: 3 }, { found: 2, ingested: -1 }, { found: 1.5, ingested: 1 }]) {
     const r = trivyCoverage({ signal: 'trivy', passed: true, unscanned: [], ...counts })
     assert.equal(r.passed, false, `missing or inconsistent counts must conservative-fail: ${JSON.stringify(counts)}`)
   }
   assert.equal(trivyCoverage(undefined).passed, false)
-  assert.deepEqual(TRIVY_SIG.required, ['signal', 'passed', 'found', 'ingested', 'unscanned'])
+  assert.deepEqual(TRIVY_SIG.required, ['signal', 'passed', 'found', 'ingested', 'unscanned', 'declared'])
   // A pure rule proves nothing if the workflow stops calling it: pin the wiring in source AND bundle.
   for (const f of ['per-wave-workflow.js', 'per-wave-workflow.bundled.js']) {
     const src = readFileSync(new URL(`../../skills/nextwave/${f}`, import.meta.url), 'utf8')

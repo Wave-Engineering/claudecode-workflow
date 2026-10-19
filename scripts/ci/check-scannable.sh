@@ -71,6 +71,16 @@ find_files() {
 	find . \( "${PRUNE[@]}" \) -prune -o -type f -name "$1" -print 2>/dev/null
 }
 
+# Every pip requirements file, not only `requirements.txt` (#1247): the
+# `requirements-dev.txt` sibling, the `dev-requirements.txt` prefix form, and the
+# pip-tools `requirements/<name>.txt` layout. THE single source of this predicate:
+# gate.js's trivySignalPrompt and SKILL.md's Job C fallback carry it verbatim, and
+# their tests extract it from this line, so keep it on one line.
+REQ_FIND=(\( -name '*requirements*.txt' -o -path '*/requirements/*.txt' \))
+find_reqs() {
+	find . \( "${PRUNE[@]}" \) -prune -o -type f "${REQ_FIND[@]}" -print 2>/dev/null
+}
+
 scannable=0
 declare -a REPORT=()
 
@@ -123,10 +133,11 @@ done
 # `==` only. `>=` and `~=` are ranges, and a range is not an installed version,
 # so they parse to nothing for the same reason a bare name does.
 #
-# Every `requirements*.txt` counts, though trivy's pip analyzer reads only a file
-# named exactly `requirements.txt` (#1247). dependency-scan.sh closes that by
-# scanning each sibling alone under the name trivy reads, and it takes the list
-# from the `[scannable] … pinned entr…` lines below, so keep their shape.
+# Every requirements file REQ_FIND matches counts, though trivy's pip analyzer
+# reads only a file named exactly `requirements.txt` (#1247). dependency-scan.sh
+# closes that by scanning each of the others alone under the name trivy reads,
+# and it takes the list from the `[scannable] … pinned entr…` lines below, so
+# keep their shape.
 while IFS= read -r req; do
 	[[ -n "$req" ]] || continue
 	pinned="$(grep -cE '^[[:space:]]*[A-Za-z0-9._-]+[[:space:]]*===?[[:space:]]*[0-9]' "$req" 2>/dev/null || true)"
@@ -137,7 +148,7 @@ while IFS= read -r req; do
 	elif [[ "$entries" =~ ^[0-9]+$ ]] && ((entries > 0)); then
 		REPORT+=("  [UNSCANNABLE] $req — entries present but none pinned with '=='; trivy matches CVEs against versions")
 	fi
-done < <(find_files 'requirements*.txt')
+done < <(find_reqs)
 
 # --- verdict ------------------------------------------------------------------
 # DENOMINATOR FIRST, ALWAYS — before any verdict, and on every path including the

@@ -43,6 +43,12 @@
 #      trivy's vulnerability DB, a rate-limited or air-gapped network —
 #      expect to hit this, and never treat an unmapped/unrecognized rc as a
 #      pass.
+#   6  PARTIAL COVERAGE — some locks ingested, some not: a pinned pip lock named
+#      UNSCANNED, or fewer manifests ingested than check-scannable.sh counted
+#      (#1247). A pass over part of the denominator is not a pass, because an
+#      unscanned lock is not a clean one. The trust gate's trivyCoverage() HOLDs
+#      the same shape, so /precheck must not PASS it. Findings still exit 1
+#      first; the declaration rescues only the zero-ingested case (2).
 set -uo pipefail
 
 ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
@@ -170,9 +176,10 @@ raw="$(scan "$ROOT" "the repo" "${SKIP_DIRS[@]}")" || exit $?
 printf '%s' "$raw" >"$work/main.json"
 
 # --- pip locks trivy will not read under their own name (#1247) -----------------
-# trivy's pip analyzer reads ONLY a file named exactly `requirements.txt`. A
-# sibling lock (requirements-dev.txt, requirements-build.txt) is skipped with no
-# warning, though check-scannable.sh rightly counts it, so the coverage line
+# trivy's pip analyzer reads ONLY a file named exactly `requirements.txt`. Any
+# other pip lock (requirements-dev.txt, dev-requirements.txt, the pip-tools
+# requirements/base.txt) is skipped with no warning, though check-scannable.sh
+# rightly counts it (its REQ_FIND matches all of them), so the coverage line
 # below could never close. Measured: a dev lock of 209 packages, never examined.
 #
 # So each sibling is scanned ALONE: copied into an empty directory under the one
@@ -186,8 +193,12 @@ n=0
 while IFS= read -r lock; do
 	[[ -n "$lock" && "$(basename "$lock")" != requirements.txt ]] || continue
 	n=$((n + 1))
-	mkdir "$work/sib-$n"
-	cp -- "$ROOT/$lock" "$work/sib-$n/requirements.txt"
+	# A lock that cannot be staged was never scanned: a tooling error (5), never
+	# a silent skip that the coverage line would only later call partial.
+	if ! mkdir "$work/sib-$n" || ! cp -- "$ROOT/$lock" "$work/sib-$n/requirements.txt"; then
+		echo "dependency-scan: FAIL — could not stage ${lock} for its own scan" >&2
+		exit 5
+	fi
 	sib_raw="$(scan "$work/sib-$n" "$lock")" || exit $?
 	printf '%s' "$sib_raw" >"$work/sib-$n.json"
 	printf '%s\t%s\n' "$lock" "$work/sib-$n.json" >>"$work/siblings.tsv"
@@ -295,7 +306,7 @@ if ((scannable_n > 0)); then
 	echo "dependency-scan: coverage: ${manifests} of ${scannable_n} scannable manifest(s) ingested"
 	if ((manifests > 0)) && ((manifests < scannable_n)); then
 		echo "dependency-scan: WARNING — $((scannable_n - manifests)) scannable manifest(s) NOT ingested." >&2
-		echo "  A PASS below covers only what was ingested. The remainder is unscanned, not clean." >&2
+		echo "  The remainder is unscanned, not clean, so this run cannot pass (exit 6 below)." >&2
 	fi
 fi
 unscanned="$(sed -n "s/^UNSCANNED$(printf '\t')//p" <<<"$summary")"
@@ -332,6 +343,22 @@ if ((findings > 0)); then
 	exit 1
 fi
 
+# --- partial coverage (#1247) -------------------------------------------------
+# Some ingested, some not. This used to exit 0 with a COVERS note, on the theory
+# that a human reads the checklist; but Job C and the autochain gate both read
+# exit 0 as PASS, so the note passed what the trust gate HOLDs. One rule on all
+# three paths: a partial run is not a pass.
+if ((manifests > 0)) && { ((unscanned_n > 0)) || ((manifests < scannable_n)); }; then
+	msg="dependency-scan: FAIL — PARTIAL COVERAGE: ${manifests} of ${scannable_n} scannable manifest(s) ingested"
+	if ((unscanned_n > 0)); then
+		msg="${msg}, ${unscanned_n} pinned pip lock(s) UNSCANNED (named above)"
+	fi
+	echo "${msg}. An unscanned lock is not a clean one." >&2
+	exit 6
+fi
+
+# Reached with a shortfall only on the declared zero-ingested path (2 rescued by
+# .no-scannable-dependencies), so the notes below still say what was not read.
 verdict="dependency-scan: PASS — ${packages} package(s) across ${manifests} manifest(s), 0 ${SEVERITY}"
 if ((scannable_n > manifests)); then
 	verdict="${verdict} (COVERS ${manifests}/${scannable_n} — see WARNING above)"

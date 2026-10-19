@@ -168,10 +168,12 @@ prompt: "Run: bash <repo_root>/scripts/ci/dependency-scan.sh <repo_root>
               a pass. Ordinary triggers: first run pulling trivy's DB, a
               rate-limited or air-gapped network. Never treat an
               unmapped/unrecognized exit code as a pass.
+           6  PARTIAL COVERAGE (some ingested, some UNSCANNED) -> checklist
+              item FAILS — an unscanned lock is not a clean one (#1247)
 
-         If the output carries a `coverage:` line showing fewer ingested than
-         scannable, report that shortfall explicitly — a PASS covering 1 of 2
-         manifests is a pass over half a denominator.
+         Report the `coverage:` line and every UNSCANNED lock by name, on every
+         exit — a run covering 1 of 2 manifests is a scan over half a
+         denominator, and it exits 6, not 0.
 
          If the script is MISSING (older checkout), say so and fall back to
          `trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps
@@ -186,22 +188,34 @@ prompt: "Run: bash <repo_root>/scripts/ci/dependency-scan.sh <repo_root>
          flags — this fallback exists only for a checkout that predates the
          script.
 
-         On the fallback, trivy's pip analyzer reads ONLY a file named exactly
-         requirements.txt (#1247); requirements-dev.txt and every other
-         sibling is skipped with no warning. So ALSO list the siblings:
-           find <repo_root> \( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \) -prune -o -type f -name 'requirements*.txt' ! -name requirements.txt -print
-         A sibling with no entry pinned by '==' is a range declaration, not a
-         lock (check-scannable.sh lists it UNSCANNABLE). Test each one with
-           grep -cE '^[[:space:]]*[A-Za-z0-9._-]+[[:space:]]*===?[[:space:]]*[0-9]' '<sibling>'
+         On the fallback, FIRST enumerate the lockfiles. Run this exactly (one
+         command, do not split it); it is the trust gate's own find:
+           find <repo_root> \( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \) -prune -o -type f \( -name 'bun.lock' -o -name 'bun.lockb' -o -name 'package-lock.json' -o -name 'yarn.lock' -o -name 'pnpm-lock.yaml' -o -name 'go.sum' -o -name 'Cargo.lock' -o -name '*requirements*.txt' -o -path '*/requirements/*.txt' \) -print
+         Every line it prints is in the denominator, less two exclusions, both
+         matching check-scannable.sh:
+         (1) a pip requirements file with no entry pinned by '==' is a range
+         declaration, not a lock. Test each one with
+           grep -cE '^[[:space:]]*[A-Za-z0-9._-]+[[:space:]]*===?[[:space:]]*[0-9]' '<that file>'
          and where it prints 0, leave it out of the denominator and name it
-         as unpinned, not UNSCANNED. Scan every other sibling ALONE, under the
-         name trivy reads, with the same flags:
-           d=$(mktemp -d) && cp '<sibling>' $d/requirements.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet $d; rm -rf ${d:?}
+         as unpinned, not UNSCANNED.
+         (2) a bun.lockb with a bun.lock in the same directory is the same
+         packages in bun's old binary format: leave it out. A bun.lockb with NO
+         bun.lock beside it stays in; trivy cannot parse it, so it is
+         UNSCANNED, and the remedy is bun's text lockfile, bun.lock.
+         trivy's pip analyzer reads ONLY a file named exactly requirements.txt
+         (#1247), so the scan above skips every other pinned requirements
+         file. Scan each of those ALONE, under the name trivy reads, with the
+         same flags:
+           d=$(mktemp -d) && cp '<that file>' $d/requirements.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet $d; rm -rf ${d:?}
          Its HIGH/CRITICAL findings count toward the verdict exactly like the
-         main scan's. Count every lock you found (the denominator) and every
-         one trivy returned packages for (ingested). Name each lock found but
-         not ingested as UNSCANNED, before any verdict. A PASS covers only
-         what was ingested; an unscanned lock is not clean."
+         main scan's. A lock in the denominator is INGESTED when a scan
+         returned at least one package for it (for go.sum, a result for the
+         go.mod beside it); every other one is UNSCANNED. Report the
+         denominator and the ingested count, and name each UNSCANNED lock,
+         before any verdict. Any UNSCANNED lock -> the checklist item FAILS:
+         an unscanned lock is not a clean one. Nothing ingested at all FAILS
+         too, unless a .no-scannable-dependencies at the repo root declares it
+         with a reason."
 ```
 
 **The denominator is emitted by the tool, not requested from the agent (#1137).** This job used to be prose asking a sub-agent to report the count. It complied — and compliance is the problem: an instruction can be forgotten by the next agent, misread, or quietly dropped in a rewrite, and the resulting verdict looks identical to a real one. `dependency-scan.sh` emits the number on every path including the passing one, so the report survives the agent.
@@ -463,6 +477,7 @@ Delegated to Job C (Haiku sub-agent) in the parallel batch. Interpret the result
 - **SKIP** → emit `[SKIPPED — trivy not installed]` on the checklist. Do not fail the gate.
 - **FINDINGS** (`dependency-scan.sh` exit 1) → report each finding (package, CVE, severity, fixed version if any) as a deferred checklist item. Do NOT auto-upgrade dependencies — the user approves the codebase state at the gate. **The checklist item FAILS on any HIGH/CRITICAL finding, with or without a fix available** — `dependency-scan.sh` does not distinguish them (no `--ignore-unfixed` support; `.trivyignore` is explicitly disabled via `--ignorefile /dev/null`, not merely undocumented), which is stricter than this skill's own prose promised before this scan was a real tool rather than an agent's judgment call. Tracked for a policy decision: #1188. **Escape hatch that exists today, undocumented until now:** `DEP_SCAN_SEVERITY` (env var, default `HIGH,CRITICAL`) overrides the severity filter — e.g. `DEP_SCAN_SEVERITY=CRITICAL ./scripts/ci/validate.sh` to stop blocking on HIGH while #1188 is unresolved. This is a manual, visible override for an operator to reach for, not something Job C or this skill invokes on its own.
 - **SCANNER/TOOLING ERROR** (`dependency-scan.sh` exit 5 — timeout, no scanner output, unparseable scanner output, OR a partial install missing `check-scannable.sh`) → the checklist item FAILS. This is not a skip: the scan did not run to completion, which is not evidence of a clean dependency tree. Ordinary triggers (first DB pull, rate-limited/air-gapped network) are not a reason to wave it through.
+- **PARTIAL COVERAGE** (`dependency-scan.sh` exit 6: some locks ingested, at least one UNSCANNED or a manifest not ingested) → the checklist item FAILS, naming each unscanned lock. A clean result over part of the denominator is not a pass (#1247); the trust gate's `trivyCoverage()` HOLDs the same shape, so the two gates agree.
 
 ## The Checklist (full every time; a checkmark means VERIFIED by reading the codebase)
 **Context:** Project | Issue #N — title | Branch `feature/N-...` → `<base>` | PR/MR #<PR_NUMBER> @ `<HEAD_SHA7>`
