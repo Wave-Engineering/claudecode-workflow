@@ -57,6 +57,7 @@ Quick reference for all skills and the MCP tools they route to.
 
 | Command | Purpose | MCP Tool |
 |---------|---------|----------|
+| `/onboard` | Get up to speed in a repo, then hold for tag-up | — |
 | `/engage` | Load rules, restore context | — |
 | `/name` | Report/pick session identity | — |
 | `/ccfold` | Merge upstream CLAUDE.md template | — |
