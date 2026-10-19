@@ -280,7 +280,9 @@ done
 echo ""
 echo "Regression tests"
 echo "──────────────────────────────────────────"
-for test_script in "$REPO_DIR"/tests/regression/*.sh; do
+# tests/skills/ holds the skill-structure tests. They ran nowhere until #1236, which is how
+# test_nextwave_structure.sh went stale after the #712 cutover.
+for test_script in "$REPO_DIR"/tests/regression/*.sh "$REPO_DIR"/tests/skills/*.sh; do
 	[[ -f "$test_script" ]] || continue
 	rel="${test_script#"$REPO_DIR/"}"
 	if bash "$test_script"; then
