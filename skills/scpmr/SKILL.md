@@ -1,6 +1,6 @@
 ---
 name: scpmr
-description: Stage, commit, push, and create PR/MR — but do not merge
+description: Commit and push, open a draft PR/MR, run /precheck — on a pass the PR/MR is ready for the merge call
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
@@ -9,18 +9,27 @@ description: Stage, commit, push, and create PR/MR — but do not merge
      Do NOT delete introduction.md — it lives in a protected directory.
      Do this BEFORE executing any skill logic below. -->
 
-# Stage, Commit, Push, Create PR/MR (No Merge)
+# Commit, Push, Open PR/MR, Precheck (No Merge)
 
-Thin wrapper over `/scp` (rewritten to use `mcp__sdlc-server__ibm` + `pr_list` + `pr_create` via MCP tools). Runs the full scp workflow, then stops — does NOT merge. Explicit no-merge is the whole distinction from `/scpmmr`.
+The PR/MR gate in one command (#1235): `/scp`, then `/precheck`, which opens the draft and on a pass marks it ready. It stops for BJ's merge call. It never merges; that is `/mmr`.
+
+## Tools Used
+
+- `mcp__sdlc-server__pr_list` — does a PR/MR already exist for this branch?
+- `mcp__sdlc-server__branch_guard` — validate the base before opening
+- `mcp__sdlc-server__pr_create` (`draft: true`) — open the draft
 
 ## Procedure
 
-Requires `/precheck` first — invoking `/scpmr` after `/precheck` is approval to execute. If `/precheck` has not been run, run it first and wait for approval.
+1. **`/scp`**: commit and push, if anything is uncommitted. Free on a working branch.
+2. **Open the draft PR/MR**, if none exists (`pr_list({head: "<branch>"})`):
+   - **Resolve the base, then validate it.** The base is the **live** default branch (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name` / GitLab `glab api "projects/:id" --jq .default_branch`), unless you are deliberately targeting a non-default branch such as a `kahuna/*` integration branch on a sandbox flight. Call `branch_guard({ role: "target", branch: <that base> })` and on `verdict == "warn"` **STOP**, surfacing `reason`.
+   - On `pass`, **mark the issue in review FIRST**, per the lifecycle table (mark when you start a step): GitLab Status → `In Test`, then read it back. On GitHub the linked PR with `Closes #N` is the marker, so there's nothing to set.
+   - Then call `pr_create({title, body, base, head, draft: true})`. The title is 72 characters or fewer, in `type(scope): description` form. The body is in the CLAUDE.md PR/MR format: `## Summary`, `## Changes`, `## Linked Issues` with `Closes #N`, `## Test Plan` (what actually ran). Once sdlc#592 ships, `pr_create` also takes the `squash_message`, the exact commit that will land. If `pr_create` fails, put the issue back to `In progress`.
+   - A draft needs no precheck: it can't merge, and opening it is what starts CI on repos that run CI only for PRs/MRs.
+3. **`/precheck`**: reviews the pushed commits and reads CI. On a pass it posts the `precheck` status and marks the PR/MR **ready**, then STOPs for the merge call (or, under a kahuna, autochain or standing-grant exception, invokes `/mmr` itself).
+4. Report the PR/MR URL and its state: ready and waiting for the merge call, or a draft with what failed.
 
-1. Run `/scp` — delegates to the rewritten skill; creates the PR/MR
-2. Stop — report the PR/MR URL. User can run `/mmr` later when ready.
-3. `vox` announcement (best-effort): identity from `<project_root>/.claude/agent-identity.json` (fallback: `/tmp/claude-agent-<md5>.json`), then name/team/project/issue/PR/"pushed and CI is running"
+Do NOT merge. That is the distinction from `/scpmmr`.
 
-Do NOT merge — that's the distinction from `/scpmmr`. Convenience shortcut; does NOT skip any safety checks.
-
-**Sandbox note.** In KAHUNA sandbox contexts `/precheck` auto-invokes `/scpmmr` (full merge), not `/scpmr`, because Flight Agents land into the per-wave integration branch and the wave gate — not the flight gate — is where review happens. `/scpmr` therefore retains its no-merge semantics for non-sandbox use. See `skills/precheck/SKILL.md` and Dev Spec §5.2.1.
+**Sandbox note.** In KAHUNA sandbox contexts `/precheck` auto-invokes `/mmr` after a pass, because Flight Agents land into the per-wave integration branch and the wave gate, not the flight gate, is where review happens. See `skills/precheck/SKILL.md` and Dev Spec §5.2.1.

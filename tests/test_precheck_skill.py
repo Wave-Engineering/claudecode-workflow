@@ -3,9 +3,9 @@
 Validates the changes from #416:
 - Sandbox detection regex `^kahuna/[0-9]+-` is documented in the skill.
 - The auto-approval path emits the literal sentinel
-  `[AUTO-APPROVED: kahuna sandbox]` before invoking `/scpmmr`.
+  `[AUTO-APPROVED: kahuna sandbox]` before invoking `/mmr` (#1235).
 - The non-sandbox path is unchanged: STOP-and-wait for
-  `/scp` / `/scpmr` / `/scpmmr` / affirmative.
+  the merge call (`/mmr` / `/scpmmr` / affirmative).
 - Checklist items (validation, code-reviewer, trivy) still run in full
   inside the sandbox — only the human-approval step is bypassed.
 - Discord `#precheck` notification fires regardless of context.
@@ -99,12 +99,12 @@ class TestDetectionRegex:
 
 # ---------------------------------------------------------------------------
 # AC 2: Auto-approval path emits sentinel `[AUTO-APPROVED: kahuna sandbox]`
-#       before invoking `/scpmmr`
+#       before invoking `/mmr` (#1235: precheck already opened + readied the PR/MR)
 # ---------------------------------------------------------------------------
 
 
 class TestSentinelAndAutoApprove:
-    """The sentinel literal must appear, and `/scpmmr` must follow it."""
+    """The sentinel literal must appear, and `/mmr` must follow it."""
 
     def test_sentinel_literal_present(self, skill_text: str) -> None:
         """The literal sentinel appears verbatim in the skill."""
@@ -118,9 +118,9 @@ class TestSentinelAndAutoApprove:
         body = _section_body(skill_text, "Sandbox Auto-Approval (KAHUNA Flight Agents)")
         assert SENTINEL_LITERAL in body
 
-    def test_sentinel_precedes_scpmmr_invocation(self, skill_text: str) -> None:
+    def test_sentinel_precedes_mmr_invocation(self, skill_text: str) -> None:
         """The skill describes emitting the sentinel BEFORE invoking
-        `/scpmmr` — not after, which would defeat its 'announcing the
+        `/mmr` — not after, which would defeat its 'announcing the
         bypass' purpose. We assert ordering inside the
         `sandbox_context == true` behavior-matrix entry, where the
         actual invocation step is documented."""
@@ -134,15 +134,15 @@ class TestSentinelAndAutoApprove:
         assert true_match, "Behavior matrix entry for sandbox_context == true missing"
         true_block = true_match.group(0)
         sentinel_idx = true_block.find(SENTINEL_LITERAL)
-        scpmmr_idx = true_block.find("/scpmmr")
+        mmr_idx = true_block.find("`/mmr`")
         assert sentinel_idx != -1, (
             "sentinel missing in sandbox_context == true branch"
         )
-        assert scpmmr_idx != -1, (
-            "/scpmmr invocation missing in sandbox_context == true branch"
+        assert mmr_idx != -1, (
+            "/mmr invocation missing in sandbox_context == true branch"
         )
-        assert sentinel_idx < scpmmr_idx, (
-            "Sentinel must be emitted BEFORE /scpmmr is invoked"
+        assert sentinel_idx < mmr_idx, (
+            "Sentinel must be emitted BEFORE /mmr is invoked"
         )
 
     def test_auto_approve_is_no_wait(self, skill_text: str) -> None:
@@ -487,7 +487,7 @@ class TestPlatformPrerequisiteDocumented:
 
     def test_github_behavior_preserved_no_regression(self, skill_text: str) -> None:
         """AC-4: existing GitHub behavior is preserved. The original
-        sentinel + `/scpmmr` invocation flow on a kahuna sandbox must
+        sentinel + `/mmr` invocation flow on a kahuna sandbox must
         still be present and unconditional — the new platform-detection
         warning must NOT have replaced the auto-approval emission."""
         body = _section_body(
@@ -497,8 +497,8 @@ class TestPlatformPrerequisiteDocumented:
         # where someone replaces the auto-approval with a hard prereq
         # check)
         assert SENTINEL_LITERAL in body
-        # /scpmmr still invoked
-        assert "/scpmmr" in body
+        # /mmr invoked (#1235: precheck has already opened and readied the PR/MR)
+        assert "`/mmr`" in body
 
 
 class TestClaudeMdExceptionDocumentsBothPlatforms:
@@ -573,7 +573,7 @@ class TestClaudeMdExceptionDocumentsBothPlatforms:
         self, claude_md_text: str
     ) -> None:
         """AC-4: the CLAUDE.md exception still describes the unchanged
-        GitHub auto-approval flow (sentinel + /scpmmr). The platform
+        GitHub auto-approval flow (sentinel + /mmr, #1235). The platform
         documentation addition must not have deleted the original
         contract."""
         match = re.search(
@@ -584,4 +584,4 @@ class TestClaudeMdExceptionDocumentsBothPlatforms:
         assert match
         body = match.group(1)
         assert SENTINEL_LITERAL in body
-        assert "/scpmmr" in body
+        assert "`/mmr`" in body

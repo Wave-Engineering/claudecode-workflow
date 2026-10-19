@@ -207,33 +207,36 @@ All operations are handled by the MCP server -- the skill is a thin routing stub
 
 ---
 
-### `/precheck` -- Pre-Commit Gate
+### `/precheck` -- MR Gate
 
-The mandatory verification step before any commit. Checks branch/issue compliance, runs validation, launches a code-reviewer sub-agent, fixes high-risk findings, and presents a full checklist. Then stops and waits for approval.
+The mandatory gate into a release branch. Commits and pushes to a working branch are free; precheck gates the PR/MR. It checks branch/issue compliance, reviews the **pushed commits** with a code-reviewer sub-agent, reads CI's verdict for the pushed HEAD (running local validation only where CI doesn't cover it), runs the dependency scan, fixes high-risk findings, and presents a full checklist. On a pass it posts a `precheck` commit status on HEAD and marks the PR/MR **ready**. Then it stops and waits for your merge call.
 
 **When to use it:**
-- When implementation work is done and you are ready to commit
+- When implementation work is done and pushed, and the PR/MR is open (usually as a draft) -- `/scpmr` runs it for you
 - Claude runs this proactively when it determines work is complete -- you do not always need to invoke it manually
 
 **Examples:**
 
 ```
 /precheck
+/precheck rearm
 ```
 
-No arguments. It runs through six steps: branch/issue check, validation, code review, present the checklist, announce completion via `/vox` (best-effort), and stop. High-risk review findings are fixed automatically before the checklist is shown.
+Without arguments it runs the full gate: branch/issue check, CI and validation, code review, dependency scan, present the checklist, post the status and mark ready, announce via Discord `#precheck` and `/vox` (best-effort), and stop. High-risk review findings are fixed (committed and pushed) automatically before the checklist is shown.
 
-**What happens after:** You respond with `/scp`, `/scpmr`, `/scpmmr`, or an affirmative to approve. Any other response means rework.
+`/precheck rearm` is for a push to a PR/MR that was already prechecked: it reviews only the new commits and waits for a green pipeline, with no checklist, announcement, or STOP unless the push changes what the PR/MR does. `/mmr` runs it by itself when the head has moved past the pass.
+
+**What happens after:** You give the merge call: `/mmr`, `/scpmmr`, or an affirmative. Any other response means rework. A ready PR/MR needs the `precheck` status on its head -- `/precheck` marks it ready with `precheck-status.sh mark-ready`, which refuses without it, and `pr-ready-gate.sh` refuses `gh pr ready`, a non-draft create, and any `glab mr update` without `--draft` without it. Contract: `docs/precheck-status.md`.
 
 ---
 
 ### `/scp` -- Stage, Commit, Push
 
-Stages specific files, commits with a conventional commit message, pushes to the remote, and creates a PR if one does not exist for the branch.
+Stages specific files, commits with a conventional commit message, and pushes your working branch to the remote. **Free**: it needs no `/precheck` and no approval, and it opens no PR/MR. The only gates are hooks: a secret scan at commit and push, and a push gate that refuses protected and release refs.
 
 **When to use it:**
-- After `/precheck` has been run and you approve the commit
-- As the standard "ship it" command for pushing code
+- Any time you want work committed and pushed -- to back it up, test it in another sandbox, or pair on one branch
+- To push a fix onto an open PR/MR (the next step is then `/precheck rearm`, which `/mmr` runs for you)
 
 **Examples:**
 
@@ -244,17 +247,17 @@ Stages specific files, commits with a conventional commit message, pushes to the
 
 Without a message, it auto-generates a conventional commit message. With `-m`, it uses your provided message. It always includes `Closes #N` if an issue is linked and adds the Co-Authored-By line.
 
-**Safety checks:** Refuses to commit on protected branches (`main`, `release/*`). Verifies an issue exists. Runs validation if it has not been run recently. Never uses `git add -A`.
+**Safety checks:** Refuses to commit on protected branches (`main`, `release/*`). Verifies an issue exists. Pushes as a plain `git push <remote> <branch>`, the shape the push gate exempts. Never uses `git add -A`.
 
 ---
 
-### `/scpmr` -- Stage, Commit, Push, Create PR/MR
+### `/scpmr` -- Commit, Push, Open PR/MR, Precheck
 
-Same as `/scp` but explicitly creates a PR/MR and stops before merging. Use this when you want human review on the PR before merging.
+The PR/MR gate in one command: runs `/scp`, opens a **draft** PR/MR targeting the resolved base branch (drafts are free -- they can't merge -- and opening one starts CI), then runs `/precheck`. On a pass the PR/MR is marked ready and it stops for your merge call. It never merges.
 
 **When to use it:**
-- When you want the PR up for review but do not want to merge yet
-- When CI needs to pass before you decide to merge
+- When implementation is done and you want it reviewed and ready to merge
+- The default "I'm done" command -- Claude runs it proactively
 
 **Examples:**
 
@@ -262,17 +265,17 @@ Same as `/scp` but explicitly creates a PR/MR and stops before merging. Use this
 /scpmr
 ```
 
-No arguments. Runs the full `/scp` workflow, then creates a PR/MR targeting the resolved base branch. Announces the PR via `/vox` (best-effort) and reports the URL. Run `/mmr` later to merge.
+No arguments. Reports the PR/MR URL and its state: ready and waiting for the merge call, or a draft with what failed. Run `/mmr` (or `/scpmmr`) to merge.
 
 ---
 
-### `/scpmmr` -- Stage, Commit, Push, Create PR/MR, Merge
+### `/scpmmr` -- Commit, Push, Precheck, Merge
 
-The full pipeline in one command: stage, commit, push, create PR/MR, verify CI, and merge with squash.
+`/scpmr` then `/mmr`.
 
 **When to use it:**
-- When the change is straightforward and you want to go from code to merged in one step
-- After `/precheck` when you are confident the change is ready
+- **After a precheck STOP**, as the merge call -- the PR/MR is already prechecked and ready, so it goes straight to `/mmr`
+- With nothing prechecked yet, to take the work all the way to the gate: it runs `/scpmr`, whose `/precheck` still STOPs for the merge call (unless a kahuna, autochain, or standing-grant exception applies). Typed before a precheck, it is not approval of a merge nobody has seen.
 
 **Examples:**
 
@@ -280,9 +283,9 @@ The full pipeline in one command: stage, commit, push, create PR/MR, verify CI, 
 /scpmmr
 ```
 
-No arguments. Chains `/scp` and `/mmr` together. Announces the merge via `/vox` (best-effort) when done.
+No arguments. Announces the merge via `/vox` (best-effort) when done.
 
-**Important:** CI must pass before merge. If CI fails, the skill stops and reports the failure.
+**Important:** The merge needs a `precheck` pass on the PR/MR's head, the merge call (or an exception), and passing CI. If CI fails, the skill stops and reports the failure.
 
 ---
 
@@ -291,8 +294,8 @@ No arguments. Chains `/scp` and `/mmr` together. Announces the merge via `/vox` 
 Merges an existing pull request or merge request with squash commits, a detailed squash commit message, and source branch deletion.
 
 **When to use it:**
-- When a PR/MR is approved and CI has passed, and you want to merge it
-- After `/scpmr` when you are ready to complete the merge
+- As the merge call after `/scpmr` (or `/precheck`) stops with the PR/MR ready
+- When a prechecked PR/MR has CI passing and you want to merge it
 
 **Examples:**
 
@@ -301,9 +304,9 @@ Merges an existing pull request or merge request with squash commits, a detailed
 /mmr 58       # Merge PR/MR #58 specifically
 ```
 
-It gathers the PR/MR context, verifies CI status, generates a thorough squash commit message, presents it for approval, and merges on confirmation. Post-merge, it switches to the target branch, pulls, and deletes the local source branch.
+It gathers the PR/MR context, confirms the `precheck` status on the head (running `/precheck rearm` if a push moved the head past the pass), verifies CI status, generates a thorough squash commit message, and merges. Typed after a precheck STOP, `/mmr` is itself the approval; reached any other way, it asks first. Post-merge, it switches to the target branch, pulls, and deletes the local source branch.
 
-**Hard rules:** Never merges with failing CI. Never merges without explicit user approval. Always uses squash.
+**Hard rules:** Never merges with failing CI. Never merges without a `precheck` pass on the head. Never merges without the user's merge call (or a kahuna, autochain, or standing-grant exception). Always uses squash.
 
 ---
 
@@ -332,7 +335,7 @@ Runs a code review using the `code-reviewer` sub-agent on staged changes, a bran
 
 **When to use it:**
 - When you want a standalone code review outside of the `/precheck` flow
-- To review a specific file or PR/MR without going through the full pre-commit gate
+- To review a specific file or PR/MR without going through the full MR gate
 - For a second opinion on changes before committing
 
 **Examples:**

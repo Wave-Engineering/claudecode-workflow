@@ -1,6 +1,6 @@
 ---
 name: scp
-description: Approve and execute pending commit, or run full stage/commit/push workflow
+description: Stage, commit, push to your working branch — free; gated only by the commit and push hooks
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
@@ -11,23 +11,16 @@ description: Approve and execute pending commit, or run full stage/commit/push w
 
 # Stage, Commit, Push
 
-Git commit workflow with context awareness. Reasoning layer (commit message drafting, validation orchestration) stays as agent prose; mechanical layer (branch/issue checks, PR existence, PR creation) routes through MCP tools.
+Commit and push your own working branch (`feature/`, `fix/`, `chore/`, `doc/`). **This is free** (#1233, #1235): it needs no `/precheck` and no approval. Back up work, test it in another sandbox, pair on one branch. Two gates apply, and both are hooks, not this skill:
+
+- **commit:** `secret-scan-gate.sh` scans what is staged.
+- **push:** `secret-scan-gate.sh` scans every commit being pushed. `pre-push-test-gate.sh` refuses protected and release refs and tags, and lets a plain working-branch push through.
+
+The gate into a release branch is the **PR/MR**. That's `/precheck` (`/scpmr` runs it), and BJ's approval is at the **merge** (`/mmr`).
 
 ## Tools Used
 
 - `mcp__sdlc-server__ibm` — branch/issue workflow gate (no protected branch; branch linked to an open issue). Handles platform detection internally.
-- `mcp__sdlc-server__branch_guard` — validate the PR target against the live default before creating (protected-gated, `kahuna/*`-exempt).
-- `mcp__sdlc-server__pr_list` — check whether a PR already exists for the current branch.
-- `mcp__sdlc-server__pr_create` — create the PR with the drafted title/body.
-
-## Pre-Commit Gate
-
-**Before executing, verify that `/precheck` has been run in this conversation.**
-
-- If `/precheck` was run and the user approved (via `/scp`, `/scpmr`, `/scpmmr`, or an affirmative like "yes", "approved", "go ahead") → proceed to execution.
-- If `/precheck` has NOT been run → run it first and wait for approval before proceeding.
-
-**Sandbox auto-approval path.** When `/precheck` detects a KAHUNA sandbox context (base ref matches `^kahuna/[0-9]+-`), it emits the sentinel `[AUTO-APPROVED: kahuna sandbox]` and invokes `/scpmmr` directly — `/scp` is reached transitively through that auto-invocation, not by a human typing `/scp`. The approval here is structural (the wave Orchestrator dispatched a Flight Agent into a sandbox) rather than per-commit. See `skills/precheck/SKILL.md` and Dev Spec §5.2.1 for the rule. Non-sandbox behaviour is unchanged.
 
 ## Execution
 
@@ -35,13 +28,7 @@ Git commit workflow with context awareness. Reasoning layer (commit message draf
 
 Call `ibm()`. It verifies you are not on a protected branch, that a feature branch exists, and that the branch is linked to an open issue. Stop on failure and surface the remediation it returns. (Tools handle platform detection internally — no bash probing required.)
 
-### Step 2: Validate
-
-Run the repo's validation script (`./scripts/ci/validate.sh`, `npm test`, `pytest`, etc.).
-- If arriving from an approved `/precheck` run and no files have changed since, skip this step.
-- If validation fails, stop and report errors.
-
-### Step 3: Draft the Commit Message
+### Step 2: Draft the Commit Message
 
 Generate a conventional commit message — this is agent reasoning, not a tool call.
 {{#if message}}
@@ -53,22 +40,19 @@ Generate a conventional commit message — this is agent reasoning, not a tool c
 - Append the Co-Authored-By line
 {{/if}}
 
-Draft a matching PR title (≤72 chars, same `type(scope): description` convention) and body (`## Summary`, `## Changes`, `## Linked Issues` with `Closes #N`, `## Test Plan`).
+Write the message to a file with the `Write` tool and commit with `git commit -F <file>`. A message is full of backticks, and an inline `-m "…"` runs them.
 
-### Step 4: Commit, Push, PR
+### Step 3: Commit and Push
 
-Git plumbing stays as git:
 1. Stage specific files (never `git add -A` or `git add .`).
-2. `git commit` with the drafted message.
-3. `git push` to the feature branch (with `-u origin <branch>` if it has no upstream).
+2. `git commit -F <file>`.
+3. `git push <remote> <branch>` as a **plain, separate command** (`-u origin <branch>` the first time). That shape is what the push gate exempts; a compound or unusual push still needs a test run first.
 
 **If the secret-scan gate blocks the commit or push** (`secret-scan-gate.sh`, #1234): it names each finding's file, line, rule and, for a push, the commit. It never shows the value. A real secret: remove it, and if it is already in a commit, rewrite that commit, because a later commit that deletes it still pushes it. A false positive: add the finding's allowlist key (`<file>:<rule>:<line>`, printed in the block message) to `.gitleaksignore` at the repository root, commit that, and retry. A rule-level allowlist goes in `.gitleaks.toml`. There is no bypass flag, and a missing gitleaks blocks too: install it with the kit's `./install`.
 
-Then route PR handling through MCP tools:
-4. `pr_list({head: "<current-branch>"})` — check whether a PR already exists for this branch.
-5. If the list is empty, **resolve the intended base, then validate it before creating.** The base is the **live** default branch (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name` / GitLab `glab api "projects/:id" --jq .default_branch`) unless you are intentionally targeting a non-default branch (e.g. a `kahuna/*` integration branch on a sandbox flight). Call `branch_guard({ role: "target", branch: <that resolved base> })` — passing the concrete base so the guard actually inspects it — and on `verdict == "warn"` **STOP**, surfacing `reason` (the base is a protected branch that is neither the live default nor a `kahuna/*` sandbox). On `pass`, call `pr_create({title, body, base, head, draft?})` with that validated `base` (never a cached value); `head` is the current branch.
-   - *Transition fallback until `branch_guard` is deployed (#465):* skip the tool call and **STOP** directly if the resolved `base` is neither the live default nor matches `^kahuna/[0-9]+-`. (The degraded path can't query host protection, so it errs toward stopping on any non-default, non-sandbox base — safe, and rare in this trunk-based flow.)
-6. Report the PR URL (either the pre-existing one from `pr_list` or the newly-created one from `pr_create`).
+### Step 4: Report
+
+Report the commit SHA and the push. If a PR/MR already exists for the branch and HEAD moved past its `precheck` status, say so: the next step is `/precheck rearm`, and `/mmr` runs it by itself. **No PR/MR is opened here**; `/scpmr` does that.
 
 ## Important Rules
 
@@ -78,4 +62,4 @@ Then route PR handling through MCP tools:
 - Always include the Co-Authored-By line.
 - Respect any project-specific commit rules in CLAUDE.md.
 - If push fails due to protected branch, create a feature branch and retry.
-- Always create a PR if one doesn't exist for the feature branch.
+- Pushing is not publishing a decision. A pushed working branch is reviewed at the PR/MR gate, before anything lands.

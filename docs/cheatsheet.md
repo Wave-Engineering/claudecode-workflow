@@ -6,11 +6,12 @@ Quick reference for all skills and the MCP tools they route to.
 
 | Command | Purpose | MCP Tool |
 |---------|---------|----------|
-| `/precheck` | Pre-commit gate — verify, review, checklist | `ibm`, `spec_validate_structure` |
-| `/scp` | Stage, commit, push, create PR | `pr_list`, `pr_create` |
-| `/scpmr` | scp + stop before merge | `pr_list`, `pr_create` |
-| `/scpmmr` | scp + merge (full pipeline) | `pr_create`, `pr_wait_ci`, `pr_merge` |
-| `/mmr` | Merge existing PR/MR | `pr_status`, `pr_diff`, `pr_wait_ci`, `pr_merge` |
+| `/precheck` | MR gate — review pushed commits, read CI, post `precheck` status, mark ready | `ibm`, `spec_validate_structure`, `ci_wait_run` |
+| `/precheck rearm` | Renew the pass after a push: review new commits + green pipeline | `ci_wait_run` |
+| `/scp` | Stage, commit, push working branch (free; opens no PR) | `ibm` |
+| `/scpmr` | scp + draft PR/MR + precheck → ready; stops for the merge call | `pr_list`, `pr_create` |
+| `/scpmmr` | scpmr + mmr; after a precheck STOP it is the merge call | `pr_create`, `pr_wait_ci`, `pr_merge` |
+| `/mmr` | Merge a prechecked PR/MR (rearms if the head moved) | `pr_status`, `pr_diff`, `pr_wait_ci`, `pr_merge` |
 | `/review` | Code review (branch/staged/file/PR) | — (sub-agent) |
 | `/jfail` | CI failure analysis | `ci_run_logs`, `ci_failed_jobs` |
 

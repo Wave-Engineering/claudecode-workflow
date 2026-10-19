@@ -3,7 +3,7 @@
 # precheck-asking-detector.sh — CC Stop hook.
 #
 # Detects when the assistant asks permission to run /precheck instead of
-# running it. Per CLAUDE.md MANDATORY: Pre-Commit Gate.
+# running it. Per CLAUDE.md MANDATORY: MR Gate (#1235; formerly the Pre-Commit Gate).
 #
 # Godspeed integration (cc-workflow#818):
 #   - ARMED: uses the decaying-mandate decision model instead of narrow regex.
@@ -81,7 +81,7 @@ case "$ARM_STATUS" in
 	if printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_INTERROGATIVE" 2>/dev/null ||
 		printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_DEFERRAL" 2>/dev/null ||
 		printf '%s' "$LAST_ASSISTANT_TEXT" | grep -Pq "$PATTERN_INVERTED" 2>/dev/null; then
-		printf '{"decision":"block","reason":"Per CLAUDE.md MANDATORY Pre-Commit Gate: do not ask whether to run /precheck — run it. The checklist that /precheck presents is the approval gate; the start of /precheck is unilateral. Continue this turn by invoking /precheck now."}\n'
+		printf '{"decision":"block","reason":"Per CLAUDE.md MANDATORY: MR Gate: do not ask whether to run /precheck — run it. The checklist that /precheck presents is the merge-approval surface; the start of /precheck is unilateral. Continue this turn by invoking /precheck now."}\n'
 	fi
 	;;
 esac

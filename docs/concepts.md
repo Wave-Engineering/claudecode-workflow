@@ -103,11 +103,11 @@ Every skill and script that needs identity reads from the same file, resolved th
 
 The kit enforces several workflows that cannot be skipped. These exist because of real problems encountered in production use -- every mandatory rule was added in response to a specific failure mode.
 
-### No Autonomous Commits
+### No Autonomous Merges
 
-**The rule:** Claude never commits without explicit human approval. Even trivial changes require `/precheck` followed by one of `/scp`, `/scpmr`, or `/scpmmr`.
+**The rule:** Commits and pushes to Claude's own working branch are free (`/scp`). The gate is the PR/MR: Claude never marks a PR/MR ready without a `/precheck` pass on its head, and never merges without your merge call. Even trivial changes go `/scpmr` (draft PR/MR + `/precheck`) and then wait for `/mmr`, `/scpmmr`, or an affirmative.
 
-**Why it exists:** Context compaction (when Claude's context window fills up and gets summarized) causes loss of state. In early use, compaction led to Claude skipping the review checklist and committing directly -- pushing unreviewed code to the remote. The pre-commit gate exists to make this structurally impossible: `/precheck` presents the checklist and then *stops*. Claude cannot proceed until you respond.
+**Why it exists:** Context compaction (when Claude's context window fills up and gets summarized) causes loss of state. In early use, compaction led to Claude skipping the review checklist and shipping unreviewed code. The MR gate makes this structurally impossible: `/precheck` reviews the pushed commits, reads CI, posts a `precheck` commit status, marks the PR/MR ready, and then *stops*. A hook refuses to mark a PR/MR ready without that status, and Claude cannot merge until you respond.
 
 ### Always Have an Issue
 
@@ -117,9 +117,9 @@ The kit enforces several workflows that cannot be skipped. These exist because o
 
 ### Test Before a Protected Push or a PR/MR
 
-**The rule:** Testing gates the PR/MR, not the push. An agent pushes its own working branch (`feature/`, `fix/`, `chore/`, `doc/`) freely, as a plain `git push <remote> <branch>`. Local tests must pass before any push to a protected or release branch, before any compound or unusual push, and before opening a PR/MR. This is non-negotiable regardless of time pressure or session state.
+**The rule:** Testing gates the PR/MR, not the push. An agent pushes its own working branch (`feature/`, `fix/`, `chore/`, `doc/`) freely, as a plain `git push <remote> <branch>`. Local tests must pass before any push to a protected or release branch, before any compound or unusual push, and before a PR/MR is marked ready (CI's verdict for the pushed HEAD counts). This is non-negotiable regardless of time pressure or session state.
 
-**Why it exists:** Pushing untested code wastes CI resources, blocks shared pipelines, and creates false signal for other developers. A failed CI run that could have been caught locally costs the team far more time than the seconds it takes to run `./scripts/ci/validate.sh`. Claude enforces this by running validation as part of both `/precheck` and `/scp`.
+**Why it exists:** Pushing untested code wastes CI resources, blocks shared pipelines, and creates false signal for other developers. A failed CI run that could have been caught locally costs the team far more time than the seconds it takes to run `./scripts/ci/validate.sh`. Claude enforces this at the PR/MR: `/precheck` reads CI's verdict for the pushed HEAD and runs local validation where CI doesn't cover it, and the push hook refuses protected and release refs.
 
 ### Post-Compaction Re-Engagement
 
@@ -151,11 +151,11 @@ These drive the development loop: creating issues, committing, reviewing, mergin
 
 | Skill | Purpose |
 |-------|---------|
-| `/precheck` | Pre-commit gate -- the mandatory verification step before any commit. |
-| `/scp` | Stage, commit, push. Creates a PR if one does not exist. |
-| `/scpmr` | Stage, commit, push, create PR/MR -- stops before merging. |
-| `/scpmmr` | Stage, commit, push, create PR/MR, merge -- the full pipeline. |
-| `/mmr` | Merge an existing PR/MR with squash and source branch deletion. |
+| `/precheck` | MR gate -- reviews the pushed commits, reads CI, marks the PR/MR ready, stops for the merge call. |
+| `/scp` | Stage, commit, push your working branch. Free; opens no PR. |
+| `/scpmr` | `/scp`, open a draft PR/MR, run `/precheck` -- stops for the merge call. |
+| `/scpmmr` | `/scpmr` then `/mmr`. Typed after a precheck STOP, it is the merge call. |
+| `/mmr` | Merge a prechecked PR/MR with squash and source branch deletion. |
 | `/ibm` | Issue-Branch-PR/MR workflow reminder. A cheat sheet, not an executor. |
 | `/review` | Run a standalone code review on staged changes, a branch, or a file. |
 | `/jfail` | Fetch and analyze a failed CI job or workflow run. |
@@ -219,8 +219,8 @@ The rules in `CLAUDE.md` are loaded into Claude's context at session start and t
 | Section | Controls |
 |---------|----------|
 | Platform Detection | Which CLI and terminology to use |
-| Mandatory: Local Testing | Tests before a protected push or a PR/MR |
-| Mandatory: Pre-Commit Gate | The `/precheck` workflow |
+| Mandatory: Testing Gates the PR/MR | Tests before a protected push or a ready PR/MR |
+| Mandatory: MR Gate | The `/precheck` workflow and the merge call |
 | Mandatory: Story Completion | Acceptance criteria verification |
 | Mandatory: Issue Tracking | Issue-branch-PR/MR workflow |
 | Work Item Standards | Issue template quality requirements |

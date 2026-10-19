@@ -18,7 +18,7 @@ BJ runs many concurrent agents across the fleet. He does not have time to microm
 - `memory/feedback_take_initiative.md` — report-don't-ask on non-architectural calls
 - `memory/feedback_no_time_nagging.md` — do not comment on session length or hour
 
-The precheck-no-ask rule is now mechanically enforced in `CLAUDE.md` (the "MANDATORY: Pre-Commit Gate" section). You don't need a memory file for it — just read `CLAUDE.md`.
+The precheck-no-ask rule is now mechanically enforced in `CLAUDE.md` (the "MANDATORY: MR Gate" section). You don't need a memory file for it — just read `CLAUDE.md`.
 
 ---
 
@@ -107,7 +107,7 @@ idea → /ddd (optional)       → event storming, domain model
 - `skills/nextwave/SKILL.md` — single-wave execution via the per-wave Dynamic Workflow (`per-wave-workflow.js`)
 - `skills/prepwaves/SKILL.md` — wave planning
 - `skills/devspec/SKILL.md` — Dev Spec creation + approval + upshift
-- `skills/precheck/SKILL.md` — pre-commit gate (includes KAHUNA sandbox auto-approval path)
+- `skills/precheck/SKILL.md` — MR gate (includes KAHUNA sandbox auto-approval path)
 - `skills/issue/SKILL.md` — structured issue creation with proper templates
 
 ---
@@ -120,7 +120,7 @@ These are the "why the code looks this way" load-bearing patterns. Each has a me
 |---|---|---|
 | **Per-wave Dynamic Workflow** | `docs/wavemachine-workflows-migration.md` §3/§5, `skills/nextwave/SEAMS.md` | A wave runs as a deterministic JS Workflow (`skills/nextwave/per-wave-workflow.js`): the loop, closed legal exits, dynamic re-plan, and parallel fan-out are code, not an LLM. Agents (`agent()`) run only the judgment seams — plan, flight, reconcile, gate review. Replaced the legacy Orchestrator/Prime/Flight model in the #691 cutover (historical: `decision_wavemachine_v2.md`). |
 | **State via return values + wave-status** | `skills/nextwave/SEAMS.md` (#688) | Flights return schema-validated results; the loop persists them to durable wave-status (`<target>/.claude/status/`). Replaced the legacy `/tmp/wavemachine` filesystem bus (retired in the #691 cutover). |
-| **KAHUNA sandbox** | `docs/kahuna-devspec.md`, `memory/decision_plan_phase_epic_taxonomy.md` | Flights PR to a per-Plan `kahuna/<plan_id>-<slug>` integration branch, not `main`. `/precheck` auto-approves inside the sandbox. Trust-score gate on the final `kahuna→main` merge. |
+| **KAHUNA sandbox** | `docs/kahuna-devspec.md`, `memory/decision_plan_phase_epic_taxonomy.md` | Flights PR to a per-Plan `kahuna/<plan_id>-<slug>` integration branch, not `main`. `/precheck` auto-approves the merge inside the sandbox. Trust-score gate on the final `kahuna→main` merge. |
 | **Plan issue body/comments split** | `pattern_plan_issue_body_comments_split.md` | Body = frozen post-approval. Runtime state (Decision Ledger, status updates, lifecycle events) = typed-prefix comments (`[ledger D-NNN]`, `[status ...]`, `[phase-start ...]`, etc.). Platform enforces append-only. |
 | **Exhaustive Legal Exits** | `pattern_exhaustive_legal_exits.md` | Every autonomy-loop skill body has a closed enumeration of legal halt conditions + explicit non-exits list. Agents do not invent new halt conditions. |
 | **Concerns Channel** | `pattern_concerns_channel.md` | When unease doesn't match any Legal Exit: post `[concern]` comment + Discord ping, then **continue** the loop. The concern is durable; the human responds async. |
@@ -139,13 +139,15 @@ Internalize these two; they resolve most "should I stop or continue?" questions:
 
 ---
 
-## 8. How to commit: the gate discipline
+## 8. How to ship: the gate discipline
 
-**Never commit without `/precheck`.** When your work is done, run `/precheck` immediately — do not ask permission. The skill runs the full checklist (validation, trivy, code-reviewer agent dispatch, Discord + vox announcement), then:
+**Commit and push your working branch freely (`/scp`); never make a PR/MR ready, or merge, without `/precheck`.** When your work is done, run `/scpmr` (draft PR/MR, then `/precheck`) immediately — do not ask permission. The skill reviews the pushed commits, reads CI for the pushed HEAD, runs the rest of the checklist (trivy, code-reviewer agent dispatch, Discord + vox announcement), posts the `precheck` commit status and marks the PR/MR ready, then:
 
-- **On `main`-targeted branches:** stops and waits for `/scp`, `/scpmr`, or `/scpmmr` from the human.
-- **On `kahuna/<N>-*` branches (KAHUNA sandbox):** emits `[AUTO-APPROVED: kahuna sandbox]` sentinel and auto-chains to `/scpmmr`. No human STOP.
-- **In an approved `/autochain` run:** if `autochain-gate.sh check` approves the issue (BJ approved the chain's order, the gate is armed with his words and has not expired) and the checklist passes mechanically, it emits `[AUTO-APPROVED: autochain #<epic>]` and auto-chains to `/scpmmr`. See CLAUDE.md "Exception: Approved Autochain".
+- **On `main`-targeted branches:** stops and waits for the human's merge call: `/mmr`, `/scpmmr`, or an affirmative.
+- **On `kahuna/<N>-*` branches (KAHUNA sandbox):** emits `[AUTO-APPROVED: kahuna sandbox]` sentinel and invokes `/mmr`. No human STOP.
+- **In an approved `/autochain` run:** if `autochain-gate.sh check` approves the issue (BJ approved the chain's order, the gate is armed with his words and has not expired) and the checklist passes mechanically, it emits `[AUTO-APPROVED: autochain #<epic>]` and invokes `/mmr`. See CLAUDE.md "Exception: Approved Autochain".
+
+A push after the pass makes the status stale; `/precheck rearm` (a review of only the new commits plus a green pipeline) renews it, and `/mmr` runs it for you.
 
 Reference:
 
@@ -286,10 +288,10 @@ Before your first commit in any session:
 - [ ] Verify `git status` + `git branch --show-current` match your expectation
 - [ ] Know which repo you are in and whether you are cross-repo-orchestrating
 
-And before your first **any action that touches remote**:
+And before you **mark a PR/MR ready or merge**:
 
-- [ ] `/precheck` ran and passed
-- [ ] Human STOP honored (unless KAHUNA sandbox or an approved autochain, which auto-approve)
+- [ ] `/precheck` ran and passed on the PR/MR's head
+- [ ] Human merge STOP honored (unless KAHUNA sandbox, an approved autochain, or a standing grant, which auto-approve)
 
 ---
 
