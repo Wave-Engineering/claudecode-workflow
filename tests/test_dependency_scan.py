@@ -63,6 +63,27 @@ def test_precheck_invokes_the_tool_rather_than_describing_the_report():
     assert "dependency-scan.sh" in body, "Job C does not invoke the script"
 
 
+def test_precheck_fallback_scans_siblings_like_the_script():
+    """#1247: the raw-trivy fallback, which runs in every repo but this one, must
+    agree with dependency-scan.sh: an unpinned sibling stays out of the
+    denominator, and a sibling scan's findings count toward the verdict.
+
+    The pin regex is taken FROM check-scannable.sh, so the two cannot drift; a
+    literal copied here would only pin SKILL.md to itself.
+    """
+    script = (REPO_ROOT / "scripts" / "ci" / "check-scannable.sh").read_text()
+    m = re.search(r"pinned=\"\$\(grep -cE '([^']+)' \"\$req\"", script)
+    assert m, "check-scannable.sh pin test not found; update this extraction with it"
+    body = (REPO_ROOT / "skills" / "precheck" / "SKILL.md").read_text()
+    assert f"grep -cE '{m.group(1)}' '<sibling>'" in body, (
+        "the fallback must test sibling pins with check-scannable.sh's own regex"
+    )
+    flat = " ".join(body.split())
+    assert "leave it out of the denominator and name it as unpinned" in flat
+    assert "findings count toward the verdict exactly like the main scan's" in flat
+    assert "<same flags>" not in body, "a placeholder for flags is not runnable"
+
+
 @trivy_required
 def test_reports_the_denominator_before_the_verdict():
     """DENOMINATOR FIRST, on every path including the passing one."""
@@ -363,6 +384,136 @@ def test_missing_sibling_check_scannable_exits_5_not_4(tmp_path: Path):
         f"4 would falsely claim nothing is scannable\n{proc.stdout}{proc.stderr}"
     )
     assert "check-scannable.sh missing" in proc.stdout + proc.stderr
+
+
+# --- pip locks not named exactly requirements.txt (#1247) ------------------------
+#
+# trivy's pip analyzer reads ONLY a file named exactly `requirements.txt`. A
+# sibling lock (requirements-dev.txt, requirements-build.txt) was skipped with no
+# warning, though check-scannable.sh counts it. Measured on a real 4-lock tree:
+# 2 ingested, the 209-package dev lock never examined, and the scan exited 0.
+# dependency-scan.sh now scans each sibling alone, under the one name trivy reads.
+
+
+def _routing_stub(tmp_path: Path, main_payload: str, sibling_payload: str, *, sibling_rc: int = 0) -> dict[str, str]:
+    """A trivy stub that answers the repo scan with `main_payload` and a sibling
+    scan with `sibling_payload`. It tells them apart by behaviour, not by the
+    script's temp-dir names: a sibling scan targets a directory holding exactly
+    one file, `requirements.txt`. A lock whose first line is `nothing==` yields no
+    Results, like a lock trivy cannot read. Every call goes to calls.log: a
+    `MAIN` line, or `SIBLING` followed by the requirements.txt it was handed."""
+    bindir = tmp_path / "stubbin"
+    bindir.mkdir(exist_ok=True)
+    log = tmp_path / "calls.log"
+    stub = bindir / "trivy"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "--version" ]; then echo "Version: 9.9.9-stub"; exit 0; fi\n'
+        'for a in "$@"; do last="$a"; done\n'
+        'if [ "$(ls -A "$last")" = "requirements.txt" ]; then\n'
+        f'  {{ echo SIBLING; cat "$last/requirements.txt"; }} >> {log}\n'
+        '  if head -1 "$last/requirements.txt" | grep -q "^nothing=="; then echo \'{"Results":[]}\'; exit 0; fi\n'
+        f"  cat <<'JSON'\n{sibling_payload}\nJSON\n"
+        f"  exit {sibling_rc}\n"
+        "fi\n"
+        f"echo MAIN >> {log}\n"
+        f"cat <<'JSON'\n{main_payload}\nJSON\n"
+    )
+    stub.chmod(0o755)
+    return {"PATH": f"{bindir}:/usr/bin:/bin", "HOME": str(tmp_path)}
+
+
+def _pip(target: str, *names: str, vulns: str = "") -> str:
+    pkgs = ",".join(f'{{"Name":"{n}"}}' for n in names)
+    v = f',"Vulnerabilities":[{vulns}]' if vulns else ""
+    return f'{{"Target":"{target}","Type":"pip","Packages":[{pkgs}]{v}}}'
+
+
+def _four_lock_repo(tmp_path: Path) -> Path:
+    """The issue's shape: an app lock, a dev lock and a build lock, plus a nested app lock."""
+    repo = tmp_path / "repo"
+    (repo / "sub").mkdir(parents=True)
+    (repo / "requirements.txt").write_text("flask==3.0.0\n")
+    (repo / "requirements-dev.txt").write_text("flask==3.0.0\npytest==8.0.0\n")
+    (repo / "sub" / "requirements.txt").write_text("django==5.0.0\n")
+    (repo / "sub" / "requirements-build.txt").write_text("pip==24.0\nwheel==0.43.0\n")
+    return repo
+
+
+# What trivy 0.74.0 reads of that tree in place: the two exact-name files only.
+FOUR_LOCK_MAIN = f'{{"Results":[{_pip("requirements.txt", "flask")},{_pip("sub/requirements.txt", "django")}]}}'
+SIBLING_TWO = f'{{"Results":[{_pip("requirements.txt", "a", "b")}]}}'
+
+
+def test_sibling_pip_locks_are_scanned_alone_and_counted(tmp_path: Path):
+    """The 2-of-4 case: every pinned lock is now ingested, under its real path.
+    Against the pre-#1247 script this reads `coverage: 2 of 4`."""
+    repo = _four_lock_repo(tmp_path)
+    proc = _run_env(repo, _routing_stub(tmp_path, FOUR_LOCK_MAIN, SIBLING_TWO))
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 0, out
+    assert "coverage: 4 of 4 scannable manifest(s) ingested" in proc.stdout, out
+    assert "manifests ingested: 4" in proc.stdout, out
+    assert "packages scanned: 6" in proc.stdout, out
+    assert "requirements-dev.txt  (pip, 2 packages, 0 finding(s); scanned alone as requirements.txt)" in proc.stdout, out
+    assert "sub/requirements-build.txt  (pip, 2 packages, 0 finding(s); scanned alone as requirements.txt)" in proc.stdout, out
+    assert "WARNING" not in out and "UNSCANNED" not in out and "COVERS" not in out, out
+    # Each sibling was handed to trivy whole, under the name it reads.
+    calls = (tmp_path / "calls.log").read_text()
+    assert calls.count("MAIN") == 1 and calls.count("SIBLING") == 2, calls
+    assert "SIBLING\nflask==3.0.0\npytest==8.0.0\n" in calls, calls
+    assert "SIBLING\npip==24.0\nwheel==0.43.0\n" in calls, calls
+
+
+def test_a_finding_in_a_sibling_lock_fails_the_scan(tmp_path: Path):
+    repo = _four_lock_repo(tmp_path)
+    vuln = '{"PkgName":"pytest","VulnerabilityID":"CVE-9999-7","Severity":"HIGH","FixedVersion":"8.0.1"}'
+    sibling = f'{{"Results":[{_pip("requirements.txt", "pytest", vulns=vuln)}]}}'
+    proc = _run_env(repo, _routing_stub(tmp_path, FOUR_LOCK_MAIN, sibling))
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "FINDINGS — 2 HIGH,CRITICAL across 4 manifest(s)" in proc.stderr, proc.stderr
+    assert "pytest | CVE-9999-7 | HIGH | 8.0.1" in proc.stderr, proc.stderr
+
+
+def test_a_pinned_lock_trivy_ingests_nothing_from_is_named_unscanned(tmp_path: Path):
+    """The honest denominator: the shortfall names the file, and the verdict says so."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("flask==3.0.0\n")
+    (repo / "requirements-odd.txt").write_text("nothing==1.0\n")
+    main = f'{{"Results":[{_pip("requirements.txt", "flask")}]}}'
+    proc = _run_env(repo, _routing_stub(tmp_path, main, SIBLING_TWO))
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 0, out
+    assert "coverage: 1 of 2" in proc.stdout, out
+    assert "UNSCANNED — 1 pinned pip lock(s) trivy ingested nothing from:\n  - requirements-odd.txt" in proc.stderr, out
+    assert "(1 pip lock(s) UNSCANNED — see above)" in proc.stdout, out
+
+
+def test_a_sibling_trivy_reads_in_place_is_not_counted_twice(tmp_path: Path):
+    """A future trivy that reads requirements-dev.txt itself must not double it."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("flask==3.0.0\n")
+    (repo / "requirements-dev.txt").write_text("flask==3.0.0\npytest==8.0.0\n")
+    main = f'{{"Results":[{_pip("requirements.txt", "flask")},{_pip("requirements-dev.txt", "flask", "pytest")}]}}'
+    proc = _run_env(repo, _routing_stub(tmp_path, main, SIBLING_TWO))
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 0, out
+    assert "manifests ingested: 2" in proc.stdout, out
+    assert "packages scanned: 3" in proc.stdout, out
+    assert "scanned alone" not in proc.stdout, out
+
+
+def test_a_sibling_scan_with_no_output_exits_5_naming_the_lock(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("flask==3.0.0\n")
+    (repo / "requirements-dev.txt").write_text("pytest==8.0.0\n")
+    main = f'{{"Results":[{_pip("requirements.txt", "flask")}]}}'
+    proc = _run_env(repo, _routing_stub(tmp_path, main, "", sibling_rc=1))
+    assert proc.returncode == 5, proc.stdout + proc.stderr
+    assert "trivy produced no output scanning requirements-dev.txt" in proc.stderr, proc.stderr
 
 
 def test_validate_survives_a_non_zero_scan_rc(tmp_path: Path):

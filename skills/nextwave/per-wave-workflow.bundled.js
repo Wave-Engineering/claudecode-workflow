@@ -584,6 +584,50 @@ function conservativeFail(signal, err) {
   }
 }
 
+// The TRIVY signal's own schema (cc-workflow#1247): the generic SIG plus the coverage counts, so
+// the partial-coverage rule below is applied by CODE, not left to the agent's reading of a prompt.
+const TRIVY_SIG = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['signal', 'passed', 'found', 'ingested', 'unscanned'],
+  properties: {
+    signal: { type: 'string' },
+    passed: { type: 'boolean' },
+    detail: { type: 'string' },
+    found: { type: 'integer' }, // lockfiles the prescribed find printed, less the prompt's two exclusions
+    ingested: { type: 'integer' }, // of those, how many a scan returned at least one package for
+    unscanned: { type: 'array', items: { type: 'string' } }, // the rest, by path
+  },
+}
+
+// PARTIAL COVERAGE FAILS (cc-workflow#1247). trivy's pip analyzer reads only a file named exactly
+// requirements.txt, so a requirements-dev.txt beside it was counted in the denominator and never
+// scanned, and a clean result over the other half read as a PASS. A lock that was not scanned is
+// not clean. This never turns a failing signal into a passing one; it only HOLDs one that claims
+// a pass over part of its denominator, names a lock it did not scan (an agent can miscount
+// ingested; it is far less likely to list a path it never examined), or whose counts cannot be
+// squared. A zero-ingested result is left to the prompt's own predicate, because only the agent
+// can see a declaration file.
+function trivyCoverage(sig) {
+  const { found, ingested } = sig ?? {}
+  const unscanned = Array.isArray(sig?.unscanned) ? sig.unscanned : []
+  if (!Number.isInteger(found) || !Number.isInteger(ingested) || ingested < 0 || ingested > found) {
+    return conservativeFail('trivy', `coverage counts missing or inconsistent (found=${found}, ingested=${ingested})`)
+  }
+  if (ingested > 0 && (ingested < found || unscanned.length > 0)) {
+    const names = unscanned.length ? unscanned.join(', ') : 'not named'
+    const why = ingested < found
+      ? `${ingested} of ${found} lockfile(s) ingested`
+      : `counts claim full coverage (${ingested} of ${found}) yet name unscanned lock(s)`
+    return {
+      ...sig,
+      passed: false,
+      detail: `PARTIAL COVERAGE (HOLD): ${why}; UNSCANNED: ${names}. ${sig.detail ?? ''}`.trim(),
+    }
+  }
+  return sig
+}
+
 // ── 1. commutativity signal ──────────────────────────────────────────────────────────
 // Single-target mode (one changeset = the whole kahuna composed diff): is kahuna safe to
 // land on the integration base? pass = verdict ∈ {STRONG, MEDIUM}; every other verdict —
@@ -838,13 +882,33 @@ function reviewSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRepoD
 // instead of separately (widening beyond that shared set, e.g. poetry.lock/Gemfile.lock, is a
 // real gap too, but a bigger scope change than this fix — check-scannable.sh doesn't cover them
 // either, so parity with it is the bar this fix targets, not universal ecosystem coverage).
+//
+// cc-workflow#1247: the find counts every requirements*.txt, but trivy's pip analyzer reads only
+// the exact name requirements.txt, so a requirements-dev.txt was in the denominator and never in
+// the scan. A 2-of-4 run then passed on the clean half. Siblings are now scanned alone under the
+// name trivy reads (scripts/ci/dependency-scan.sh does the same), and the agent returns its counts
+// in TRIVY_SIG so trivyCoverage() holds a partial run in code rather than by instruction. A
+// requirements*.txt with no '==' pin stays OUT of the denominator, as check-scannable.sh leaves it
+// out (UNSCANNABLE): it carries no version, so trivy could never ingest it, and counting it would
+// HOLD every wave that also has a real lock (a docs/requirements.txt of `sphinx>=7` is enough).
+// So does a bun.lockb beside a bun.lock: the same packages, and the one check-scannable.sh does not
+// count. A lone bun.lockb, which trivy cannot parse, stays in and HOLDs by design.
 function trivySignalPrompt({ waveId, kahunaBranch, targetRepoDir }) {
   return [
     `Trust-gate TRIVY signal for wave ${waveId}. Scan ${kahunaBranch} for dependency vulnerabilities.`,
     `FIRST enumerate the dependency manifests/lockfiles under ${targetRepoDir} — run this exactly (one command, do not split it):`,
     `  find ${targetRepoDir} \\( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \\) -prune -o -type f \\( -name 'bun.lock' -o -name 'bun.lockb' -o -name 'package-lock.json' -o -name 'yarn.lock' -o -name 'pnpm-lock.yaml' -o -name 'go.sum' -o -name 'Cargo.lock' -o -name 'requirements*.txt' \\) -print`,
     `and report the count of lines it prints — this is the denominator the pass predicate below`,
-    `needs, not optional context.`,
+    `needs, not optional context. Two exclusions, both matching scripts/ci/check-scannable.sh:`,
+    `(1) a requirements*.txt with no entry pinned by '==' is a range declaration, not a lock (it`,
+    `carries no version, so trivy can never ingest it). Test each requirements*.txt the find printed with`,
+    `  grep -cE '^[[:space:]]*[A-Za-z0-9._-]+[[:space:]]*===?[[:space:]]*[0-9]' <that file>`,
+    `and where it prints 0, leave that file OUT of the denominator and name it in detail as unpinned.`,
+    `(2) a bun.lockb with a bun.lock in the same directory is the same packages in bun's old binary`,
+    `format, and check-scannable.sh counts only the bun.lock: leave that bun.lockb OUT as well. trivy`,
+    `cannot parse bun.lockb at all, so a bun.lockb with NO bun.lock beside it stays in and is UNSCANNED`,
+    `by design; say in detail that the remedy is bun's text lockfile, bun.lock (bun 1.2+ writes it).`,
+    `A file left out goes in detail, never in unscanned, and is never counted as ingested.`,
     `THEN run:`,
     `  trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet ${targetRepoDir}`,
     `(ensure ${kahunaBranch} is the checked-out / scanned state of ${targetRepoDir}).`,
@@ -852,18 +916,30 @@ function trivySignalPrompt({ waveId, kahunaBranch, targetRepoDir }) {
     `project whose entire tree is dev-only (e.g. a bun-based tools repo) would otherwise scan`,
     `ZERO packages while still exiting clean (cc-workflow#1169). --list-all-pkgs is required on`,
     `trivy <0.67.0, where it is not yet the default.`,
+    `trivy's pip analyzer reads ONLY a file named exactly requirements.txt (cc-workflow#1247), so the`,
+    `scan above skips every other pinned requirements*.txt. Scan each of those ALONE, under`,
+    `the one name trivy reads, with the same flags, and count its result for that file:`,
+    `  d=$(mktemp -d) && cp <that file> $d/requirements.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet $d; rm -rf \${d:?}`,
+    `Its HIGH/CRITICAL findings count toward the verdict exactly like the main scan's.`,
+    `A lockfile in the denominator is INGESTED when a scan returned at least one package for it (for`,
+    `go.sum, a result for the go.mod beside it). Every other one is UNSCANNED. PARTIAL COVERAGE`,
+    `FAILS: if some lockfiles are INGESTED and any is UNSCANNED, passed=false even when every`,
+    `ingested one is clean, because an unscanned lock is not a clean one.`,
     `Pass predicate: passed = NO HIGH/CRITICAL finding that has an AVAILABLE FIXED VERSION. An`,
     `unfixable upstream advisory (no fixed version published) does NOT fail the signal — record it in`,
     `detail as a deferral. CONSERVATIVE-FAIL (passed=false) — the gate must not PASS on the absence`,
     `of a scan — applies to trivy is not installed / the scan cannot run, AND to a manifest count`,
-    `greater than 0 where the JSON output has no Results key or Results carry an empty/absent`,
-    `Packages list (a real manifest existed but nothing was extractable from it — e.g. every entry`,
-    `is an unpinned range, not a version). A .no-scannable-dependencies declaration at the repo`,
+    `(found) greater than 0 where the JSON output has no Results key or Results carry an empty/absent`,
+    `Packages list (a real lockfile existed but trivy extracted nothing from it).`,
+    `A .no-scannable-dependencies declaration at the repo`,
     `root, with a reason, rescues BOTH a manifest count of 0 AND the zero-packages-despite-a-real-`,
     `manifest case above — a repo can legitimately have nothing pinnable and the declaration is`,
     `how it says so; omitting the declaration is the failure in either shape, not having nothing`,
     `to scan. Report the manifest count AND the actual package count scanned in detail either way.`,
-    `Do NOT do any other work beyond the enumeration above. Return signal="trivy", passed (bool), detail (count + 1 line).`,
+    `Do NOT do any other work beyond the enumeration and scans above. Return signal="trivy", passed (bool),`,
+    `found (the denominator: lines the find printed, less the two exclusions above), ingested`,
+    `(how many of those are INGESTED), unscanned (the UNSCANNED`,
+    `paths), and detail (counts + 1 line). The gate re-checks found, ingested and unscanned itself.`,
   ].join('\n')
 }
 
@@ -1936,11 +2012,12 @@ if (!halt && pending.size === 0) {
           { label: 'gate:review', phase: 'Trust gate', schema: SIG, agentType: 'feature-dev:code-reviewer' },
         )
       })().catch((e) => conservativeFail('review', e)),
-      // 4. trivy HIGH/CRITICAL dependency scan of kahuna
+      // 4. trivy HIGH/CRITICAL dependency scan of kahuna. trivyCoverage HOLDs a pass over part of
+      //    the lockfiles found (#1247); the agent reports the counts, code applies the rule.
       () => agent(
         trivySignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, targetRepoDir: TARGET_REPO_DIR }),
-        { label: 'gate:trivy', phase: 'Trust gate', schema: SIG, agentType: 'general-purpose' },
-      ).catch((e) => conservativeFail('trivy', e)),
+        { label: 'gate:trivy', phase: 'Trust gate', schema: TRIVY_SIG, agentType: 'general-purpose' },
+      ).then(trivyCoverage).catch((e) => conservativeFail('trivy', e)),
       // A null/undefined slot (an SDK-level failure upstream of the per-signal .catch) must become a
       // conservative-fail, NEVER be dropped — the gate must always weigh exactly 4 signals, or a
       // missing signal silently becomes a PASS (absence-of-evidence-as-safety). #687 review.

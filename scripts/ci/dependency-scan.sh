@@ -136,41 +136,94 @@ SKIP_DIRS=(--skip-dirs "**/node_modules" --skip-dirs "**/dist" --skip-dirs "**/b
 # committed .trivyignore silently suppress findings with nothing here
 # checking for one. Forcing an empty ignore file makes "every HIGH/CRITICAL
 # blocks, no suppression channel" actually true rather than merely intended.
-trivy_err="$(mktemp)"
-raw="$(timeout "${DEP_SCAN_TIMEOUT:-300}" trivy fs --scanners vuln --severity "$SEVERITY" \
-	--include-dev-deps --list-all-pkgs --ignorefile /dev/null \
-	"${SKIP_DIRS[@]}" --format json --quiet "$ROOT" 2>"$trivy_err")"
-trivy_rc=$?
-if ((trivy_rc == 124)); then
-	echo "dependency-scan: FAIL — trivy timed out after ${DEP_SCAN_TIMEOUT:-300}s (DB pull? network?)" >&2
-	sed 's/^/    /' "$trivy_err" >&2
-	rm -f "$trivy_err"
-	exit 5
-fi
-if [[ -z "$raw" ]]; then
-	# NOT exit 2. A scanner that failed is not a lockfile that could not be parsed,
-	# and conflating them sends the operator hunting an ecosystem problem that does
-	# not exist. Most likely cause is the vulnerability-DB pull: first run, offline
-	# box, registry rate-limit, air-gap.
-	echo "dependency-scan: FAIL — trivy produced no output (rc=$trivy_rc)" >&2
-	sed 's/^/    /' "$trivy_err" >&2
-	rm -f "$trivy_err"
-	exit 5
-fi
-rm -f "$trivy_err"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+trivy_err="$work/trivy.err"
+TRIVY_FLAGS=(--scanners vuln --severity "$SEVERITY" --include-dev-deps --list-all-pkgs
+	--ignorefile /dev/null --format json --quiet)
+
+# Run trivy on $1 (extra flags after it); its JSON goes to stdout. A timeout or an
+# empty answer exits 5 here, naming what was being scanned.
+scan() {
+	local target="$1" what="$2" out rc
+	shift 2
+	out="$(timeout "${DEP_SCAN_TIMEOUT:-300}" trivy fs "${TRIVY_FLAGS[@]}" "$@" "$target" 2>"$trivy_err")"
+	rc=$?
+	if ((rc == 124)); then
+		echo "dependency-scan: FAIL — trivy timed out after ${DEP_SCAN_TIMEOUT:-300}s scanning ${what} (DB pull? network?)" >&2
+		sed 's/^/    /' "$trivy_err" >&2
+		exit 5
+	fi
+	if [[ -z "$out" ]]; then
+		# NOT exit 2. A scanner that failed is not a lockfile that could not be parsed,
+		# and conflating them sends the operator hunting an ecosystem problem that does
+		# not exist. Most likely cause is the vulnerability-DB pull: first run, offline
+		# box, registry rate-limit, air-gap.
+		echo "dependency-scan: FAIL — trivy produced no output scanning ${what} (rc=$rc)" >&2
+		sed 's/^/    /' "$trivy_err" >&2
+		exit 5
+	fi
+	printf '%s' "$out"
+}
+
+raw="$(scan "$ROOT" "the repo" "${SKIP_DIRS[@]}")" || exit $?
+printf '%s' "$raw" >"$work/main.json"
+
+# --- pip locks trivy will not read under their own name (#1247) -----------------
+# trivy's pip analyzer reads ONLY a file named exactly `requirements.txt`. A
+# sibling lock (requirements-dev.txt, requirements-build.txt) is skipped with no
+# warning, though check-scannable.sh rightly counts it, so the coverage line
+# below could never close. Measured: a dev lock of 209 packages, never examined.
+#
+# So each sibling is scanned ALONE: copied into an empty directory under the one
+# name trivy reads, its results folded into the totals under its real path. The
+# list is check-scannable.sh's own pinned-requirements report, so the set scanned
+# here is the set counted there. A `-r other.txt` include is not followed, which
+# is also true of trivy reading the file in place.
+sed -n 's/^  \[scannable\] \.\/\(.*\) — [0-9][0-9]* pinned entr.*$/\1/p' <<<"$scannable_out" >"$work/pip-locks"
+: >"$work/siblings.tsv"
+n=0
+while IFS= read -r lock; do
+	[[ -n "$lock" && "$(basename "$lock")" != requirements.txt ]] || continue
+	n=$((n + 1))
+	mkdir "$work/sib-$n"
+	cp -- "$ROOT/$lock" "$work/sib-$n/requirements.txt"
+	sib_raw="$(scan "$work/sib-$n" "$lock")" || exit $?
+	printf '%s' "$sib_raw" >"$work/sib-$n.json"
+	printf '%s\t%s\n' "$lock" "$work/sib-$n.json" >>"$work/siblings.tsv"
+done <"$work/pip-locks"
 
 # --- POST: what did it actually ingest? ----------------------------------------
 # DENOMINATOR FIRST, on every path including the passing one — the same rule
 # check-scannable.sh states for its own count. A verdict without the number that
 # qualifies it is the failure this whole family of checks exists to prevent.
-summary="$(printf '%s' "$raw" | python3 -c '
+summary="$(python3 -c '
 import json, sys
+main_path, siblings_path, pip_locks_path = sys.argv[1:4]
+def load(path):
+    with open(path) as f:
+        return json.load(f)
 try:
-    doc = json.load(sys.stdin)
+    docs = [(None, load(main_path))]
+    with open(siblings_path) as f:
+        for row in f:
+            label, path = row.rstrip("\n").split("\t", 1)
+            docs.append((label, load(path)))
 except Exception as exc:
     print(f"PARSE_ERROR\t{exc}")
     raise SystemExit
-results = doc.get("Results") or []
+with open(pip_locks_path) as f:
+    pip_locks = [l.rstrip("\n") for l in f if l.strip()]
+in_place = {r.get("Target") for r in (docs[0][1].get("Results") or [])}
+results = []
+for label, doc in docs:
+    for r in doc.get("Results") or []:
+        if label is not None:
+            # A trivy that reads this sibling in place already counted it once.
+            if label in in_place:
+                continue
+            r = dict(r, Target=label, _alone=True)
+        results.append(r)
 manifests, packages, findings = 0, 0, 0
 lines = []
 for r in results:
@@ -184,7 +237,8 @@ for r in results:
     manifests += 1
     packages += pkgs
     findings += vulns
-    lines.append(f"  - {target}  ({rtype}, {pkgs} packages, {vulns} finding(s))")
+    alone = "; scanned alone as requirements.txt" if r.get("_alone") else ""
+    lines.append(f"  - {target}  ({rtype}, {pkgs} packages, {vulns} finding(s){alone})")
 print(f"COUNTS\t{manifests}\t{packages}\t{findings}")
 for l in lines:
     print(f"LINE\t{l}")
@@ -193,7 +247,13 @@ for r in results:
         print("VULN\t{}\t{}\t{}\t{}".format(
             v.get("PkgName","?"), v.get("VulnerabilityID","?"),
             v.get("Severity","?"), v.get("FixedVersion") or "no fix available"))
-')"
+# A pinned lock that check-scannable.sh counted but that yielded no packages is
+# UNSCANNED, by name. A count alone says something is missing, not what.
+ingested = {r.get("Target") for r in results if r.get("Packages")}
+for lock in pip_locks:
+    if lock not in ingested:
+        print(f"UNSCANNED\t{lock}")
+' "$work/main.json" "$work/siblings.tsv" "$work/pip-locks")"
 
 if printf '%s' "$summary" | grep -q '^PARSE_ERROR'; then
 	# exit 5 (scanner error), NOT 2 (present-but-uningested): malformed JSON is
@@ -238,6 +298,13 @@ if ((scannable_n > 0)); then
 		echo "  A PASS below covers only what was ingested. The remainder is unscanned, not clean." >&2
 	fi
 fi
+unscanned="$(sed -n "s/^UNSCANNED$(printf '\t')//p" <<<"$summary")"
+unscanned_n=0
+if [[ -n "$unscanned" ]]; then
+	unscanned_n="$(wc -l <<<"$unscanned" | tr -d ' ')"
+	echo "dependency-scan: UNSCANNED — ${unscanned_n} pinned pip lock(s) trivy ingested nothing from:" >&2
+	while IFS= read -r lock; do echo "  - $lock"; done <<<"$unscanned" >&2
+fi
 
 # --- the gap ------------------------------------------------------------------
 # Manifests exist (check-scannable passed above) but the scanner covered none.
@@ -268,6 +335,9 @@ fi
 verdict="dependency-scan: PASS — ${packages} package(s) across ${manifests} manifest(s), 0 ${SEVERITY}"
 if ((scannable_n > manifests)); then
 	verdict="${verdict} (COVERS ${manifests}/${scannable_n} — see WARNING above)"
+fi
+if ((unscanned_n > 0)); then
+	verdict="${verdict} (${unscanned_n} pip lock(s) UNSCANNED — see above)"
 fi
 echo "$verdict"
 exit 0

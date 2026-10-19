@@ -122,6 +122,11 @@ done
 # --- shape 2: requirements.txt with pinned entries ---------------------------
 # `==` only. `>=` and `~=` are ranges, and a range is not an installed version,
 # so they parse to nothing for the same reason a bare name does.
+#
+# Every `requirements*.txt` counts, though trivy's pip analyzer reads only a file
+# named exactly `requirements.txt` (#1247). dependency-scan.sh closes that by
+# scanning each sibling alone under the name trivy reads, and it takes the list
+# from the `[scannable] … pinned entr…` lines below, so keep their shape.
 while IFS= read -r req; do
 	[[ -n "$req" ]] || continue
 	pinned="$(grep -cE '^[[:space:]]*[A-Za-z0-9._-]+[[:space:]]*===?[[:space:]]*[0-9]' "$req" 2>/dev/null || true)"

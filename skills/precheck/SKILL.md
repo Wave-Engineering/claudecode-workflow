@@ -184,7 +184,24 @@ prompt: "Run: bash <repo_root>/scripts/ci/dependency-scan.sh <repo_root>
          only became trivy's default in v0.67.0, with this fleet pinning no
          minimum trivy version. dependency-scan.sh itself already carries both
          flags — this fallback exists only for a checkout that predates the
-         script."
+         script.
+
+         On the fallback, trivy's pip analyzer reads ONLY a file named exactly
+         requirements.txt (#1247); requirements-dev.txt and every other
+         sibling is skipped with no warning. So ALSO list the siblings:
+           find <repo_root> \( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \) -prune -o -type f -name 'requirements*.txt' ! -name requirements.txt -print
+         A sibling with no entry pinned by '==' is a range declaration, not a
+         lock (check-scannable.sh lists it UNSCANNABLE). Test each one with
+           grep -cE '^[[:space:]]*[A-Za-z0-9._-]+[[:space:]]*===?[[:space:]]*[0-9]' '<sibling>'
+         and where it prints 0, leave it out of the denominator and name it
+         as unpinned, not UNSCANNED. Scan every other sibling ALONE, under the
+         name trivy reads, with the same flags:
+           d=$(mktemp -d) && cp '<sibling>' $d/requirements.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet $d; rm -rf ${d:?}
+         Its HIGH/CRITICAL findings count toward the verdict exactly like the
+         main scan's. Count every lock you found (the denominator) and every
+         one trivy returned packages for (ingested). Name each lock found but
+         not ingested as UNSCANNED, before any verdict. A PASS covers only
+         what was ingested; an unscanned lock is not clean."
 ```
 
 **The denominator is emitted by the tool, not requested from the agent (#1137).** This job used to be prose asking a sub-agent to report the count. It complied — and compliance is the problem: an instruction can be forgotten by the next agent, misread, or quietly dropped in a rewrite, and the resulting verdict looks identical to a real one. `dependency-scan.sh` emits the number on every path including the passing one, so the report survives the agent.
