@@ -1,6 +1,6 @@
 ---
 name: precheck
-description: Pre-commit gate — verify branch/issue, run code-reviewer, present checklist, then stop and wait for approval
+description: MR gate — review the pushed commits, read CI, post the precheck status, mark the PR/MR ready, then stop for the merge call
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
@@ -9,35 +9,67 @@ description: Pre-commit gate — verify branch/issue, run code-reviewer, present
      Do NOT delete introduction.md — it lives in a protected directory.
      Do this BEFORE executing any skill logic below. -->
 
-# Pre-Commit Gate
+# MR Gate
 
-Mandatory verification before any commit. Checks compliance, runs code review, presents the checklist, and **stops**. Does NOT commit/push/PR.
+Precheck is **the gate into a release branch** (#1233, #1235). Commits and pushes to your own working branch are free; precheck gates the **PR/MR**. It reviews the **pushed commits**, which are exactly what the PR/MR carries; reads CI's verdict for the pushed HEAD; and on a pass posts the `precheck` commit status on HEAD and marks the PR/MR **ready**. Then it **stops for the merge call**: BJ's approval is at the merge, where what he approves is something landing.
 
-**IMPORTANT: When implementation is done, run this skill IMMEDIATELY. Do NOT ask "shall I run precheck?" or "ready for precheck?" — just start it. The checklist at the end is the approval gate; asking permission to START is a redundant pause.**
+| Gate | What runs there |
+|---|---|
+| commit | secret scan of what is staged (`secret-scan-gate.sh`) |
+| push | secret scan of the range being pushed; no push to protected or release refs; working-branch pushes are free (`pre-push-test-gate.sh`) |
+| **MR (this skill)** | review, acceptance criteria, lanes (CI first), dependency scan, issue spec; posts `precheck` = success and marks ready |
+| merge | BJ's approval, or an exception (kahuna and autochain, detected mechanically; a standing grant, applied by you); CI green on the merge result (`/mmr`) |
+
+**Drafts are free.** A draft PR/MR can't merge, so `/scpmr` opens one before precheck runs, and CI runs on it. Making it **ready** needs the `precheck` status on its head. `pr-ready-gate.sh` refuses otherwise on the CLI today. sdlc's `pr_create`/`pr_ready`/`pr_merge` will refuse on the MCP path once mcp-server-sdlc#592 ships; until then, nothing on that path checks it except this skill and `/mmr`. The contract is `docs/precheck-status.md`.
+
+**IMPORTANT: When implementation is done, push and run this skill IMMEDIATELY (`/scpmr` does both). Do NOT ask "shall I run precheck?" or "ready for precheck?" — just start it. The checklist at the end is the merge-approval surface; asking permission to START is a redundant pause.**
+
+**Once the PR/MR is open and prechecked, a later push uses `/precheck rearm`** (below): a review of only the new commits plus a green pipeline, with no checklist, no announcement and no STOP, unless the push changes what the MR does (BJ ruling K-11).
 
 ## Tools Used
 - `mcp__sdlc-server__ibm` — branch/issue workflow (no protected branch; branch linked to an open issue)
-- `mcp__sdlc-server__branch_guard` — resolve the live default branch and verify the current branch's base is it (protected-gated, `kahuna/*`-exempt)
+- `mcp__sdlc-server__branch_guard` — resolve the live default branch and verify the PR/MR's base is it (protected-gated, `kahuna/*`-exempt)
 - `mcp__sdlc-server__spec_validate_structure` — linked issue has Changes / Tests / AC
-- `mcp__disc-server__disc_send` — post approval request to `#precheck` (channel `1491195025198157834`)
+- `mcp__sdlc-server__pr_list` / `pr_create` (`draft: true`) — find or open the draft PR/MR
+- `mcp__sdlc-server__ci_wait_run` — CI's verdict for the pushed HEAD (`expected_sha`)
+- `precheck-status.sh` — post and read the `precheck` commit status
+- `mcp__disc-server__disc_send` — post the merge-call request to `#precheck` (channel `1491195025198157834`)
 
 ## Procedure
 
-### Step 0 — Pre-flight: resolve the scope tool (refuse to guess)
+### Step 0 — Pre-flight: resolve the scope and status tools (refuse to guess)
 
-Before Step 1, resolve `precheck-review-scope.sh` once and reuse that path for every later call. Step 2 invokes it, so probing later in the Job D section is too late — an agent reading top-down would already have run it.
+Before Step 1, resolve `precheck-review-scope.sh` and `precheck-status.sh` once and reuse those paths for every later call. Step 0.5 already invokes the first, so probing later is too late.
 
 ```bash
-SCOPE=""
+SCOPE="" STATUS=""
 for cand in \
   "$(command -v precheck-review-scope.sh 2>/dev/null)" \
   "<repo_root>/.claude/bin/precheck-review-scope.sh" \
   "<repo_root>/scripts/precheck-review-scope.sh"; do
   [[ -n "$cand" && -x "$cand" ]] && { SCOPE="$cand"; break; }
 done
+for cand in \
+  "$(command -v precheck-status.sh 2>/dev/null)" \
+  "<repo_root>/.claude/bin/precheck-status.sh" \
+  "<repo_root>/scripts/precheck-status.sh"; do
+  [[ -n "$cand" && -x "$cand" ]] && { STATUS="$cand"; break; }
+done
 ```
 
-`PATH` covers a normal install; `.claude/bin` covers `install --local` (which is deliberately NOT on `PATH`); `scripts/` covers a cc-workflow checkout. If all three miss, the kit is genuinely absent — take the fallback documented in the Job D section and say so on the checklist. Do not improvise.
+`PATH` covers a normal install; `.claude/bin` covers `install --local` (which is deliberately NOT on `PATH`); `scripts/` covers a cc-workflow checkout. If `SCOPE` misses on all three, the kit is genuinely absent: take the fallback documented in the Job D section and say so on the checklist. **If `STATUS` misses, STOP.** Without it a pass can't be recorded and the PR/MR can't be marked ready, and there's no fallback. Do not improvise.
+
+### Step 0.5 — The pushed commits, and a draft PR/MR (serial, hard stop)
+
+Precheck reviews **what is pushed**, so the working tree must hold nothing else:
+
+```bash
+"$SCOPE" ready <repo_root> <marker_dir>   # -> "ready <sha>" | "not-ready <reason>" (exit 1)
+```
+
+`not-ready` → **STOP** and surface the reason. Usually the fix is to commit and push (`/scp`): free on a working branch, and gated by the commit and push hooks. Never review a dirty tree and post a pass on a HEAD that does not contain what was reviewed. Keep `<sha>`; it's `HEAD_SHA` for every later step.
+
+Then find the PR/MR: `pr_list({head: "<branch>"})`. If there is none, first mark the issue in review (GitLab Status → `In Test`, read back; on GitHub the linked PR is the marker), as `/scpmr` step 2 does. Then open the PR/MR **as a draft** with `pr_create({..., draft: true})`, using a title and body in the CLAUDE.md format (and, once sdlc#592 ships, its `squash_message`). If `pr_create` fails, put the issue back to `In progress` and STOP. A draft needs no precheck. This is also what gives CI something to run on: many repos run CI only for PRs/MRs (this one does). Keep `PR_NUMBER` and the PR's **base**; the base is `<base>` for every later step.
 
 ### Step 1 — IBM gate (serial, hard stop)
 Call `mcp__sdlc-server__ibm` directly (no sub-agent — it's one MCP call). If it fails, stop immediately and do not proceed.
@@ -50,7 +82,7 @@ Call `mcp__sdlc-server__branch_guard({ role: "base" })`. It resolves the **live*
 
 **Protected-gated:** silent when the base is unprotected (feature→feature, stacked branches) or a `kahuna/*` integration branch. Only a protected, non-default, non-sandbox base trips it.
 
-**Scope (known limit):** reliable once a PR exists (it reads the PR's base). Before a PR exists, git can't distinguish "based on a stale default" from "based on the current default, now a bit behind" without false positives, so the pre-PR case is intentionally not gated here — the PR-create and merge target guards catch the wrong-target case. (#888)
+**Scope:** reliable once a PR exists, because it reads the PR's base, and since #1235 one always exists by this step (Step 0.5 opens the draft). Before a PR exists, git can't distinguish "based on a stale default" from "based on the current default, now a bit behind" without false positives; that was the known limit of the pre-commit gate (#888).
 
 **Transition fallback** — *only* until `branch_guard` is deployed on this host's sdlc-server (#465): resolve the live default inline (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name`, or GitLab `glab api "projects/:id" --jq .default_branch`). If an open PR exists, compare its base (`gh pr view --json baseRefName -q .baseRefName`) and STOP if that base is a protected branch that is neither the live default nor matches `^kahuna/[0-9]+-`. Delete this paragraph once `branch_guard` is universal.
 
@@ -65,7 +97,31 @@ prompt: "Run mcp__sdlc-server__spec_validate_structure for issue #<N> in repo <r
          Return: PASS or FAIL, and if FAIL, list exactly which required H2 sections are missing."
 ```
 
-**Job B — Repo validation** `model: haiku`
+**Job B — Lanes: CI first** `model: haiku`
+
+**Source rule (#1235).** Every push runs CI, so CI's verdict for the pushed HEAD is the lane result whenever it exists. Running the same lanes again locally spends a shared box on a question CI has already answered. Decide the source before dispatching:
+
+- **The repo has CI** (`.github/workflows/*.yml` or `.gitlab-ci.yml`) → dispatch **Job B-ci**.
+- **It has none** → dispatch **Job B-local**.
+- **Job B-ci reports `NO-RUN`** (CI exists but never ran for this SHA) → dispatch Job B-local. Say so on the checklist.
+
+The checklist line names the source: `Validation (CI run <id> @ <sha7>)` or `Validation (local lanes)`.
+
+**Job B-ci**
+```
+subagent_type: general-purpose
+model: haiku
+prompt: "Call mcp__sdlc-server__ci_wait_run with ref: '<branch>', expected_sha: '<HEAD_SHA>',
+         timeout_sec: 1800. Report its JSON VERBATIM, then exactly one line:
+           LANE ci:<workflow or pipeline name> | exit=<0 if final_status is success, else 1> | run=<id> sha=<sha>
+         If the response shows no run was found for that SHA, print instead:
+           NO-RUN <the response's reason>
+         Do not re-derive or soften the status; a timed_out or cancelled run is exit=1."
+```
+
+The `LANE … | exit=` line keeps the shape Step 5's autochain path reads.
+
+**Job B-local**
 ```
 subagent_type: general-purpose
 model: haiku
@@ -189,23 +245,23 @@ Reading `name` is immune to all four **because it never asks the path a question
 
 Job D has **two** prompts: a **full** pass and a **delta** re-run. Which one you use is not a judgment call — it is decided by the rule below.
 
-> **Resolve the merge-base to a SHA, then diff against the WORKING TREE: `mb="$(git -C <repo_root> merge-base <base> HEAD)"` then `git -C <repo_root> diff "$mb"`.**
+> **Resolve the merge-base to a SHA, then diff against the WORKING TREE: `mb="$(git -C <repo_root> merge-base <base> HEAD)"` then `git -C <repo_root> diff "$mb"`.** (`precheck-review-scope.sh gather` does exactly this.) Since #1235, Step 0.5 guarantees the tree equals the pushed HEAD, so this **is** the commit range the PR/MR carries. The mechanics stay working-tree-based on purpose: they stay correct if the tree ever is not clean, and `pmr-bench-arm.sh` still measures the pre-commit protocol through them.
 >
-> Not `git diff <base>...HEAD`, and not `git diff <base>`. Both are wrong, in opposite directions, and the first one is catastrophic:
+> Not `git diff <base>...HEAD`, and not `git diff <base>`. Both are wrong, in opposite directions, and the first one was catastrophic in the pre-commit gate:
 > - **`<base>...HEAD`** is a *commit-to-commit* range (`git diff $(merge-base A B) B`), so the working tree and index are excluded **by construction**. In a pre-commit gate the changeset IS the working tree and HEAD has not moved — so this diff is **empty**. Measured on this very branch during #1194: `git diff main...HEAD` returned **0 bytes** while `git diff $(merge-base)` returned **61,193**. Embedding the three-dot form hands the reviewer nothing and gets back "No findings".
 > - **bare `git diff <base>`** compares base's *current tip* to the working tree, so if someone pulls `<base>` mid-cycle its new commits appear inverted as phantom deletions.
 >
 > Resolving the merge-base first gets both properties: merge-base semantics (no phantom deletions) *and* the working tree (the code actually under review).
 >
-> **`<base>` is the branch this work will merge into — never a hardcoded `main` (#1194).** Resolve it, do not assume it: if a PR/MR exists, it is that PR's base (`gh pr view --json baseRefName -q .baseRefName`); otherwise it is the live default branch that Step 1.5's `branch_guard` already returned as `default_branch`. On a `kahuna/*` sandbox flight the base is the wave integration branch, and on repos whose default is `release/*` it is that release branch. A literal `main` reviews the wrong range in both cases — and on the sandbox path there is no human present to notice the reviewer read a nonsensical diff.
+> **`<base>` is the branch this work will merge into — never a hardcoded `main` (#1194).** Resolve it, do not assume it: it is the PR/MR's base, which Step 0.5 recorded (`gh pr view --json baseRefName -q .baseRefName`). On a `kahuna/*` sandbox flight the base is the wave integration branch, and on repos whose default is `release/*` it is that release branch. A literal `main` reviews the wrong range in both cases — and on the sandbox path there is no human present to notice the reviewer read a nonsensical diff.
 
 **The first Job D pass of a precheck cycle ALWAYS uses the full prompt.** There is no condition, issue type, label, or file extension that scopes it. The delta prompt exists only to avoid re-reading code a reviewer has *already cleared in this same cycle*; it is not a cheaper first look.
 
-**Both prompts carry the untracked channel, and the full one needs it just as much.** `git diff <base>` does not show untracked paths, and `/precheck` runs before `/scp` does the `git add` — so a brand-new file can be untracked for the whole cycle. Without the second channel the full pass never sees it, yet `record` afterwards writes that file into the reviewed set, so the *next* pass correctly omits it as already-cleared. The file would then ship reviewed by nobody: bookkeeping asserting a coverage claim the prompt never made. Do not drop the untracked block from either prompt on the grounds that a reviewer "would probably run `git status`" — spelling it out in one prompt is already the admission that you cannot rely on that.
+**Both prompts carry the untracked channel, and the full one needs it just as much.** Since #1235 it should be empty: Step 0.5 refuses a tree with an untracked file, and fixes are committed and pushed before a re-run. **A non-empty `new-untracked` mid-cycle means the tree changed outside the commit flow. STOP, then commit and push it or remove it, and re-run `ready`.** The channel stays because it is what proves the emptiness. Under the pre-commit gate it carried real files: `git diff <base>` does not show untracked paths, and a brand-new file could be untracked for the whole cycle. Without the second channel the full pass never sees it, yet `record` afterwards writes that file into the reviewed set, so the *next* pass correctly omits it as already-cleared. The file would then ship reviewed by nobody: bookkeeping asserting a coverage claim the prompt never made. Do not drop the untracked block from either prompt on the grounds that a reviewer "would probably run `git status`" — spelling it out in one prompt is already the admission that you cannot rely on that.
 
 **Job D-full** — used when `resolve` (below) printed `full`: the first pass of every cycle, and any pass where the recorded state could not be trusted.
 
-> **The parent gathers the content and embeds it. The reviewer is never handed a command to run.** `feature-dev:code-reviewer` has no `Bash` tool — its tool list is `Glob, Grep, LS, Read, NotebookRead, WebFetch, TodoWrite, WebSearch, KillShell, BashOutput`. Every `<output of: …>` below is substituted by YOU before dispatch. This is not a style preference: the delta prompt's ref is a dangling `git stash create` SHA that no `Read` or `Grep` can reach, so a reviewer told to fetch it would review nothing and report success. (The plugin's own agent definition says "review unstaged changes from `git diff`" — an instruction it cannot follow. `skills/review/SKILL.md` already embeds instead of instructing; match it.)
+> **The parent gathers the content and embeds it. The reviewer is never handed a command to run.** `feature-dev:code-reviewer` has no `Bash` tool — its tool list is `Glob, Grep, LS, Read, NotebookRead, WebFetch, TodoWrite, WebSearch, KillShell, BashOutput`. Every `<output of: …>` below is substituted by YOU before dispatch. This is not a style preference: a reviewer with no `git` cannot produce a diff from any ref, so one told to fetch it would review nothing and report success. (Under the pre-commit gate the ref was a dangling `git stash create` SHA; since #1235 it is a pushed commit, and the rule is unchanged.) (The plugin's own agent definition says "review unstaged changes from `git diff`" — an instruction it cannot follow. `skills/review/SKILL.md` already embeds instead of instructing; match it.)
 
 ```
 subagent_type: feature-dev:code-reviewer
@@ -322,20 +378,32 @@ prompt: "Re-review after fixes in <repo_root>.
 
 **Where the stakeholder channel goes when it lands (#1194 follow-on).** Both prompts are sectioned so a contract-graph stakeholder list drops in as one more `###` block — files that share declared contract tokens with the changeset but are not part of it, which a diff can never surface. Keep the "use Read/Grep freely" instruction when it does: whole-file reading is how the reviewer caught the `/devspec upshift` emitter that shared zero lines with the change.
 
-**Why the delta is safe, stated plainly:** `<ref>` is a snapshot of the working tree *as the last reviewer saw it*, so `git diff <ref>` covers everything that changed since — the fixes, any other edits made in between, and any new commits. Nothing on the branch escapes review; the full diff is still reviewed, exactly once, on pass 1. What the delta drops is re-reading already-cleared code. Untracked files are handed over separately because a working-tree snapshot cannot contain them. Jobs A, B, and C stay unscoped and run in full on every pass, so the entire test suite remains the backstop for cross-file breakage the reviewer's dependent-tracing might miss.
+**Why the delta is safe, stated plainly:** `<ref>` is a snapshot of the working tree *as the last reviewer saw it* (since #1235, on a clean tree, that is the reviewed HEAD; in rearm it is the last commit carrying a pass), so `git diff <ref>` covers everything that changed since — the fixes, any other edits made in between, and any new commits. Nothing on the branch escapes review; the full diff is still reviewed, exactly once, on pass 1. What the delta drops is re-reading already-cleared code. Untracked files are handed over separately because a working-tree snapshot cannot contain them. Jobs A, B, and C stay unscoped and run in full on every pass, so the entire test suite remains the backstop for cross-file breakage the reviewer's dependent-tracing might miss.
 
-**The trap this replaced, so nobody reintroduces it:** the obvious version of this feature records `rev-parse HEAD` and re-reviews `<prev>..HEAD`. Because `/precheck` runs *before* the commit, HEAD does not move between passes — so `prev == HEAD`, `merge-base --is-ancestor` returns 0 (ancestry is reflexive, so no guard fires), the diff is **empty**, and pass 2 reviews nothing while reporting success. That was the first implementation of #1194 and code review caught it. A two-dot commit range cannot contain uncommitted work; do not "simplify" the snapshot back into one.
+**The trap this replaced, so nobody reintroduces it:** the obvious version of this feature records `rev-parse HEAD` and re-reviews `<prev>..HEAD`. Because `/precheck` runs *before* the commit, HEAD does not move between passes — so `prev == HEAD`, `merge-base --is-ancestor` returns 0 (ancestry is reflexive, so no guard fires), the diff is **empty**, and pass 2 reviews nothing while reporting success. That was the first implementation of #1194 and code review caught it. A two-dot commit range cannot contain uncommitted work; do not "simplify" the snapshot back into one. (Since #1235 fixes are committed and pushed, so HEAD *does* move and the snapshot `record` stores on a clean tree *is* HEAD. The snapshot code is what makes that correct in both worlds; the equality check in `resolve` is what still refuses an empty delta when nothing was pushed.)
 
 **Why this optimisation and not a conditional gate.** The expensive thing about precheck is review wall-clock (~8 min/pass; three passes approaches 30 min, which is why a one-line fix can cost 15+ minutes and why agents drift toward filing follow-up issues instead of fixing inline). The tempting "fix" is to skip review for doc-only or chore-labelled work. **Do not.** #1191 was labelled `chore`, its own acceptance criteria said "no direct pytest coverage — it's a prose skill file," and its diff contained a real Bash defect: a rename guard that reported success while doing nothing. Issue type is self-reported *intent* and says nothing about what the diff contains. Scoping a re-read is safe because the skipped code was genuinely reviewed; skipping a gate on a label is not.
 
 ### Step 3 — Fix high+ findings (serial)
 Wait for all four jobs to return. **The moment Job D returns, run `record` — before touching any file** (or `reset`, if it errored/timed out rather than returning a verdict). Then, if Job D returned critical or important findings, fix them. Re-run Job D after **any** fix — not only "non-trivial" ones. That escape hatch existed because a re-run cost a full ~8-minute re-read; the delta removes the cost, so the judgment call is no longer worth its risk (#1191 is the standing example of a "trivial" change carrying a real defect). Ask `precheck-review-scope.sh resolve <repo_root> <marker_dir>` which prompt to use; do not decide by eye. Both arguments are required — the script exits 2 with usage if either is missing. Carry the prior pass's findings into the re-run prompt verbatim so it can verify each one rather than rediscover it. Haiku job failures (B or C) block the checklist item but do not block the gate unless validation itself fails.
 
-### Step 4 — Assemble checklist and notify
-Collect results from all four jobs, assemble the checklist (see below), then **notify BJ**: `disc_send` to `#precheck`, **then `vox`** — **ALWAYS do both**. If `disc_send` fails (MCP unavailable, network), still do `vox`.
+**A fix is a commit (#1235).** Fix, then commit and push it (`/scp`), then re-run `ready`; its new SHA is the new `HEAD_SHA`. The pushed fix starts a new CI run, so Job B-ci runs again for the new SHA, and Job D re-runs as the delta `resolve` names. Reviewing an uncommitted fix and then pushing it is the defect this ordering prevents: the pass would describe a tree that is not the commit it gets posted on.
 
-### Step 5 — Sandbox detection + gate
-Run **sandbox-context detection** (see "Sandbox Auto-Approval" below): if the current branch's base ref matches `^kahuna/[0-9]+-`, emit the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invoke `/scpmmr` immediately with no wait.
+### Step 4 — Assemble the checklist; on a pass, post the status and mark ready
+Collect results from all four jobs and assemble the checklist (see below). Then:
+
+1. **A pass** is the mechanical definition Step 5 also uses: every checklist item verified, zero unresolved critical/important findings from the latest Job D pass, every Job B `LANE … | exit=` line `exit=0` (at least one), Job C exit 0. On a pass:
+   1. Re-run `"$SCOPE" ready`. It must still print `ready <HEAD_SHA>`; a push since the review means review again, not post.
+   2. Post the status: `"$STATUS" post <repo_root> <HEAD_SHA> "#<N> review <passes, e.g. full+delta> clean; lanes <ci|local>; trivy <0|skipped>"`. It reads the status back and exits non-zero if the status isn't there. A failure → STOP and report it; never mark ready without it.
+   3. Mark the PR/MR ready: `"$STATUS" mark-ready <repo_root> <PR_NUMBER>` → `ready <N> <sha>`. It refuses (exit 4) unless the PR/MR's head carries the pass, then reads the PR/MR back. On GitHub it uses the GraphQL `markPullRequestReadyForReview` mutation; on GitLab it rewrites the title without the draft prefix. **Never use `gh pr ready` or `glab mr update` for this.** glab rewrites the title on most update flags, and on GitLab the draft state *is* the title, which is why the kit stopped relying on glab's porcelain here. Once sdlc#592 ships, its `pr_ready` is the MCP equivalent. Any non-zero exit → STOP, and the PR/MR stays a draft.
+2. **Short of a pass:** post nothing and leave the PR/MR a draft. Present the checklist with what failed; the STOP below is then for rework. If BJ looks at the exceptions and says to go anyway, that go is what posts the status, with `exceptions approved by BJ: <which>` in the description, and then marks it ready.
+
+Then **notify BJ**: `disc_send` to `#precheck`, **then `vox`**. **ALWAYS do both.** If `disc_send` fails (MCP unavailable, network), still do `vox`.
+
+### Step 5 — Sandbox detection + the merge gate
+Precheck has already done everything up to the merge. What remains is the merge call, and that is all an exception skips.
+
+Run **sandbox-context detection** (see "Sandbox Auto-Approval" below): if the PR/MR's base ref matches `^kahuna/[0-9]+-`, emit the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invoke `/mmr` immediately with no wait.
 
 Otherwise, check for an **approved autochain** (CLAUDE.md "Exception: Approved Autochain", #1224). Resolve `autochain-gate.sh` with the same ladder as Step 0 — `PATH`, then `<repo_root>/.claude/bin/`, then `<repo_root>/scripts/` — and run `autochain-gate.sh check <repo_root> <N>`, where `<N>` is the `issue_number` that `ibm()` returned in Step 1. Auto-approve **only** when it exits 0 printing `approved <epic> armed_at=<ts>` **and** this cycle meets the mechanical pass definition:
 - every checklist item verified;
@@ -343,11 +411,25 @@ Otherwise, check for an **approved autochain** (CLAUDE.md "Exception: Approved A
 - **every** `LANE … | exit=` line from Job B reads `exit=0`, and there is at least one. A missing lane line, a lane still running, or a bare PASS with no lane lines is not a pass;
 - Job C exit 0.
 
-Then put the gate's two output lines (`approved … armed_at=…` and `approval: …`) on the checklist, so the approval being relied on is visible at the moment it is used, emit `[AUTO-APPROVED: autochain #<epic>]`, and invoke `/scpmmr`. A gate that cannot be found, a `not-approved` (including an expired approval), or any item short of a pass → STOP below. The gate fails closed; so does this step.
+Then put the gate's two output lines (`approved … armed_at=…` and `approval: …`) on the checklist, so the approval being relied on is visible at the moment it is used, emit `[AUTO-APPROVED: autochain #<epic>]`, and invoke `/mmr`. A gate that cannot be found, a `not-approved` (including an expired approval), or any item short of a pass → STOP below. The gate fails closed; so does this step.
 
-Notifications fire in both auto-approval paths exactly as they would before a STOP. A notification failure is reported on the checklist; it does not change the gate's answer in either direction.
+Otherwise, a **standing merge grant** (CLAUDE.md "Exception: Standing Merge Grant") also skips the STOP, under all of its conditions: BJ's own words, given directly and recorded in memory; a **bounded, named effort** (a grant for "all PRs", or an old grant that only skipped `/mmr`'s second ask, does not qualify) with this PR plainly inside it; the same mechanical pass as the autochain bullets above; and nothing the prod rule gates, nor any tag, release or install. Put the memory file, BJ's words verbatim, the scope, and one sentence on why this PR is inside it on the checklist, then invoke `/mmr`. This path is applied by you, not detected by a script, so a grant whose scope you have to stretch does not apply. When in doubt, STOP.
 
-Otherwise **STOP.** Wait for `/scp`/`/scpmr`/`/scpmmr`/affirmative. Negative/rework → return to work. Never bypass the STOP on notification failure; outside the two auto-approval paths above, never bypass it at all.
+Notifications fire in every auto-approval path exactly as they would before a STOP. A notification failure is reported on the checklist; it does not change the gate's answer in either direction.
+
+Otherwise **STOP.** The PR/MR is ready and waiting for BJ's merge call: `/mmr`, `/scpmmr`, or an affirmative. Negative or rework → return to work. Fix, commit and push, and the next run is `/precheck rearm` if the PR is still prechecked at an ancestor. Never bypass the STOP on notification failure; outside the auto-approval paths above, never bypass it at all.
+
+### `/precheck rearm` — a push to a prechecked PR/MR (BJ ruling K-11)
+
+The full precheck runs on the exact commit the PR/MR opens ready with. **After that, a push needs only a review of its new commits, a green pipeline at the new head, and any platform approval re-given at the new SHA.** It needs no full re-run, no checklist, no `#precheck` post or `vox`, and no STOP, **unless the push changes what the MR does**. `/mmr` runs this itself when the head has lost its status.
+
+1. `"$SCOPE" ready` → `HEAD_SHA` (STOP on `not-ready`). Then `"$STATUS" pr-head <repo_root> <PR_NUMBER>` and **STOP unless its SHA equals `HEAD_SHA`.** Rearm reviews the local checkout, so the local checkout must be the PR/MR's head. Otherwise the status would land on another branch's commit while the PR/MR being merged was never reviewed.
+2. `git -C <repo_root> fetch -q origin <base>`, then `"$STATUS" last-success <repo_root> <base>` → `PREV`. It reads `origin/<base>`, so the fetch is what keeps a commit that another PR already landed from lending this branch its pass. On `none` (no commit on the branch carries a pass), there is nothing to rearm from: run the **full** precheck above. **Any non-zero exit → STOP**: 3 is an API error and 2 is a base it can't resolve. Never treat either as `none` or as a pass.
+3. `"$SCOPE" gather <repo_root> <marker_dir> <PREV>`, then Job D-delta (below) with that diff and one more instruction: *"Also answer, first line of your reply: `BEHAVIOUR-CHANGE: yes|no — <one sentence>`. Yes means this delta changes what the MR does: new or removed behaviour, scope, interface or acceptance criteria, as opposed to fixes and adjustments inside what was already reviewed."* Then Job B for `HEAD_SHA`, by the same source rule as the full gate: B-ci when a CI run exists for `HEAD_SHA`; B-local when B-ci reports `NO-RUN` or the repo has no CI. Otherwise a repo without CI could never rearm clean.
+4. **Clean:** no critical or important findings, `BEHAVIOUR-CHANGE: no`, and every lane `exit=0`. Post the status on `HEAD_SHA` with the description `#<N> rearm from <PREV7>: delta clean; lanes <ci|local>`. Make no announcement and no STOP. If BJ's merge go was already given, it still stands: continue to `/mmr`. Re-request platform approvals the push reset (GitLab MR approvals), and say so.
+5. **Not clean:** fix it as in Step 3 and rearm again. **`BEHAVIOUR-CHANGE: yes`**, or a reviewer that does not answer the question → run the **full** precheck from Step 0.5, including its checklist, notification and STOP.
+
+The last reviewed SHA comes from the commit status, not from the session marker, so rearm survives a `/clear`, a reseed and a different session.
 
 ## Dependency Vulnerability Scan
 Delegated to Job C (Haiku sub-agent) in the parallel batch. Interpret the result as:
@@ -357,10 +439,11 @@ Delegated to Job C (Haiku sub-agent) in the parallel batch. Interpret the result
 - **SCANNER/TOOLING ERROR** (`dependency-scan.sh` exit 5 — timeout, no scanner output, unparseable scanner output, OR a partial install missing `check-scannable.sh`) → the checklist item FAILS. This is not a skip: the scan did not run to completion, which is not evidence of a clean dependency tree. Ordinary triggers (first DB pull, rate-limited/air-gapped network) are not a reason to wave it through.
 
 ## The Checklist (full every time; a checkmark means VERIFIED by reading the codebase)
-**Context:** Project | Issue #N — title | Branch `feature/N-...` → `<live default>`
-- [ ] Implementation (AC verified) — [ ] TODOs (searched+addressed) — [ ] Docs (reviewed+updated) — [ ] Validation (actually ran)
+**Context:** Project | Issue #N — title | Branch `feature/N-...` → `<base>` | PR/MR #<PR_NUMBER> @ `<HEAD_SHA7>`
+- [ ] Implementation (AC verified) — [ ] TODOs (searched+addressed) — [ ] Docs (reviewed+updated) — [ ] Validation (CI run `<id>` @ `<sha7>`, or local lanes — actually ran)
 - [ ] New tests (cover new code) — [ ] All tests pass (entire suite) — [ ] Scripts executed (linting is NOT testing) — [ ] Code review (high+ fixed)
 - [ ] Dependencies (trivy: 0 HIGH/CRITICAL, or exceptions documented, or [SKIPPED])
+- [ ] `precheck` status posted on `<HEAD_SHA7>` and read back — [ ] PR/MR marked ready (or: not posted, still a draft, because <what failed>)
 
 **Summary:** `[codebase]` `[docs]` `[tests]` `[config]`. **Findings:** `[fixed]` / `[deferred]` / "(none)".
 
@@ -371,30 +454,30 @@ Resolve identity from `<project_root>/.claude/agent-identity.json`; fall back to
 
 **`disc_send` to `#precheck` (`1491195025198157834`) — exact body shape:**
 ```
-⚠️ **Precheck gate — awaiting approval**
+⚠️ **Precheck passed — PR/MR ready for your merge call**   (or: ⚠️ **Precheck failed — rework**)
 
 **Project:** <project-name>
 **Issue:** #<N> — <title>
-**Branch:** `<type>/<N>-<slug>` → `<live default>`
+**PR/MR:** <url> — `<type>/<N>-<slug>` → `<base>` @ `<sha7>`
 **Checklist:** `[codebase]` `[docs]` `[tests]` `[config]`
 **Findings:** <fixed> / <deferred> / (none)
 
-Ready for `/scp` / `/scpmr` / `/scpmmr` or rework.
+Ready for `/mmr` / `/scpmmr` or rework.
 
 — **<dev-name>** <dev-avatar> (<dev-team>)
 ```
 
-**`vox`:** same info, conversational, 1-2 sentences, ending with "Ready for your call."
+**`vox`:** same info, conversational, 1-2 sentences, ending with "Ready for your merge call." (a pass) or "Back to rework." (a failure).
 
 **FRONT-LOAD the speaker identity — open with `"<Dev-Name> here."`** (#952). Synthesis runs at ~1x realtime, so a long body can exhaust a caller's `timeout` budget *during synthesis*, and whatever is still playing gets cut — the tail first. `vox` appends its own `. This is <name>.` sign-off, but the sign-off is the tail, so it is exactly what a truncation drops. Leading with the name means the identity is spoken first and survives a cut. Example — **pipe it, never inline** (#942):
 
 ```bash
 vox <<'EOF'
-<Dev-Name> here. Precheck gate ready on #<N>. <one sentence>. Ready for your call.
+<Dev-Name> here. Precheck passed on #<N>, and the PR is ready. <one sentence>. Ready for your merge call.
 EOF
 ```
 
-Do NOT open with "Precheck gate ready on #<N>…" and rely on the appended sign-off to identify you; that identity is the first thing lost.
+Do NOT open with "Precheck passed on #<N>…" and rely on the appended sign-off to identify you; that identity is the first thing lost.
 
 **Two hazards, not one (#942 substitution, #1136 termination).** The quoted
 delimiter fixes the first. It does not fix the second: a body containing a line
@@ -421,9 +504,9 @@ an earlier draft of this paragraph got it wrong.
 
 ## Sandbox Auto-Approval (KAHUNA Flight Agents)
 
-Flight Agents working inside a KAHUNA sandbox push to a per-wave integration branch (`kahuna/<N>-<slug>`), not to `main`. In that context the human gate is a redundant pause — the wave Orchestrator has already decided the wave runs autonomously and reviews aggregated results at the wave gate, not per-flight. The full checklist (validation, code-reviewer, trivy) and Discord/`vox` notifications still run; only the STOP-and-wait step is bypassed.
+Flight Agents working inside a KAHUNA sandbox merge into a per-wave integration branch (`kahuna/<N>-<slug>`), not into `main`. In that context the human merge call is a redundant pause — the wave Orchestrator has already decided the wave runs autonomously and reviews aggregated results at the wave gate, not per-flight. The full checklist (validation, code-reviewer, trivy), the `precheck` status and the Discord/`vox` notifications still run; only the STOP-and-wait for the merge call is bypassed.
 
-**Why this exists (narrative).** A wave can dispatch dozens of Flight Agents in parallel; a per-flight human STOP would serialise the wave back to one-at-a-time and defeat the orchestration. The Orchestrator's contract with the human is "I will surface the *wave* result, not every flight." Flight Agents inside the sandbox honour that contract by completing their own quality bar (the full checklist) and then auto-progressing; they never bypass quality, only the human pause. Outside the sandbox — i.e. an agent operating directly against `main` — the original rule applies in full and the STOP is non-negotiable, unless Step 5's autochain gate approves the issue (a separate exception, with its own conditions, described in Step 5 rather than here). See Dev Spec §5.2.1 for the authoritative statement; the mechanical detection (regex `^kahuna/[0-9]+-`, sentinel `[AUTO-APPROVED: kahuna sandbox]`) lives below and in the procedure summary above.
+**Why this exists (narrative).** A wave can dispatch dozens of Flight Agents in parallel; a per-flight human STOP would serialise the wave back to one-at-a-time and defeat the orchestration. The Orchestrator's contract with the human is "I will surface the *wave* result, not every flight." Flight Agents inside the sandbox honour that contract by completing their own quality bar (the full checklist) and then auto-progressing; they never bypass quality, only the human pause. Outside the sandbox — i.e. an agent operating directly against `main` — the original rule applies in full and the STOP is non-negotiable, unless one of Step 5's other two exceptions applies: an approved autochain or a standing merge grant, each with its own conditions, described in Step 5 rather than here. See Dev Spec §5.2.1 for the authoritative statement; the mechanical detection (regex `^kahuna/[0-9]+-`, sentinel `[AUTO-APPROVED: kahuna sandbox]`) lives below and in the procedure summary above.
 
 **Platform-specific enforcement prerequisite.** The branch-name regex makes the *decision* to auto-approve, but the *safety* of that decision rests on platform-side configuration that constrains what a Flight Agent can actually push to. The two platforms model this differently — and the asymmetry is load-bearing:
 
@@ -449,15 +532,15 @@ else:
     sandbox_context = false
 ```
 
-The detection regex is `^kahuna/[0-9]+-`. Resolve `base_branch` from the most recent PR opened by this agent against the current branch (`gh pr view --json baseRefName`), or from the spawning Orchestrator's context when no PR exists yet.
+The detection regex is `^kahuna/[0-9]+-`. Resolve `base_branch` from the PR/MR that Step 0.5 found or opened (`gh pr view --json baseRefName`). Since #1235 one always exists by Step 5.
 
 **Behavior matrix:**
-- `sandbox_context == false` (default — feature branch targeting `main`): existing behavior preserved — present checklist, notify, **STOP** and wait for `/scp` / `/scpmr` / `/scpmmr` / affirmative. This is the IT-09 negative case. The one exception is an approved autochain, which Step 5 checks separately and which never changes this matrix entry.
-- `sandbox_context == true` (Flight Agent on a kahuna sandbox): full checklist runs, full notifications fire, then emit the sentinel line **`[AUTO-APPROVED: kahuna sandbox]`** on stdout, then invoke `/scpmmr` with no wait. The sentinel makes the auto-approval grep-able in transcripts and Discord scrollback.
+- `sandbox_context == false` (default — feature branch targeting `main`): present checklist, notify, **STOP** and wait for BJ's merge call (`/mmr` / `/scpmmr` / affirmative); the PR/MR is already ready. This is the IT-09 negative case. The two exceptions are an approved autochain and a standing merge grant. Step 5 checks both separately, and neither changes this matrix entry.
+- `sandbox_context == true` (Flight Agent on a kahuna sandbox): full checklist runs, full notifications fire, then emit the sentinel line **`[AUTO-APPROVED: kahuna sandbox]`** on stdout, then invoke `/mmr` with no wait. The sentinel makes the auto-approval grep-able in transcripts and Discord scrollback.
 
-**Non-bypassable items:** validation, code-reviewer (high+ findings still block), trivy scan, Discord `#precheck` post, `vox` announcement, **and `/mmr`'s CI gate**. These run in full regardless of `sandbox_context`. Only the human-approval STOP is replaced by the sentinel + auto-`/scpmmr`.
+**Non-bypassable items:** validation, code-reviewer (high+ findings still block), trivy scan, Discord `#precheck` post, `vox` announcement, **and `/mmr`'s CI gate**. These run in full regardless of `sandbox_context`. Only the human merge-call STOP is replaced by the sentinel + auto-`/mmr`.
 
-The CI gate is listed explicitly because **the kahuna sandbox is not the only path that merges without a human.** Autonomous merging also occurs under **`/wavemachine` in `auto` mode** — its promote node performs the kahuna→protected merge with no human halt (interactive mode routes that same merge *to* a human, so the exposure is mode-specific, not skill-wide) — and under an **armed `godspeed` mandate**, whose gated-action list covers force-push, push-to-protected, terraform/kubectl/helm/docker/systemctl and prod-shaped writes but **not merges**, so an armed agent carries straight through one. **An approved `/autochain` run** is the third (#1224): its merges land on the *protected* branch directly, one per issue, with no human between them — which is why `/autochain plan` refuses a chain unless `wave_ci_trust_level` reports `pre_merge_authoritative`. In all three, once the human approval is gone, the CI gate is the *last* thing between a red build and the protected branch.
+The CI gate is listed explicitly because **the kahuna sandbox is not the only path that merges without a human.** Autonomous merging also occurs under **`/wavemachine` in `auto` mode** — its promote node performs the kahuna→protected merge with no human halt (interactive mode routes that same merge *to* a human, so the exposure is mode-specific, not skill-wide) — and under an **armed `godspeed` mandate**, whose gated-action list covers force-push, push-to-protected, terraform/kubectl/helm/docker/systemctl and prod-shaped writes but **not merges**, so an armed agent carries straight through one. **An approved `/autochain` run** is the third (#1224): its merges land on the *protected* branch directly, one per issue, with no human between them — which is why `/autochain plan` refuses a chain unless `wave_ci_trust_level` reports `pre_merge_authoritative`. **A standing merge grant** is the fourth (#1235): `/precheck` invokes `/mmr` itself for a PR inside the grant's scope. In all four, once the human approval is gone, the CI gate is the *last* thing between a red build and the protected branch.
 
 *(`/lazyriver` is deliberately **not** in that list. It is a `probe → journal → judge → steer` goal-seek loop that terminates by emitting a plan or an answer — it has no merge path at all. It was named here in an earlier draft and the claim was wrong; naming a skill that cannot merge costs the paragraph its credibility with exactly the reader careful enough to check.)*
 
@@ -466,11 +549,11 @@ That gate was **inert on GitHub** until cc-workflow#925: it blocked only on `has
 `/mmr` step 3 is now default-deny. Do not weaken it back to a blocklist without re-reading that issue, and treat any *new* autonomous merge path as inheriting this dependency: **removing the human raises the CI gate from a second opinion to the only opinion.**
 
 ## Rules
-No diff. No commit. No skipping code-reviewer. Honesty over speed — no checking items you haven't verified. **Linting is not testing** — passing lint/typecheck does not mean code works. **`vox` is ALWAYS called** — it is NOT a fallback for disc_send failure. Both notifications happen every time.
+No pasted diff. No merge from this skill (that is `/mmr`, after the STOP or an exception). No skipping code-reviewer. No `precheck` status on a commit that was not the one reviewed. Honesty over speed — no checking items you haven't verified. **Linting is not testing** — passing lint/typecheck does not mean code works. **`vox` is ALWAYS called** — it is NOT a fallback for disc_send failure. Both notifications happen every time.
 
 ## New-Repo Onboarding (Branch-Protection End-to-End Dry-Run)
 
-Out of scope for the per-commit gate, but called out here because this skill is the closest thing to an institutional checklist we have: **when configuring branch protection on a new repo, configuration verification is not enough — you MUST prove the gate end-to-end before any real work lands.** "Configuration exists" is not the same as "configuration works."
+Out of scope for the per-MR gate, but called out here because this skill is the closest thing to an institutional checklist we have: **when configuring branch protection on a new repo, configuration verification is not enough — you MUST prove the gate end-to-end before any real work lands.** "Configuration exists" is not the same as "configuration works."
 
 Two throwaway PRs, both required:
 

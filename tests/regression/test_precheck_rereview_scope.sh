@@ -548,6 +548,85 @@ fi
 scope reset
 expect full "reset clears the marker -> next pass is full"
 
+# --- #1235: the MR gate reviews PUSHED COMMITS -----------------------------
+# A fresh repo with a bare remote, so `ready` has a pushed branch to compare against.
+P="$TMP/pushed"
+B="$TMP/remote.git"
+PM="$TMP/pmark"
+git init -q --bare "$B"
+git -C "$TMP" clone -q "$B" pushed 2>/dev/null
+git -C "$P" config user.email t@t.t
+git -C "$P" config user.name t
+git -C "$P" config commit.gpgsign false
+git -C "$P" checkout -q -b main
+echo base >"$P/f"
+git -C "$P" add f
+git -C "$P" commit -qm base
+git -C "$P" push -q -u origin main 2>/dev/null
+git -C "$P" checkout -q -b feature/1-x
+pscope() { bash "$SCOPE" "$1" "$P" "$PM" "${@:2}" 2>/dev/null; }
+expect_ready() { # <want: ready|not-ready> <label>
+	local out
+	out="$(pscope ready)"
+	if [[ "${out%% *}" == "$1" ]]; then pass "$2"; else fail "$2 (got '$out')"; fi
+}
+
+echo one >>"$P/f"
+git -C "$P" commit -qam one
+expect_ready not-ready "ready: a branch never pushed is not ready"
+git -C "$P" push -q -u origin feature/1-x 2>/dev/null
+expect_ready ready "ready: clean tree, HEAD pushed"
+if [[ "$(pscope ready)" == "ready $(git -C "$P" rev-parse HEAD)" ]]; then
+	pass "ready: names the pushed SHA"
+else
+	fail "ready: does not name the pushed SHA"
+fi
+echo dirty >>"$P/f"
+expect_ready not-ready "ready: a modified file is not ready"
+git -C "$P" checkout -q -- f
+echo new >"$P/untracked"
+expect_ready not-ready "ready: an untracked file is not ready"
+rm -f "$P/untracked"
+echo two >>"$P/f"
+git -C "$P" commit -qam two
+expect_ready not-ready "ready: an unpushed commit is not ready"
+if pscope ready >/dev/null; then
+	fail "ready: exit 0 when not ready"
+else
+	pass "ready: exit 1 when not ready"
+fi
+git -C "$P" push -q 2>/dev/null
+
+# Record on a clean pushed HEAD, add a fix COMMIT, push: the delta is exactly that commit.
+pscope reset
+pscope record
+REVIEWED="$(git -C "$P" rev-parse HEAD)"
+echo fix >>"$P/f"
+git -C "$P" commit -qam fix
+git -C "$P" push -q 2>/dev/null
+pv="$(pscope resolve)"
+if [[ "$pv" == "delta $REVIEWED" ]]; then
+	pass "committed fix after a recorded pass -> delta from the reviewed SHA"
+else
+	fail "committed fix -> expected 'delta $REVIEWED', got '$pv'"
+fi
+g="$(pscope gather "$REVIEWED")"
+gf="$(printf '%s' "$g" | awk '{print $3}')"
+if [[ -n "$gf" ]] && grep -q '^+fix$' "$gf" && ! grep -q '^+two$' "$gf"; then
+	pass "delta gather holds the fix commit and nothing already reviewed"
+else
+	fail "delta gather is wrong: $g"
+fi
+
+# A branch cut from origin/main tracks main: @{upstream} is the base, never HEAD. `ready`
+# compares with where the branch pushes, so pushing it is what makes it ready.
+git -C "$P" checkout -q -b feature/2-y --track origin/main
+echo y >>"$P/f"
+git -C "$P" commit -qam y
+expect_ready not-ready "ready: a branch tracking origin/main, not yet pushed, is not ready"
+git -C "$P" push -q origin feature/2-y 2>/dev/null
+expect_ready ready "ready: a branch tracking origin/main is ready once pushed to its own name"
+
 # ===========================================================================
 # PART 2 — doc-shape: the skill must still DELEGATE to that script.
 # ===========================================================================

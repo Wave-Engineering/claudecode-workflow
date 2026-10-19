@@ -11,9 +11,11 @@
 #
 # THE BUG THAT MOTIVATES THE DESIGN — read before "simplifying" this.
 #
-# /precheck is a PRE-COMMIT gate ("Does NOT commit/push/PR"); /scp commits
-# afterwards. So the code under review lives in the WORKING TREE, and HEAD does
-# NOT move between Job D passes. The obvious implementation — record
+# /precheck was a PRE-COMMIT gate ("Does NOT commit/push/PR"); /scp committed
+# afterwards. So the code under review lived in the WORKING TREE, and HEAD did
+# NOT move between Job D passes. (Since #1235 /precheck is the MR gate and reviews
+# pushed commits on a clean tree — see `ready` — where this snapshot is simply
+# HEAD. The design below is what keeps both worlds correct.) The obvious implementation — record
 # `rev-parse HEAD`, re-review `$prev..HEAD` — therefore degrades to:
 #
 #     prev == HEAD  ->  `git merge-base --is-ancestor` returns 0 (ancestry is
@@ -76,6 +78,12 @@ Commands:
             the markers that make this re-widen. Never returns empty on error:
             it prints an UNRESOLVABLE sentinel plus every untracked path,
             because empty output reads as "there are none".
+  ready     Print "ready <sha>" and exit 0 when the tree is clean (nothing
+            modified, staged, or untracked-and-not-ignored) and HEAD equals the
+            branch as pushed (<push remote>/<branch>, never @{upstream}, which
+            is often the base); otherwise print "not-ready <reason>" and exit 1. /precheck
+            runs this first: it reviews the pushed commits, which is exactly what
+            the MR carries (#1235).
 EOF
 }
 
@@ -130,8 +138,8 @@ UNTRACKED="$marker_dir/precheck-reviewed-untracked"
 # that exists at `record` time and is EDITED before the next pass is invisible in
 # both channels — `git diff <snapshot>` never shows untracked paths, and a
 # name-only set difference sees its name on both sides. Its fix would never be
-# read. That is not exotic: /precheck is a pre-commit gate and /scp does the
-# `git add`, so every NEW file is untracked for the whole cycle.
+# read. That was not exotic: under the pre-commit gate /scp did the `git add`,
+# so every NEW file was untracked for the whole cycle.
 #
 # A path that cannot be hashed (deleted mid-run, unreadable, dangling symlink)
 # emits a sentinel rather than being skipped, so it reads as changed and gets
@@ -377,6 +385,45 @@ new-untracked)
 		exit 0
 	fi
 	[[ -z "$out" ]] || printf '%s\n' "$out"
+	;;
+
+ready)
+	# Since #1235 /precheck is the MR gate and reviews pushed commits. On a clean tree
+	# `stash create` above prints nothing, so `record` stores HEAD and `gather` diffs the
+	# merge-base against a tree equal to HEAD: the commit range, through the same code
+	# the working-tree protocol used. The untracked channel is empty by construction.
+	dirty="$(git -C "$repo" status --porcelain --untracked-files=normal 2>/dev/null)" || {
+		echo "not-ready git status failed"
+		exit 1
+	}
+	if [[ -n "$dirty" ]]; then
+		echo "not-ready uncommitted or untracked changes: $(printf '%s' "$dirty" | head -3 | tr '\n' ';')"
+		exit 1
+	fi
+	head="$(git -C "$repo" rev-parse --verify --quiet HEAD)" || {
+		echo "not-ready no commits on this branch"
+		exit 1
+	}
+	# Compare with where the branch PUSHES, not @{upstream}: fleet branches are often
+	# cut from origin/main (or a kahuna branch) and track it, so @{upstream} is the base,
+	# never equal to HEAD, and no push can fix that.
+	branch="$(git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null)" || {
+		echo "not-ready HEAD is detached; check out the branch the PR/MR is from"
+		exit 1
+	}
+	remote="$(git -C "$repo" config "branch.$branch.pushRemote" 2>/dev/null ||
+		git -C "$repo" config remote.pushDefault 2>/dev/null ||
+		git -C "$repo" config "branch.$branch.remote" 2>/dev/null || true)"
+	[[ -n "$remote" && "$remote" != "." ]] || remote=origin
+	up="$(git -C "$repo" rev-parse --verify --quiet "refs/remotes/$remote/$branch" 2>/dev/null)" || {
+		echo "not-ready $branch is not pushed to $remote; push it first (git push -u $remote $branch)"
+		exit 1
+	}
+	if [[ "$head" != "$up" ]]; then
+		echo "not-ready HEAD ($head) is not what is pushed to $remote/$branch ($up); push or pull first"
+		exit 1
+	fi
+	echo "ready $head"
 	;;
 
 *)

@@ -26,6 +26,13 @@ Squash-merge a pull request (GitHub) or merge request (GitLab) with a detailed c
 Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix); otherwise resolve via `pr_status` on the current branch's PR or fail if none exists.
 
 1. `pr_status(number)` → require `state == "open"`; inspect `checks.summary`. **Then guard the merge target:** call `branch_guard({ role: "target", branch: <PR/MR target from pr_status> })`; on `verdict == "warn"` **STOP** and surface `reason` — you are about to merge into a **protected** branch that is neither the live default nor a `kahuna/*` sandbox integration branch. Silent for the live default and `kahuna/*` targets. *(Transition fallback until `branch_guard` is deployed (#465): resolve the live default inline via `gh repo view --json defaultBranchRef -q .defaultBranchRef.name` / GitLab `glab api "projects/:id" --jq .default_branch` and STOP if the target is neither the live default nor matches `^kahuna/[0-9]+-`. The degraded path can't query host protection, so it errs toward stopping on any non-default, non-sandbox target — safe, and rare in this trunk-based flow.)*
+1.5. **Precheck on the head (#1235).** Resolve the script as `/precheck` Step 0 does. Read the PR/MR's head as the platform sees it, `precheck-status.sh pr-head <repo_root> <N>` → `<head_sha> <head-branch> <base-branch>`, then run `precheck-status.sh get <repo_root> <head_sha>`.
+   - `success` → continue.
+   - Anything else: a push moved the head past the pass. Run **`/precheck rearm`** for this PR/MR. It refuses unless the local checkout is this PR/MR's head, reviews only the new commits, waits for CI, and on a clean delta posts the status on the new head. If rearm escalates to a full precheck, follow that one to its STOP.
+   - **After a rearm, read the head again and `get` its status again.** Continue only if the head is the SHA rearm posted on and it reads `success`. Anything else → STOP. Rearm reporting success is not the check; the status on the PR/MR's head is.
+   - Exit 3 (the head or the status could not be read) → STOP. Never merge on an unreadable gate.
+
+   Once sdlc#592 ships, `pr_merge` refuses a head without the status by itself. This step is what keeps that refusal from being the first you hear of it.
 2. If `checks.summary == "pending"` → `pr_wait_ci(number, poll_interval_sec: 30, timeout_sec: 1800)`. On `timed_out` ask whether to wait longer. On `failed` STOP.
 3. **DEFAULT-DENY — merge only on an explicit pass.** Proceed **only** if `checks.summary == "all_passed"`. **Any other value STOPs**, including values that do not exist yet.
 
@@ -71,7 +78,7 @@ Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix)
    - Body: what changed and why; key implementation decisions or trade-offs; notable side effects
    - Footer: `Closes #issue-number` for any linked issues (check the PR/MR description)
    - Comprehensive enough that `git log` alone tells the full story without opening the PR
-6. **Present for approval**: PR/MR number, title, source→target branches, the drafted squash message. Ask "May I merge this PR/MR?" and WAIT. A second `/mmr` invocation counts as approval.
+6. **The approval is how you got here.** Since #1235 BJ's approval is the merge call itself. `/mmr` or `/scpmmr` typed after a precheck STOP, or an affirmative to it, IS the approval, and so is an exception path (`[AUTO-APPROVED: kahuna sandbox]`, `[AUTO-APPROVED: autochain #<epic>]`, or a standing grant named on the checklist). Show the PR/MR number, title, source→target branches and the drafted squash message, and proceed. **Reached any other way** (an agent deciding on its own to merge, with no STOP answered and no exception), ask "May I merge this PR/MR?" and WAIT.
 7. `pr_merge(number, squash_message)` — squash merge. Returns `merge_method`, `merge_commit_sha`, `url`.
 8. **Post-merge**: switch to target branch, pull, delete local source branch if present. Optionally `ci_wait_run(ref: <PR/MR target from step 1>, expected_sha: <merge_commit_sha from step 7>, timeout_sec: 1800)` to confirm the target-branch pipeline lands clean — skip if the user wants to move on immediately.
 
@@ -84,7 +91,8 @@ Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix)
 
 ## Important Rules
 
-- NEVER merge without explicit user approval
+- NEVER merge without explicit user approval: BJ's merge call, or a mechanical exception (step 6)
+- NEVER merge a head without a `precheck` pass (step 1.5). A push after precheck is rearmed, not waved through.
 - ONLY merge if `checks.summary == "all_passed"` — an allowlist, never a blocklist. `has_failures` blocks, and so does `none`, and so does any value not in this list. A blocklist of known-bad states silently permits every state you did not think of, which is exactly how this gate sat inert (cc-workflow#925). **But on `none`/unrecognised, escalate to `pr_wait_ci` first (step 3) — stop only if that also cannot confirm a pass.** Without that clause this rule reads as "block every GitHub merge", because `pr_status` returned `none` for every GitHub PR on `gh 2.45.0`.
 - `pr_wait_ci` is an allowlist too — proceed only on `passed`. **`no_checks_configured` and `no_checks_yet` are both STOPs**, not passes: they mean the probe found nothing to wait for, or found that CI has not reported yet — never that anything succeeded. (`no_checks_required` was their single ambiguous predecessor, retired in `mcp-server-sdlc` v4.0.0.)
 - NEVER merge into a protected, non-default, non-`kahuna/*` branch — `branch_guard` STOPs this (target must be the live default or a `kahuna/*` sandbox)

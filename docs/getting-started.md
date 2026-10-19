@@ -87,7 +87,7 @@ Once you are in a session, run:
 
 This is the "rules of engagement" skill. It does three things:
 
-1. **Reads CLAUDE.md** and confirms the mandatory rules are loaded -- things like "never commit without `/precheck`", "always have an issue before starting work", and "test before a protected push or a PR/MR".
+1. **Reads CLAUDE.md** and confirms the mandatory rules are loaded -- things like "never make a PR/MR ready, or merge, without a `/precheck` pass", "always have an issue before starting work", and "test before a protected push or a PR/MR".
 2. **Loads the current plan** if one exists (from plan mode or plan files). If no plan exists, it says so.
 3. **Reports ready state** -- your current git branch, any pending work, and asks what you would like to work on.
 
@@ -99,7 +99,7 @@ You should run `/engage` at the start of every session, and especially after con
 
 ## Step 4: The Mandatory Workflow
 
-Every change follows the same loop: **issue, branch, code, precheck, ship**. The system enforces this -- if you try to skip steps, Claude will stop you.
+Every change follows the same loop: **issue, branch, code, push, precheck, merge**. The system enforces this -- if you try to skip steps, Claude will stop you.
 
 ### 4a: Start with an Issue
 
@@ -131,35 +131,43 @@ The branch name includes the issue number so the system can trace work back to i
 
 This is the part where actual work happens. Claude implements the changes described in the issue. If you are driving, you write the code and Claude assists. If Claude is driving, it implements to the issue spec.
 
-### 4d: Run `/precheck`
+### 4d: Commit and Push (Free)
+
+Commits and pushes to your own working branch need no precheck and no approval:
+
+```
+/scp
+```
+
+It stages specific files (never `git add -A`), writes a conventional commit message with `Closes #42`, and pushes the branch. Two hooks still run: a secret scan at commit and push, and a push gate that refuses protected and release branches. `/scp` opens no PR/MR.
+
+### 4e: Open the PR/MR and Run `/precheck`
 
 When the work is done, run (or Claude proactively runs):
 
 ```
-/precheck
+/scpmr
 ```
 
-This is the pre-commit gate. It runs through a multi-step verification:
+That commits and pushes anything left, opens a **draft** PR/MR (drafts are free -- they can't merge -- and opening one starts CI), then runs `/precheck`. This is the MR gate. It runs through a multi-step verification:
 
 1. **Branch and issue check** -- confirms you are on a feature branch linked to an open issue.
-2. **Validation** -- runs `./scripts/ci/validate.sh` or whatever test tooling the project has.
-3. **Code review** -- launches a code-reviewer sub-agent that reviews all changed files and flags issues by severity.
+2. **CI and validation** -- reads CI's verdict for the pushed HEAD, and runs local tooling only where CI doesn't cover it.
+3. **Code review** -- launches a code-reviewer sub-agent that reviews the pushed commits and flags issues by severity.
 4. **Fix high-risk findings** -- anything rated high risk or above gets fixed before the checklist is presented.
 5. **Present the checklist** -- a full verification checklist covering implementation completeness, TODOs, docs, tests, and review results.
 
-After the checklist is presented, Claude **stops and waits**. It will not commit until you explicitly approve.
+On a pass, `/precheck` posts a `precheck` commit status on HEAD and marks the PR/MR **ready**. Then Claude **stops and waits** for your merge call. It will not merge until you explicitly approve.
 
-### 4e: Approve and Ship
-
-You have three options for shipping:
+### 4f: The Merge Call
 
 | Command | What it does |
 |---------|-------------|
-| `/scp` | Stage, commit, push (creates a PR if one does not exist) |
-| `/scpmr` | Stage, commit, push, create PR/MR -- but do not merge |
-| `/scpmmr` | Stage, commit, push, create PR/MR, and merge -- the full pipeline |
+| `/mmr` | Merge the prechecked PR/MR |
+| `/scpmmr` | Typed after the precheck STOP, it is the merge call (goes straight to `/mmr`) |
+| an affirmative | Same as `/mmr` |
 
-Pick one and the system handles the rest: staging specific files (never `git add -A`), writing a conventional commit message with `Closes #42`, pushing to the remote, and creating or merging the PR/MR.
+If you push more commits after the pass, the status is stale; `/precheck rearm` (which `/mmr` runs for you) reviews only the new commits and waits for a green pipeline.
 
 ### The Loop in Practice
 
@@ -170,15 +178,14 @@ You:    Let's work on issue #42
 Claude: [reads the issue, creates branch feature/42-add-retry-logic]
 
 You:    Go ahead and implement it
-Claude: [writes code, runs tests]
+Claude: [writes code, runs tests, commits and pushes with /scp]
 
-Claude: /precheck
-Claude: [runs validation, code review, presents checklist]
-Claude: Ready for your call.
+Claude: /scpmr
+Claude: [opens draft PR #58, runs /precheck: CI, code review, checklist]
+Claude: PR #58 is ready for your merge call: https://github.com/your-org/your-repo/pull/58
 
-You:    /scpmr
-Claude: [commits, pushes, creates PR #58]
-Claude: PR #58 is up: https://github.com/your-org/your-repo/pull/58
+You:    /mmr
+Claude: [merges PR #58, confirms main's pipeline]
 ```
 
 ---
@@ -245,8 +252,9 @@ This merges new sections and updates while preserving your project-specific cont
 | Load rules | `/engage` |
 | Check workflow | `/ibm` |
 | Create an issue | `/issue feature <prompt>` |
-| Pre-commit gate | `/precheck` |
-| Ship code | `/scp`, `/scpmr`, or `/scpmmr` |
+| Commit and push (free) | `/scp` |
+| Open PR/MR + MR gate | `/scpmr` (or `/precheck` on a pushed branch) |
+| Merge | `/mmr` or `/scpmmr` |
 | Context budget | `/nerf` |
 | Restore state | `/engage` |
 | Update kit | `git pull && ./install.sh` |

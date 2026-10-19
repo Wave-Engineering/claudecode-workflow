@@ -112,15 +112,16 @@ printf '    %s\n' "${PINS[@]}"
 
 # --- 2. What is in the registry? ---------------------------------------------
 VERSIONS_JSON="$(mktemp)"
-trap 'rm -f "$VERSIONS_JSON"' EXIT
+VERSIONS_ERR="$(mktemp)"
+trap 'rm -f "$VERSIONS_JSON" "$VERSIONS_ERR"' EXIT
 if ! gh api --paginate "/orgs/$ORG/packages/container/$PACKAGE/versions" \
 	--jq '.[] | {id, name, tags: (.metadata.container.tags // []), created: .created_at}' \
-	>"$VERSIONS_JSON" 2>"$VERSIONS_JSON.err"; then
+	>"$VERSIONS_JSON" 2>"$VERSIONS_ERR"; then
 	echo "registry-prune: could not list versions for $ORG/$PACKAGE" >&2
 	# Surface gh's own diagnostic: a 403 (missing read:packages), a 404 (wrong
 	# org/package) and a rate limit are different problems and collapsing them
 	# into one generic line sends people down the wrong path.
-	sed 's/^/registry-prune:   /' "$VERSIONS_JSON.err" >&2
+	sed 's/^/registry-prune:   /' "$VERSIONS_ERR" >&2
 	echo "registry-prune: the token needs read:packages (and delete:packages for --apply)" >&2
 	exit 2
 fi
@@ -174,7 +175,7 @@ echo "==> resolving manifests (to find index children)…"
 
 # --- 4. Decide, and print the reasoning ---------------------------------------
 PLAN="$(mktemp)"
-trap 'rm -f "$VERSIONS_JSON" "$PLAN"' EXIT
+trap 'rm -f "$VERSIONS_JSON" "$VERSIONS_ERR" "$PLAN"' EXIT
 
 OAW_PINS="$(printf '%s\n' "${PINS[@]}")" OAW_KEEP_RECENT="$KEEP_RECENT" \
 OAW_IMAGE_REF="ghcr.io/${ORG,,}/${PACKAGE}" \

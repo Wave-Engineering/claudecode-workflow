@@ -36,7 +36,7 @@ A wave-pattern campaign is justified by **autonomous batched execution**, not by
 
 ### Why
 
-The benefit isn't concurrency. It is **queue-and-walk-away** — the agent walks the deps, /precheck → /scpmmr per issue, while the user does something else. Lifecycle tracking and audit trail land regardless of flight count. The user's wall-clock is the resource the campaign exists to protect.
+The benefit isn't concurrency. It is **queue-and-walk-away** — the agent walks the deps, /scpmr (precheck) → /mmr per issue, while the user does something else. Lifecycle tracking and audit trail land regardless of flight count. The user's wall-clock is the resource the campaign exists to protect.
 
 Observed failure mode: `/assesswaves` (and operators reasoning from first principles) downgrading "no parallelism here" to "ad-hoc, no campaign," dropping the user back into a per-issue checkpoint loop they explicitly invoked the wave pattern to avoid.
 

@@ -51,6 +51,11 @@
             "type": "command",
             "command": "~/.claude/scripts/hooks/workflow/secret-scan-gate.sh",
             "onFailure": "block"
+          },
+          {
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/pr-ready-gate.sh",
+            "onFailure": "block"
           }
         ]
       }

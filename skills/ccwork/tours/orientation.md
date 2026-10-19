@@ -52,7 +52,7 @@ For a deeper explanation of how these three layers work together, see the [Three
 
 ## Section 2: The Core Loop
 
-Narration: "Every change follows the same loop: issue, branch, code, precheck, ship. Let me show you what that looks like."
+Narration: "Every change follows the same loop: issue, branch, code, push, precheck, merge. Let me show you what that looks like."
 
 ### Show current branch and status
 
@@ -72,10 +72,11 @@ Present this table:
 | 1. Track | Create or pick an issue | `/issue` skill |
 | 2. Branch | Create a feature branch | `git checkout -b feature/42-description` |
 | 3. Code | Write the implementation | (you or Claude) |
-| 4. Gate | Run the pre-commit checklist | `/precheck` |
-| 5. Ship | Stage, commit, push, PR | `/scp`, `/scpmr`, or `/scpmmr` |
+| 4. Push | Stage, commit, push the working branch (free) | `/scp` |
+| 5. Gate | Open a draft PR/MR and run the MR gate checklist | `/scpmr` (runs `/precheck`) |
+| 6. Merge | Give the merge call | `/mmr` or `/scpmmr` |
 
-Narration: "The system enforces this loop — if you try to commit without `/precheck`, or start coding without an issue, Claude will stop you. That's by design. See the [Mandatory Workflow](../../../docs/getting-started.md#step-4-the-mandatory-workflow) section in Getting Started for the full walkthrough."
+Narration: "The system enforces this loop — if you try to make a PR/MR ready or merge without a `/precheck` pass, or start coding without an issue, Claude will stop you. That's by design. See the [Mandatory Workflow](../../../docs/getting-started.md#step-4-the-mandatory-workflow) section in Getting Started for the full walkthrough."
 
 ---
 

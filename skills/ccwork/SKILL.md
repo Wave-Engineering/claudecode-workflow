@@ -266,11 +266,11 @@ Do NOT dump the entire issue text at once. This is a guided exercise — one ste
 2. **Frame actions as prompts, not announcements** — say *"Go ahead — run `/engage` and see what happens"* not *"Let me run /engage for you."*
 3. **Suggest `/view` for file inspection** — when a step involves reading or inspecting a file, prompt the student to use `/view <file>` rather than reading it yourself. This teaches the tool while accomplishing the step.
 4. **Wait for the student to report results** — after yielding the prompt, wait for the student to tell you what happened. Only then verify and advance.
-5. **Explain choices when they arise** — when the student faces a decision (e.g., `/scp` vs `/scpmr` vs `/scpmmr` after precheck), explain each option briefly before asking them to choose:
-   - `/scp` — Stage, commit, and push. You create the PR/MR separately.
-   - `/scpmr` — Stage, commit, push, and create a PR/MR.
-   - `/scpmmr` — Stage, commit, push, create a PR/MR, AND merge it.
-   In a lab context, guide the student toward `/scpmr` unless the lab's steps specify otherwise — it completes the full workflow loop (branch → PR/MR) that the lab is teaching, while leaving the merge as a separate conscious step.
+5. **Explain choices when they arise** — when the student faces a decision (e.g., `/scp` vs `/scpmr` vs `/scpmmr`), explain each option briefly before asking them to choose:
+   - `/scp` — Stage, commit, and push the working branch. Free: no precheck, no approval, no PR/MR.
+   - `/scpmr` — `/scp`, open a draft PR/MR, run `/precheck`; on a pass the PR/MR is ready and it stops for the merge call.
+   - `/scpmmr` — `/scpmr`, then merge (`/mmr`). Typed after a precheck STOP, it is the merge call.
+   In a lab context, guide the student toward `/scpmr` unless the lab's steps specify otherwise — it completes the full workflow loop (branch → prechecked PR/MR) that the lab is teaching, while leaving the merge as a separate conscious step.
 6. **The only exception** is verification — you MAY run verification commands (the "Verify:" part) yourself to confirm the student's work succeeded.
 
 ### Step 8: Solution verification

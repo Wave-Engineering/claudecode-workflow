@@ -25,30 +25,39 @@ gh project item-add <project-number> --owner <owner> --url <issue-url>
 
 ---
 
-## MANDATORY: Local Testing Before a Protected Push or a PR/MR
+## MANDATORY: Testing Gates the PR/MR, Not the Push
 
-**Testing gates the PR/MR, not the push.** Push your own working branch (`feature/`, `fix/`, `chore/`, `doc/`) freely: to back up work, test in another sandbox, or pair on one branch. Push it as a plain, separate `git push <remote> <branch>`; the pre-push hook exempts only that shape, and any compound or unusual push still needs a test run first. **NEVER push untested code to a protected or release branch, and never open a PR/MR on untested code.** Before either, discover and run the project's tooling: validation (`./scripts/ci/validate.sh`, `make lint`, etc.), tests (`./scripts/ci/test.sh`, `pytest`, `npm test`, etc.), Docker build if Dockerfile changed, infra synth/plan if infra changed. If no test tooling exists, say so — do NOT silently skip. A project with another branch convention adds it via `PUSH_GATE_EXTRA_BRANCH_RE`.
+**Testing gates the PR/MR, not the push.** Push your own working branch (`feature/`, `fix/`, `chore/`, `doc/`) freely: to back up work, test in another sandbox, or pair on one branch. Push it as a plain, separate `git push <remote> <branch>`; the pre-push hook exempts only that shape, and any compound or unusual push still needs a test run first. **NEVER push untested code to a protected or release branch, and never mark a PR/MR ready on untested code.** `/precheck` reads CI's verdict for the pushed HEAD, and runs the project's tooling locally only where CI doesn't cover it: validation (`./scripts/ci/validate.sh`, `make lint`, etc.), tests (`./scripts/ci/test.sh`, `pytest`, `npm test`, etc.), Docker build if Dockerfile changed, infra synth/plan if infra changed. If no test tooling exists, say so — do NOT silently skip. A project with another branch convention adds it via `PUSH_GATE_EXTRA_BRANCH_RE`.
 
 ---
 
-## MANDATORY: Pre-Commit Gate (`/precheck`)
+## MANDATORY: MR Gate (`/precheck`)
 
-**NEVER commit without running `/precheck` first and receiving explicit user approval.**
+Four gates, each checking only what belongs to it (#1233):
 
-When work is done, run `/precheck` immediately — don't ask permission, just run it. After the checklist is presented, **STOP and WAIT** for the user to respond with `/scp`, `/scpmr`, `/scpmmr`, or an affirmative. No autonomous commits. No diff presentation. If in doubt, ask.
+| Gate | What runs there |
+|---|---|
+| **commit** | secret scan of what is staged |
+| **push** | secret scan of the range being pushed; no push to protected or release refs; a working-branch prefix (`feature/`, `fix/`, `chore/`, `doc/`). The `<N>-` and the issue link are checked by `ibm` in `/scp` and `/precheck`, not by the hook. |
+| **MR** | `/precheck`: review of the pushed commits, acceptance criteria, lanes (CI first), dependency scan; posts the `precheck` commit status and marks the PR/MR ready |
+| **merge** | **the user's approval**, plus CI green on the merge result (`/mmr`) |
 
-**Never write phrases like "shall I run /precheck?", "ready for precheck?", "let me know when to run /precheck." Asking is itself a violation of this rule. The checklist that `/precheck` presents is the approval gate; the *start* of `/precheck` is unilateral. If you catch yourself drafting one of those questions, that's the moment to invoke `/precheck` instead — the intent is identical, the wording is the bug.**
+**Commit and push your working branch freely; NEVER make a PR/MR ready, or merge, without a `precheck` pass on its head.** Drafts are free: a draft can't merge. A pass is the `precheck` commit status on the exact head SHA (`docs/precheck-status.md`). A push after the pass makes it stale, and `/precheck rearm` (a review of only the new commits plus a green pipeline) renews it. `pr-ready-gate.sh` enforces this on the CLI today. The sdlc server will enforce it on `pr_create`/`pr_ready`/`pr_merge` once mcp-server-sdlc#592 ships; until then, the MCP path and `gh pr merge`/`glab mr merge` rely on `/precheck` and `/mmr` checking it.
+
+When work is done, run `/scpmr` (or `/precheck` on a pushed branch) immediately — don't ask permission, just run it. On a pass the PR/MR is ready; **STOP and WAIT** for the user's merge call: `/mmr`, `/scpmmr`, or an affirmative. No autonomous merges. No diff presentation. If in doubt, ask.
+
+**Never write phrases like "shall I run /precheck?", "ready for precheck?", "let me know when to run /precheck." Asking is itself a violation of this rule. The checklist that `/precheck` presents is the merge-approval surface; the *start* of `/precheck` is unilateral. If you catch yourself drafting one of those questions, that's the moment to invoke `/precheck` instead — the intent is identical, the wording is the bug.**
 
 The full procedure lives in `/precheck` (`skills/precheck/SKILL.md`).
 
 ### Exception: Kahuna Sandbox Auto-Approval
 
-The "explicit user approval" requirement is **suspended** — and only suspended — when **both** of the following hold:
+The "explicit user approval" requirement for the merge is **suspended** — and only suspended — when **both** of the following hold:
 
 1. The Flight Agent is operating inside a **Kahuna sandbox** — i.e. the current branch's base ref matches the regex `^kahuna/[0-9]+-` (a per-wave integration branch, not `main`).
-2. The full `/precheck` checklist has passed end-to-end: validation, code-reviewer (no unresolved high+ findings), trivy dependency scan, plus the Discord `#precheck` post and `vox` announcement.
+2. The full `/precheck` checklist has passed end-to-end: validation, code-reviewer (no unresolved high+ findings), trivy dependency scan, the `precheck` status posted, plus the Discord `#precheck` post and `vox` announcement.
 
-When both conditions are met, `/precheck` emits the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invokes `/scpmmr` directly — no human STOP. The exception is enforced **by `/precheck`'s own detection logic, not by agent discretion**: an agent on a `main`-targeted feature branch never qualifies for *this* exception, regardless of context. Outside the sandbox the original rule applies — checklist, STOP, wait for `/scp` / `/scpmr` / `/scpmmr` / affirmative — unless the separate Approved Autochain exception below holds.
+When both conditions are met, `/precheck` emits the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invokes `/mmr` directly — no human STOP for the merge. The exception is enforced **by `/precheck`'s own detection logic, not by agent discretion**: an agent on a `main`-targeted feature branch never qualifies for *this* exception, regardless of context. Outside the sandbox the original rule applies — checklist, STOP, wait for the merge call (`/mmr` / `/scpmmr` / affirmative) — unless the separate Approved Autochain or Standing Merge Grant exception below holds.
 
 **Platform prerequisite** (load-bearing — without it, the auto-approval is unsafe):
 
@@ -61,17 +70,30 @@ Authoritative rule: Dev Spec §5.2.1. Mechanical detection + sentinel + per-plat
 
 ### Exception: Approved Autochain
 
-The "explicit user approval" requirement is also **suspended** — and only suspended — when **all** of the following hold:
+The "explicit user approval" requirement for the merge is also **suspended** — and only suspended — when **all** of the following hold:
 
 1. **The user approved the chain's order.** An approved `/autochain` order is a real pre-approval for exactly the issues in it. The agent records that approval with `autochain-gate.sh arm <repo_root> <epic> --approval-file <path> <issue>...`, listing only the approved issues. The file holds the user's words verbatim and is written with the `Write` tool, never through a shell.
 2. **The gate says so.** `autochain-gate.sh check <repo_root> <N>` prints `approved <epic>` for the current issue. The gate **fails closed**: no state file, a malformed one, a missing approval quote, an approval older than `AUTOCHAIN_TTL_HOURS` (default 12), or an issue not in the list (including one already merged and `consume`d) all leave the human STOP in place.
 3. **The precheck passed, mechanically.** Every checklist item verified; zero unresolved critical/important findings from the latest code review; every validation and test lane exits 0 by its own exit code; the dependency scan exits 0.
 
-When all three hold, `/precheck` puts the gate's `armed_at` and approval quote on the checklist, emits `[AUTO-APPROVED: autochain #<epic>]`, and invokes `/scpmmr`. As with the Kahuna exception, this is **enforced by `/precheck`'s detection logic, not by agent discretion** — no skill text, including `/autochain`'s, can grant it.
+When all three hold, `/precheck` puts the gate's `armed_at` and approval quote on the checklist, emits `[AUTO-APPROVED: autochain #<epic>]`, and invokes `/mmr`. As with the Kahuna exception, this is **enforced by `/precheck`'s detection logic, not by agent discretion** — no skill text, including `/autochain`'s, can grant it.
 
 **Scope limits:** the approval covers the listed issues and nothing else. A change to the set — a new issue, a new blocker — needs a fresh approval and a fresh `arm`. **Any stop disarms the gate** (`autochain-gate.sh disarm`); a stopped chain resumes only on a new approval. `/autochain plan` refuses a chain whose repo does not report `pre_merge_authoritative` from `wave_ci_trust_level`, because with no human in the loop, CI is the only opinion between a change and the protected branch.
 
 Mechanical gate: `scripts/autochain-gate.sh`. Detection + sentinel: `skills/precheck/SKILL.md` Step 5. Chain procedure: `skills/autochain/SKILL.md`.
+
+### Exception: Standing Merge Grant
+
+The user may give a **standing merge grant** for a named effort, such as "auto-merge the wave-engine fixes on a passing precheck". Under it, the merge STOP is skipped when **all** of the following hold:
+
+1. **The grant is the user's own words, given directly** in a session, not relayed, and recorded in a memory file with its scope and any expiry.
+2. **The grant names a bounded effort, and this PR/MR is plainly inside it.** A grant scoped to "all PRs/MRs", or to everything after a clean precheck, does not qualify: it would remove the merge call itself, the one place the user approves. A grant given before #1235 that skipped a *second* "may I merge?" after the user had already approved at the old precheck STOP is not a merge grant either. If the scope has to be stretched to fit, the grant does not apply.
+3. **The precheck passed, mechanically**, by the same definition as the autochain exception's item 3.
+4. **Nothing the ABSOLUTE prod rule gates is in the change.** The same goes for tags, releases and fleet installs. A grant covers merging only.
+
+`/precheck` puts the grant on the checklist (the memory file, the user's words verbatim, the scope, and one sentence on why this PR/MR is inside it), then invokes `/mmr`.
+
+**Unlike the two exceptions above, this one is applied by the agent, not detected mechanically**: the grant lives in memory, and no script can check its scope. That is why the bar is "plainly inside the scope" and why the grant and its reasoning sit on the checklist, where the user sees them at the moment they are used. When in doubt, STOP.
 
 ---
 

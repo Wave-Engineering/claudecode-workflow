@@ -1,0 +1,46 @@
+# The `precheck` commit status
+
+The contract between the kit, which **produces** the mark, and everything that **consumes** it. Change this file first, then the code.
+
+`/precheck` is the MR gate (#1233, #1235). A pass is recorded on the commit it reviewed, as a commit status.
+
+## The status
+
+| field | value |
+|---|---|
+| GitHub | a commit status (`POST /repos/{owner}/{repo}/statuses/{sha}`) with `context` = `precheck` |
+| GitLab | a commit status (`POST /projects/:id/statuses/:sha`) with `name` = `precheck`, attached to the SHA's existing pipeline through `pipeline_id` when one exists |
+| state | `success`. Precheck posts nothing else: no pass means no status. |
+| description | one line, 140 characters or fewer. It names the issue, the review passes and where the lane results came from, for example `#1235 review full+delta clean; lanes ci; trivy 0` |
+| SHA | the HEAD that was reviewed. It must already be pushed. |
+
+**Why GitLab passes `pipeline_id`:** a bare status post makes GitLab create a separate "external" pipeline. That pipeline can become the MR's latest pipeline and hide the real CI verdict from the merge check.
+
+## Reading it
+
+A consumer treats the mark as present **only** when the latest `precheck` status on the exact head SHA is `success`.
+
+- No status, `pending`, `failure`/`error` (GitHub), or `failed`/`canceled` (GitLab) all mean **no pass**.
+- A status on an older SHA is no pass either. A push after precheck makes the mark stale by construction.
+- A read that fails (an API error or timeout) is **no pass**. Every consumer fails closed.
+
+## Producer and consumers
+
+- **Producer:** `scripts/precheck-status.sh post <repo_root> <sha> <description>`, called by `/precheck` on a pass and by `/precheck rearm` on a clean delta. It reads the status back after posting.
+- **Read helpers:**
+  - `precheck-status.sh get <repo_root> <sha>` prints `success`, `pending`, `failure` or `none`, and exits 3 on an API error.
+  - `precheck-status.sh last-success <repo_root> <base>` prints the newest first-parent commit on the branch that carries a pass. `/precheck rearm` diffs from it.
+  - `precheck-status.sh pr-head <repo_root> [<number|url|branch>]` prints a PR/MR as the platform sees it: `<sha> <head-branch> <base-branch>`.
+  - `precheck-status.sh branch-head <repo_root> <branch>` prints where a branch points on the platform, which is what a create from it opens with. It exits 3 if the branch can't be read, including a branch that was never pushed.
+  - `PRECHECK_SLUG` (with `PRECHECK_PLATFORM`, and optionally `PRECHECK_HOST`) points any of these at another repository, the `-R` case.
+  - GitLab reads fail on an error **body** as well as on an exit code, because `glab api` exits 0 on an HTTP error (mcp-server-sdlc#502).
+- **Marking ready:** `precheck-status.sh mark-ready <repo_root> <number>` is the kit's one way to make a PR/MR ready. It refuses (exit 4) unless the head carries a pass, then reads the PR/MR back. On GitHub it runs the GraphQL `markPullRequestReadyForReview` mutation (REST has no endpoint for it). On GitLab it PUTs the title with every draft prefix stripped. `/precheck` uses it; nothing in the kit makes a PR/MR ready through `gh pr ready` or `glab mr update`, except the wave engine's integration-branch promotions noted below.
+- **Consumers:**
+  - `scripts/hooks/workflow/pr-ready-gate.sh` gates the CLI path: `gh pr create` and `gh pr ready`, `glab mr create`, and **every** `glab mr update` without `--draft`. On GitLab the draft state *is* the title prefix (`Draft:`, `[Draft]`, `(Draft)`), and glab rewrites the title on most update flags (`--title`, `--fill`, `--wip`, …), so the gate doesn't model which flags keep it. (`WIP:` and glab's `--wip` haven't counted as drafts since GitLab 14.0.) It checks the PR/MR's own head, read through `pr-head` (or, for a create, `branch-head`), never local HEAD or the local `origin/<branch>`. It is a guard rail for the spellings agents write, not a boundary: an unusual argv spelling or `gh api` gets past it, and the merge-time checks below are the backstop.
+  - **Once mcp-server-sdlc#592 ships**, it gates the MCP path: `pr_create` (non-draft) and `pr_ready` check the head SHA, and `pr_merge` re-checks it at merge time. Until then nothing on the MCP path enforces it, and neither does `gh pr merge` or `glab mr merge`; `/precheck` and `/mmr` checking it is the only gate there.
+- **Drafts never need the mark.** A draft can't merge.
+- **Integration branches are exempt.** A head on `kahuna/*` (wave promotion) or `campaign/*` (campaign → protected), or a **base** on `kahuna/*` (a flight landing into its wave's integration branch), is governed by the wave trust gate: commutativity, merge-result CI, code review and trivy. Nothing reaches a protected branch from `kahuna/*` except through it. This is the same rule as the push gate's integration refs (#724) and the kahuna sandbox auto-approval. The wave engine marks promotion drafts ready itself (`gh -R <repo> pr ready <n>`), and its prime node lands flights with `pr_create` + `pr_merge`.
+
+## Release order
+
+The producer ships before the consumers. If a consumer that requires the mark ships first, every PR is refused until the kit catches up. If the kit ships first, the mark is simply posted and ignored for a while.

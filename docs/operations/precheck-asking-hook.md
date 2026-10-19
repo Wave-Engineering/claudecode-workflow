@@ -1,6 +1,6 @@
 # Precheck-asking Stop hook
 
-A Claude Code `Stop` hook that catches "shall I run /precheck?" style asking phrasings and forces the agent to invoke `/precheck` instead. Closes the residual ~10% leak rate that the CLAUDE.md MANDATORY: Pre-Commit Gate prose alone doesn't catch.
+A Claude Code `Stop` hook that catches "shall I run /precheck?" style asking phrasings and forces the agent to invoke `/precheck` instead. Closes the residual ~10% leak rate that the CLAUDE.md MANDATORY: MR Gate prose alone doesn't catch.
 
 Issue: cc-workflow#542 (paired with #541 prose tightening).
 
@@ -80,6 +80,6 @@ CC agent finishes turn
 - `scripts/precheck-asking-detector.sh` — hook source
 - `tests/regression/test_precheck_asking_detector.sh` — regression tests
 - `config/settings.template.json` — Stop hook entry (installed to `~/.claude/settings.json`)
-- `CLAUDE.md` — the rule itself (MANDATORY: Pre-Commit Gate)
+- `CLAUDE.md` — the rule itself (MANDATORY: MR Gate)
 - Memory: `feedback_precheck_no_ask.md` — paired feedback record with phrasings list
 - Issues: cc-workflow#541 (prose half), #542 (this hook)

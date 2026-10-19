@@ -161,7 +161,7 @@ Requirements follow the **EARS** notation:
 |----|------|-------------|
 | **R-05** | Ubiquitous | The Flight Agent shall branch its implementation work from the active kahuna branch, not from main. |
 | **R-06** | Ubiquitous | The Flight Agent shall open its merge request with `base = <active-kahuna-branch>`, not `base = main`. |
-| **R-07** | State-driven | While a Flight Agent is operating inside a Kahuna sandbox (its branch base ref matches the `kahuna/*` pattern), `/precheck` shall auto-approve the Flight's own `/scpmmr` after completing the full checklist (validation, code-reviewer, trivy, notifications) with no STOP-and-wait step. |
+| **R-07** | State-driven | While a Flight Agent is operating inside a Kahuna sandbox (its branch base ref matches the `kahuna/*` pattern), `/precheck` shall auto-approve the Flight's own merge (`/mmr`; before cc-workflow#1235, `/scpmmr`) after completing the full checklist (validation, code-reviewer, trivy, notifications) with no STOP-and-wait step. |
 
 ### 3.3 Platform Enforcement
 
@@ -271,7 +271,7 @@ Narrative: BJ approves a Dev Spec, runs `/devspec upshift` to populate the backl
    - Creates a worktree, branches off `kahuna/<plan-id>-<slug>` (per R-05)
    - Implements the story
    - Runs `/precheck` — the checklist runs fully (validation, code-reviewer, trivy, notifications)
-   - Because the base ref is `kahuna/*`, `/precheck` recognizes the sandbox context (per R-07) and auto-approves its own `/scpmmr` without STOP-and-wait
+   - Because the base ref is `kahuna/*`, `/precheck` recognizes the sandbox context (per R-07) and auto-approves its own merge (`/mmr`; before #1235, `/scpmmr`) without STOP-and-wait
    - `pr_create` opens an MR with `base = kahuna/<plan-id>-<slug>`
    - The platform auto-merges on CI-green (per R-08, enforced by KAHUNA settings applied via gl-settings)
    - Flight writes its `results.md` to the wavebus and returns `PASS` to Prime
@@ -390,7 +390,7 @@ A non-wave contributor pushing to main while `/wavemachine` runs overnight is a 
 - **Canonical status-line protocol (Flight → Prime → Orchestrator)** — unchanged. `PASS`/`FAIL` returns still govern the control flow.
 - **`wave_health_check` circuit breaker** — extended only to add the kahuna-staleness check (R-22). Core behavior unchanged.
 - **`/precheck` mandatory checklist** — unchanged for non-KAHUNA work. For KAHUNA work, the *post-checklist approval step* changes; the checklist itself is identical.
-- **`/scp`, `/scpmr`, `/scpmmr`** — unchanged for non-KAHUNA work. For Flights inside a Kahuna sandbox, `/scpmmr` is what auto-runs after `/precheck` auto-approves.
+- **`/scp`, `/scpmr`, `/scpmmr`** — unchanged for non-KAHUNA work. For Flights inside a Kahuna sandbox, `/mmr` is what auto-runs after `/precheck` auto-approves (cc-workflow#1235; before it, `/scpmmr`).
 - **Wave state schema (`.claude/status/state.json`)** — extended additively. New fields (`kahuna_branch`, `kahuna_branches` history). Existing fields (`action`, `label`, `current_wave`, etc.) untouched.
 - **Existing sdlc-server tool surface** — `pr_create`, `pr_merge` unchanged per tachikoma's §1 review. `commutativity_verify` extended (schema relaxation) rather than replaced.
 
@@ -562,11 +562,11 @@ else:
     sandbox_context = false
 ```
 
-**Behavior:**
-- If `sandbox_context == false`: existing behavior — checklist presentation, STOP, wait for `/scp*` or affirmative.
-- If `sandbox_context == true`: checklist presentation + notifications still happen (so the operator sees progress on `#precheck`). Immediately after notifications, the skill emits the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invokes `/scpmmr` with no wait.
+**Behavior** (amended by cc-workflow#1235: precheck is now the MR gate, and the STOP it skips is the merge call):
+- If `sandbox_context == false`: checklist presentation, STOP, wait for the merge call (`/mmr`, `/scpmmr` or an affirmative). The PR/MR is already ready.
+- If `sandbox_context == true`: checklist presentation + notifications still happen (so the operator sees progress on `#precheck`). Immediately after notifications, the skill emits the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invokes `/mmr` with no wait. (Before #1235 it invoked `/scpmmr`; precheck now runs inside `/scpmr`, so that would recurse.)
 
-**CLAUDE.md mandatory-rule update:** the existing rule "NEVER commit without running `/precheck` first and receiving explicit user approval" gains an exception block noting that auto-approval is valid only when `sandbox_context == true` AND the checklist itself passed. The exception is enforced by `/precheck`'s own detection logic, not by agent discretion.
+**CLAUDE.md mandatory-rule update:** the MR-gate rule ("NEVER make a PR/MR ready, or merge, without a `precheck` pass on its head"; before #1235, "NEVER commit without running `/precheck` first") carries an exception block noting that skipping the merge STOP is valid only when `sandbox_context == true` AND the checklist itself passed. The exception is enforced by `/precheck`'s own detection logic, not by agent discretion.
 
 #### 5.2.2 `/wavemachine` — autonomous gate evaluation and auto-merge
 
@@ -602,6 +602,8 @@ If wave state has no `kahuna_branch` (legacy non-KAHUNA execution), Flights cont
 #### 5.2.4 `/scp`, `/scpmr`, `/scpmmr` — no code changes
 
 These skills need no code changes. They already accept commit messages and call `pr_create` / `pr_merge` without opinions about base ref. The sandbox-aware behavior lives in `/precheck`'s auto-approval logic.
+
+*Amended by cc-workflow#1235:* `/scp` commits and pushes only. `/scpmr` opens a **draft** PR/MR with `pr_create` and then runs `/precheck`, which marks it ready on a pass. `/scpmmr` adds `/mmr`, which calls `pr_merge`. The base ref is still not their concern.
 
 #### 5.2.5 `wave-status` CLI additions
 
@@ -752,7 +754,7 @@ The split is deliberate: unit tests verify correctness, integration tests verify
 | **IT-06** | Team-member drift at gate | R-16, R-23 | Setup: start `/wavemachine` on a Plan, then (during the run) push an unrelated MR to main that touches overlapping files. Expected: commutativity_verify returns WEAK at gate, pause for BJ. |
 | **IT-07** | Orchestrator crash recovery | R-02, Procedure D | Setup: start `/wavemachine`, kill the session mid-Plan. Expected: re-running `/wavemachine` on the same Plan resumes from wave state's last recorded action, reuses the existing kahuna branch, no duplicate MRs created. |
 | **IT-08** | Flight rebase-conflict handling | R-21, Procedure B | Setup via `wave-fixture-gen --scenario rebase-conflict-setup`: flight branches where flight N+1 touches the same lines as flight N after flight N merges to kahuna. Expected: flight N+1 attempts rebase, detects conflict, returns FAIL, kahuna preserved. |
-| **IT-09** | `/precheck` sandbox detection | R-07 | Setup: Flight agent on a `kahuna/*`-based feature branch. Expected: `/precheck` runs full checklist, then auto-approves `/scpmmr` without STOP. Same flight on a `main`-based branch: STOP-and-wait behavior preserved. |
+| **IT-09** | `/precheck` sandbox detection | R-07 | Setup: Flight agent on a `kahuna/*`-based feature branch. Expected: `/precheck` runs full checklist, then auto-approves the merge (`/mmr`; before #1235, `/scpmmr`) without STOP. Same flight on a `main`-based branch: STOP-and-wait behavior preserved. |
 | **IT-10** | Concurrent wavemachine invocation refused | R-20 | Setup: run `/wavemachine` on a Plan, then (in a second session) try to run `/wavemachine` on the same Plan while the first run is still in-flight. Expected: second invocation refused with message naming the prior run's state. |
 | **IT-11** | Non-wave teammate workflow unchanged | CP-01 | Setup: during an active `/wavemachine` run, an unrelated `feature/` branch MR opened to main. Expected: that MR behaves identically to pre-KAHUNA — normal review, normal protections. |
 | **IT-12** | Settings-automation drift detection | R-10, CP-02 | Setup: run `gl-settings kahuna-sandbox --check <project-url>` on a project where the KAHUNA settings have been partially removed. Expected: check mode reports the specific drift items. |

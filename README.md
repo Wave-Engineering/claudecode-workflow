@@ -59,7 +59,7 @@ A drop-in project instructions file that works with both GitHub and GitLab proje
 Key features:
 - **Platform detection** — GitHub (`gh`) vs GitLab (`glab`), auto-detected
 - **Discovery-based code standards** — finds the project's linters, formatters, and test runners instead of assuming a stack
-- **Pre-commit checklist** — enforced review protocol with mandatory verification steps
+- **MR gate checklist** — enforced review protocol at the PR/MR (`/precheck`), with the merge left to the user's call
 - **Agent identity system** — Dev-Team (persisted per-project) + Dev-Name/Dev-Avatar (ephemeral per-session)
 - **Secrets guardrail** — warns before staging sensitive files, confirms with user before proceeding
 - **PR/MR description format** — consistent structure for pull/merge requests
@@ -88,12 +88,12 @@ Key features:
 | nerf | `/nerf` | Context budget system — soft limits, doom modes, scope monitor |
 | nextwave | `/nextwave` | Execute spec-driven sub-agents per wave; reads each wave's `dispatch` hint to fan or serialize |
 | devspec | `/devspec` | Interactive Dev Spec creation with Deliverables Manifest and finalization checklist |
-| precheck | `/precheck` | Pre-commit gate — verify compliance, run code review, present checklist |
+| precheck | `/precheck` | MR gate — review the pushed commits, read CI, post the `precheck` status, mark the PR/MR ready, stop for the merge call |
 | prepwaves | `/prepwaves` | Analyze issues, compute dependency waves, and annotate each wave with a `dispatch` hint |
 | review | `/review` | Code review on staged/branch changes |
-| scp | `/scp` | Stage, commit, and push workflow |
-| scpmr | `/scpmr` | Stage, commit, push, and create PR/MR |
-| scpmmr | `/scpmmr` | Stage, commit, push, create PR/MR, and merge |
+| scp | `/scp` | Stage, commit, and push your working branch — free, no precheck or approval |
+| scpmr | `/scpmr` | `/scp`, open a draft PR/MR, run `/precheck`; on a pass it is ready for the merge call |
+| scpmmr | `/scpmmr` | `/scpmr` then `/mmr`; typed after a precheck STOP it is the merge call |
 | view | `/view` | Open file/URL in GUI viewer (read-only) |
 | vox | `/vox` | Text-to-speech voice announcements for status updates and alerts |
 
@@ -132,7 +132,7 @@ Each MCP has its own `install-remote.sh` for standalone installation. Running `.
 
 `settings.template.json` provides a starting point for `~/.claude/settings.json` with:
 - **Permissions** — Granular tool allowlists for common CLIs (git, gh, glab, docker, terraform, aws, etc.)
-- **Hooks** — PreToolUse (push gate, secrets gate), PostToolUse (test sentinel, context tracker), PostCompact (re-read reminder)
+- **Hooks** — PreToolUse (push gate, secrets gate, PR-ready gate), PostToolUse (test sentinel, context tracker), PostCompact (re-read reminder)
 - **Status line** — Points to the custom statusline script
 - **Plugins** — Full plugin list (see Plugins section below)
 - **Effort level** — Set to `high` for thorough responses

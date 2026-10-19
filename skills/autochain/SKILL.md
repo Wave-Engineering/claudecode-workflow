@@ -67,11 +67,11 @@ For each issue, in order, while unblocked:
 
 1. Mark it started (per CLAUDE.md's lifecycle rules — mark on start, never hand-set a terminal state).
 2. Branch from the live default.
-3. Implement.
-4. **Run `/precheck` — the skill, not your own assembly of its parts.** If you find yourself
+3. Implement, then commit and push (`/scp`; free on a working branch).
+4. **Run `/scpmr` — it opens the draft PR/MR and runs `/precheck`, the skill, not your own assembly of its parts.** If you find yourself
    hand-rolling IBM, spec validation, trivy or the code review, stop and run the skill. Its Step 5
    runs `autochain-gate.sh check`; for an armed issue that has **passed**, it emits
-   `[AUTO-APPROVED: autochain #<epic>]` and invokes `/scpmmr` itself. Nothing in this skill grants
+   `[AUTO-APPROVED: autochain #<epic>]` and invokes `/mmr` itself. Nothing in this skill grants
    that — the gate does.
 
    **"Passed" is mechanical, not a judgment.** ALL of:
@@ -85,7 +85,7 @@ For each issue, in order, while unblocked:
      stop and report it.
 
    Anything short of that is a failed precheck: fix it, or stop.
-5. `/scpmmr` — invoked by `/precheck` on the sentinel; do not invoke it yourself around a failed gate.
+5. `/mmr` — invoked by `/precheck` on the sentinel, after it posted the `precheck` status and marked the PR/MR ready; do not invoke it yourself around a failed gate.
 6. **Verify the post-state.** Read the merge back — a merge that returned 200 is not a merge.
    Confirm the merge closed the issue via `Closes #N`; close it by hand **only** if the merge did
    not (per CLAUDE.md: merge does the closing, never hand-set a terminal state). Then
