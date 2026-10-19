@@ -44,6 +44,9 @@ are worth keeping apart:
     landed before arming still rings, carrying the change, and rings only once.
   - **`sqtk-banner.sh`** is an opt-in `Stop` hook that shows BJ the open `bj:needs` items. It is
     wired per session in `settings.local.json`.
+  - **Known limit:** ✓ and ✗ need squawk.apps at squawkie-talkie ≥ 0.8.0. The live server is
+    older, so `sqtk set --state confirmed|rejected` returns HTTP 400 until it is upgraded, which
+    is a production change and BJ's call. Open, `→` answers, retired and recorded work today.
 - **`/onboard` (#1239, PR #1263)** brings a fresh agent up to speed in a repo, in order:
   - `/engage`, `/name`, and a seed check (a fresh `.claude/reseed-revive.md` hands off to
     `/reseed revive`);
@@ -54,7 +57,7 @@ are worth keeping apart:
 
 ### Changed
 
-These three change how a session runs once the kit is installed.
+The first three change how a session runs once the kit is installed.
 
 - **Spotted something outside the work in front of you? Squawk it on `<project>:triage`; don't
   file it (#1236, PR #1262).** It is a new MANDATORY section in `CLAUDE.md`, with a guard line atop
@@ -79,22 +82,18 @@ These three change how a session runs once the kit is installed.
     `@<lead-dev-name>`.
   - A grunt's PR/MR stops at ready, and its `/precheck` STOP becomes the handoff to the lead.
   - The charter template gains `<lead>` and `<lead-dev-name>` slots.
-- **CI:** `validate.sh` now runs `tests/skills/*.sh`, which ran nowhere before. Three stale skill
-  tests are re-aimed: nextwave (#712), the label colour (#903) and the prepwaves strings (#1186).
-
-**Known limit:** ✓ and ✗ need squawk.apps at squawkie-talkie ≥ 0.8.0. The live server is older, so
-`sqtk set --state confirmed|rejected` returns HTTP 400 until it is upgraded, which is a production
-change and BJ's call. Open, `→` answers, retired and recorded work today.
+- **CI (#1236, PR #1265):** `validate.sh` now runs `tests/skills/*.sh`, which ran nowhere before.
+  Three stale skill tests are re-aimed: nextwave (#712), the label colour (#903) and the prepwaves
+  strings (#1186).
 
 ### Image
 
 - **The image now bakes mcp-server-sdlc v5.0.0**, the first image server that enforces the
   `precheck` status (#592): `pr_create`/`pr_ready`/`pr_merge`/`pr_merge_wait` refuse a head
-  without a pass. This
-  kit posts that status (8.8.0 onward), so the pair is consistent inside the image. The other four
-  are unchanged from 8.8.0: mcp-server-wtf v1.5.2, mcp-server-discord v1.4.2,
-  mcp-server-discord-watcher v1.6.1 and mcp-server-nerf v2.0.0. `install-remote.sh` bakes each
-  server's latest release at tag time.
+  without a pass. This kit posts that status (8.8.0 onward), so the pair is consistent inside the
+  image. The other four are unchanged from 8.8.0: mcp-server-wtf v1.5.2, mcp-server-discord
+  v1.4.2, mcp-server-discord-watcher v1.6.1 and mcp-server-nerf v2.0.0. `install-remote.sh` bakes
+  each server's latest release at tag time.
 
 ## [8.8.0] - 2026-10-19
 
