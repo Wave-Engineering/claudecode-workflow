@@ -70,7 +70,7 @@ const greenMerge = (over = {}) => ({
   const v = mergeResultVerdict(greenMerge({ merge_pipelines: [{ id: 900, ref: REF, status: 'failed', sha: MERGE }] }))
   ok(v.pass === false && /#900, is failed/.test(v.reason), 'ci_wait_run returns nothing, the direct read is red: HOLD')
 }
-for (const red of ['failure', 'cancelled']) {
+for (const red of ['failure', 'cancelled', 'failed', 'canceled']) {
   const v = mergeResultVerdict(greenMerge({ wait: { ok: true, final_status: red } }))
   ok(v.pass === false && v.path === 'ci_wait_run' && /never overrides/.test(v.reason), `a graded ${red} from ci_wait_run plus a green, bound direct read still HOLDs`)
 }
@@ -133,6 +133,14 @@ for (const wait of [NOT_FOUND, { ok: true, final_status: 'timed_out' }, { ok: tr
     ],
   })
   ok(mergeResultVerdict(newerGreen).pass === true, 'a retried green run supersedes the older red one (the #1211 infra-retry case)')
+  const unordered = greenMerge({
+    merge_pipelines: [
+      { id: '950', ref: REF, status: 'failed', sha: '5'.repeat(40) },
+      { id: 900, ref: REF, status: 'success', sha: MERGE },
+    ],
+  })
+  const u = mergeResultVerdict(unordered)
+  ok(u.pass === false && /no integer id/.test(u.reason), 'a merge-result run with a non-integer id HOLDs rather than vanishing behind an older green')
   // 3. it must be green
   const running = greenMerge({ merge_pipelines: [{ id: 900, ref: REF, status: 'running', sha: MERGE }] })
   ok(mergeResultVerdict(running).pass === false, 'a still-running pipeline HOLDs')
@@ -145,6 +153,10 @@ for (const wait of [NOT_FOUND, { ok: true, final_status: 'timed_out' }, { ok: tr
   ok(mergeResultVerdict(octopus).pass === false, 'a merge commit must have exactly two parents')
   const flipped = greenMerge({ merge_commit: { sha: MERGE, parent_ids: [HEAD, TARGET] } })
   ok(mergeResultVerdict(flipped).pass === false, 'the head must be the SECOND parent (the first is the target tip)')
+  const oneParent = greenMerge({ merge_commit: { sha: MERGE, parent_ids: [HEAD] } })
+  ok(mergeResultVerdict(oneParent).pass === false, 'a one-parent commit whose sha is not the head cannot be bound: HOLD')
+  const noParents = greenMerge({ merge_commit: { sha: MERGE } })
+  ok(mergeResultVerdict(noParents).pass === false, 'a merge commit read without parent_ids cannot be bound: HOLD')
   const noCommit = greenMerge({ merge_commit: undefined })
   ok(mergeResultVerdict(noCommit).pass === false, 'a green merge-commit pipeline with no commit read cannot be bound: HOLD')
 }

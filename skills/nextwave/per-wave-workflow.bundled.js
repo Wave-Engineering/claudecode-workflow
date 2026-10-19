@@ -616,7 +616,8 @@ function isMergeSha(s) {
 }
 // ci_wait_run graded a merge-result run bound to the current head and it was red. That is final:
 // a direct read never overrides it. Re-running a red gate is cheap; a wrong green is not.
-const MERGE_DEFINITIVE_RED = new Set(['failure', 'cancelled'])
+// GitLab's own spellings (failed, canceled) count too, in case an agent copies a status through.
+const MERGE_DEFINITIVE_RED = new Set(['failure', 'cancelled', 'failed', 'canceled'])
 
 // The rule. A graded red is final. Any pass needs the head read twice, equal (see THE HEAD IS
 // READ TWICE above), and a pass returns that head, so the merge binds to the head that was graded.
@@ -652,9 +653,12 @@ function mergeResultVerdict(ev) {
   const err = ev.wait?.error ? `: ${String(ev.wait.error).slice(0, 160)}` : ''
   const why = !ev.wait ? 'no answer' : fs ? `final_status=${fs}` : `not found${err}`
   const want = `refs/merge-requests/${n}/merge`
-  const runs = (Array.isArray(ev.merge_pipelines) ? ev.merge_pipelines : []).filter(
-    (p) => p?.ref === want && Number.isInteger(p.id),
-  )
+  const runs = (Array.isArray(ev.merge_pipelines) ? ev.merge_pipelines : []).filter((p) => p?.ref === want)
+  // A merge-result run without an integer id cannot be ordered, so newest-wins cannot be applied:
+  // dropping it could let an older green hide it. Hold instead.
+  if (runs.some((p) => !Number.isInteger(p.id))) {
+    return hold('direct', `ci_wait_run gave no verdict (${why}), and a ${want} pipeline has no integer id, so the newest cannot be determined`)
+  }
   if (runs.length === 0) {
     return hold('direct', `ci_wait_run gave no verdict (${why}), and the direct read found no ${want} pipeline`)
   }
