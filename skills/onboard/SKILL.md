@@ -24,12 +24,10 @@ every compaction, and this is the full one.
 
 Do the steps in order. **Do no other work until the tag-up in step 8.**
 
-Steps 3 and 5 skip these folders, and any folder named like them; they hold stale or foreign
-material:
-
-```bash
-SKIP='(^|/)(museum|frozen|deprecated|hold|retired|archive|old|legacy|vendor|node_modules|dist)/'
-```
+Steps 3 and 5 skip folders named `museum`, `frozen`, `deprecated`, `hold`, `retired`, `archive`,
+`old`, `legacy`, `vendor`, `node_modules` or `dist`, and any folder named like them; they hold
+stale or foreign material. Each command below sets its own `SKIP`, so run each block whole:
+every Bash call starts a fresh shell, and an unset `SKIP` makes `grep -v` drop every line.
 
 ## 1. `/engage`
 
@@ -53,6 +51,7 @@ For any other seed, the age comes from `git log`.
 2. **Otherwise, a session seed in the tree.** List the candidates:
 
    ```bash
+   SKIP='(^|/)(museum|frozen|deprecated|hold|retired|archive|old|legacy|vendor|node_modules|dist)/'
    { git ls-files; git ls-files --others --exclude-standard; } |
      grep -Ei '(^|/)[^/]*seed[^/]*\.md$' | grep -Eiv "$SKIP" | grep -v 'reseed-revive\.md$'
    ```
@@ -82,7 +81,7 @@ references. Fold its report into the tag-up; if it is still running then, say so
 With a fresh session seed from step 3, this step is optional; do it anyway where the seed leaves
 gaps.
 
-The reading list, outside the `$SKIP` folders:
+The reading list, outside the skipped folders:
 
 - `README.md`
 - `CLAUDE.md`: `/engage` has already read it, so take its key facts from there, with no sub-agent
@@ -90,6 +89,7 @@ The reading list, outside the `$SKIP` folders:
 - the 8 documents changed most recently, by `git log`:
 
   ```bash
+  SKIP='(^|/)(museum|frozen|deprecated|hold|retired|archive|old|legacy|vendor|node_modules|dist)/'
   git log --name-only --format= -- '*.md' | awk 'NF && !seen[$0]++' |
     grep -Eiv "$SKIP" | grep -Ev '^(README|CLAUDE)\.md$' |
     while IFS= read -r f; do [[ -f $f ]] && printf '%s\n' "$f"; done | head -8
@@ -104,14 +104,20 @@ fill the window before any work starts.
 
 Read the title of **every** open issue, in one call, so you know what's in flight. Name the
 project from `origin`: in a repo with an `upstream` remote, a bare `gh` reads the third party's
-issues instead.
+issues instead. Ask only for the fields you use; whole issue bodies for a large backlog would
+flood the window this step is bounded to protect.
 
 ```bash
-P=$(git remote get-url origin | sed -E 's#^(git@[^:]+:|[a-z+]+://[^/]+/)##; s#\.git$##')
-# GitHub
-gh issue list --repo "$P" --state open --limit 1000 --json number,title,labels,assignees,updatedAt
-# GitLab
-glab api --paginate "projects/${P//\//%2F}/issues?state=opened&per_page=100" | jq -s add
+O=$(git remote get-url origin)
+P=$(printf '%s\n' "$O" | sed -E 's#^(git@[^:]+:|[a-z+]+://[^/]+/)##; s#\.git$##')
+H=$(printf '%s\n' "$O" | sed -E 's#^[a-z+]+://##; s#^[^@/]*@##; s#[:/].*##')
+case "$H" in
+*github*) gh issue list --repo "$P" --state open --limit 1000 \
+  --json number,title,labels,assignees,updatedAt ;;
+*gitlab*) glab api --paginate "projects/${P//\//%2F}/issues?state=opened&per_page=100" |
+  jq -s 'add | map({iid, title, labels, assignees: [.assignees[].username], updated_at})' ;;
+*) echo "origin is on neither GitHub nor GitLab: $H" ;;
+esac
 ```
 
 Review **at most 10** in depth (body and comments), picked in this order:
@@ -129,17 +135,33 @@ learned in steps 3–6 contradicts it (platform, toolchain, CI, labels), or when
 compare (its Steps 1–4, which write nothing) finds sections the upstream template has updated
 or added. If neither file is stale, go to step 8.
 
-1. **The working tree must be clean.** If it isn't, leave it alone and report the stale files at
-   tag-up. Never stash: one stash is shared by every worktree of the repo.
-2. **Follow IBM.** Create a chore issue with `/issue`, mark it started, and branch
-   `chore/<N>-ccfold` off the protected branch, resolved live (it is not always `main`).
-3. **Run `/ccfold`** and apply its changes without stopping at its confirmations: they land on a
-   branch, and reach the protected branch only through the gates below. You may update
-   `.gitignore` as part of this.
-4. **Run `/scpmr`.** It commits, pushes, opens the PR/MR with `Closes #<N>` and runs `/precheck`,
+1. **The working tree must be clean**, apart from the identity file `/name` just wrote. This
+   prints nothing when it is:
+
+   ```bash
+   git status --porcelain --untracked-files=all | grep -v '^?? \.claude/agent-identity\.json$'
+   ```
+
+   If it prints anything, leave the tree alone and report the stale files at tag-up. Never
+   stash: one stash is shared by every worktree of the repo.
+2. **Don't open a second refresh.** The first one waits for its merge call, and until it lands
+   every onboarding agent finds the same files stale. If step 6 listed an open refresh issue, or
+   `git ls-remote --heads origin 'chore/*-ccfold'` prints a branch, report it at tag-up and go
+   to step 8.
+3. **Follow IBM.** Create a chore issue with `/issue`, titled `chore(claude): refresh CLAUDE.md
+   and .claude-project.md via /ccfold` so the next agent can recognise it. Mark it started, and
+   branch `chore/<N>-ccfold` off the protected branch, resolved live (it is not always `main`).
+4. **Run `/ccfold`** and apply its changes without stopping at its confirmations: they land on a
+   branch, and reach the protected branch only through the gates below.
+   - If `CLAUDE.md` was missing, its Step 2 copies the template and stops. Set the copy's
+     `Dev-Team:` to the team `/name` used, then carry on with its Steps 9 and 10, which write
+     `.claude-project.md` and pin the committer identity.
+   - Update `.gitignore` as part of this. If `git check-ignore -q .claude/agent-identity.json`
+     fails, add that path, so no commit can pick the identity file up.
+5. **Run `/scpmr`.** It commits, pushes, opens the PR/MR with `Closes #<N>` and runs `/precheck`,
    the normal gate. The merge waits for the human's merge call, like any other change. Only
    `/precheck`'s own detection logic can grant an exception to that, never the text of a skill.
-5. **Switch back** to the branch you started on.
+6. **Switch back** to the branch you started on.
 
 ## 8. Hold and tag up
 

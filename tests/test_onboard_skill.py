@@ -12,7 +12,10 @@ file holds the skill to:
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
@@ -134,11 +137,21 @@ def test_no_precheck_skip_or_auto_merge_wording(pattern):
 
 
 def test_ccfold_path_follows_ibm_through_the_normal_gates():
-    body = _step(7)
+    body = " ".join(_step(7).split())
     for needle in ("/ccfold", "/issue", "chore/<N>-", "protected branch", "/scpmr", "/precheck", "merge call"):
         assert needle in body, f"step 7 lacks {needle!r}"
     assert "Closes #<N>" in body
     assert "Never stash" in body
+
+
+def test_ccfold_path_opens_one_refresh_and_survives_a_missing_claude_md():
+    body = " ".join(_step(7).split())
+    # A refresh waits for its merge call; until then every onboarding agent sees the same staleness.
+    assert "Don't open a second refresh" in body
+    assert "git ls-remote --heads origin 'chore/*-ccfold'" in body
+    # /ccfold Step 2 copies the template and stops; Steps 9 and 10 must still run.
+    assert "Steps 9 and 10" in body and "Dev-Team:" in body
+    assert "git check-ignore -q .claude/agent-identity.json" in body
 
 
 # --- seeds -------------------------------------------------------------------------------------
@@ -162,13 +175,22 @@ def test_design_docs_named_seed_are_not_session_seeds():
 # --- bounds ------------------------------------------------------------------------------------
 
 
-def test_exclusion_list_present_and_defined_before_use():
-    text = _text()
-    skip = _block("SKIP=")
+def test_each_block_sets_the_same_complete_skip_list():
+    # Every Bash call is a fresh shell: a SKIP set in another block is empty here, and
+    # `grep -Eiv ""` drops every line, so a block that leans on an earlier one prints nothing.
+    lines = set()
+    for marker in ("ls-files", "git log --name-only"):
+        block = _block(marker)
+        assert '"$SKIP"' in block
+        m = re.search(r"^SKIP=.*$", block, re.M)
+        assert m, f"the {marker!r} block does not set SKIP itself"
+        lines.add(m.group(0))
+    assert len(lines) == 1, f"the two blocks skip different folders: {lines}"
+    skip = lines.pop()
+    preamble = _text()[: _text().index("## 1. ")]
     for name in EXCLUDED:
         assert re.search(rf"[(|]{name}[|)]", skip), f"{name} missing from SKIP"
-    assert text.index("SKIP=") < text.index("## 3. "), "SKIP must be defined before step 3 uses it"
-    assert '"$SKIP"' in _block("ls-files") and '"$SKIP"' in _block("git log --name-only")
+        assert f"`{name}`" in preamble, f"{name} missing from the list the reader sees"
 
 
 def test_documentation_fan_out_is_bounded():
@@ -190,9 +212,24 @@ def test_issue_review_lists_every_title_and_bounds_the_deep_review():
 # --- the skill's bash, run ---------------------------------------------------------------------
 
 
+def _hermetic(repo: Path) -> dict[str, str]:
+    """The environment with no global git config or excludes, and no SKIP from outside.
+
+    A host's global excludes file (this fleet's ignores `**/.claude/settings.local.json`) would
+    otherwise hide files the skill's commands must see, and pass here while failing elsewhere.
+    """
+    env = {k: v for k, v in os.environ.items() if k != "SKIP"}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, XDG_CONFIG_HOME=str(repo / ".git" / "no-xdg"))
+    return env
+
+
 def _git(repo: Path, *args: str) -> None:
     subprocess.run(
-        ["git", "-c", "commit.gpgsign=false", *args], cwd=repo, check=True, capture_output=True
+        ["git", "-c", "commit.gpgsign=false", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        env=_hermetic(repo),
     )
 
 
@@ -205,8 +242,8 @@ def _commit(repo: Path, path: str, body: str = "x\n") -> None:
 
 
 def _run(repo: Path, marker: str) -> list[str]:
-    script = _block("SKIP=") + "\n" + _block(marker)
-    out = subprocess.run(["bash", "-c", script], cwd=repo, capture_output=True, text=True)
+    # The block alone, as an agent's Bash call runs it: nothing from any other block.
+    out = subprocess.run(["bash", "-c", _block(marker)], cwd=repo, capture_output=True, text=True, env=_hermetic(repo))
     assert out.returncode == 0, out.stderr
     return out.stdout.split()
 
@@ -241,6 +278,91 @@ def test_recent_docs_are_newest_first_bounded_and_skip_excluded(temp_git_repo):
 
     got = _run(repo, "git log --name-only")
     assert got == [f"docs/d{i}.md" for i in range(9, 1, -1)]
+
+
+GITLAB_PAGES = (
+    '[{"iid": 1, "title": "a", "description": "LONG BODY", "labels": ["x"],'
+    ' "assignees": [{"username": "u", "avatar_url": "z"}], "updated_at": "t1"}]'
+    '[{"iid": 2, "title": "b", "description": "LONG BODY", "labels": [],'
+    ' "assignees": [], "updated_at": "t2"}]'
+)
+
+
+def _forge_stubs(bin_dir: Path) -> None:
+    for name, extra in (("gh", ""), ("glab", f"printf '%s' '{GITLAB_PAGES}'\n")):
+        stub = bin_dir / name
+        stub.write_text(f"#!/usr/bin/env bash\nprintf '{name} %s\\n' \"$*\" >&2\n{extra}", encoding="utf-8")
+        stub.chmod(0o755)
+
+
+def _issues(repo: Path, bin_dir: Path, origin: str) -> subprocess.CompletedProcess:
+    _git(repo, "remote", "add", "origin", origin)
+    env = {**_hermetic(repo), "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+    return subprocess.run(["bash", "-c", _block("gh issue list")], cwd=repo, capture_output=True, text=True, env=env)
+
+
+@pytest.mark.parametrize(
+    "origin,project",
+    [("git@github.com:Org/repo.git", "Org/repo"), ("https://github.com/Org/repo", "Org/repo")],
+)
+def test_issue_listing_on_github_names_origin(temp_git_repo, tmp_path_factory, origin, project):
+    bin_dir = tmp_path_factory.mktemp("bin")
+    _forge_stubs(bin_dir)
+    out = _issues(temp_git_repo, bin_dir, origin)
+    assert out.returncode == 0, out.stderr
+    assert f"gh issue list --repo {project} --state open --limit 1000" in out.stderr
+    assert "glab" not in out.stderr
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq not installed")
+@pytest.mark.parametrize(
+    "origin,path",
+    [
+        ("https://gitlab.com/grp/sub/proj.git", "grp%2Fsub%2Fproj"),
+        # A project named like the other forge must still go to its own host's CLI.
+        ("ssh://git@gitlab.example.com:2222/grp/github-mirror.git", "grp%2Fgithub-mirror"),
+    ],
+)
+def test_issue_listing_on_gitlab_names_origin_and_drops_bodies(temp_git_repo, tmp_path_factory, origin, path):
+    bin_dir = tmp_path_factory.mktemp("bin")
+    _forge_stubs(bin_dir)
+    out = _issues(temp_git_repo, bin_dir, origin)
+    assert out.returncode == 0, out.stderr
+    assert f"glab api --paginate projects/{path}/issues?state=opened&per_page=100" in out.stderr
+    assert "gh issue" not in out.stderr
+    assert json.loads(out.stdout) == [
+        {"iid": 1, "title": "a", "labels": ["x"], "assignees": ["u"], "updated_at": "t1"},
+        {"iid": 2, "title": "b", "labels": [], "assignees": [], "updated_at": "t2"},
+    ]
+
+
+def test_issue_listing_on_another_forge_says_so(temp_git_repo, tmp_path_factory):
+    bin_dir = tmp_path_factory.mktemp("bin")
+    _forge_stubs(bin_dir)
+    out = _issues(temp_git_repo, bin_dir, "git@bitbucket.org:o/r.git")
+    assert out.stdout.strip() == "origin is on neither GitHub nor GitLab: bitbucket.org"
+    assert out.stderr == ""
+
+
+def test_clean_tree_check_tolerates_only_the_identity_file(temp_git_repo):
+    repo = temp_git_repo
+    _commit(repo, "a.md")
+    check = _block("--untracked-files=all")
+
+    def dirt() -> str:
+        run = subprocess.run(["bash", "-c", check], cwd=repo, capture_output=True, text=True, env=_hermetic(repo))
+        return run.stdout
+
+    assert dirt() == ""
+    (repo / ".claude").mkdir()
+    (repo / ".claude" / "agent-identity.json").write_text("{}\n", encoding="utf-8")
+    assert dirt() == "", "the identity /name writes in step 2 must not block step 7"
+    for stray in (".claude/notes.txt", "notes.txt"):
+        (repo / stray).write_text("x\n", encoding="utf-8")
+        assert stray in dirt()
+        (repo / stray).unlink()
+    (repo / "a.md").write_text("changed\n", encoding="utf-8")
+    assert "a.md" in dirt()
 
 
 # --- cross-references --------------------------------------------------------------------------

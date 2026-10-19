@@ -43,7 +43,7 @@ aoe send <title> "/onboard"
 
 **Seeds:** only `.claude/reseed-revive.md`, or a `*seed*.md` that hands this repo's in-flight work to a next session, counts as a session seed. A design document with `seed` in its name, such as `docs/seed-ai-dev.md`, does not. Seeds are dated by their own `Written:` line or by `git log`, never by mtime.
 
-**The `/ccfold` refresh** follows IBM: a chore issue, a `chore/<N>-ccfold` branch, then `/scpmr`. Its PR/MR goes through `/precheck` and waits for the merge call like any other.
+**The `/ccfold` refresh** follows IBM: a chore issue, a `chore/<N>-ccfold` branch, then `/scpmr`. Its PR/MR goes through `/precheck` and waits for the merge call like any other. There is one refresh at a time: an agent that finds one already open reports it at tag-up rather than opening another.
 
 ---
 
