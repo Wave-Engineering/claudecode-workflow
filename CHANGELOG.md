@@ -19,6 +19,82 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.9.0] - 2026-10-19
+
+### Added
+
+- **Squawk lists in the kit (#1236, PR #1265).** squawkie-talkie's lists become how an agent asks
+  BJ something and how it hears back.
+  - **`sqtk`** is vendored, byte-identical, from squawkie-talkie v0.9.0. It is pinned by sha256 in
+    `scripts/ci/sqtk.pin`, written only by `scripts/ci/vendor-sqtk.sh <tag>`, and put on PATH by
+    `./install`. `sqtk add` records each squawk in `.claude/sqtk-mine.json`.
+  - **`/sqtk`** covers which list to use (`bj:needs`, `<project>:triage`, or any named list), the
+    rules for `bj:needs` (end every ask with ` →`), walking a list with BJ, and images.
+  - **`sqtk-drain.sh`** (a `UserPromptSubmit` hook, timeout 10) injects each change to the agent's
+    own squawks into its next turn, once.
+    - It fetches lists least recently first, at most 5 per prompt, within a 5 s budget.
+    - It filters each list to this checkout's ids and hands jq files, never argv, so a long list
+      can't hit ARG_MAX.
+    - It fails open.
+    - A squawk that vanishes, or whose list squawkie says is gone, is only marked gone after 3
+      misses over a day. A passing 404 or a wrong `SQUAWK_URL` can't drop an answer.
+  - **`sqtk-doorbell.sh`** is a one-shot SSE listener for an idle agent, run as a background task.
+    Its exit is the wake-up: 0 answered, 2 nothing open, 3 its own timeout, 4 the stream dropped.
+    Once the stream is live it catches up through the drain's `--pending`, so an answer that
+    landed before arming still rings, carrying the change, and rings only once.
+  - **`sqtk-banner.sh`** is an opt-in `Stop` hook that shows BJ the open `bj:needs` items. It is
+    wired per session in `settings.local.json`.
+  - **Known limit:** ✓ and ✗ need squawk.apps at squawkie-talkie ≥ 0.8.0. The live server is
+    older, so `sqtk set --state confirmed|rejected` returns HTTP 400 until it is upgraded, which
+    is a production change and BJ's call. Open, `→` answers, retired and recorded work today.
+- **`/onboard` (#1239, PR #1263)** brings a fresh agent up to speed in a repo, in order:
+  - `/engage`, `/name`, and a seed check (a fresh `.claude/reseed-revive.md` hands off to
+    `/reseed revive`);
+  - a background code explorer, and a bounded documentation fan-out;
+  - every open issue title, with at most 10 reviewed in depth;
+  - `/ccfold` through the normal gates when CLAUDE.md is stale;
+  - then a hold for tag-up.
+
+### Changed
+
+The first three change how a session runs once the kit is installed.
+
+- **Spotted something outside the work in front of you? Squawk it on `<project>:triage`; don't
+  file it (#1236, PR #1262).** It is a new MANDATORY section in `CLAUDE.md`, with a guard line atop
+  `/issue` and a paragraph in WAVE_AXIOMS Axiom 4. It keeps three cases apart, each unchanged:
+  - an in-lane fix is still done inline;
+  - unease about the run in flight is still a `[concern]` comment;
+  - an issue the user asked for is still filed with `/issue`.
+- **A new merge-gate exception, the Lead-Agent Grant (PR #1262).**
+  - The user may name one agent as lead for an organization. That agent self-approves the merge
+    on a clean precheck of the exact head, and tags and releases when it judges the time is
+    right.
+  - The grant is never relayed. The lead checks that its Dev-Name (`.claude/agent-identity.json`)
+    and the repo's origin match the grant.
+  - A grunt's or peer's PR/MR merges only on the lead's own `/precheck` of that head.
+  - The ABSOLUTE prod rule still binds: a tag that changes what prod runs still needs a yes-prod.
+  - `/precheck` emits `[AUTO-APPROVED: lead-agent grant]`, and `/mmr` accepts it. Every list of
+    the merge exceptions now names both grants.
+- **Grunts escalate only to their lead (PR #1262).**
+  - Concerns, questions and parks go to the lead by `SendMessage`, never to the human in the
+    grunt's own session. Emergency pages are the exception.
+  - When `SendMessage` fails, the grunt falls back to `<side-channel>`, addressed
+    `@<lead-dev-name>`.
+  - A grunt's PR/MR stops at ready, and its `/precheck` STOP becomes the handoff to the lead.
+  - The charter template gains `<lead>` and `<lead-dev-name>` slots.
+- **CI (#1236, PR #1265):** `validate.sh` now runs `tests/skills/*.sh`, which ran nowhere before.
+  Three stale skill tests are re-aimed: nextwave (#712), the label colour (#903) and the prepwaves
+  strings (#1186).
+
+### Image
+
+- **The image now bakes mcp-server-sdlc v5.0.0**, the first image server that enforces the
+  `precheck` status (#592): `pr_create`/`pr_ready`/`pr_merge`/`pr_merge_wait` refuse a head
+  without a pass. This kit posts that status (8.8.0 onward), so the pair is consistent inside the
+  image. The other four are unchanged from 8.8.0: mcp-server-wtf v1.5.2, mcp-server-discord
+  v1.4.2, mcp-server-discord-watcher v1.6.1 and mcp-server-nerf v2.0.0. `install-remote.sh` bakes
+  each server's latest release at tag time.
+
 ## [8.8.0] - 2026-10-19
 
 ### Changed
