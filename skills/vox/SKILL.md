@@ -17,6 +17,8 @@ Use `vox` to speak to the user when they need to hear something. One-way audio �
 
 Run `vox --setup` to pick a TTS provider. Contract and examples live in `scripts/vox-providers/README.md`. The default (no setup) is silent — safe but inaudible.
 
+**Wake noise.** By default vox plays 0.5 s of quiet white noise before the speech, so a Bluetooth sink that sleeps when idle wakes up and doesn't clip the first syllable. Turn it off with `VOX_WAKE=none`, or by putting `none` in `~/.config/vox/wake`. The env var wins over the file, and the default is `noise`. Turn it off when your sinks never suspend, or when your player (`~/.config/vox/player`) loudness-normalizes: normalizing boosts the noise along with the speech, into a burst of static. A player like that can play its own cue after it normalizes. The file is the setting every caller sees, because a container's vox plays through the host's.
+
 ## When to Use
 
 - **Approval needed** — "Hey BJ, the build passed and I'm ready for your review on PR 91"

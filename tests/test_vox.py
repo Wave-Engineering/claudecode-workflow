@@ -590,3 +590,142 @@ def test_setup_is_idempotent(env, tmp_path):
     assert r2.returncode == 0, r2.stderr
     link = Path(env["XDG_CONFIG_HOME"]) / "vox" / "provider"
     assert link.resolve() == ESPEAK.resolve(), "re-running setup should update the symlink"
+
+
+# ---------------------------------------------------------------------------
+# Wake noise preamble: VOX_WAKE / ~/.config/vox/wake (#1254)
+# ---------------------------------------------------------------------------
+#
+# A provider writes a real 1.0 s WAV; a capture player copies what vox hands it.
+# The wake noise is 0.5 s, so the captured duration says whether it was prepended.
+
+TONE_RATE = 24000
+
+
+def _tone_frames() -> bytes:
+    """1.0 s of a 440 Hz tone, 24 kHz mono s16: what the tone provider writes."""
+    import math
+
+    return b"".join(
+        int(8000 * math.sin(2 * math.pi * 440 * i / TONE_RATE)).to_bytes(2, "little", signed=True)
+        for i in range(TONE_RATE)
+    )
+
+
+@pytest.fixture()
+def tone_provider(tmp_path: Path) -> Path:
+    frames = tmp_path / "tone.raw"
+    frames.write_bytes(_tone_frames())
+    return _write_executable(
+        tmp_path / "tone-provider.sh",
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+: "${{VOX_OUTPUT_FILE:?}}"
+python3 - "$VOX_OUTPUT_FILE" <<'PY'
+import sys, wave
+with wave.open(sys.argv[1], "wb") as w:
+    w.setnchannels(1)
+    w.setsampwidth(2)
+    w.setframerate({TONE_RATE})
+    w.writeframes(open("{frames}", "rb").read())
+PY
+""",
+    )
+
+
+@pytest.fixture()
+def wake_env(env, tone_provider, tmp_path):
+    """Foreground, no sign-off, no log, the tone provider and a capture player."""
+    capture = tmp_path / "captured.wav"
+    player = _write_executable(tmp_path / "capture-player.sh", f'#!/usr/bin/env bash\ncp "$1" "{capture}"\n')
+    e = dict(env)
+    e.update(
+        {
+            "VOX_PROVIDER": str(tone_provider),
+            "VOX_PLAYER": str(player),
+            "VOX_FOREGROUND": "1",
+            "VOX_NO_SIGNOFF": "1",
+            "VOX_NO_LOG": "1",
+        }
+    )
+    return e, capture
+
+
+def _wav(path: Path) -> tuple[float, bytes]:
+    with wave.open(str(path), "rb") as w:
+        return w.getnframes() / w.getframerate(), w.readframes(w.getnframes())
+
+
+def _wake_file(env: dict[str, str], content: str) -> None:
+    d = Path(env["XDG_CONFIG_HOME"]) / "vox"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "wake").write_text(content)
+
+
+def test_wake_default_prepends_noise(wake_env):
+    e, capture = wake_env
+    r = _run([str(VOX), "hello"], env=e)
+    assert r.returncode == 0, r.stderr
+    dur, _ = _wav(capture)
+    assert dur == pytest.approx(1.5, abs=0.01)
+
+
+def test_wake_env_none_skips_noise(wake_env):
+    e, capture = wake_env
+    r = _run([str(VOX), "hello"], env={**e, "VOX_WAKE": "none"})
+    assert r.returncode == 0, r.stderr
+    dur, frames = _wav(capture)
+    assert dur == pytest.approx(1.0, abs=0.01)
+    assert frames == _tone_frames(), "with none, the provider's audio must reach the player untouched"
+
+
+def test_wake_config_file_none_skips_noise(wake_env):
+    e, capture = wake_env
+    _wake_file(e, "none\n")
+    r = _run([str(VOX), "hello"], env=e)
+    assert r.returncode == 0, r.stderr
+    assert _wav(capture)[0] == pytest.approx(1.0, abs=0.01)
+
+
+def test_wake_env_beats_config_file(wake_env):
+    e, capture = wake_env
+    _wake_file(e, "none\n")
+    r = _run([str(VOX), "hello"], env={**e, "VOX_WAKE": "noise"})
+    assert r.returncode == 0, r.stderr
+    assert _wav(capture)[0] == pytest.approx(1.5, abs=0.01)
+
+
+def test_wake_unknown_value_warns_and_uses_noise(wake_env):
+    e, capture = wake_env
+    r = _run([str(VOX), "hello"], env={**e, "VOX_WAKE": "bogus"})
+    assert r.returncode == 0, r.stderr
+    assert "unknown wake setting 'bogus' (want noise|none); using noise" in r.stderr
+    assert r.stderr.count("unknown wake setting") == 1
+    assert _wav(capture)[0] == pytest.approx(1.5, abs=0.01)
+
+
+def test_wake_unknown_value_warns_on_the_background_path(wake_env):
+    """A long message plays from a subshell whose stderr is discarded; the warning must come first."""
+    e, capture = wake_env
+    e = {k: v for k, v in e.items() if k != "VOX_FOREGROUND"}
+    e.update({"VOX_WAKE": "bogus", "VOX_CHUNK_CHARS": "12"})
+    r = _run([str(VOX), "One two three. Four five six."], env=e)
+    assert r.returncode == 0, r.stderr
+    assert "playing in the background" in r.stderr, "the message must take the background path"
+    assert r.stderr.count("unknown wake setting 'bogus' (want noise|none); using noise") == 1
+    assert _poll(capture.exists), "the background player never ran"
+
+
+@pytest.mark.parametrize("wake", [None, "noise", "none"])
+def test_wake_output_mode_unaffected(wake_env, tmp_path, wake):
+    """--output never prepends the noise, whatever the setting (regression guard)."""
+    e, capture = wake_env
+    if wake is not None:
+        e = {**e, "VOX_WAKE": wake}
+    out = tmp_path / "memo.wav"
+    r = _run([str(VOX), "--output", str(out), "hello"], env=e)
+    assert r.returncode == 0, r.stderr
+    dur, frames = _wav(out)
+    assert dur == pytest.approx(1.0, abs=0.01)
+    assert frames == _tone_frames()
+    assert not capture.exists(), "--output must not play"
