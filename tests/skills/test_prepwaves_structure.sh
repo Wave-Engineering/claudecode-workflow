@@ -68,7 +68,11 @@ else
 	fail "test_prepwaves_pins_plan_identity: no campaign-head call after wave_init"
 fi
 
-if grep -n 'never overwrite a running campaign' "$SKILL" >/dev/null; then
+# The guard: plan_id is read back from the persisted plan and used as-is when present; it is
+# backfilled only when absent (a legacy plan). The phrase this used to grep for never existed
+# in the skill, so the check had failed since #1186, unseen until validate.sh ran tests/skills.
+if grep -qF 'Read `plan_id` back from the just-persisted plan file' "$SKILL" &&
+	grep -qF '**If present**' "$SKILL" && grep -qF '**If absent**' "$SKILL"; then
 	pass "test_prepwaves_pins_plan_identity: extend mode preserves existing plan_id"
 else
 	fail "test_prepwaves_pins_plan_identity: no extend-mode plan_id preservation guard"

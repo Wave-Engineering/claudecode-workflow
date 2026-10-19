@@ -95,6 +95,7 @@ Key features:
 | scp | `/scp` | Stage, commit, and push your working branch — free, no precheck or approval |
 | scpmr | `/scpmr` | `/scp`, open a draft PR/MR, run `/precheck`; on a pass it is ready for the merge call |
 | scpmmr | `/scpmmr` | `/scpmr` then `/mmr`; typed after a precheck STOP it is the merge call |
+| sqtk | `/sqtk` | Squawk lists: what agents need from BJ (`bj:needs`), each project's triage, and any list an agent names; answers come back by hook or doorbell |
 | view | `/view` | Open file/URL in GUI viewer (read-only) |
 | vox | `/vox` | Text-to-speech voice announcements for status updates and alerts |
 

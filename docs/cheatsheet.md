@@ -52,6 +52,7 @@ Quick reference for all skills and the MCP tools they route to.
 | `/wtf happened` | Get incident timeline | `wtf_happened` |
 | `/wtf imout` | Suspend recording | `wtf_imout` |
 | `/disc` | Discord (send, read, list, create) | `disc_send`, `disc_read`, `disc_list` |
+| `/sqtk` | Squawk lists: `bj:needs`, `<project>:triage`, any named list | — |
 
 ## Session & UI
 

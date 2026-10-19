@@ -6,7 +6,7 @@
 #   - test_nextwave_no_unqualified_epic: `\bepic\b` (case-insensitive) in the
 #     pipeline-operational contexts of the skill body returns zero. [R-10]
 #   - test_nextwave_exhaustive_legal_exits: the `## Exhaustive Legal Exits`
-#     section is present and contains the required sub-sections.
+#     section is present, its table lists every coded exit, and it states the non-exit.
 #   - test_nextwave_axiom_crossref: the WAVE_AXIOMS.md cross-reference is
 #     present in the body, AND a top-of-file `## Axioms` block exists per
 #     the post-#605 structural rework. The previous incarnation of this
@@ -62,37 +62,24 @@ else
 	pass "heading present: '## Exhaustive Legal Exits'"
 fi
 
-# 2. The three required sub-section headings must exist.
-if ! grep -qE '^### Mechanical exits' "$SKILL"; then
-	fail "test_nextwave_exhaustive_legal_exits: '### Mechanical exits' sub-section missing"
-else
-	pass "sub-section present: '### Mechanical exits'"
-fi
+# Since the #712 cutover the list is the per-wave Workflow's coded exits, kept as one table,
+# not the old Mechanical / Plan-reality / non-exits sub-sections.
+LEGAL_EXITS="$(awk '/^## Exhaustive Legal Exits/{flag=1;next} /^## /{flag=0} flag' "$SKILL")"
 
-if ! grep -qE '^### Plan-reality drift exits' "$SKILL"; then
-	fail "test_nextwave_exhaustive_legal_exits: '### Plan-reality drift exits' sub-section missing"
-else
-	pass "sub-section present: '### Plan-reality drift exits'"
-fi
+# 2. The table must list every coded exit, one row each.
+for exit_name in success runaway thrash cost impasse 'per-issue breaker' reconcile-blocked 'gate HOLD'; do
+	if grep -qE "^\| ${exit_name} \|" <<<"$LEGAL_EXITS"; then
+		pass "exit row present: '${exit_name}'"
+	else
+		fail "test_nextwave_exhaustive_legal_exits: no table row for exit '${exit_name}'"
+	fi
+done
 
-if ! grep -qE '^### Explicit non-exits' "$SKILL"; then
-	fail "test_nextwave_exhaustive_legal_exits: '### Explicit non-exits' sub-section missing"
+# 3. The explicit non-exit must be stated: unease rides the concerns channel and the loop continues.
+if grep -qF 'is NOT an exit' <<<"$LEGAL_EXITS" && grep -qF 'concerns[]' <<<"$LEGAL_EXITS"; then
+	pass "non-exit stated: unease rides concerns[], the loop continues"
 else
-	pass "sub-section present: '### Explicit non-exits'"
-fi
-
-# 3. The Mechanical exits sub-section must contain numbered items.
-if ! awk '/^### Mechanical exits/{flag=1;next} /^### /{flag=0} flag && /^[0-9]+\. /{found=1} END{exit !found}' "$SKILL"; then
-	fail "test_nextwave_exhaustive_legal_exits: Mechanical exits has no numbered items"
-else
-	pass "Mechanical exits contains numbered items"
-fi
-
-# 4. The Explicit non-exits sub-section must contain bulleted items.
-if ! awk '/^### Explicit non-exits/{flag=1;next} /^### /{flag=0} /^## /{flag=0} flag && /^- /{found=1} END{exit !found}' "$SKILL"; then
-	fail "test_nextwave_exhaustive_legal_exits: Explicit non-exits has no bulleted items"
-else
-	pass "Explicit non-exits contains bulleted items"
+	fail "test_nextwave_exhaustive_legal_exits: the 'NOT an exit' / concerns[] statement is missing"
 fi
 
 # 5. Required memory-file cross-references (AC-3).

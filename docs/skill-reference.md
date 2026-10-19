@@ -525,6 +525,33 @@ For anything filled in at invocation time, write the text with the `Write` tool 
 
 ---
 
+### `/sqtk` -- Squawk Lists
+
+Drives `sqtk`, the CLI for squawkie-talkie, the fleet's shared lists. A squawk is one line on a list, and it is never deleted. It changes state instead: `open` ○, `confirmed` ✓, `rejected` ✗, `retired` ◌, `recorded` ↗. A list is scoped by who walks it: `bj:needs` holds what only BJ can give, one list for every agent; `<project>:triage` holds one project's candidate work and concerns; any other name an agent picks is allowed. `sqtk add` prefixes each line with `[<dev-name>·<repo>]`, refuses a duplicate of an open squawk, and records what it created in `.claude/sqtk-mine.json`. The skill carries the 13 rules for `bj:needs`, from BJ's Stop-hook wait list.
+
+**When to use it:**
+- When you need something only BJ can give: a production approval, a tag he owns, a credential
+- When you spot something outside the work in front of you that deserves a look later (triage)
+- When BJ wants to walk a list: lay out every item with a take, and apply his batch of answers
+
+**How you hear back:**
+- **Busy:** the `sqtk-drain.sh` `UserPromptSubmit` hook puts each state change to your squawks into your next turn, once.
+- **Idle:** `~/.claude/scripts/sqtk-doorbell.sh`, run in the background, exits when one of your squawks is answered.
+- **BJ's banner:** `sqtk-banner.sh` is an opt-in `Stop` hook that prints the open `bj:needs` items. Wire it only into the sessions he picks, in that project's `.claude/settings.local.json`.
+
+**Examples:**
+
+```bash
+sqtk add  bj:needs "Cut sdlc v5.0.0? It's breaking. Recommend yes →"
+sqtk walk claudecode-workflow:triage
+sqtk mine
+sqtk set  bj:needs 12 --state retired
+```
+
+`SQUAWK_URL` must be set; there is no default. The kit's `sqtk` is vendored at the pin in `scripts/ci/sqtk.pin` by `scripts/ci/vendor-sqtk.sh`. Never edit it by hand.
+
+---
+
 ### `/view` -- Open in GUI Viewer
 
 Opens a file or URL in a GUI application for read-only viewing. Launches asynchronously so the chat can continue.
