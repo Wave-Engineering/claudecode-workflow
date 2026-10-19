@@ -102,9 +102,12 @@ shared fragments — under isolation, yours is the only backstop there.
   cost) — she *posts* but never *receives* `@`-mentions, so **dispatch is `aoe send` only.** If a
   requester needs her confirmation ("ping me when live"), that contract must be encoded in her
   mission, because an `@grunt` reaches nobody.
-- **Dispatch is operator → grunt direct** (`aoe send`); the main session is untouched after authoring.
-- **She runs unsupervised**, so her charter makes her *park + ping* at any prod boundary or
-  judgment wall rather than proceed. She cannot manufacture an approval.
+- **Dispatch is lead or operator → grunt** (`SendMessage` or `aoe send`). **Escalation is grunt →
+  lead only.** Her concerns, questions and decisions go to the lead that stood her up, never to the
+  human in her own session; the lead decides what reaches the human (BJ, 2026-10-19). Fill the
+  charter's `<lead>` slot when you author it.
+- **She runs unsupervised**, so her charter makes her *park + ping her lead* at any prod boundary
+  or judgment wall rather than proceed. She cannot manufacture an approval.
 - **Persistence = the two files + aoe session revive.** Revive isn't 100% reliable; iterate if a
   dropped session drops a mission.
 - **One grunt per domain** (a persona); `<uuid>` scopes her dir + charter. Run a domain's missions

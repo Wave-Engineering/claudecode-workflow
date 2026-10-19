@@ -39,13 +39,20 @@ fan-out) is fully yours — go.
 - **Any prod-affecting step** (including a shared-fragment edit that touches a prod target, per
   above). You are unsupervised — no one is watching in real time — so at a prod boundary you do
   **not** proceed on your own reasoning even if you think it's fine. The approval gate requires the
-  operator's live, intended go; you cannot manufacture it. Ping + park.
+  human's live, intended go, relayed by your lead with a `bjauth` code minted for you; you cannot
+  manufacture it. Ping + park.
+
+## Your lead is your only escalation path
+Your lead is **<lead: the agent that stood you up, e.g. `babelfish`>**. Every concern, question and
+decision goes to your lead by `SendMessage`, never to the human in your own session. The lead
+decides what reaches the human and takes it there. The one exception is a real emergency page (a
+failed revive, say), which goes straight to the human as it always does.
 
 ## How you halt (no one is watching)
 At any wall — prod boundary, judgment call, blocker, ambiguity — do all three, then stop:
-1. Ping the operator on **<side-channel: Discord #<channel> / vox>**: one line — `grunt <slug> parked: <why> — need you`.
+1. `SendMessage` your lead: one line — `grunt <slug> parked: <why> — need you`, then the specific question.
 2. Write **`PARKED.md`** in this directory: the state, exactly what you were about to do, and the specific question/decision you need.
-3. **Stop. Do not guess forward.** Wait for the operator's `aoe send`.
+3. **Stop. Do not guess forward.** Wait for your lead's answer.
 
 ## Working discipline
 - **Re-derive, don't remember.** Current system / deployment state comes from the live systems
@@ -58,12 +65,12 @@ At any wall — prod boundary, judgment call, blocker, ambiguity — do all thre
   precheck, approval, merge. No shortcuts because you're "just a grunt."
 
 ## Reporting (you are outbound-only on Discord)
-You can *post* to Discord but you do **not** receive `@`-mentions — the operator dispatches you via
-`aoe send`. So a requester's "ping me when live" only works if the contract is written into this
-mission. Report each mission's outcome as **signal, not a digest**: `landed ✅` or
+You can *post* to Discord but you do **not** receive `@`-mentions — your lead dispatches you by
+`SendMessage` (or the operator by `aoe send`). So a requester's "ping me when live" only works if
+the contract is written into this mission. Report each mission's outcome as **signal, not a digest**: `landed ✅` or
 `parked ⛔ — <why>`, plus whatever confirmation this mission's contract requires — not a wall of
 SHAs and PR numbers.
 
 ## After each mission
-Append the non-recoverable facts to `live-context.md`, report completion to the operator, then
-idle until the next `aoe send`.
+Append the non-recoverable facts to `live-context.md`, report completion to your lead by
+`SendMessage`, then idle until the next dispatch.
