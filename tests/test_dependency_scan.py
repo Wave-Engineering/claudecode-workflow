@@ -504,6 +504,30 @@ def test_a_denominator_that_cannot_be_read_by_name_exits_5(tmp_path: Path):
     assert "could not read check-scannable.sh's 2 scannable lock(s) by name" in proc.stderr, proc.stderr
 
 
+def test_an_unreadable_scannable_count_exits_5_not_pass(tmp_path: Path):
+    """The name check above compares two numbers, so it cannot see both sides
+    vanish. If check-scannable.sh's summary line AND its lock lines are both
+    reshaped, a count defaulted to 0 agrees with 0 names, the denominator is
+    empty, and a clean trivy run PASSes over locks nobody matched. A missing
+    count is unmeasured, not zero: a tooling error (5)."""
+    ci = tmp_path / "ci"
+    ci.mkdir()
+    shutil.copy(SCRIPT, ci / "dependency-scan.sh")
+    (ci / "check-scannable.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        'echo "check-scannable v2: found 1 lock in $1"\n'
+        'echo "  * requirements.txt (1 pinned)"\n'
+    )
+    repo = _scannable_repo(tmp_path)
+    proc = subprocess.run(
+        ["bash", str(ci / "dependency-scan.sh"), str(repo)],
+        capture_output=True, text=True, timeout=120, env=_stub_trivy(tmp_path, CLEAN_JSON),
+    )
+    assert proc.returncode == 5, proc.stdout + proc.stderr
+    assert "could not read check-scannable.sh's scannable count" in proc.stderr, proc.stderr
+    assert "PASS" not in proc.stdout, proc.stdout
+
+
 def test_a_declaration_does_not_rescue_a_lone_bun_lockb(tmp_path: Path):
     """#1247, babelfish's ruling: a declaration applies only when no lock is
     found, on all three paths. A lone bun.lockb is a found lock trivy cannot

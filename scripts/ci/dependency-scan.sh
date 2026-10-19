@@ -102,12 +102,18 @@ fi
 # by default. Nothing said so before now.
 scannable_n="$(printf '%s' "$scannable_out" |
 	sed -n 's/^check-scannable: \([0-9][0-9]*\) scannable manifest.*/\1/p' | head -1)"
-scannable_n="${scannable_n:-0}"
+# check-scannable.sh prints this line on every path it exits 0 from. Missing, the
+# count is UNMEASURED, not zero: defaulted to 0 it would agree with zero readable
+# `[scannable]` names below, and an empty denominator PASSes.
+if [[ -z "$scannable_n" ]]; then
+	echo "dependency-scan: FAIL — could not read check-scannable.sh's scannable count" >&2
+	exit 5
+fi
 
 # --- the scan ------------------------------------------------------------------
-# --skip-dirs MIRRORS check-scannable.sh's PRUNE list, so trivy reads the file set
-# check-scannable.sh counts: it prunes node_modules/vendor/dist/... and trivy,
-# unasked, does not. Since coverage is matched by name (#1247), a VENDORED lockfile
+# --skip-dirs MIRRORS check-scannable.sh's PRUNE list, so trivy walks the same
+# pruned tree check-scannable.sh counts in: it prunes node_modules/vendor/dist/...
+# and trivy, unasked, does not. Since coverage is matched by name (#1247), a VENDORED lockfile
 # can no longer stand in for one of the repo's own (its Result is outside the
 # denominator and covers nothing), but without this list its Results, and their
 # findings, would still decide a verdict about dependencies the repo does not
@@ -124,13 +130,12 @@ SKIP_DIRS=(--skip-dirs "**/node_modules" --skip-dirs "**/dist" --skip-dirs "**/b
 # suppresses dev/test dependencies by default, and a project whose entire
 # dependency tree is dev-only (a bun-based tools repo is the measured case —
 # @types/*, typescript, nothing else) scans ZERO packages without it, while
-# still exiting clean and still emitting a Results entry for the manifest.
-# Counted as a Result, that read as ingested: a silent false PASS, which is
-# exactly the defect class this whole script exists to close. Matched by
-# name below, a Result with no packages leaves its lock UNSCANNED, so
-# without the flag every such repo would FAIL instead, on a lock that is
-# fine. check-scannable.sh documents this same gap and explicitly leaves
-# closing it to whatever runs the actual scan.
+# still exiting clean: measured on this repo's own bun.lock files, the lock
+# drops out of Results entirely (the include-dev-deps test's docstring).
+# Matched by name below, a lock with no Result, or a Result with no
+# packages, is UNSCANNED, so without the flag every such repo would FAIL,
+# on a lock that is fine. check-scannable.sh documents this same gap and
+# explicitly leaves closing it to whatever runs the actual scan.
 #
 # --list-all-pkgs is ALSO required, not just --include-dev-deps: it only
 # became trivy's default in v0.67.0, and this fleet pins no minimum trivy
@@ -307,8 +312,8 @@ fi
 
 if ! printf '%s' "$summary" | grep -q '^COUNTS'; then
 	# Without this guard the `${var:-0}` defaults below turn a python failure into
-	# a confident "manifests present but ZERO ingested", complete with remediation
-	# advice about lockfile formats. An unmeasured zero must never reach a verdict.
+	# a PASS: no COUNTS line means no UNSCANNED lines either, so nothing below
+	# fails. An unmeasured zero must never reach a verdict.
 	echo "dependency-scan: FAIL — could not extract counts from trivy output" >&2
 	printf '%s\n' "$summary" | head -5 >&2
 	exit 5

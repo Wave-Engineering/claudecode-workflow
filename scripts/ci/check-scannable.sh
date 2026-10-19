@@ -157,7 +157,8 @@ done < <(find_reqs)
 # dependency-scan.sh PARSES this output (#1247): every `  [scannable] ./<path>`
 # line is its coverage denominator, by name, and their number must equal the
 # count on the summary line. Keep both shapes. A reshaped line still fails
-# safe there (exit 5, or the lock reported UNSCANNED), but it fails every scan.
+# safe there (exit 5, or the lock reported UNSCANNED), but it fails every scan
+# that prints it.
 echo "check-scannable: ${scannable} scannable manifest(s) in $ROOT"
 ((${#REPORT[@]})) && printf '%s\n' "${REPORT[@]}"
 
