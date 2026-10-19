@@ -122,6 +122,8 @@ If the agent is unsettled and no Legal Exit applies, the response is:
 
 The campaign does not pause for unease. The Concerns Channel exists precisely so the agent can register the unease without burning the user's wall-clock.
 
+The Concerns Channel is for unease about the run in flight. Something spotted *outside* the run (a defect elsewhere, candidate work) goes on the project's triage list instead (`sqtk add <project>:triage …`; CLAUDE.md, "Spotted Something?"), and the run still continues.
+
 ### Why
 
 Unease is information; stopping is action. The information goes into the durable record (issue comment + optional Discord ping). The action is reserved for Legal Exits. Conflating the two is the bug.

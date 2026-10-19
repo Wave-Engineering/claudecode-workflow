@@ -57,7 +57,7 @@ The "explicit user approval" requirement for the merge is **suspended** — and 
 1. The Flight Agent is operating inside a **Kahuna sandbox** — i.e. the current branch's base ref matches the regex `^kahuna/[0-9]+-` (a per-wave integration branch, not `main`).
 2. The full `/precheck` checklist has passed end-to-end: validation, code-reviewer (no unresolved high+ findings), trivy dependency scan, the `precheck` status posted, plus the Discord `#precheck` post and `vox` announcement.
 
-When both conditions are met, `/precheck` emits the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invokes `/mmr` directly — no human STOP for the merge. The exception is enforced **by `/precheck`'s own detection logic, not by agent discretion**: an agent on a `main`-targeted feature branch never qualifies for *this* exception, regardless of context. Outside the sandbox the original rule applies — checklist, STOP, wait for the merge call (`/mmr` / `/scpmmr` / affirmative) — unless the separate Approved Autochain or Standing Merge Grant exception below holds.
+When both conditions are met, `/precheck` emits the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invokes `/mmr` directly — no human STOP for the merge. The exception is enforced **by `/precheck`'s own detection logic, not by agent discretion**: an agent on a `main`-targeted feature branch never qualifies for *this* exception, regardless of context. Outside the sandbox the original rule applies — checklist, STOP, wait for the merge call (`/mmr` / `/scpmmr` / affirmative) — unless the separate Approved Autochain, Standing Merge Grant or Lead-Agent Grant exception below holds.
 
 **Platform prerequisite** (load-bearing — without it, the auto-approval is unsafe):
 
@@ -87,13 +87,24 @@ Mechanical gate: `scripts/autochain-gate.sh`. Detection + sentinel: `skills/prec
 The user may give a **standing merge grant** for a named effort, such as "auto-merge the wave-engine fixes on a passing precheck". Under it, the merge STOP is skipped when **all** of the following hold:
 
 1. **The grant is the user's own words, given directly** in a session, not relayed, and recorded in a memory file with its scope and any expiry.
-2. **The grant names a bounded effort, and this PR/MR is plainly inside it.** A grant scoped to "all PRs/MRs", or to everything after a clean precheck, does not qualify: it would remove the merge call itself, the one place the user approves. A grant given before #1235 that skipped a *second* "may I merge?" after the user had already approved at the old precheck STOP is not a merge grant either. If the scope has to be stretched to fit, the grant does not apply.
+2. **The grant names a bounded effort, and this PR/MR is plainly inside it.** A grant scoped to "all PRs/MRs", or to everything after a clean precheck, does not qualify: it would remove the merge call itself, the one place the user approves. A grant given before #1235 that skipped a *second* "may I merge?" after the user had already approved at the old precheck STOP is not a merge grant either. If the scope has to be stretched to fit, the grant does not apply. (The Lead-Agent Grant below is the one deliberate exception, with its own conditions.)
 3. **The precheck passed, mechanically**, by the same definition as the autochain exception's item 3.
 4. **Nothing the ABSOLUTE prod rule gates is in the change.** The same goes for tags, releases and fleet installs. A grant covers merging only.
 
 `/precheck` puts the grant on the checklist (the memory file, the user's words verbatim, the scope, and one sentence on why this PR/MR is inside it), then invokes `/mmr`.
 
 **Unlike the two exceptions above, this one is applied by the agent, not detected mechanically**: the grant lives in memory, and no script can check its scope. That is why the bar is "plainly inside the scope" and why the grant and its reasoning sit on the checklist, where the user sees them at the moment they are used. When in doubt, STOP.
+
+### Exception: Lead-Agent Grant
+
+The user may name **one agent as lead** for an organization and grant it self-approval: it approves the merge on a clean precheck, and it tags and releases when it judges the time is right. Unlike a standing merge grant, this one is scoped to **an agent, not an effort**, so the bounded-effort test and the tags-and-releases ban of the standing merge grant do not apply to it. It applies when all of the following hold:
+
+1. **The user's own words, given directly to that agent** in its session, and recorded in its memory with the organization and any expiry. The grant belongs to that agent alone: it is never relayed, and grunts or peers the lead tasks don't inherit it.
+2. **This agent is the one named, in the organization named.** The Dev-Name in `.claude/agent-identity.json` matches the grant. Memory loads for every session in a checkout, so this match is the check, not the memory's presence. The repo's origin is in the grant's organization: on a forge the organization doesn't own, the grant does not exist.
+3. **The precheck passed, mechanically**, by the same definition as the autochain exception's item 3, **on the exact head being merged.** A grunt's or peer's PR/MR stops at ready. The lead merges it only on its own `/precheck` run on that head. Their precheck, and any `precheck` status it posted, is evidence, not the pass.
+4. **The ABSOLUTE prod rule still binds.** A tag or release that changes what production runs, such as an image a live service follows, still needs the user's yes-prod. So do fleet installs.
+
+`/precheck` puts the grant on the checklist (the memory file, the user's words verbatim, the Dev-Name match, and one sentence on why this repo's origin is inside the organization), then invokes `/mmr`. Like the standing merge grant, it is applied by the agent, not detected mechanically. When in doubt, STOP.
 
 ---
 
@@ -116,6 +127,18 @@ The user may give a **standing merge grant** for a named effort, such as "auto-m
 ## MANDATORY: Work Item Standards
 
 Every issue MUST be wave-pattern quality: detailed enough that a spec-driven agent can execute without making design decisions; acceptance criteria evaluable before merge. Use `/issue` — it carries templates and label taxonomy (`group::value`, mutually exclusive within group).
+
+---
+
+## MANDATORY: Spotted Something? Squawk It on Triage, Don't File It
+
+**`/issue` is for work the user has decided to do.** When you spot something worrying or worth doing that is *outside the work in front of you*, such as a defect in another file, a smell, or a candidate improvement, squawk it on the project's triage list: `sqtk add <project>:triage "<what you saw, and why it matters>"` (`/sqtk`). The user and an agent walk that list together and decide each item. The item is then `record`ed as an issue, or `retire`d.
+
+- **Inside your lane, fix it inline** — a triage squawk is not a way to defer your own work.
+- **A concern about the run in flight** stays a `[concern]` comment on its issue (WAVE_AXIOMS Axiom 4).
+- **The user asked for the issue** — file it with `/issue`; that's a decision, not a sighting.
+
+Why: filing an issue for every worry bloats the backlog with items nobody has weighed (#1236). A one-line squawk costs nothing, and triage decides which items earn an issue (`recorded ↗`) and which are let go (`retired ◌`).
 
 ---
 
