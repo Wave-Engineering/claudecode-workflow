@@ -21,6 +21,7 @@ instruction can be forgotten; a tool that emits the number cannot.
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 import shutil
@@ -83,6 +84,8 @@ def test_precheck_fallback_scans_siblings_like_the_script():
     assert "leave it out of the denominator and name it as unpinned" in flat
     assert "findings count toward the verdict exactly like the main scan's" in flat
     assert "<same flags>" not in body, "a placeholder for flags is not runnable"
+    # The main fallback scan names its target: `trivy fs` with no path errors when run as written.
+    assert "--list-all-pkgs --format json --quiet <repo_root>`" in flat, "the fallback trivy fs needs a target"
     # The FULL denominator (babelfish's #1269 review): the fallback runs the trust
     # gate's own find, byte for byte, so a lone bun.lockb or a pinned lock trivy
     # read nothing from enters it and can be named UNSCANNED. The gate's find is
@@ -335,6 +338,170 @@ def test_stub_present_but_uningested_exits_2(tmp_path: Path):
     proc = _run_env(repo, _stub_trivy(tmp_path, '{"Results":[]}'))
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "ingested ZERO" in proc.stdout + proc.stderr
+    # A pinned requirements file is never an empty lock (check-scannable.sh counts
+    # one only with an `==` pin), so it gets its own remedy, not the delete advice.
+    assert "A pinned requirements file trivy read no package from is malformed" in proc.stderr, proc.stderr
+    assert "delete the empty lockfile" not in proc.stderr, proc.stderr
+
+
+def _poetry_result(target: str = "poetry.lock") -> str:
+    return f'{{"Target":"{target}","Type":"poetry","Packages":[{{"Name":"requests"}}]}}'
+
+
+def _web_bun_lockb(repo: Path) -> None:
+    (repo / "web").mkdir(parents=True, exist_ok=True)
+    (repo / "web" / "package.json").write_text('{"name":"w","dependencies":{"left-pad":"1.3.0"}}\n')
+    (repo / "web" / "bun.lockb").write_bytes(b"\x00binary\x00")
+
+
+def test_a_result_outside_the_denominator_covers_no_counted_lock(tmp_path: Path):
+    """babelfish's #1269 finding, its exact tree: a root poetry.lock (which
+    check-scannable.sh does not count) and web/bun.lockb (which it does). The
+    count-based check read trivy's 1 Result as "1 of 1" and PASSED with the
+    bun.lockb never scanned. By name, nothing counted was ingested: exit 2, the
+    bun.lockb named, the poetry.lock listed but marked outside the denominator."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "poetry.lock").write_text("# poetry lock\n")
+    _web_bun_lockb(repo)
+    proc = _run_env(repo, _stub_trivy(tmp_path, f'{{"Results":[{_poetry_result()}]}}'))
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "coverage: 0 of 1 scannable manifest(s) ingested" in proc.stdout, proc.stdout
+    assert "UNSCANNED — 1 lock(s) no scan ingested a package from:\n  - web/bun.lockb" in proc.stderr, proc.stderr
+    assert "poetry.lock  (poetry, 1 packages, 0 finding(s); NOT in the denominator, so it covers no counted lock)" in proc.stdout, proc.stdout
+    assert "1 trivy Result(s) outside the denominator: listed, never counted toward coverage" in proc.stdout, proc.stdout
+    assert "bun's text lockfile, bun.lock" in proc.stderr, proc.stderr
+    assert "PASS" not in proc.stdout
+
+
+def test_a_result_outside_the_denominator_with_a_counted_lock_ingested_exits_6(tmp_path: Path):
+    """The same tree with a pinned requirements.txt that trivy does ingest: some
+    counted locks ingested, one UNSCANNED, so PARTIAL COVERAGE (6)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "poetry.lock").write_text("# poetry lock\n")
+    (repo / "requirements.txt").write_text("flask==3.0.0\n")
+    _web_bun_lockb(repo)
+    flask = '{"Target":"requirements.txt","Type":"pip","Packages":[{"Name":"flask"}]}'
+    proc = _run_env(repo, _stub_trivy(tmp_path, f'{{"Results":[{_poetry_result()},{flask}]}}'))
+    assert proc.returncode == 6, proc.stdout + proc.stderr
+    assert "coverage: 1 of 2 scannable manifest(s) ingested" in proc.stdout, proc.stdout
+    assert "FAIL — PARTIAL COVERAGE: 1 of 2 scannable manifest(s) ingested, 1 lock(s) UNSCANNED" in proc.stderr, proc.stderr
+    assert "  - web/bun.lockb" in proc.stderr, proc.stderr
+
+
+def test_a_finding_outside_the_denominator_still_fails_first(tmp_path: Path):
+    """A Result outside the denominator covers no counted lock, but its CVEs are
+    real: findings count from every Result, and exit 1 comes before the
+    zero-ingested exit 2, so the CVE is reported rather than hidden behind it."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "poetry.lock").write_text("# poetry lock\n")
+    _web_bun_lockb(repo)
+    vuln = '"Vulnerabilities":[{"PkgName":"requests","VulnerabilityID":"CVE-9999-3","Severity":"CRITICAL","FixedVersion":"2.31.0"}]'
+    poetry = f'{{"Target":"poetry.lock","Type":"poetry","Packages":[{{"Name":"requests"}}],{vuln}}}'
+    proc = _run_env(repo, _stub_trivy(tmp_path, f'{{"Results":[{poetry}]}}'))
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "requests | CVE-9999-3 | CRITICAL | 2.31.0" in proc.stderr, proc.stderr
+    assert "  - web/bun.lockb" in proc.stderr, "the UNSCANNED lock is still named before the verdict"
+
+
+def test_a_result_with_no_packages_does_not_ingest_its_lock(tmp_path: Path):
+    """A lock is INGESTED only when a Result names it AND carries a package, the
+    rule the gate and the fallback already state. An empty Packages list is a
+    lock read as nothing, so it is UNSCANNED."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("flask==3.0.0\n")
+    (repo / "web").mkdir()
+    (repo / "web" / "package.json").write_text('{"name":"w","dependencies":{"left-pad":"1.3.0"}}\n')
+    (repo / "web" / "bun.lock").write_text('{"lockfileVersion":1,"packages":{}}\n')
+    flask = '{"Target":"requirements.txt","Type":"pip","Packages":[{"Name":"flask"}]}'
+    empty = '{"Target":"web/bun.lock","Type":"bun","Packages":[]}'
+    proc = _run_env(repo, _stub_trivy(tmp_path, f'{{"Results":[{flask},{empty}]}}'))
+    assert proc.returncode == 6, proc.stdout + proc.stderr
+    assert "UNSCANNED — 1 lock(s) no scan ingested a package from:\n  - web/bun.lock" in proc.stderr, proc.stderr
+
+
+def test_a_go_module_is_ingested_under_its_go_mod(tmp_path: Path):
+    """check-scannable.sh counts the go.sum, and trivy names the module by the
+    go.mod beside it (measured, trivy 0.74.0: Target `gomod/go.mod`). Either
+    name covers the lock."""
+    repo = tmp_path / "repo"
+    (repo / "svc").mkdir(parents=True)
+    (repo / "svc" / "go.mod").write_text("module example.com/m\n\ngo 1.21\n")
+    (repo / "svc" / "go.sum").write_text("golang.org/x/text v0.3.7 h1:x=\n")
+    gomod = '{"Target":"svc/go.mod","Type":"gomod","Packages":[{"Name":"golang.org/x/text"}]}'
+    proc = _run_env(repo, _stub_trivy(tmp_path, f'{{"Results":[{gomod}]}}'))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "coverage: 1 of 1 scannable manifest(s) ingested" in proc.stdout, proc.stdout
+    assert "NOT in the denominator" not in proc.stdout, proc.stdout
+
+
+def test_a_package_lock_beside_a_bun_lockb_fails_on_all_three_paths(tmp_path: Path):
+    """One rule for a bun.lockb with no bun.lock beside it, on every path: it is
+    in the denominator and UNSCANNED, even beside a lock trivy reads. Only bun.lock
+    is the same packages in another format; a package-lock.json is another tool's
+    resolution, so it is no stand-in.
+
+    - script: check-scannable.sh counts the bun.lockb for web/, trivy reads only
+      the package-lock.json, so by name the bun.lockb is UNSCANNED (6);
+    - gate: its own find puts both in the denominator, exclusion (2) leaves the
+      bun.lockb in, and trivyCoverage() HOLDs the counts that follow;
+    - fallback: the same find, and any UNSCANNED lock FAILS."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("flask==3.0.0\n")
+    _web_bun_lockb(repo)
+    (repo / "web" / "package-lock.json").write_text('{"name":"w","lockfileVersion":3,"packages":{}}\n')
+    flask = '{"Target":"requirements.txt","Type":"pip","Packages":[{"Name":"flask"}]}'
+    npm = '{"Target":"web/package-lock.json","Type":"npm","Packages":[{"Name":"left-pad"}]}'
+    proc = _run_env(repo, _stub_trivy(tmp_path, f'{{"Results":[{flask},{npm}]}}'))
+    assert proc.returncode == 6, proc.stdout + proc.stderr
+    assert "  - web/bun.lockb" in proc.stderr, proc.stderr
+    assert "web/package-lock.json  (npm, 1 packages, 0 finding(s); NOT in the denominator" in proc.stdout, proc.stdout
+
+    body = (REPO_ROOT / "skills" / "precheck" / "SKILL.md").read_text()
+    m = re.search(r"^\s+(find <repo_root> .+ -print)$", body, re.M)
+    assert m, "the fallback find is missing from SKILL.md"
+    cmd = m.group(1).replace("<repo_root>", shlex.quote(str(repo)))
+    found = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=30).stdout.split()
+    rel = sorted(str(Path(p).relative_to(repo)) for p in found)
+    assert rel == ["requirements.txt", "web/bun.lockb", "web/package-lock.json"], rel
+    flat = " ".join(body.split())
+    assert "(2) a bun.lockb with a bun.lock in the same directory" in flat, "only a bun.lock beside it excludes a bun.lockb"
+    assert "Any UNSCANNED lock -> the checklist item FAILS" in flat
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed; the gate leg needs it")
+    gate = (REPO_ROOT / "skills" / "nextwave" / "gate.js").as_uri()
+    sig = '{"signal":"trivy","passed":true,"detail":"0 HIGH/CRITICAL","found":3,"ingested":2,"unscanned":["web/bun.lockb"],"declared":false}'
+    js = f"import({json.dumps(gate)}).then(m => console.log(JSON.stringify(m.trivyCoverage({sig}))))"
+    verdict = json.loads(subprocess.run([node, "--input-type=module", "-e", js], capture_output=True, text=True, timeout=30, check=True).stdout)
+    assert verdict["passed"] is False, verdict
+    assert "UNSCANNED: web/bun.lockb" in verdict["detail"], verdict
+
+
+def test_a_denominator_that_cannot_be_read_by_name_exits_5(tmp_path: Path):
+    """Coverage by name needs check-scannable.sh's lock lines to be the set it
+    counted. If the two disagree, the names are not the denominator: a tooling
+    error (5), never a verdict."""
+    ci = tmp_path / "ci"
+    ci.mkdir()
+    shutil.copy(SCRIPT, ci / "dependency-scan.sh")
+    (ci / "check-scannable.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        'echo "check-scannable: 2 scannable manifest(s) in $1"\n'
+        'echo "  [scannable] ./requirements.txt — 1 pinned entry"\n'
+    )
+    repo = _scannable_repo(tmp_path)
+    proc = subprocess.run(
+        ["bash", str(ci / "dependency-scan.sh"), str(repo)],
+        capture_output=True, text=True, timeout=120, env=_stub_trivy(tmp_path, CLEAN_JSON),
+    )
+    assert proc.returncode == 5, proc.stdout + proc.stderr
+    assert "could not read check-scannable.sh's 2 scannable lock(s) by name" in proc.stderr, proc.stderr
 
 
 def test_a_declaration_does_not_rescue_a_lone_bun_lockb(tmp_path: Path):
@@ -437,14 +604,15 @@ def test_stub_partial_coverage_exits_6(tmp_path: Path):
     )
     assert "coverage: 1 of 2" in proc.stdout, proc.stdout
     assert "WARNING" in proc.stdout + proc.stderr, "shortfall must not be silent"
-    assert "FAIL — PARTIAL COVERAGE: 1 of 2 scannable manifest(s) ingested, 1 pinned pip lock(s) UNSCANNED" in proc.stderr, proc.stderr
+    assert "UNSCANNED — 1 lock(s) no scan ingested a package from:\n  - sub/requirements.txt" in proc.stderr, proc.stderr
+    assert "FAIL — PARTIAL COVERAGE: 1 of 2 scannable manifest(s) ingested, 1 lock(s) UNSCANNED" in proc.stderr, proc.stderr
     assert "PASS" not in proc.stdout, "a partial run must print no PASS verdict"
 
 
 def test_a_lone_bun_lockb_beside_a_pip_lock_exits_6(tmp_path: Path):
     """babelfish's #1269 review case: trivy cannot parse bun.lockb, so a pinned
     requirements.txt beside one used to read `PASS … (COVERS 1/2)` with rc 0.
-    The shortfall is not a pip lock, so the FAIL line must not claim to name one."""
+    Coverage is by name, so the bun.lockb itself is named UNSCANNED."""
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "requirements.txt").write_text("flask==3.0.0\n")
@@ -452,7 +620,8 @@ def test_a_lone_bun_lockb_beside_a_pip_lock_exits_6(tmp_path: Path):
     (repo / "bun.lockb").write_bytes(b"\x00binary\x00")
     proc = _run_env(repo, _stub_trivy(tmp_path, CLEAN_JSON))
     assert proc.returncode == 6, proc.stdout + proc.stderr
-    assert "FAIL — PARTIAL COVERAGE: 1 of 2 scannable manifest(s) ingested. An unscanned lock is not a clean one." in proc.stderr, proc.stderr
+    assert "UNSCANNED — 1 lock(s) no scan ingested a package from:\n  - bun.lockb" in proc.stderr, proc.stderr
+    assert "FAIL — PARTIAL COVERAGE: 1 of 2 scannable manifest(s) ingested, 1 lock(s) UNSCANNED (named above). An unscanned lock is not a clean one." in proc.stderr, proc.stderr
 
 
 def test_stub_scanner_error_exits_5_NOT_2(tmp_path: Path):
@@ -617,8 +786,8 @@ def test_a_pinned_lock_trivy_ingests_nothing_from_is_named_unscanned(tmp_path: P
     out = proc.stdout + proc.stderr
     assert proc.returncode == 6, out
     assert "coverage: 1 of 2" in proc.stdout, out
-    assert "UNSCANNED — 1 pinned pip lock(s) trivy ingested nothing from:\n  - requirements-odd.txt" in proc.stderr, out
-    assert "1 pinned pip lock(s) UNSCANNED (named above)" in proc.stderr, out
+    assert "UNSCANNED — 1 lock(s) no scan ingested a package from:\n  - requirements-odd.txt" in proc.stderr, out
+    assert "1 lock(s) UNSCANNED (named above)" in proc.stderr, out
 
 
 @pytest.mark.parametrize(

@@ -43,12 +43,16 @@
 #      trivy's vulnerability DB, a rate-limited or air-gapped network —
 #      expect to hit this, and never treat an unmapped/unrecognized rc as a
 #      pass.
-#   6  PARTIAL COVERAGE — some locks ingested, some not: a pinned pip lock named
-#      UNSCANNED, or fewer manifests ingested than check-scannable.sh counted
-#      (#1247). A pass over part of the denominator is not a pass, because an
-#      unscanned lock is not a clean one. The trust gate's trivyCoverage() HOLDs
-#      the same shape, so /precheck must not PASS it. Findings still exit 1
-#      first.
+#   6  PARTIAL COVERAGE — some of check-scannable.sh's locks ingested, at least
+#      one named UNSCANNED (#1247). A pass over part of the denominator is not a
+#      pass, because an unscanned lock is not a clean one. The trust gate's
+#      trivyCoverage() HOLDs the same shape, so /precheck must not PASS it.
+#      Findings exit 1 first, on any trivy Result.
+#
+# COVERAGE IS BY NAME (#1247). A lock is INGESTED only when a trivy Result names
+# it and carries at least one package, the rule the trust gate and the /precheck
+# fallback apply. Comparing counts let a Result check-scannable.sh never counts
+# (poetry.lock, uv.lock, Gemfile.lock, ...) stand in for a lock it does count.
 #
 # A .no-scannable-dependencies declaration applies only when no lock is found:
 # it rescues 4, never 2 or 6. The trust gate's trivyCoverage() rules the same,
@@ -85,13 +89,6 @@ printf '%s\n' "$scannable_out"
 if ((scannable_rc != 0)); then
 	echo "dependency-scan: FAIL — nothing scannable and absence not declared" >&2
 	exit 4
-fi
-
-# A DECLARED absence is a legitimate pass with nothing to ingest, so the
-# present-but-uningested check below must not fire on it.
-declared=0
-if printf '%s' "$scannable_out" | grep -q "absence is DECLARED"; then
-	declared=1
 fi
 
 # How many the PRE-scan found. Compared against the ingested count below, because
@@ -192,6 +189,14 @@ printf '%s' "$raw" >"$work/main.json"
 # here is the set counted there. A `-r other.txt` include is not followed, which
 # is also true of trivy reading the file in place.
 sed -n 's/^  \[scannable\] \.\/\(.*\) — [0-9][0-9]* pinned entr.*$/\1/p' <<<"$scannable_out" >"$work/pip-locks"
+# The DENOMINATOR, by name: every lock check-scannable.sh printed as [scannable],
+# repo-relative as trivy names its Targets. Its count must be the one it printed,
+# or the names below are not the set that was counted.
+sed -n 's/^  \[scannable\] \.\///p' <<<"$scannable_out" | sed 's/ — [0-9][0-9]* pinned entr.*$//' >"$work/denominator"
+if [[ "$(grep -c . "$work/denominator")" != "$scannable_n" ]]; then
+	echo "dependency-scan: FAIL — could not read check-scannable.sh's ${scannable_n} scannable lock(s) by name" >&2
+	exit 5
+fi
 : >"$work/siblings.tsv"
 n=0
 while IFS= read -r lock; do
@@ -214,7 +219,7 @@ done <"$work/pip-locks"
 # qualifies it is the failure this whole family of checks exists to prevent.
 summary="$(python3 -c '
 import json, sys
-main_path, siblings_path, pip_locks_path = sys.argv[1:4]
+main_path, siblings_path, denominator_path = sys.argv[1:4]
 def load(path):
     with open(path) as f:
         return json.load(f)
@@ -227,8 +232,8 @@ try:
 except Exception as exc:
     print(f"PARSE_ERROR\t{exc}")
     raise SystemExit
-with open(pip_locks_path) as f:
-    pip_locks = [l.rstrip("\n") for l in f if l.strip()]
+with open(denominator_path) as f:
+    denominator = [l.rstrip("\n") for l in f if l.strip()]
 in_place = {r.get("Target") for r in (docs[0][1].get("Results") or [])}
 results = []
 for label, doc in docs:
@@ -239,22 +244,40 @@ for label, doc in docs:
                 continue
             r = dict(r, Target=label, _alone=True)
         results.append(r)
-manifests, packages, findings = 0, 0, 0
+def names(lock):
+    # trivy names a Go module by its go.mod (measured, trivy 0.74.0), while
+    # check-scannable.sh counts the go.sum beside it; either name covers it.
+    if lock == "go.sum" or lock.endswith("/go.sum"):
+        return {lock, lock[: -len("go.sum")] + "go.mod"}
+    return {lock}
+# INGESTED by name: a Result carrying the name of the lock AND at least one package.
+# An empty Packages list is a lock read as nothing, not a scanned one, and a
+# Result for a file outside the denominator stands in for no counted lock.
+# --list-all-pkgs is passed explicitly above (cc-workflow#1169) rather than
+# relied on as a default: it only became a trivy default in v0.67.0, and this
+# fleet pins no minimum trivy version, so an older install would otherwise
+# leave Packages empty here on every repo, not just this one.
+with_packages = {r.get("Target") for r in results if r.get("Packages")}
+claimed, unscanned = set(), []
+for lock in denominator:
+    claimed |= names(lock)
+    if not names(lock) & with_packages:
+        unscanned.append(lock)
+packages, findings, outside = 0, 0, 0
 lines = []
 for r in results:
     target, rtype = r.get("Target", "?"), r.get("Type", "?")
-    # --list-all-pkgs is passed explicitly above (cc-workflow#1169) rather than
-    # relied on as a default: it only became a trivy default in v0.67.0, and
-    # this fleet pins no minimum trivy version, so an older install would
-    # otherwise leave Packages empty here on every repo, not just this one.
     pkgs = len(r.get("Packages") or [])
     vulns = len(r.get("Vulnerabilities") or [])
-    manifests += 1
     packages += pkgs
     findings += vulns
     alone = "; scanned alone as requirements.txt" if r.get("_alone") else ""
+    if target not in claimed:
+        outside += 1
+        alone += "; NOT in the denominator, so it covers no counted lock"
     lines.append(f"  - {target}  ({rtype}, {pkgs} packages, {vulns} finding(s){alone})")
-print(f"COUNTS\t{manifests}\t{packages}\t{findings}")
+ingested = len(denominator) - len(unscanned)
+print(f"COUNTS\t{ingested}\t{len(denominator)}\t{packages}\t{findings}\t{len(results)}\t{outside}")
 for l in lines:
     print(f"LINE\t{l}")
 for r in results:
@@ -262,13 +285,11 @@ for r in results:
         print("VULN\t{}\t{}\t{}\t{}".format(
             v.get("PkgName","?"), v.get("VulnerabilityID","?"),
             v.get("Severity","?"), v.get("FixedVersion") or "no fix available"))
-# A pinned lock that check-scannable.sh counted but that yielded no packages is
-# UNSCANNED, by name. A count alone says something is missing, not what.
-ingested = {r.get("Target") for r in results if r.get("Packages")}
-for lock in pip_locks:
-    if lock not in ingested:
-        print(f"UNSCANNED\t{lock}")
-' "$work/main.json" "$work/siblings.tsv" "$work/pip-locks")"
+# Every counted lock no scan ingested is UNSCANNED, by name: a count alone says
+# something is missing, not what.
+for lock in unscanned:
+    print(f"UNSCANNED\t{lock}")
+' "$work/main.json" "$work/siblings.tsv" "$work/denominator")"
 
 if printf '%s' "$summary" | grep -q '^PARSE_ERROR'; then
 	# exit 5 (scanner error), NOT 2 (present-but-uningested): malformed JSON is
@@ -289,49 +310,66 @@ if ! printf '%s' "$summary" | grep -q '^COUNTS'; then
 	printf '%s\n' "$summary" | head -5 >&2
 	exit 5
 fi
-read -r _ manifests packages findings <<<"$(printf '%s' "$summary" | grep '^COUNTS' | head -1)"
-manifests="${manifests:-0}"
+read -r _ ingested denom packages findings results_n outside <<<"$(printf '%s' "$summary" | grep '^COUNTS' | head -1)"
+ingested="${ingested:-0}"
+denom="${denom:-0}"
 packages="${packages:-0}"
 findings="${findings:-0}"
+results_n="${results_n:-0}"
+outside="${outside:-0}"
 
 # Scanner version alongside the counts. A coverage shortfall could be an
 # ecosystem limit OR a stale binary, and the output cannot distinguish them
 # without this — "a silently outdated scanner narrows coverage while reporting
 # green" is this same defect class, one layer down.
 echo "dependency-scan: scanner: $(trivy --version 2>/dev/null | head -1 | tr -d '\n')"
-echo "dependency-scan: manifests ingested: ${manifests}"
+echo "dependency-scan: manifests ingested: ${ingested}"
 printf '%s\n' "$summary" | sed -n "s/^LINE$(printf '\t')//p"
 echo "dependency-scan: packages scanned: ${packages}"
+if ((outside > 0)); then
+	echo "dependency-scan: ${outside} trivy Result(s) outside the denominator: listed, never counted toward coverage"
+fi
 
-# COVERAGE, stated explicitly. The two counts come from opposite sides of the
-# scan and were never compared before; printing both without the comparison is
-# how a shortfall stays invisible.
-if ((scannable_n > 0)); then
-	echo "dependency-scan: coverage: ${manifests} of ${scannable_n} scannable manifest(s) ingested"
-	if ((manifests > 0)) && ((manifests < scannable_n)); then
-		echo "dependency-scan: WARNING — $((scannable_n - manifests)) scannable manifest(s) NOT ingested." >&2
-		echo "  The remainder is unscanned, not clean, so this run cannot pass." >&2
-	fi
+# COVERAGE, stated explicitly and matched by name. The two sides of the scan
+# were never compared before; printing both without the comparison is how a
+# shortfall stays invisible.
+if ((denom > 0)); then
+	echo "dependency-scan: coverage: ${ingested} of ${denom} scannable manifest(s) ingested"
 fi
 unscanned="$(sed -n "s/^UNSCANNED$(printf '\t')//p" <<<"$summary")"
 unscanned_n=0
 if [[ -n "$unscanned" ]]; then
 	unscanned_n="$(wc -l <<<"$unscanned" | tr -d ' ')"
-	echo "dependency-scan: UNSCANNED — ${unscanned_n} pinned pip lock(s) trivy ingested nothing from:" >&2
+	echo "dependency-scan: UNSCANNED — ${unscanned_n} lock(s) no scan ingested a package from:" >&2
 	while IFS= read -r lock; do echo "  - $lock"; done <<<"$unscanned" >&2
+	if ((ingested > 0)); then
+		echo "dependency-scan: WARNING — ${unscanned_n} scannable manifest(s) NOT ingested." >&2
+		echo "  The remainder is unscanned, not clean, so this run cannot pass." >&2
+	fi
+fi
+
+# Findings first, from every trivy Result, inside the denominator or not: a CVE in
+# a lock check-scannable.sh does not count is still a CVE.
+if ((findings > 0)); then
+	echo "dependency-scan: FINDINGS — ${findings} ${SEVERITY} across ${results_n} manifest(s)" >&2
+	printf '%s\n' "$summary" | sed -n "s/^VULN$(printf '\t')/  /p" |
+		awk -F'\t' '{printf "  %s | %s | %s | %s\n", $1, $2, $3, $4}' >&2
+	exit 1
 fi
 
 # --- the gap ------------------------------------------------------------------
-# Manifests exist (check-scannable passed above) but the scanner covered none.
+# Manifests exist (check-scannable passed above) but no scan covered any of them.
 # Worded distinctly from "nothing scannable" because they are opposite conditions
-# and previously both surfaced as an unremarkable green.
+# and previously both surfaced as an unremarkable green. A declaration never
+# reaches here: it exists only when check-scannable.sh counted no lock.
 #
-# The remedy depends on the lock, so name the one that fits (#1247). trivy cannot
-# parse bun.lockb at all. Any other lock that yields nothing is malformed or has
-# nothing in it: trivy 0.74.0 emits no Result for a dependency-free
+# The remedy depends on the lock, so name the one that fits each UNSCANNED lock
+# (#1247). trivy cannot parse bun.lockb at all. A pinned requirements file that
+# yields nothing is malformed. Any other lock that yields nothing is malformed or
+# has nothing in it: trivy 0.74.0 emits no Result for a dependency-free
 # package-lock.json (measured), and the escape there is deleting the lockfile,
 # never a declaration beside it.
-if ((manifests == 0)) && ((declared == 0)); then
+if ((unscanned_n > 0)) && ((ingested == 0)); then
 	cat >&2 <<-MSG
 		dependency-scan: FAIL — manifests are present but the scanner ingested ZERO of them.
 
@@ -341,19 +379,24 @@ if ((manifests == 0)) && ((declared == 0)); then
 		  scan over an empty denominator, which is indistinguishable from a clean one.
 
 	MSG
-	locks="$(sed -n 's/^  \[scannable\] //p' <<<"$scannable_out" | sed 's/ — .*//')"
-	if grep -q '/bun\.lockb$' <<<"$locks"; then
+	if grep -qE '(^|/)bun\.lockb$' <<<"$unscanned"; then
 		cat >&2 <<-MSG
 			  bun.lockb is bun's old binary format, which trivy cannot parse. Switch to
 			  bun's text lockfile, bun.lock (bun 1.2+ writes it).
 		MSG
 	fi
-	if [[ -z "$locks" ]] || grep -qv '/bun\.lockb$' <<<"$locks"; then
+	if grep -qvE '(^|/)bun\.lockb$|\.txt$' <<<"$unscanned"; then
 		cat >&2 <<-MSG
 			  A lock trivy reads gave it no packages. If the package has no dependencies,
 			  delete the empty lockfile: there is nothing to lock. If that leaves nothing
 			  scannable, declare it in .no-scannable-dependencies with a reason.
 			  Otherwise the lock is malformed, or this trivy build cannot parse it.
+		MSG
+	fi
+	if grep -q '\.txt$' <<<"$unscanned"; then
+		cat >&2 <<-MSG
+			  A pinned requirements file trivy read no package from is malformed, or this
+			  trivy build cannot parse it.
 		MSG
 	fi
 	cat >&2 <<-MSG
@@ -363,28 +406,16 @@ if ((manifests == 0)) && ((declared == 0)); then
 	exit 2
 fi
 
-if ((findings > 0)); then
-	echo "dependency-scan: FINDINGS — ${findings} ${SEVERITY} across ${manifests} manifest(s)" >&2
-	printf '%s\n' "$summary" | sed -n "s/^VULN$(printf '\t')/  /p" |
-		awk -F'\t' '{printf "  %s | %s | %s | %s\n", $1, $2, $3, $4}' >&2
-	exit 1
-fi
-
 # --- partial coverage (#1247) -------------------------------------------------
 # Some ingested, some not. This used to exit 0 with a COVERS note, on the theory
 # that a human reads the checklist; but Job C and the autochain gate both read
 # exit 0 as PASS, so the note passed what the trust gate HOLDs. One rule on all
 # three paths: a partial run is not a pass.
-if ((manifests > 0)) && { ((unscanned_n > 0)) || ((manifests < scannable_n)); }; then
-	msg="dependency-scan: FAIL — PARTIAL COVERAGE: ${manifests} of ${scannable_n} scannable manifest(s) ingested"
-	if ((unscanned_n > 0)); then
-		msg="${msg}, ${unscanned_n} pinned pip lock(s) UNSCANNED (named above)"
-	fi
-	echo "${msg}. An unscanned lock is not a clean one." >&2
+if ((unscanned_n > 0)); then
+	echo "dependency-scan: FAIL — PARTIAL COVERAGE: ${ingested} of ${denom} scannable manifest(s) ingested, ${unscanned_n} lock(s) UNSCANNED (named above). An unscanned lock is not a clean one." >&2
 	exit 6
 fi
 
-# Never reached with a shortfall: every one exits 2 or 6 above, and the
-# declaration that skips 2 exists only when check-scannable.sh found no lock.
-echo "dependency-scan: PASS — ${packages} package(s) across ${manifests} manifest(s), 0 ${SEVERITY}"
+# Never reached with a shortfall: every counted lock was ingested by name.
+echo "dependency-scan: PASS — ${packages} package(s) across ${results_n} manifest(s), 0 ${SEVERITY}"
 exit 0

@@ -177,8 +177,9 @@ prompt: "Run: bash <repo_root>/scripts/ci/dependency-scan.sh <repo_root>
 
          If the script is MISSING (older checkout), say so and fall back to
          `trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps
-         --list-all-pkgs --format json --quiet`, reporting the manifest count
-         first. Do not report a verdict without a denominator. Both flags are
+         --list-all-pkgs --format json --quiet <repo_root>`, reporting the
+         manifest count first. Do not report a verdict without a denominator.
+         Both flags are
          REQUIRED on the fallback, not optional (cc-workflow#1169): trivy
          suppresses dev/test dependencies by default (a project whose entire
          dependency tree is dev-only scans ZERO packages without
@@ -478,7 +479,7 @@ Delegated to Job C (Haiku sub-agent) in the parallel batch. Interpret the result
 - **SKIP** → emit `[SKIPPED — trivy not installed]` on the checklist. Do not fail the gate.
 - **FINDINGS** (`dependency-scan.sh` exit 1) → report each finding (package, CVE, severity, fixed version if any) as a deferred checklist item. Do NOT auto-upgrade dependencies — the user approves the codebase state at the gate. **The checklist item FAILS on any HIGH/CRITICAL finding, with or without a fix available** — `dependency-scan.sh` does not distinguish them (no `--ignore-unfixed` support; `.trivyignore` is explicitly disabled via `--ignorefile /dev/null`, not merely undocumented), which is stricter than this skill's own prose promised before this scan was a real tool rather than an agent's judgment call. Tracked for a policy decision: #1188. **Escape hatch that exists today, undocumented until now:** `DEP_SCAN_SEVERITY` (env var, default `HIGH,CRITICAL`) overrides the severity filter — e.g. `DEP_SCAN_SEVERITY=CRITICAL ./scripts/ci/validate.sh` to stop blocking on HIGH while #1188 is unresolved. This is a manual, visible override for an operator to reach for, not something Job C or this skill invokes on its own.
 - **SCANNER/TOOLING ERROR** (`dependency-scan.sh` exit 5 — timeout, no scanner output, unparseable scanner output, OR a partial install missing `check-scannable.sh`) → the checklist item FAILS. This is not a skip: the scan did not run to completion, which is not evidence of a clean dependency tree. Ordinary triggers (first DB pull, rate-limited/air-gapped network) are not a reason to wave it through.
-- **PARTIAL COVERAGE** (`dependency-scan.sh` exit 6: some locks ingested, at least one UNSCANNED or a manifest not ingested) → the checklist item FAILS, naming each unscanned lock. A clean result over part of the denominator is not a pass (#1247); the trust gate's `trivyCoverage()` HOLDs the same shape, so the two gates agree.
+- **PARTIAL COVERAGE** (`dependency-scan.sh` exit 6: some counted locks ingested, at least one UNSCANNED, matched by name) → the checklist item FAILS, naming each unscanned lock. A clean result over part of the denominator is not a pass (#1247); the trust gate's `trivyCoverage()` HOLDs the same shape, so the two gates agree.
 
 ## The Checklist (full every time; a checkmark means VERIFIED by reading the codebase)
 **Context:** Project | Issue #N — title | Branch `feature/N-...` → `<base>` | PR/MR #<PR_NUMBER> @ `<HEAD_SHA7>`
