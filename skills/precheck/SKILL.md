@@ -213,9 +213,10 @@ prompt: "Run: bash <repo_root>/scripts/ci/dependency-scan.sh <repo_root>
          go.mod beside it); every other one is UNSCANNED. Report the
          denominator and the ingested count, and name each UNSCANNED lock,
          before any verdict. Any UNSCANNED lock -> the checklist item FAILS:
-         an unscanned lock is not a clean one. Nothing ingested at all FAILS
-         too, unless a .no-scannable-dependencies at the repo root declares it
-         with a reason."
+         an unscanned lock is not a clean one. A declaration applies only when
+         no lock is found; any found-but-unscanned lock FAILS. So an empty
+         denominator FAILS unless a .no-scannable-dependencies at the repo
+         root declares it with a reason."
 ```
 
 **The denominator is emitted by the tool, not requested from the agent (#1137).** This job used to be prose asking a sub-agent to report the count. It complied — and compliance is the problem: an instruction can be forgotten by the next agent, misread, or quietly dropped in a rewrite, and the resulting verdict looks identical to a real one. `dependency-scan.sh` emits the number on every path including the passing one, so the report survives the agent.

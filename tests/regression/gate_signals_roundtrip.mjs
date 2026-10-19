@@ -139,10 +139,13 @@ try {
   assert.match(tv, /AVAILABLE FIXED VERSION/i) // pass predicate: only fixable vulns fail
   assert.match(tv, /CONSERVATIVE-FAIL/i) // missing trivy = fail, not pass
   assert.match(tv, /Results carry an empty\/absent\s+Packages list/i) // #1169: ran-but-covered-nothing is ALSO conservative-fail
-  // #1169 round 3 (code review M-1): the declaration escape must rescue BOTH a zero-manifest
-  // count AND a real-manifest-but-zero-extractable-packages count, not just the first.
-  assert.match(tv, /rescues BOTH a manifest count of 0 AND the zero-packages-despite-a-real-/i)
-  ok('trivy prompt: HIGH,CRITICAL + --include-dev-deps + --list-all-pkgs + JSON output + a real runnable enumeration command + declaration rescues both zero-manifest and zero-package cases')
+  // #1247 (babelfish's ruling, reversing #1169 round 3 M-1): the declaration applies only when no
+  // lock is found, as check-scannable.sh rules. A found lock that yields nothing is UNSCANNED, and
+  // a declaration of "nothing scannable" beside it is a contradiction, not a rescue.
+  assert.match(tv, /declaration at the repo root, with a reason, applies only when no\s+lock is found \(found 0\)/)
+  assert.match(tv, /It rescues nothing else; any found-but-unscanned lock FAILS, declared or not/)
+  assert.doesNotMatch(tv, /rescues BOTH/i)
+  ok('trivy prompt: HIGH,CRITICAL + --include-dev-deps + --list-all-pkgs + JSON output + a real runnable enumeration command + declaration applies only when nothing is found')
   // #1247: trivy reads only the exact name requirements.txt, so siblings are scanned alone under it,
   // a partial run fails, and the agent returns the counts the code-side rule below re-checks.
   assert.match(tv, /pip analyzer reads ONLY a file named exactly requirements\.txt/)
@@ -164,7 +167,7 @@ try {
   const cs = readFileSync(new URL('../../scripts/ci/check-scannable.sh', import.meta.url), 'utf8')
   const pinRe = cs.match(/pinned="\$\(grep -cE '([^']+)' "\$req"/)?.[1]
   assert.ok(pinRe, 'check-scannable.sh pin test not found; update this extraction with it')
-  assert.ok(tv.includes(`grep -cE '${pinRe}' <that file>`), 'trivy prompt must test pins with check-scannable.sh\'s own regex')
+  assert.ok(tv.includes(`grep -cE '${pinRe}' '<that file>'`), 'trivy prompt must test pins with check-scannable.sh\'s own regex, on a quoted path')
   // The requirements PATTERNS are single-sourced the same way: check-scannable.sh's REQ_FIND,
   // which also reaches dev-requirements.txt and the pip-tools requirements/<name>.txt layout.
   const reqFind = cs.match(/^REQ_FIND=\(\\\( (.+) \\\)\)$/m)?.[1]
@@ -191,15 +194,31 @@ try {
   assert.match(named.detail, /PARTIAL COVERAGE \(HOLD\): counts claim full coverage \(3 of 3\) yet name unscanned lock\(s\); UNSCANNED: requirements-dev\.txt/)
   const failing = { signal: 'trivy', passed: false, detail: 'CVE-1 fixable', found: 4, ingested: 4, unscanned: [] }
   assert.equal(trivyCoverage(failing).passed, false, 'the rule never turns a fail into a pass')
-  // Zero ingested passes ONLY with a declaration, checked here in code: a lone bun.lockb (found 1,
-  // ingested 0) cannot ride through on an agent's reading of the prompt.
-  const declared = { signal: 'trivy', passed: true, detail: 'declared', found: 1, ingested: 0, unscanned: ['bun.lockb'], declared: true }
-  assert.deepEqual(trivyCoverage(declared), declared, 'a declared zero-ingested repo passes through to the prompt verdict')
-  const lone = trivyCoverage({ ...declared, declared: false })
-  assert.equal(lone.passed, false, 'a lone bun.lockb with no declaration must HOLD')
-  assert.match(lone.detail, /nothing ingested \(1 lockfile\(s\) found\) and no \.no-scannable-dependencies declaration; UNSCANNED: bun\.lockb/)
-  assert.equal(trivyCoverage({ ...declared, found: 0, unscanned: [], declared: undefined }).passed, false, 'nothing found and nothing declared HOLDs')
-  assert.equal(trivyCoverage({ ...declared, found: 0, unscanned: [] }).passed, true, 'nothing found, but declared, passes through')
+  // A declaration applies only when no lock is found (check-scannable.sh's rule, one rule on all
+  // three paths). A lone bun.lockb (found 1, ingested 0) HOLDs with or without one: its remedy is
+  // bun.lock, and a stale declaration must not mask a lock trivy cannot read.
+  const lone = { signal: 'trivy', passed: true, detail: 'lone bun.lockb', found: 1, ingested: 0, unscanned: ['bun.lockb'], declared: false }
+  for (const declared of [false, true]) {
+    const r = trivyCoverage({ ...lone, declared })
+    assert.equal(r.passed, false, `a lone bun.lockb must HOLD (declared=${declared})`)
+    assert.match(r.detail, /^NOTHING INGESTED \(HOLD\): 0 of 1 lockfile\(s\) ingested; UNSCANNED: bun\.lockb\. A declaration applies only when no lock is found/)
+    assert.doesNotMatch(r.detail, /ERRORED/, 'a coverage HOLD is not a signal error')
+  }
+  const none = { signal: 'trivy', passed: true, detail: 'nothing to scan', found: 0, ingested: 0, unscanned: [] }
+  const undeclared = trivyCoverage({ ...none, declared: false })
+  assert.equal(undeclared.passed, false, 'nothing found and nothing declared HOLDs')
+  assert.match(undeclared.detail, /^NOTHING FOUND \(HOLD\): no lockfile found and no \.no-scannable-dependencies declaration/)
+  assert.equal(trivyCoverage({ ...none, declared: undefined }).passed, false, 'an absent declared is not a declaration')
+  assert.deepEqual(trivyCoverage({ ...none, declared: true }), { ...none, declared: true }, 'nothing found, but declared, passes through')
+  // A HOLD keeps the agent's own cause after its rule (code review I-1): a scan that already
+  // failed must not lose "trivy not installed" to a coverage note, nor be relabelled ERRORED.
+  const broken = trivyCoverage({ signal: 'trivy', passed: false, detail: 'trivy not installed', found: 2, ingested: 0, unscanned: ['a', 'b'], declared: false })
+  assert.equal(broken.passed, false)
+  assert.match(broken.detail, /^NOTHING INGESTED \(HOLD\): 0 of 2 lockfile\(s\) ingested; UNSCANNED: a, b\. .*trivy not installed$/)
+  assert.doesNotMatch(broken.detail, /ERRORED/)
+  const partialBroken = trivyCoverage({ signal: 'trivy', passed: false, detail: 'trivy DB pull failed: 429', found: 2, ingested: 1, unscanned: ['b'], declared: false })
+  assert.match(partialBroken.detail, /^PARTIAL COVERAGE \(HOLD\): 1 of 2 lockfile\(s\) ingested; UNSCANNED: b\. trivy DB pull failed: 429$/)
+  assert.match(trivyCoverage({ signal: 'trivy', passed: true, detail: 'agent said ok', found: 2 }).detail, /^signal ERRORED — conservative-fail \(HOLD\): coverage counts missing or inconsistent \(found=2, ingested=undefined\); agent detail: agent said ok$/)
   for (const counts of [{}, { found: 2 }, { found: 2, ingested: 3 }, { found: 2, ingested: -1 }, { found: 1.5, ingested: 1 }]) {
     const r = trivyCoverage({ signal: 'trivy', passed: true, unscanned: [], ...counts })
     assert.equal(r.passed, false, `missing or inconsistent counts must conservative-fail: ${JSON.stringify(counts)}`)
@@ -212,7 +231,7 @@ try {
     assert.match(src, /label: 'gate:trivy', phase: 'Trust gate', schema: TRIVY_SIG,/, `${f}: trivy signal must use TRIVY_SIG`)
     assert.match(src, /\)\.then\(trivyCoverage\)\.catch\(\(e\) => conservativeFail\('trivy', e\)\)/, `${f}: trivyCoverage must run on the agent result`)
   }
-  ok('trivy coverage: 2-of-4 HOLDs, a named unscanned lock HOLDs, full passes through, a fail never becomes a pass, bad counts conservative-fail, wired in source and bundle (#1247)')
+  ok('trivy coverage: 2-of-4 HOLDs, a named unscanned lock HOLDs, a lone bun.lockb HOLDs declared or not, full passes through, a fail never becomes a pass and keeps its cause, bad counts conservative-fail, wired in source and bundle (#1247)')
 } catch (e) { bad('trivy coverage (#1247)', e) }
 
 // ── 3. promotion is CODE: mark-ready → pr_merge → delete-branch (#5) ──────────────────

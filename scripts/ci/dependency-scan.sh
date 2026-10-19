@@ -48,7 +48,11 @@
 #      (#1247). A pass over part of the denominator is not a pass, because an
 #      unscanned lock is not a clean one. The trust gate's trivyCoverage() HOLDs
 #      the same shape, so /precheck must not PASS it. Findings still exit 1
-#      first; the declaration rescues only the zero-ingested case (2).
+#      first.
+#
+# A .no-scannable-dependencies declaration applies only when no lock is found:
+# it rescues 4, never 2 or 6. The trust gate's trivyCoverage() rules the same,
+# so a found-but-unscanned lock fails on every path, declared or not (#1247).
 set -uo pipefail
 
 ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
@@ -306,7 +310,7 @@ if ((scannable_n > 0)); then
 	echo "dependency-scan: coverage: ${manifests} of ${scannable_n} scannable manifest(s) ingested"
 	if ((manifests > 0)) && ((manifests < scannable_n)); then
 		echo "dependency-scan: WARNING — $((scannable_n - manifests)) scannable manifest(s) NOT ingested." >&2
-		echo "  The remainder is unscanned, not clean, so this run cannot pass (exit 6 below)." >&2
+		echo "  The remainder is unscanned, not clean, so this run cannot pass." >&2
 	fi
 fi
 unscanned="$(sed -n "s/^UNSCANNED$(printf '\t')//p" <<<"$summary")"
@@ -330,8 +334,9 @@ if ((manifests == 0)) && ((declared == 0)); then
 		  build cannot parse. A pass here would be a scan over an empty denominator,
 		  which is indistinguishable from a clean one.
 
-		  Either use a scanner that understands this ecosystem, or declare the gap in
-		  .no-scannable-dependencies with a reason.
+		  Use a lockfile this scanner reads (bun.lock, not bun.lockb) or a scanner
+		  that understands this ecosystem. A .no-scannable-dependencies declaration
+		  does not apply: it covers only a repo where no lock is found.
 	MSG
 	exit 2
 fi
@@ -357,14 +362,7 @@ if ((manifests > 0)) && { ((unscanned_n > 0)) || ((manifests < scannable_n)); };
 	exit 6
 fi
 
-# Reached with a shortfall only on the declared zero-ingested path (2 rescued by
-# .no-scannable-dependencies), so the notes below still say what was not read.
-verdict="dependency-scan: PASS — ${packages} package(s) across ${manifests} manifest(s), 0 ${SEVERITY}"
-if ((scannable_n > manifests)); then
-	verdict="${verdict} (COVERS ${manifests}/${scannable_n} — see WARNING above)"
-fi
-if ((unscanned_n > 0)); then
-	verdict="${verdict} (${unscanned_n} pip lock(s) UNSCANNED — see above)"
-fi
-echo "$verdict"
+# Never reached with a shortfall: every one exits 2 or 6 above, and the
+# declaration that skips 2 exists only when check-scannable.sh found no lock.
+echo "dependency-scan: PASS — ${packages} package(s) across ${manifests} manifest(s), 0 ${SEVERITY}"
 exit 0

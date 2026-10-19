@@ -69,29 +69,38 @@ export const TRIVY_SIG = {
 // not clean. This never turns a failing signal into a passing one; it only HOLDs one that claims
 // a pass over part of its denominator, names a lock it did not scan (an agent can miscount
 // ingested; it is far less likely to list a path it never examined), or whose counts cannot be
-// squared. A zero-ingested result passes only with a declaration: the agent reports whether
-// .no-scannable-dependencies exists, and the rule is applied here rather than left to the prompt,
-// so a lone bun.lockb (found 1, ingested 0) cannot pass on an agent's generous reading.
+// squared. A declaration applies only when no lock is found, as in scripts/ci/check-scannable.sh:
+// .no-scannable-dependencies says there is nothing scannable, which a found lock contradicts, and
+// a stale one must not mask a lock trivy cannot read. So a found-but-unscanned lock HOLDs with or
+// without a declaration. A lone bun.lockb (found 1, ingested 0) cannot pass; its remedy is bun.lock.
+// The agent reports whether the declaration exists, and the rule is applied here, not in the prompt.
+// Every HOLD names the rule that fired and keeps the agent's own detail AFTER it, never in place of
+// it: a scan that already failed (trivy missing, a DB pull that did not finish) must keep its cause,
+// and must not be relabelled ERRORED. Only a result whose counts cannot be read is an error.
+function trivyHold(sig, why) {
+  return { ...sig, signal: 'trivy', passed: false, detail: `${why}. ${sig.detail ?? ''}`.trim() }
+}
+
 export function trivyCoverage(sig) {
   const { found, ingested } = sig ?? {}
   const unscanned = Array.isArray(sig?.unscanned) ? sig.unscanned : []
   if (!Number.isInteger(found) || !Number.isInteger(ingested) || ingested < 0 || ingested > found) {
-    return conservativeFail('trivy', `coverage counts missing or inconsistent (found=${found}, ingested=${ingested})`)
+    const own = sig?.detail ? `; agent detail: ${sig.detail}` : ''
+    return conservativeFail('trivy', `coverage counts missing or inconsistent (found=${found}, ingested=${ingested})${own}`)
   }
-  if (ingested === 0 && sig.declared !== true) {
-    const names = unscanned.length ? `; UNSCANNED: ${unscanned.join(', ')}` : ''
-    return conservativeFail('trivy', `nothing ingested (${found} lockfile(s) found) and no .no-scannable-dependencies declaration${names}`)
+  if (found === 0 && sig.declared !== true) {
+    return trivyHold(sig, 'NOTHING FOUND (HOLD): no lockfile found and no .no-scannable-dependencies declaration')
+  }
+  if (found > 0 && ingested === 0) {
+    const names = unscanned.length ? unscanned.join(', ') : 'not named'
+    return trivyHold(sig, `NOTHING INGESTED (HOLD): 0 of ${found} lockfile(s) ingested; UNSCANNED: ${names}. A declaration applies only when no lock is found`)
   }
   if (ingested > 0 && (ingested < found || unscanned.length > 0)) {
     const names = unscanned.length ? unscanned.join(', ') : 'not named'
     const why = ingested < found
       ? `${ingested} of ${found} lockfile(s) ingested`
       : `counts claim full coverage (${ingested} of ${found}) yet name unscanned lock(s)`
-    return {
-      ...sig,
-      passed: false,
-      detail: `PARTIAL COVERAGE (HOLD): ${why}; UNSCANNED: ${names}. ${sig.detail ?? ''}`.trim(),
-    }
+    return trivyHold(sig, `PARTIAL COVERAGE (HOLD): ${why}; UNSCANNED: ${names}`)
   }
   return sig
 }
@@ -372,7 +381,7 @@ export function trivySignalPrompt({ waveId, kahunaBranch, targetRepoDir }) {
     `(1) a pip requirements file (a line the find printed for its *requirements*.txt or`,
     `requirements/*.txt patterns) with no entry pinned by '==' is a range declaration, not a lock (it`,
     `carries no version, so trivy can never ingest it). Test each requirements file the find printed with`,
-    `  grep -cE '^[[:space:]]*[A-Za-z0-9._-]+[[:space:]]*===?[[:space:]]*[0-9]' <that file>`,
+    `  grep -cE '^[[:space:]]*[A-Za-z0-9._-]+[[:space:]]*===?[[:space:]]*[0-9]' '<that file>'`,
     `and where it prints 0, leave that file OUT of the denominator and name it in detail as unpinned.`,
     `(2) a bun.lockb with a bun.lock in the same directory is the same packages in bun's old binary`,
     `format, and check-scannable.sh counts only the bun.lock: leave that bun.lockb OUT as well. trivy`,
@@ -401,11 +410,11 @@ export function trivySignalPrompt({ waveId, kahunaBranch, targetRepoDir }) {
     `of a scan — applies to trivy is not installed / the scan cannot run, AND to a manifest count`,
     `(found) greater than 0 where the JSON output has no Results key or Results carry an empty/absent`,
     `Packages list (a real lockfile existed but trivy extracted nothing from it).`,
-    `A .no-scannable-dependencies declaration at the repo`,
-    `root, with a reason, rescues BOTH a manifest count of 0 AND the zero-packages-despite-a-real-`,
-    `manifest case above — a repo can legitimately have nothing pinnable and the declaration is`,
-    `how it says so; omitting the declaration is the failure in either shape, not having nothing`,
-    `to scan. Report the manifest count AND the actual package count scanned in detail either way.`,
+    `A .no-scannable-dependencies declaration at the repo root, with a reason, applies only when no`,
+    `lock is found (found 0): a repo can legitimately have nothing pinnable, and the declaration is`,
+    `how it says so. It rescues nothing else; any found-but-unscanned lock FAILS, declared or not, as`,
+    `scripts/ci/check-scannable.sh rules. Report the manifest count AND the actual package count`,
+    `scanned in detail either way.`,
     `Do NOT do any other work beyond the enumeration and scans above. Return signal="trivy", passed (bool),`,
     `found (the denominator: lines the find printed, less the two exclusions above), ingested`,
     `(how many of those are INGESTED), unscanned (the UNSCANNED paths), declared (true ONLY if a`,

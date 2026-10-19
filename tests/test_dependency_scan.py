@@ -22,6 +22,7 @@ instruction can be forgotten; a tool that emits the number cannot.
 from __future__ import annotations
 
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -98,8 +99,29 @@ def test_precheck_fallback_scans_siblings_like_the_script():
     for layout in ("'*requirements*.txt'", "'*/requirements/*.txt'"):
         assert layout in r.group(1), f"REQ_FIND lost {layout}"
     assert "Any UNSCANNED lock -> the checklist item FAILS" in flat
+    assert "A declaration applies only when no lock is found; any found-but-unscanned lock FAILS." in flat
     assert "a bun.lockb with a bun.lock in the same directory" in flat
     assert re.search(r"^\s+6\s+PARTIAL COVERAGE .*-> checklist$", body, re.M), "exit 6 must be in Job C's table"
+
+
+def test_precheck_fallback_fails_a_declared_lone_bun_lockb(tmp_path: Path):
+    """#1247, babelfish's ruling, on the fallback path: the fallback's own find,
+    run over a lone bun.lockb with a declaration beside it, puts the bun.lockb
+    in the denominator, and SKILL.md's rule fails a found-but-unscanned lock
+    whether or not a declaration exists (the script exits 2; the gate HOLDs)."""
+    body = (REPO_ROOT / "skills" / "precheck" / "SKILL.md").read_text()
+    m = re.search(r"^\s+(find <repo_root> .+ -print)$", body, re.M)
+    assert m, "the fallback find is missing from SKILL.md"
+    (tmp_path / "package.json").write_text('{"name":"p","dependencies":{"left-pad":"1.3.0"}}\n')
+    (tmp_path / "bun.lockb").write_bytes(b"\x00binary\x00")
+    (tmp_path / ".no-scannable-dependencies").write_text("bun.lockb only; trivy cannot read it.\n")
+    cmd = m.group(1).replace("<repo_root>", shlex.quote(str(tmp_path)))
+    proc = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=30)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines() == [str(tmp_path / "bun.lockb")], proc.stdout
+    flat = " ".join(body.split())
+    assert "A bun.lockb with NO bun.lock beside it stays in; trivy cannot parse it, so it is UNSCANNED" in flat
+    assert "any found-but-unscanned lock FAILS" in flat
 
 
 @trivy_required
@@ -128,7 +150,7 @@ def test_partial_coverage_is_stated_not_hidden():
     --include-dev-deps fix above) — it is now 2 of 2 (3 of 3 in a checkout
     carrying the gitignored .claude/ copy), so this only pins the line's
     presence on a full-coverage run; the partial-coverage path itself is
-    exercised by test_stub_partial_coverage_warns_but_still_passes below.
+    exercised by test_stub_partial_coverage_exits_6 below.
     """
     proc = run(REPO_ROOT)
     assert "coverage:" in proc.stdout, "no coverage ratio emitted"
@@ -313,6 +335,25 @@ def test_stub_present_but_uningested_exits_2(tmp_path: Path):
     proc = _run_env(repo, _stub_trivy(tmp_path, '{"Results":[]}'))
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "ingested ZERO" in proc.stdout + proc.stderr
+
+
+def test_a_declaration_does_not_rescue_a_lone_bun_lockb(tmp_path: Path):
+    """#1247, babelfish's ruling: a declaration applies only when no lock is
+    found, on all three paths. A lone bun.lockb is a found lock trivy cannot
+    parse, so a .no-scannable-dependencies beside it is a contradiction, not a
+    rescue: the script exits 2, as the trust gate HOLDs and the fallback FAILS.
+    The message must not send the operator to the declaration that cannot help."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "package.json").write_text('{"name":"p","dependencies":{"left-pad":"1.3.0"}}\n')
+    (repo / "bun.lockb").write_bytes(b"\x00binary\x00")
+    (repo / ".no-scannable-dependencies").write_text("bun.lockb only; trivy cannot read it.\n")
+    proc = _run_env(repo, _stub_trivy(tmp_path, '{"Results":[]}'))
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode == 2, combined
+    assert "ingested ZERO" in combined
+    assert "declaration\n  does not apply: it covers only a repo where no lock is found" in proc.stderr, proc.stderr
+    assert "PASS" not in proc.stdout
 
 
 def test_stub_partial_coverage_exits_6(tmp_path: Path):

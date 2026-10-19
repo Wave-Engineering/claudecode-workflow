@@ -100,10 +100,12 @@ calls. Promotion is wired as CODE that runs only on a live wave's auto+PASS succ
 ```
 
 Trivy's result then runs through `trivyCoverage()` in code before the gate counts it. It HOLDs
-when `0 < ingested < found`, or when `ingested > 0` and `unscanned` names a path. It
-conservative-fails when the counts are missing or inconsistent, and when nothing was ingested
-without a `.no-scannable-dependencies` declaration (`declared`). It never turns a fail into a
-pass. The persisted signal is still projected to `{signal, passed, detail}`.
+when `0 < ingested < found`, when `ingested > 0` and `unscanned` names a path, when locks were
+found and none ingested, and when nothing was found without a `.no-scannable-dependencies`
+declaration (`declared`). A declaration applies only when no lock is found, as in
+`scripts/ci/check-scannable.sh`. Each HOLD keeps the agent's own `detail` after its rule. Only
+missing or inconsistent counts conservative-fail. It never turns a fail into a pass. The
+persisted signal is still projected to `{signal, passed, detail}`.
 
 **Order (live-gate finding #5 — reorders §3.4):** the gate FIRST opens the kahuna→**integration
 base** draft PR (`openPromotionPrPrompt` → `wave_finalize`, idempotent), THEN runs the four signals
