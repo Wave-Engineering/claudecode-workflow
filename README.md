@@ -87,6 +87,7 @@ Key features:
 | name | `/name` | Report or pick agent session identity |
 | nerf | `/nerf` | Context budget system — soft limits, doom modes, scope monitor |
 | nextwave | `/nextwave` | Execute spec-driven sub-agents per wave; reads each wave's `dispatch` hint to fan or serialize |
+| onboard | `/onboard` | Bring a fresh agent up to speed in a repo: `/engage`, `/name`, seed check, bounded reading, open issues, then hold for tag-up |
 | devspec | `/devspec` | Interactive Dev Spec creation with Deliverables Manifest and finalization checklist |
 | precheck | `/precheck` | MR gate — review the pushed commits, read CI, post the `precheck` status, mark the PR/MR ready, stop for the merge call |
 | prepwaves | `/prepwaves` | Analyze issues, compute dependency waves, and annotate each wave with a `dispatch` hint |

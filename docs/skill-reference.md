@@ -12,9 +12,44 @@ These manage the agent's own state and context. Use them at session boundaries a
 
 ---
 
+### `/onboard` -- Get Up to Speed in a Repository
+
+Brings a fresh agent up to speed in a repository, then holds for a tag-up with the human. In order: `/engage`; `/name`, so identity exists before anything talks to other agents; a seed check that hands off to `/reseed revive` when `.claude/reseed-revive.md` is fresh; a code explorer in the background; a bounded read of the documentation (README, `CLAUDE.md`, the `docs/` index and the 8 most recently changed documents, over at most 4 sub-agents); every open issue title, with at most 10 reviewed in depth; and `/ccfold` on a chore branch when `CLAUDE.md` or `.claude-project.md` is stale. It skips folders named like `museum`, `frozen`, `deprecated`, `hold`, `retired`, `archive`, `old`, `legacy`, `vendor`, `node_modules` and `dist`.
+
+**When to use it:**
+- As a new session's first prompt, in a repo the agent is new to
+- After a cold start, when there is no fresh seed to revive from
+
+**Which entry point:**
+
+| Situation | Run |
+|---|---|
+| A fresh seed exists | `/reseed revive` |
+| New to this repo, or a cold start | `/onboard` |
+| The same session, after a compaction | `/engage` |
+
+**Examples:**
+
+```
+/onboard
+```
+
+**In aoe:** make `/onboard` the session's first prompt. Launch it, then send it:
+
+```bash
+aoe add <repo-path> --title <title> --cmd claude --launch
+aoe send <title> "/onboard"
+```
+
+**Seeds:** only `.claude/reseed-revive.md`, or a `*seed*.md` that hands this repo's in-flight work to a next session, counts as a session seed. A design document with `seed` in its name, such as `docs/seed-ai-dev.md`, does not. Seeds are dated by their own `Written:` line or by `git log`, never by mtime.
+
+**The `/ccfold` refresh** follows IBM: a chore issue, a `chore/<N>-ccfold` branch, then `/scpmr`. Its PR/MR goes through `/precheck` and waits for the merge call like any other.
+
+---
+
 ### `/engage` -- Load Rules and Restore Context
 
-Reads CLAUDE.md, confirms the mandatory development rules are loaded, restores any active plan, and reports the agent's ready state. This is the single entry point for resuming work.
+Reads CLAUDE.md, confirms the mandatory development rules are loaded, restores any active plan, and reports the agent's ready state. It is the light entry point for resuming work; `/onboard` is the full one for a new or cold session, and runs `/engage` first.
 
 **When to use it:**
 - At the start of every new session

@@ -12,6 +12,7 @@ description: Read CLAUDE.md, confirm development rules of engagement, and load c
 # Engage: Rules of Engagement + Current State
 
 This skill is the post-compaction (or session-start) ritual. It restores context and confirms operating rules.
+New to this repo, or a cold start? Run `/onboard` instead: it runs this skill first.
 
 ## Steps
 
