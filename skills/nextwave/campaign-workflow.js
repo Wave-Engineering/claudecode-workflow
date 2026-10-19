@@ -31,11 +31,13 @@ import {
   routeRelease,
   waveOversightPrompt,
   dodVerificationPrompt,
+  releaseCiPrompt,
   releaseMergePrompt,
   JUDGMENT_RESULT,
   DOD_VERDICT,
   RELEASE_RESULT,
 } from './campaign-loop.js'
+import { mergeResultVerdict, MERGE_RESULT_EVIDENCE, isMergeSha } from './merge-result.js'
 
 export const meta = {
   name: 'campaign-workflow',
@@ -428,22 +430,44 @@ const releaseRoute = routeRelease({
 let release = null
 if (releaseRoute.release && RELEASE_MODE === 'auto') {
   log(`[#1052] RELEASE GATE PASSED — ${releaseRoute.reason}. Landing ${CAMPAIGN_BRANCH} → ${PROTECTED_BRANCH} (the campaign's only trunk write).`)
-  release = await agent(
-    releaseMergePrompt({
-      planId: PLAN_ID,
-      targetRepo: TARGET_REPO,
-      campaignBranch: CAMPAIGN_BRANCH,
-      protectedBranch: PROTECTED_BRANCH,
-      wavesIntegrated,
-    }),
-    { label: 'release:merge', phase: 'Release', schema: RELEASE_RESULT, agentType: 'general-purpose' },
-  ).catch((e) => {
-    // A failed release is NOT reported as released, and it is NOT a campaign failure either: every
-    // wave is integrated and durable on the campaign branch, so the merge is retryable. Never claim
-    // a merge that did not land (catalog signal I).
-    log(`[#1052] release merge soft-fail — campaign branch intact, release retryable: ${e?.message || e}`)
-    return { released: false, notes: `release error: ${e?.message || e}` }
-  })
+  const releaseArgs = {
+    planId: PLAN_ID,
+    targetRepo: TARGET_REPO,
+    campaignBranch: CAMPAIGN_BRANCH,
+    protectedBranch: PROTECTED_BRANCH,
+    wavesIntegrated,
+  }
+  // #1211: the merge-result CI gate is CODE. The release-CI node only gathers evidence (ci_wait_run,
+  // and the direct GitLab /merge read when that gives no verdict); mergeResultVerdict() grades it.
+  // An errored evidence node grades as a HOLD, never as a pass (SEAMS invariant 6).
+  const ciEvidence = await agent(releaseCiPrompt(releaseArgs), {
+    label: 'release:ci',
+    phase: 'Release',
+    schema: MERGE_RESULT_EVIDENCE,
+    agentType: 'general-purpose',
+  }).catch((e) => ({ error: e?.message || String(e) }))
+  const releaseCi = mergeResultVerdict(ciEvidence)
+  const agentNotes = ciEvidence?.notes ? ` | agent: ${String(ciEvidence.notes).slice(0, 200)}` : ''
+  log(`[#1211] release CI ${releaseCi.pass ? 'GREEN' : 'HOLD'} (${releaseCi.path}): ${releaseCi.reason}${agentNotes}`)
+  // The merge binds to the head the VERDICT names (read twice, equal), never to raw evidence. A pass
+  // always carries one; the isMergeSha check keeps that true here even if the rule ever changes.
+  if (!releaseCi.pass || !isMergeSha(releaseCi.head)) {
+    // The draft PR stays open and unmerged. A red or unproven merge-result is exactly the signal the
+    // no-interim-merge-back shape exists to act on, while trunk is still clean.
+    const why = releaseCi.pass ? 'the verdict passed without a graded head SHA to bind the merge to' : releaseCi.reason
+    release = { released: false, pr_ref: ciEvidence?.pr_ref, notes: `release CI HOLD: ${why}${agentNotes}` }
+  } else {
+    release = await agent(
+      releaseMergePrompt({ ...releaseArgs, prNumber: ciEvidence.pr_number, headSha: releaseCi.head, ciReason: releaseCi.reason }),
+      { label: 'release:merge', phase: 'Release', schema: RELEASE_RESULT, agentType: 'general-purpose' },
+    ).catch((e) => {
+      // A failed release is NOT reported as released, and it is NOT a campaign failure either: every
+      // wave is integrated and durable on the campaign branch, so the merge is retryable. Never claim
+      // a merge that did not land (catalog signal I).
+      log(`[#1052] release merge soft-fail — campaign branch intact, release retryable: ${e?.message || e}`)
+      return { released: false, notes: `release error: ${e?.message || e}` }
+    })
+  }
   log(release?.released
     ? `[#1052] RELEASED — ${CAMPAIGN_BRANCH} landed on ${PROTECTED_BRANCH}${release.merge_sha ? ` @ ${release.merge_sha}` : ''}`
     : `[#1052] NOT released — ${release?.notes || 'see release node'}. ${CAMPAIGN_BRANCH} is intact; retry once the blocker clears.`)

@@ -19,10 +19,17 @@ from __future__ import annotations
 from pathlib import Path
 
 _GATE_JS = Path(__file__).resolve().parent.parent / "skills" / "nextwave" / "gate.js"
+# #1211: the merge-result rule gate.js grades the CI signal with, shared with the release gate.
+_MERGE_RESULT_JS = _GATE_JS.with_name("merge-result.js")
+_WF_JS = _GATE_JS.with_name("per-wave-workflow.js")
 
 
 def _gate_src() -> str:
     return _GATE_JS.read_text(encoding="utf-8")
+
+
+def _merge_result_src() -> str:
+    return _MERGE_RESULT_JS.read_text(encoding="utf-8")
 
 
 class TestGateModule:
@@ -134,7 +141,9 @@ class TestPromotionLifecycle:
 class TestCiSignal:
     """CI trust signal — waits on the kahuna->protected MERGE-RESULT pipeline.
     #1035: bounded ci_wait_run + a direct /merge-pipeline fallback so the signal no
-    longer over-waits ~30-57 min/wave on GitLab's head_pipeline freshness race."""
+    longer over-waits ~30-57 min/wave on GitLab's head_pipeline freshness race.
+    #1211: the agent returns evidence and ciVerdict() grades it with merge-result.js,
+    the rule the campaign release gate shares, so the direct-read rules live in code."""
 
     def test_signal_ci_waits_on_the_merge_result(self) -> None:
         src = _gate_src()
@@ -153,16 +162,18 @@ class TestCiSignal:
     def test_direct_merge_pipeline_fallback(self) -> None:
         # #1035: when ci_wait_run does not confirm success (the GitLab head_pipeline
         # freshness race), read the MR's OWN /merge pipeline directly instead of HOLDing.
+        # #1211: the steps are the shared directMergeReadSteps, so both gates ask alike.
         src = _gate_src()
-        assert "FALLBACK" in src, "ci signal must have the step-2b direct fallback (#1035)"
-        assert "merge_requests/" in src and "pipelines" in src, (
-            "fallback must read the MR's own pipelines directly"
-        )
-        assert "refs/merge-requests/" in src, "fallback must target the /merge pipeline ref"
+        assert "from './merge-result.js'" in src, "gate.js must take the direct read from merge-result.js (#1211)"
+        assert "...directMergeReadSteps(" in src, "the ci signal must carry the shared direct-read steps"
+        mr = _merge_result_src()
+        assert "DIRECT READ" in mr, "the shared steps must name the direct read"
+        assert "merge_requests/${n}/pipelines" in mr, "the direct read must list the MR's own pipelines"
+        assert "refs/merge-requests/${n}/merge" in mr, "the direct read must target the /merge pipeline ref"
 
     def test_fallback_never_grades_a_branch_or_head_pipeline(self) -> None:
         # The safety invariant survives the fallback: only a green MERGE-RESULT run passes;
-        # a branch or GitLab detached-head pipeline is never graded.
+        # a branch or GitLab detached-head pipeline is never graded. #1211: in code, too.
         src = _gate_src()
         assert "refs/merge-requests/N/head" in src, (
             "the GitLab detached-head pipeline must be named as the invalid one"
@@ -170,12 +181,38 @@ class TestCiSignal:
         assert "branch/head fallback" in src, (
             "the fallback must explicitly disclaim being a branch/head fallback (safety invariant)"
         )
+        mr = _merge_result_src()
+        assert "const want = `refs/merge-requests/${n}/merge`" in mr and "p?.ref === want" in mr, (
+            "mergeResultVerdict must count only this MR's /merge pipelines"
+        )
 
     def test_fallback_binds_to_current_head_sha(self) -> None:
-        # #1035 review: step-2b must NOT drop step-2's freshness binding — a green /merge run
-        # for a PREVIOUS head is stale. Require the selected pipeline's sha == the MR head SHA.
+        # #1035 review: the direct read must NOT drop step-2's freshness binding — a green /merge
+        # run for a PREVIOUS head is stale. #1211: #1035 bound it with "sha EQUALS the MR head",
+        # which a merged-results pipeline never satisfies (it runs on an ephemeral merge commit:
+        # 0 of 15 measured), so the rule binds through the merge commit's second parent, in code.
         src = _gate_src()
-        assert "head_sha" in src, "step-2b must read the MR's current head SHA for freshness"
-        assert "sha EQUALS" in src, (
-            "step-2b must PASS only if the /merge pipeline's sha matches the current head (freshness)"
+        assert "head_sha" in src, "the ci signal must read the MR's current head SHA for freshness"
+        assert "sha EQUALS the MR head SHA" not in src, (
+            "the unsatisfiable #1035 rule must not come back into the prompt"
+        )
+        mr = _merge_result_src()
+        assert "c.parent_ids[1] === head" in mr, (
+            "a green /merge pipeline must be bound to the head through its merge commit's parents"
+        )
+        # #1211 review I-1: the head is read before the wait AND after the last read, and a pass
+        # needs both equal, so a head that moved while it was graded can never pass.
+        assert "...head('head_sha')," in src and "...head('head_sha_final')," in src, (
+            "the ci signal must read the head both first and last"
+        )
+        assert "ev.head_sha_final !== head" in mr, "mergeResultVerdict must HOLD a head that moved during grading"
+
+    def test_ci_signal_is_graded_in_code(self) -> None:
+        # #1211: as trivyCoverage() is for trivy, the CI signal returns evidence and code grades it,
+        # against the PR the gate opened rather than one the agent names.
+        assert "export function ciVerdict(ev, prNumber)" in _gate_src(), "gate.js must export ciVerdict"
+        wf = _WF_JS.read_text(encoding="utf-8")
+        assert "schema: MERGE_RESULT_EVIDENCE" in wf, "the gate:ci node must return merge-result evidence"
+        assert ".then((ev) => ciVerdict(ev, promotionPrNumber))" in wf, (
+            "the gate:ci node must be graded by ciVerdict against the gate's own PR number"
         )

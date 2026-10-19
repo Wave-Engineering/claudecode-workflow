@@ -32,6 +32,8 @@
 // spuriously HOLDs an otherwise-clean wave. Lint/typecheck are NOT a fifth signal; they
 // ride INSIDE the CI signal (ci_wait_run runs the project's full gate on the merge result).
 
+import { mergeResultVerdict, directMergeReadSteps, headReadLines } from './merge-result.js'
+
 // ── Conservative-fail SIG (replaces the always-pass gateSignalStub) ──────────────────
 // SEAMS invariant 6: when #687 lands, the per-signal `.catch(() => gateSignalStub(...))`
 // fallbacks go away. In production an agent/signal ERROR is not evidence of safety — it is
@@ -196,19 +198,28 @@ export const OPEN_PR_RESULT = {
 // opened (#5), passed in by number so this signal never races to "find" it (the old
 // `no_merge_result_pr` failure). Lint/typecheck ride INSIDE this signal (the project's full
 // gate runs in CI), diff-scoped to the wave's changed files (§3.4).
+//
+// #1211: the agent returns EVIDENCE (MERGE_RESULT_EVIDENCE), and ciVerdict() below grades it with
+// the rule the campaign release gate shares (merge-result.js). The #1035 step 2b this replaces told
+// the agent to PASS only when the /merge pipeline's sha EQUALED the MR head. A merged-results
+// pipeline runs on an ephemeral merge commit, so that never holds on green (0 of 15 measured): the
+// fallback could only HOLD, or pass by an agent ignoring its own rule.
 export function ciSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRepo, prNumber }) {
   const prRef = prNumber != null ? `PR #${prNumber}` : `the open ${kahunaBranch}→${integrationBase} PR/MR`
+  const head = (field) => headReadLines({ targetRepo, prNumber, field }).map((l) => `   ${l}`)
   return [
-    `Trust-gate CI signal for wave ${waveId}. Wait on the ${kahunaBranch}→${integrationBase} MERGE-RESULT`,
-    `pipeline — NOT the merge-commit branch HEAD [sdlc #452].`,
+    `Trust-gate CI signal for wave ${waveId}. Report EVIDENCE about the ${kahunaBranch}→${integrationBase}`,
+    `MERGE-RESULT pipeline — NOT the merge-commit branch HEAD [sdlc #452]. You gather facts only: the gate`,
+    `grades them in code, so do not decide pass or fail yourself.`,
     ``,
     `1. The gate's PR-OPEN node already opened the draft promotion PR: ${prRef} (repo=${targetRepo}).`,
     prNumber != null
-      ? `   Use that number directly — do NOT search for it. (If for any reason it is not found, that is a`
-      : `   Find it via sdlc-server pr_status / pr_list (or gh -R ${targetRepo}). (If none is found, that is a`,
-    `   CONSERVATIVE-FAIL: return passed=false — the gate must not PASS without a pipeline to verify.)`,
-    `   The CI you wait on is the pipeline produced by MERGING kahuna INTO ${integrationBase} (the merge`,
+      ? `   Use that number directly — do NOT search for it. (If for any reason it is not found, say so in`
+      : `   Find it via sdlc-server pr_status / pr_list (or gh -R ${targetRepo}). (If none is found, say so in`,
+    `   notes and return wait: {}: with no pipeline to grade, the gate HOLDs.)`,
+    `   The CI you report on is the pipeline produced by MERGING kahuna INTO ${integrationBase} (the merge`,
     `   result), not the branch's own latest push.`,
+    ...head('head_sha'),
     `2. Call sdlc-server ci_wait_run (repo=${targetRepo}) with require_merge_result=true, pr_number=${prNumber != null ? prNumber : '<the PR number>'},`,
     `   AND explicit timeout_sec=420 + poll_interval_sec=15 (#1035 — do NOT omit them). All are load-bearing:`,
     `     • require_merge_result makes the tool refuse to grade a BRANCH pipeline, a SKIPPED one, or a`,
@@ -220,33 +231,39 @@ export function ciSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRe
     `     • timeout_sec=420 + poll_interval_sec=15 (#1035) are the BLEED FIX: these merge-result pipelines`,
     `       finish in 2–5 min, but WITHOUT an explicit timeout the tool rides its ~1800s idle default and`,
     `       burned ~30–57 min/wave (P5W12: 57 min to confirm a 156s pipeline). 420s is ample headroom.`,
-    `2b. FALLBACK — read the /merge pipeline DIRECTLY (do this ONLY when step 2 did NOT return`,
-    `    final_status=="success" — it timed out or returned "not_merge_result", most often GitLab's`,
-    `    head_pipeline freshness race: head_pipeline lags or points at the detached`,
-    `    refs/merge-requests/N/head instead of the /merge run). Do NOT HOLD yet — read the promotion`,
-    `    MR's OWN merge-result pipeline straight from GitLab, but KEEP step 2's freshness guarantee:`,
-    `      • First read the MR's CURRENT head SHA:`,
-    `          glab api "projects/<url-encoded ${targetRepo}>/merge_requests/${prNumber != null ? prNumber : '<pr>'}" | jq -r '.diff_refs.head_sha // .sha'`,
-    `      • Then list the MR's pipelines and take the NEWEST whose ref ==`,
-    `        "refs/merge-requests/${prNumber != null ? prNumber : '<pr>'}/merge":`,
-    `          glab api "projects/<url-encoded ${targetRepo}>/merge_requests/${prNumber != null ? prNumber : '<pr>'}/pipelines"`,
-    `    PASS iff that pipeline's status=="success" AND its sha EQUALS the MR head SHA above — a green`,
-    `    /merge run for a PREVIOUS head is STALE and must NOT pass (this is the same current-head-SHA`,
-    `    binding require_merge_result enforces; do not drop it just because you are reading directly).`,
-    `    HOLD (passed=false) if the pipeline failed/canceled/absent, OR if its sha does not match head.`,
-    `    If running/pending on the matching head, poll ~every 15s (up to ~another 420s). Reading straight`,
-    `    bypasses the head_pipeline LAG but keeps the SHA binding — so it is NOT a branch/head fallback`,
-    `    and keeps every safety property of step 2. (GitLab only; on GitHub the step-2 timeout suffices`,
-    `    — ci_wait_run binds reliably to the PR head SHA.)`,
-    `3. Pass predicate — passed = (step-2 final_status == "success") OR (step-2b /merge pipeline status == "success").`,
-    `   Otherwise FAIL (HOLD): a "not_merge_result"/timeout with NO green /merge pipeline in step 2b means CI`,
-    `   never validated the merge (no merge-result / branch-only / skipped / failed). NEVER fall back to a`,
-    `   BRANCH or head pipeline, and never PASS without a green MERGE-RESULT run from one of the two paths.`,
-    `   Report the final_status/reason (+ the step-2b pipeline id if that path decided it).`,
+    `   Report its answer as wait, copied as returned (ok, final_status, reason, error). Do not interpret it.`,
+    ...directMergeReadSteps({ targetRepo, prNumber, windowSec: 420 }).map((l, i) => (i === 0 ? `3. ${l}` : `   ${l}`)),
+    `   The direct read is NOT a branch/head fallback: only a merge-result pipeline bound to the current`,
+    `   head can pass, and the gate checks both in code.`,
     `   The project's lint + typecheck RIDE INSIDE this pipeline, diff-scoped to the wave's changed files`,
     `   (§3.4) — they are not a separate signal; pre-existing baseline debt must NOT fail this signal.`,
-    `Do NOT do any other work. Return signal="ci", passed (bool), detail (final_status/reason + 1 line).`,
+    `4. LAST, after step 2 and (if you ran it) step 3: the head again. If it moved, what was graded may`,
+    `   be the previous head's pipeline, and the gate HOLDs; do not re-run anything to chase it.`,
+    ...head('head_sha_final'),
+    ``,
+    `Do NOT do any other work. Return: pr_number, pr_ref, head_sha (step 1), wait (step 2), and, ONLY if`,
+    `you ran step 3, merge_pipelines and merge_commit; head_sha_final (step 4); notes (1-2 sentences).`,
+    `Report what you READ. A missing fact holds the wave; it never passes it.`,
   ].join('\n')
+}
+
+// ── CI verdict (#1211): the merge-result rule is CODE, as trivyCoverage() is for trivy ─────
+// Grades the CI signal's MERGE_RESULT_EVIDENCE with mergeResultVerdict(), the predicate the campaign
+// release gate uses, and returns the SIG the gate aggregates. The PR number is the one the gate's
+// PR-OPEN node opened, not the agent's: evidence about another PR/MR HOLDs, and the /merge ref the
+// direct read is filtered on is always this PR's. A HOLD keeps the agent's notes after the rule,
+// so the cause it read is never lost to the verdict.
+export function ciVerdict(ev, prNumber) {
+  const notes = ev?.notes ? ` | agent: ${String(ev.notes).slice(0, 200)}` : ''
+  if (prNumber != null && ev?.pr_number != null && ev.pr_number !== prNumber) {
+    return {
+      signal: 'ci',
+      passed: false,
+      detail: `HOLD (none): the evidence is for PR #${ev.pr_number}, but the gate opened PR #${prNumber}${notes}`,
+    }
+  }
+  const v = mergeResultVerdict(prNumber != null ? { ...ev, pr_number: prNumber } : ev)
+  return { signal: 'ci', passed: v.pass, detail: `${v.pass ? 'PASS' : 'HOLD'} (${v.path}): ${v.reason}${notes}` }
 }
 
 // ── 3. review signal (#847/ENG-5: 2-step stage→review; specialized reviewer PRESERVED) ─

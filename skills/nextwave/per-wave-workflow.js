@@ -59,6 +59,7 @@ import {
   OPEN_PR_RESULT,
   commutativitySignalPrompt,
   ciSignalPrompt,
+  ciVerdict,
   reviewStagePrompt,
   REVIEW_STAGE,
   reviewSignalPrompt,
@@ -68,6 +69,8 @@ import {
   promotePrompt,
   PROMOTE_RESULT,
 } from './gate.js'
+// #1211: the CI signal's evidence shape, shared with the campaign release gate. ciVerdict() grades it.
+import { MERGE_RESULT_EVIDENCE } from './merge-result.js'
 // #824 (Story 1.2, Plan #822) dispatch ceiling seam: the pure, deterministic enforcement of the
 // wave `dispatch` hint /prepwaves (#823) writes into phases-waves.json. normalizeDispatch resolves
 // absent→'serialize' (CT-01); applyDispatchCeiling clamps each planned flight-group toward more
@@ -929,11 +932,12 @@ if (!halt && pending.size === 0) {
         commutativitySignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, integrationBase: INTEGRATION_BASE, targetRepoDir: TARGET_REPO_DIR }),
         { label: 'gate:commutativity', phase: 'Trust gate', schema: SIG, agentType: 'general-purpose' },
       ).catch((e) => conservativeFail('commutativity', e)),
-      // 2. CI on the MR MERGE-RESULT pipeline of the draft PR opened above — NOT the merge-commit branch HEAD (sdlc #452, #5)
+      // 2. CI on the MR MERGE-RESULT pipeline of the draft PR opened above — NOT the merge-commit branch HEAD (sdlc #452, #5).
+      //    The agent reports evidence; ciVerdict grades it against this PR in code (#1211).
       () => agent(
         ciSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, integrationBase: INTEGRATION_BASE, targetRepo: TARGET_REPO, prNumber: promotionPrNumber }),
-        { label: 'gate:ci', phase: 'Trust gate', schema: SIG, agentType: 'general-purpose' },
-      ).catch((e) => conservativeFail('ci', e)),
+        { label: 'gate:ci', phase: 'Trust gate', schema: MERGE_RESULT_EVIDENCE, agentType: 'general-purpose' },
+      ).then((ev) => ciVerdict(ev, promotionPrNumber)).catch((e) => conservativeFail('ci', e)),
       // 3. review the kahuna-vs-base diff via a 2-STEP stage→review sub-pipeline (#847/ENG-5):
       //    a Bash-capable general-purpose STAGE agent fetches + diffs origin/<base>...origin/<kahuna>
       //    and materializes the changed-file set into a durable workspace; then the SPECIALIZED

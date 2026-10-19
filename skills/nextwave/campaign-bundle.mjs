@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const DIR = dirname(fileURLToPath(import.meta.url))
-const MODULES = ['campaign-loop.js'] // dependency order: the workflow imports the pure core
+const MODULES = ['merge-result.js', 'campaign-loop.js'] // dependency order: the core imports merge-result (#1211); the workflow imports both
 const MAIN = 'campaign-workflow.js'
 const OUT = 'campaign-workflow.bundled.js'
 

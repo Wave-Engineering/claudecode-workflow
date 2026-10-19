@@ -71,7 +71,7 @@ export function toBlob(state) {
 // claim N waves early — then a campaign abort would leave a trail of closed issues for work that
 // was deleted. So: durable engine state (wave_close_issue) is recorded HERE, because the flight
 // genuinely did land on the integration base; the PLATFORM close moves to the campaign's release
-// node (campaign-loop.js releaseMergePrompt step 4), which runs after the one trunk merge.
+// node (campaign-loop.js releaseMergePrompt step 2), which runs after the one trunk merge.
 //
 // `inCampaign` selects between the two. A standalone /nextwave wave promotes straight to the
 // protected branch, so for it merge and release coincide and the platform close still belongs here
