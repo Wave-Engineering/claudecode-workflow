@@ -119,6 +119,18 @@ Every issue MUST be wave-pattern quality: detailed enough that a spec-driven age
 
 ---
 
+## MANDATORY: Spotted Something? Squawk It on Triage, Don't File It
+
+**`/issue` is for work the user has decided to do.** When you spot something worrying or worth doing that is *outside the work in front of you*, such as a defect in another file, a smell, or a candidate improvement, squawk it on the project's triage list: `sqtk add <project>:triage "<what you saw, and why it matters>"` (`/sqtk`). The user and an agent walk that list together and decide each item. The item is then `record`ed as an issue, or `retire`d.
+
+- **Inside your lane, fix it inline** — a triage squawk is not a way to defer your own work.
+- **A concern about the run in flight** stays a `[concern]` comment on its issue (WAVE_AXIOMS Axiom 4).
+- **The user asked for the issue** — file it with `/issue`; that's a decision, not a sighting.
+
+Why: filing an issue for every worry bloats the backlog with items nobody has weighed (#1236). A one-line squawk costs nothing, and triage decides which items earn an issue (`recorded ↗`) and which are let go (`retired ◌`).
+
+---
+
 ## MANDATORY: WAVE_AXIOMS
 
 **Read `WAVE_AXIOMS.md` before any wave-pattern work** — resolve it from the repo root, or the kit-installed `~/.claude/WAVE_AXIOMS.md` in repos that don't carry it (the same resolution applies to the `docs/…` pointers elsewhere in this file: repo root, else `~/.claude/docs/…`). The binding axioms — violation is a bug. Disagreement is a reason to PR the file, never to override in the moment.

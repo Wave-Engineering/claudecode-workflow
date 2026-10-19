@@ -24,6 +24,8 @@ usage: |
 
 Create properly templated and labeled issues from a natural language prompt.
 
+**For work the user has decided to do.** If you're about to file something you only *spotted*, such as a worry, a defect outside your work, or an idea nobody has weighed, squawk it on `<project>:triage` instead (`/sqtk`; CLAUDE.md, "Spotted Something?"). Triage decides whether it earns an issue.
+
 ## Usage
 
 ```
