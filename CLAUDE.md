@@ -57,7 +57,7 @@ The "explicit user approval" requirement for the merge is **suspended** — and 
 1. The Flight Agent is operating inside a **Kahuna sandbox** — i.e. the current branch's base ref matches the regex `^kahuna/[0-9]+-` (a per-wave integration branch, not `main`).
 2. The full `/precheck` checklist has passed end-to-end: validation, code-reviewer (no unresolved high+ findings), trivy dependency scan, the `precheck` status posted, plus the Discord `#precheck` post and `vox` announcement.
 
-When both conditions are met, `/precheck` emits the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invokes `/mmr` directly — no human STOP for the merge. The exception is enforced **by `/precheck`'s own detection logic, not by agent discretion**: an agent on a `main`-targeted feature branch never qualifies for *this* exception, regardless of context. Outside the sandbox the original rule applies — checklist, STOP, wait for the merge call (`/mmr` / `/scpmmr` / affirmative) — unless the separate Approved Autochain or Standing Merge Grant exception below holds.
+When both conditions are met, `/precheck` emits the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invokes `/mmr` directly — no human STOP for the merge. The exception is enforced **by `/precheck`'s own detection logic, not by agent discretion**: an agent on a `main`-targeted feature branch never qualifies for *this* exception, regardless of context. Outside the sandbox the original rule applies — checklist, STOP, wait for the merge call (`/mmr` / `/scpmmr` / affirmative) — unless the separate Approved Autochain, Standing Merge Grant or Lead-Agent Grant exception below holds.
 
 **Platform prerequisite** (load-bearing — without it, the auto-approval is unsafe):
 
@@ -94,6 +94,16 @@ The user may give a **standing merge grant** for a named effort, such as "auto-m
 `/precheck` puts the grant on the checklist (the memory file, the user's words verbatim, the scope, and one sentence on why this PR/MR is inside it), then invokes `/mmr`.
 
 **Unlike the two exceptions above, this one is applied by the agent, not detected mechanically**: the grant lives in memory, and no script can check its scope. That is why the bar is "plainly inside the scope" and why the grant and its reasoning sit on the checklist, where the user sees them at the moment they are used. When in doubt, STOP.
+
+### Exception: Lead-Agent Grant
+
+The user may name **one agent as lead** for an organization and grant it self-approval: it merges its own PRs/MRs on a clean precheck, and it tags and releases when it judges the time is right. Unlike a standing merge grant, this one is scoped to **an agent, not an effort**, so the bounded-effort test in item 2 above does not apply to it. Everything else does:
+
+1. **The user's own words, given directly to that agent** in its session, and recorded in its memory with the organization and any expiry. The grant belongs to that agent alone: it is never relayed, and grunts or peers the lead tasks don't inherit it. They stop at a ready PR/MR, and the lead verifies their evidence before merging.
+2. **The precheck passed, mechanically**, by the same definition as the autochain exception's item 3.
+3. **The ABSOLUTE prod rule still binds.** A tag or release that changes what production runs, such as an image a live service follows, still needs the user's yes-prod. So do fleet installs.
+
+`/precheck` puts the grant on the checklist (the memory file and the user's words verbatim), then invokes `/mmr`. Like the standing merge grant, it is applied by the agent, not detected mechanically.
 
 ---
 
