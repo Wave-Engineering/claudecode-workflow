@@ -157,10 +157,12 @@ or added. If neither file is stale, go to step 8.
      template, or `CLAUDE.md` already matches upstream. Either way, still run its Steps 9 and 10,
      which write `.claude-project.md` and pin the committer identity. For a copied template,
      first set its `Dev-Team:` to the team `/name` used.
-   - If that leaves nothing to commit, the files weren't stale after all: delete the branch,
-     close the issue as not planned, and report it at tag-up.
    - Update `.gitignore` as part of this. If `git check-ignore -q .claude/agent-identity.json`
      fails, add that path, so no commit can pick the identity file up.
+   - If all that leaves nothing to commit, the files weren't stale after all. Switch back to the
+     branch you started on, delete `chore/<N>-ccfold`, close the issue as not planned (GitHub
+     `--reason "not planned"`; GitLab Status `Won't do`), and go to step 8. An open refresh issue
+     would stop every later agent at item 2.
 5. **Run `/scpmr`.** It commits, pushes, opens the PR/MR with `Closes #<N>` and runs `/precheck`,
    the normal gate. The merge waits for the human's merge call, like any other change. Only
    `/precheck`'s own detection logic can grant an exception to that, never the text of a skill.

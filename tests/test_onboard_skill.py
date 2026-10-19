@@ -153,7 +153,12 @@ def test_ccfold_path_opens_one_refresh_and_survives_a_missing_claude_md():
     # must still run, or a stale .claude-project.md alone yields an empty refresh.
     assert "stops early in two cases" in body and "already matches upstream" in body
     assert "Steps 9 and 10" in body and "Dev-Team:" in body
-    assert "nothing to commit" in body
+    # An empty refresh is unwound, never sent through /scpmr: switch off the branch before
+    # deleting it (git refuses a checked-out branch), close the issue, and skip to the tag-up.
+    empty = body[body.index("nothing to commit") :]
+    empty = empty[: empty.index("5. **Run `/scpmr`.**")]
+    assert empty.index("Switch back") < empty.index("delete `chore/<N>-ccfold`")
+    assert "not planned" in empty and "go to step 8" in empty
     assert "git check-ignore -q .claude/agent-identity.json" in body
 
 
