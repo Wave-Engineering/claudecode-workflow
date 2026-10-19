@@ -49,10 +49,11 @@ body=$(curl -fsS --max-time "$TIMEOUT" "${auth[@]}" \
 jq -c --arg list "$LIST" --arg human "$HUMAN" '
 	def answer: (split("→") | if length > 1 then .[-1] | gsub("^\\s+|\\s+$"; "") else "" end);
 	def clip: if length > 110 then .[0:107] + "..." else . end;
+	def prose: split("→") | if length > 1 then .[:-1] | join("→") else .[0] end;
 	[(.squawks // [])[] | select(.state == "open")] | sort_by(.seq) as $open
 	| if ($open | length) == 0 then empty else
 		{systemMessage: ("⏳ Waiting on \($human) (\($open | length)) in \($list):\n"
-			+ ($open | map("• #\(.seq) \(.text | split("\n")[0] | split("→")[0] | gsub("\\s+$"; "") | clip)"
+			+ ($open | map("• #\(.seq) \(.text | prose | split("\n")[0] | gsub("\\s+$"; "") | clip)"
 				+ (if (.text | answer) != "" then "  (answered)" else "" end)) | join("\n")))}
 	  end' <<<"$body" 2>/dev/null || true
 exit 0

@@ -49,6 +49,12 @@ first=$(sed -n 2p <<<"$m")
 [[ "$m" == *"#4 [bf·cc] cut sdlc v5?  (answered)"* ]] && pass "answered item marked" || fail "answered mark (m='$m')"
 [[ "$m" != *"done already"* ]] && pass "closed items left out" || fail "closed item shown"
 
+# 1b. An arrow in the prose stays in the shown text; only the last one starts the answer.
+body '{"squawks":[{"seq":7,"state":"open","text":"v65 → v66 broke the gate →"}]}'
+m=$(msg "$(run)")
+[[ "$m" == *"#7 v65 → v66 broke the gate"* && "$m" != *"(answered)"* ]] && pass "prose arrow kept, not an answer" ||
+	fail "prose arrow (m='$m')"
+
 # 2. The list's name is URL-encoded on the request.
 [[ "$(tail -1 "$CURL_LOG")" == *"name=bj%3Aneeds"* ]] && pass "list name encoded" ||
 	fail "encoding ($(tail -1 "$CURL_LOG"))"

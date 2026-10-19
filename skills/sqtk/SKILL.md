@@ -22,8 +22,10 @@ list. It is never deleted: it changes state, and each state has a glyph:
 | `retired` | ◌ | let go, no verdict |
 | `recorded` | ↗ | it became tracked work (an issue) |
 
-A non-yes/no answer goes after the squawk's **last** `→`. An arrow earlier in the prose
-("v65 → v66") is not an answer.
+A non-yes/no answer goes after the squawk's **last** `→`. **End every ask with ` →`**: it's
+the answer slot, and it keeps an arrow in your prose ("v65 → v66 broke the gate →") from being
+read as an answer. Without that closing arrow, everything after the prose's last `→` counts as
+the answer.
 
 `SQUAWK_URL` must be set (BJ's shell sets it). There is no default, on purpose: a write to the
 wrong instance persists but never reaches the people watching.
@@ -115,9 +117,17 @@ When BJ settles a squawk, you find out mechanically:
   ~/.claude/scripts/sqtk-doorbell.sh    # run_in_background: true
   ```
 
-  Exit `0` means one of your squawks was answered; re-arm after handling it. Exit `4` means the
-  stream dropped, not an answer: pause, then re-arm. Don't spin. Exit `2` means you have nothing
-  open to wait for. Re-arm after adding new squawks, because the set is read when it's armed.
+  Exit `0` means one of your squawks was answered; re-arm after handling it. An answer that
+  landed during your last turn, after the drain ran, rings at once with the change in its
+  output (`{"type":"sqtk.catch-up","changes":[...]}`), so arming late never misses one. It rings
+  once per change, so re-arming won't loop on it. Exit `4` means the stream dropped, not an
+  answer: pause, then re-arm. Don't spin. Exit `2` means none of your squawks is still open
+  (every one is settled or gone), so there's nothing to wait for. Re-arm after adding new
+  squawks, because the set is read when it's armed.
+
+  A squawk that vanishes from its list, or whose list is deleted, is only marked gone after
+  several misses over a day. Until then it still counts as open, so a server blip or a wrong
+  `SQUAWK_URL` can't silently drop an answer.
 
 ## BJ's banner (opt-in, per session)
 

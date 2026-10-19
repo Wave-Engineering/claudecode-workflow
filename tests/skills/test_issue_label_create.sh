@@ -6,7 +6,7 @@
 # Covers `test_issue_label_create_ondemand` called out in issue #516:
 #   - Missing `type::plan` triggers label_create call
 #   - Missing `epic::N` triggers label_create call
-#   - Canonical colour #5319E7 documented
+#   - Canonical colour 5319E7 documented as bare hex (#903)
 
 set -euo pipefail
 
@@ -46,10 +46,11 @@ else
 fi
 
 # --- Canonical colour (Dev Spec §5.5.3 step 2, §5.5.4 step 3, R-14) ----------
-if grep -q '#5319E7' "$SKILL"; then
-	pass "canonical colour '#5319E7' documented"
+# Bare hex, no '#': label_create rejects '#5319E7', which is why #903 removed it from the skill.
+if grep -q '5319E7' "$SKILL" && ! grep -q '#5319E7' "$SKILL"; then
+	pass "canonical colour '5319E7' documented, without the '#' label_create rejects"
 else
-	fail "canonical colour '#5319E7' missing"
+	fail "canonical colour must appear as bare '5319E7', never '#5319E7' (#903)"
 fi
 
 # --- type::plan label creation path (R-14, §5.5.3 step 2) --------------------

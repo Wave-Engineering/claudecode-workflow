@@ -36,7 +36,17 @@ cat >"$WORK/bin/curl" <<'EOF'
 exit "${FAKE_RC:-0}"
 EOF
 chmod +x "$WORK/bin/curl"
+# Stub the drain's --pending catch-up: exit $FAKE_PENDING (default 1, nothing waiting), and
+# on 0 print one waiting change, as the real one does.
+cat >"$WORK/bin/drain" <<'EOF'
+#!/usr/bin/env bash
+[[ "$1" == --pending ]] && printf 'called\n' >>"$DRAIN_LOG"
+[[ "${FAKE_PENDING:-1}" == 0 ]] && printf '%s\n' '[{"id":31,"list":"bj:needs","seq":3,"state":"confirmed","answer":"","text":"tag v9? →"}]'
+exit "${FAKE_PENDING:-1}"
+EOF
+chmod +x "$WORK/bin/drain"
 export SQUAWK_URL="http://squawk.test" FAKE_STREAM="$WORK/stream" FAKE_HOLD=0 FAKE_RC=0
+export SQTK_DRAIN="$WORK/bin/drain" DRAIN_LOG="$WORK/drain.log"
 
 stream() { printf '%s\n' "$@" >"$FAKE_STREAM"; }
 run() { (cd "$REPO" && PATH="$WORK/bin:$PATH" timeout 20 bash "$BELL" 2>/dev/null); }
@@ -98,6 +108,38 @@ mv "$REPO/.claude/sqtk-mine.json" "$WORK/mine.bak"
 run >/dev/null
 [[ $? -eq 2 ]] && pass "no sqtk-mine.json: exit 2" || fail "no mine file"
 mv "$WORK/mine.bak" "$REPO/.claude/sqtk-mine.json"
+
+# 7. Every id already settled in a terminal state (incl. gone): nothing open, exit 2.
+printf '%s\n' '{"31":"confirmed|"}' >"$REPO/.claude/sqtk-seen.json"
+run >/dev/null
+[[ $? -eq 2 ]] && pass "all settled: exit 2" || fail "all settled (rc=$?)"
+printf '%s\n' '{"31":"gone|"}' >"$REPO/.claude/sqtk-seen.json"
+run >/dev/null
+[[ $? -eq 2 ]] && pass "all gone: exit 2" || fail "all gone"
+printf '%s\n' '{"31":"open|maybe"}' >"$REPO/.claude/sqtk-seen.json"
+stream "$(ev squawk.updated 31 open 'tag it? → go')"
+run >/dev/null
+[[ $? -eq 0 ]] && pass "seen but not terminal: still waited on" || fail "non-terminal seen"
+rm -f "$REPO/.claude/sqtk-seen.json"
+
+# 8. An answer that landed before the stream opened: the catch-up rings at once, after the
+#    stream's first line, while the stream would otherwise hold.
+stream ": connected"
+rm -f "$DRAIN_LOG"
+start=$SECONDS
+out=$(FAKE_PENDING=0 FAKE_HOLD=15 run)
+rc=$?
+took=$((SECONDS - start))
+[[ $rc -eq 0 && "$out" == *sqtk.catch-up* && $took -lt 5 ]] && pass "missed answer: catch-up rings at once" ||
+	fail "catch-up (rc=$rc out='$out' ${took}s)"
+[[ "$(jq -r '.changes[0].state' <<<"$out" 2>/dev/null)" == confirmed ]] &&
+	pass "the catch-up carries the change itself" || fail "catch-up payload (out='$out')"
+pkill -f "$WORK/bin/curl" 2>/dev/null
+stream ": connected" "$(ev squawk.updated 31 confirmed 'mine → yes')"
+rm -f "$DRAIN_LOG"
+out=$(run)
+[[ $? -eq 0 && "$out" == *'"id":31'* && "$(wc -l <"$DRAIN_LOG")" == 1 ]] &&
+	pass "nothing missed: catch-up runs once, then the stream answers" || fail "catch-up then stream (out='$out')"
 
 echo
 if [[ $FAILS -eq 0 ]]; then
