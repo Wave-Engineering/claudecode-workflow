@@ -19,6 +19,52 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.10.0] - 2026-10-19
+
+### Fixed
+
+- **The nextwave trust gates grade merge-result CI in code (#1211, PR #1270).** A GitLab
+  merged-results pipeline runs on an ephemeral merge commit, so its sha is never the MR head
+  (0/15 measured on green pipelines). The per-wave CI signal's old rule, "its sha equals the MR
+  head", could therefore never pass on green.
+  - The per-wave CI signal and the campaign release gate now share one pure predicate,
+    `mergeResultVerdict()` in `skills/nextwave/merge-result.js`, inlined into both bundles. It
+    binds a pipeline to the head through the merge commit's second parent (`parent_ids[1] ==
+    head`, 15/15), or through `sha == head`.
+  - `ci_wait_run` is the primary path. A direct read of the MR's
+    `refs/merge-requests/<n>/merge` pipelines is used **only when it gives no verdict**. Only
+    that ref counts (the #904/#476 guarantees hold), and the newest run wins. A run that can't
+    be ordered, because it has no integer id, HOLDs.
+  - **A graded red is final**, GitLab's `failed`/`canceled` spellings included. A direct read
+    never overrides it.
+  - The head is read twice, before `ci_wait_run` and after the last read. A head that moved
+    between the two HOLDs. The release merge is pinned to the head the verdict graded.
+  - Not in this fix: removing the 420 s / 1800 s waits. That depends on `ci_wait_run` seeing
+    GitLab pipelines (sdlc#585, shipped in sdlc v5.0.2, below) and on sdlc's own no-run window.
+- **Dependency-scan coverage is matched by name, and partial coverage fails (#1247, PR #1269).**
+  trivy's pip analyzer reads only a file named exactly `requirements.txt`. Every other pip lock
+  was counted in the coverage denominator but never scanned, so a clean scan of the remaining
+  locks read as a PASS.
+  - `scripts/ci/check-scannable.sh` is the single source for what a pip lock is
+    (`*requirements*.txt`, or `requirements/*.txt`). Each lock that isn't named
+    `requirements.txt` is staged alone under that name and scanned.
+  - A lock that was counted but not ingested is reported `UNSCANNED`. **New exit 6, PARTIAL
+    COVERAGE, fails on every path**: `dependency-scan.sh`, the `/precheck` Job C fallback, and
+    the trust gate's trivy signal, which re-checks coverage in code (`trivyCoverage()`).
+  - `.no-scannable-dependencies` applies only when no lock is found. A lock that is found but
+    not scanned fails, declared or not.
+
+### Image
+
+- **The image bakes mcp-server-sdlc v5.0.2 and mcp-server-discord v1.4.3.**
+  - sdlc v5.0.1 and discord v1.4.3 fix their installers: the release tag is resolved from the
+    `releases/latest` redirect, and curl network failures are told apart from HTTP errors.
+  - sdlc v5.0.2 runs `glab` as argv, so an `&` in a query can no longer background a GitLab
+    list call (sdlc#585). This is what lets `ci_wait_run` see GitLab pipelines.
+  - The other three are unchanged from 8.9.0: mcp-server-wtf v1.5.2,
+    mcp-server-discord-watcher v1.6.1 and mcp-server-nerf v2.0.0. `install-remote.sh` bakes each
+    server's latest release at tag time.
+
 ## [8.9.0] - 2026-10-19
 
 ### Added
