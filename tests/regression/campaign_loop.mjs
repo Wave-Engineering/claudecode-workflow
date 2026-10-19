@@ -19,11 +19,14 @@ import {
   runCampaign,
   waveOversightPrompt,
   dodVerificationPrompt,
+  releaseCiPrompt,
   releaseMergePrompt,
   DOD_VERDICT,
   RELEASE_RESULT,
   JUDGMENT_RESULT,
 } from '../../skills/nextwave/campaign-loop.js'
+import { directMergeReadSteps } from '../../skills/nextwave/merge-result.js'
+import { readFileSync } from 'node:fs'
 
 let passed = 0
 let failed = 0
@@ -240,14 +243,64 @@ async function main() {
   ok(!/pr_merge\b/.test(dodP) && !/gh pr merge/.test(dodP), 'dod prompt: NEVER merges — it answers; routing is the pure predicate\'s job')
   ok(DOD_VERDICT.required.includes('met') && DOD_VERDICT.additionalProperties === false, 'DOD_VERDICT schema requires met, no extra props')
 
-  const relP = releaseMergePrompt({ planId: '56', targetRepo: 'o/r', campaignBranch: 'campaign/56-x', protectedBranch: 'main', wavesIntegrated: ['w1', 'w2'] })
-  ok(/campaign\/56-x/.test(relP) && /main/.test(relP), 'release prompt: names both refs (campaign → protected)')
+  const relArgs = { planId: '56', targetRepo: 'o/r', campaignBranch: 'campaign/56-x', protectedBranch: 'main', wavesIntegrated: ['w1', 'w2'] }
+  const ciP = releaseCiPrompt(relArgs)
+  ok(/campaign\/56-x/.test(ciP) && /main/.test(ciP), 'release-CI prompt: names both refs (campaign → protected)')
   // A wave's pipeline ran against the campaign branch, which drifts from trunk — so the release
   // needs its OWN merge-result CI run against current trunk. A branch-CI signal is weaker.
-  ok(/require_merge_result/.test(relP), 'release prompt: gates on a MERGE-RESULT CI run (no per-wave pipeline tested this diff against current trunk)')
-  ok(/ci_wait_run/.test(relP), 'release prompt: waits on that CI run before merging')
+  ok(/require_merge_result=true/.test(ciP) && /ci_wait_run/.test(ciP), 'release-CI prompt: gates on a MERGE-RESULT CI run (no per-wave pipeline tested this diff against current trunk)')
+  ok(/timeout_sec=1800, poll_interval_sec=20/.test(ciP), 'release-CI prompt: the explicit bounded wait (#1035)')
+  // #1211: the release gate had no fallback, so a GitLab ci_wait_run that saw nothing (sdlc#585)
+  // waited 1800s and could only hold. It now carries the shared direct read, verbatim.
+  ok(ciP.includes(directMergeReadSteps({ targetRepo: 'o/r', windowSec: 600 })[0]), 'release-CI prompt: carries the shared direct /merge read (#1211)')
+  ok(/merge_requests\/<n>\/pipelines\?per_page=100/.test(ciP) && /parent_ids/.test(ciP), 'release-CI prompt: the direct read lists pipelines and reads the merge commit parents')
+  // The CI node only ANSWERS — a node that could merge would make mergeResultVerdict advisory.
+  ok(!/pr merge\b/.test(ciP) && !/pr_merge\b/.test(ciP) && !/pr ready\b/.test(ciP), 'release-CI prompt: NEVER marks ready or merges; it answers and code grades')
+  ok(/do NOT merge/.test(ciP), 'release-CI prompt: says so')
+  // #1211 review I-1: the head is read FIRST and again LAST, so a head that moved while CI was graded
+  // HOLDs instead of passing on the previous head's /merge pipeline.
+  const first = ciP.indexOf('report it as head_sha,')
+  const last = ciP.indexOf('report it as head_sha_final')
+  ok(first >= 0 && first < ciP.indexOf('sdlc-server ci_wait_run('), 'release-CI prompt: the first head read comes before ci_wait_run')
+  ok(last > ciP.indexOf('DIRECT READ'), 'release-CI prompt: the final head read comes after ci_wait_run AND the direct read')
+
+  const relP = releaseMergePrompt({ ...relArgs, prNumber: 77, headSha: 'f'.repeat(40), ciReason: 'graded-green-reason' })
+  ok(/campaign\/56-x/.test(relP) && /main/.test(relP), 'release prompt: names both refs (campaign → protected)')
+  ok(!/ci_wait_run/.test(relP) && /Do NOT re-gate CI/.test(relP), 'release prompt: no CI wait of its own; the gate graded CI in code before this node (#1211)')
+  ok(relP.includes('graded-green-reason'), "release prompt: carries the gate's reason")
+  ok(relP.includes(`pr merge 77 --match-head-commit ${'f'.repeat(40)}`), 'release prompt: GitHub merge is bound to the graded head')
+  ok(relP.includes(`merge_requests/77/merge?sha=${'f'.repeat(40)}`), 'release prompt: GitLab merge is bound to the graded head')
+  ok(/the merge refuses\. Then STOP and return\s+released=false/.test(relP), 'release prompt: a moved head is a HOLD, never a merge of unseen code')
+  ok(relP.includes('glab mr update 77 --ready -R o/r'), 'release prompt: GitLab marks the MR ready before merging (GitLab refuses to merge a draft)')
+  // #1211 review I-2: no graded head, no merge. The old fallback bound to "the head SHA you read now".
+  for (const headSha of [undefined, '', 'HEAD', 'F'.repeat(40)]) {
+    const stop = releaseMergePrompt({ ...relArgs, prNumber: 77, headSha, ciReason: 'x' })
+    ok(/STOP\. Do NOT mark the PR ready and do NOT merge\. Return released=false/.test(stop) && !/pr merge|\/merge\?sha=|pr ready|--ready/.test(stop),
+      `release prompt: no well-formed graded head (${JSON.stringify(headSha)}) STOPs with no merge instruction`)
+  }
+
   ok(/Refs #/.test(relP), 'release prompt: honors Refs #N (do-not-close) when closing issues (#1046)')
   ok(RELEASE_RESULT.required.includes('released') && RELEASE_RESULT.additionalProperties === false, 'RELEASE_RESULT schema requires released, no extra props')
+
+  // #1211: a pure rule proves nothing if the workflow stops calling it. Pin the wiring in the source
+  // AND the committed bundle (the artifact the Workflow tool runs): the CI node returns evidence,
+  // the verdict is computed in code, and the merge node is reached only in the pass branch.
+  for (const f of ['campaign-workflow.js', 'campaign-workflow.bundled.js']) {
+    const src = readFileSync(new URL(`../../skills/nextwave/${f}`, import.meta.url), 'utf8')
+    ok(/label: 'release:ci',\s+phase: 'Release',\s+schema: MERGE_RESULT_EVIDENCE,/.test(src), `${f}: the release-CI node returns MERGE_RESULT_EVIDENCE`)
+    ok(/\.catch\(\(e\) => \(\{ error: e\?\.message \|\| String\(e\) \}\)\)\s+const releaseCi = mergeResultVerdict\(ciEvidence\)/.test(src), `${f}: an errored CI node is graded (HOLD), not skipped`)
+    ok(/if \(!releaseCi\.pass \|\| !isMergeSha\(releaseCi\.head\)\) \{[\s\S]*?released: false[\s\S]*?\} else \{\s+release = await agent\(\s+releaseMergePrompt\(/.test(src), `${f}: the merge node runs only when the verdict passed with a graded head`)
+    ok(/releaseMergePrompt\(\{ \.\.\.releaseArgs, prNumber: ciEvidence\.pr_number, headSha: releaseCi\.head,/.test(src), `${f}: the merge binds to the head the VERDICT names, not to raw evidence (#1211 review I-2)`)
+    ok(src.includes('notes: `release CI HOLD: ${why}${agentNotes}`'), `${f}: a release HOLD keeps the agent's notes`)
+    // Calls only: the bundle also inlines campaign-loop.js, so it carries the definition too.
+    ok((src.match(/(?<!function )releaseMergePrompt\(/g) || []).length === 1, `${f}: releaseMergePrompt is called exactly once (no path around the gate)`)
+  }
+  // The bundle must also DEFINE what it calls. A module dropped from campaign-bundle.mjs MODULES
+  // still bundles "in sync" and parses, then throws a ReferenceError at the release gate.
+  const campaignBundle = readFileSync(new URL('../../skills/nextwave/campaign-workflow.bundled.js', import.meta.url), 'utf8')
+  for (const def of ['function mergeResultVerdict(', 'function directMergeReadSteps(', 'const MERGE_RESULT_EVIDENCE =']) {
+    ok(campaignBundle.includes(def), `campaign-workflow.bundled.js defines ${def.replace(/[ (=]+$/, '')} (merge-result.js inlined)`)
+  }
 
   // The oversight lens must know BOTH branches, so a mid-campaign `promoted:false` reads as the
   // normal state it now is (nothing has shipped yet) rather than as catalog-I evidence.

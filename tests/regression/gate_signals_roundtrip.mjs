@@ -7,7 +7,8 @@
 //      a signal that ERRORS returns passed:false (HOLD), NEVER passed:true (SEAMS invariant 6).
 //   2. each signal prompt names its REAL sdlc-server tool + the EXACT pass predicate, and is
 //      diff-scoped (the §3.4 refinement: changed-files, never the whole tree).
-//   3. the CI prompt's pass predicate is final_status == "success" and nothing else (#898).
+//   3. the CI pass predicate is CODE (#1211): ciVerdict() passes only a ci_wait_run success or a
+//      green merge-result pipeline bound to the current head, and nothing else (#898).
 //   4. the promote prompt is wave_finalize → pr_merge → delete-branch (CODE ONLY), and reports
 //      promoted ONLY once the merge is observable on the integration base.
 
@@ -18,6 +19,7 @@ import {
   OPEN_PR_RESULT,
   commutativitySignalPrompt,
   ciSignalPrompt,
+  ciVerdict,
   reviewStagePrompt,
   REVIEW_STAGE,
   reviewSignalPrompt,
@@ -73,7 +75,21 @@ try {
   assert.match(ci, /ci_wait_run/)
   assert.match(ci, /MERGE-RESULT/) // #452: merge-result pipeline, not branch HEAD
   assert.match(ci, /NOT the merge-commit branch HEAD/)
-  assert.match(ci, /final_status == "success"/) // the ONLY pass shape
+  // #1211: the pass shape is CODE (ciVerdict, section 2c). The prompt only gathers evidence, and must
+  // not hand the agent a predicate of its own to apply, generously or not.
+  assert.match(ci, /do not decide pass or fail yourself/)
+  assert.doesNotMatch(ci, /sha EQUALS/, 'the #1035 2b rule a merged-results pipeline can never satisfy must be gone')
+  assert.doesNotMatch(ci, /passed=false|passed \(bool\)/, 'the agent returns evidence, never a verdict')
+  assert.match(ci, /timeout_sec=420/) // #1035's bleed fix survives the rewrite
+  assert.match(ci, new RegExp(`merge_requests/${PR}/pipelines`)) // the direct read lists THIS MR's pipelines
+  assert.match(ci, new RegExp(`refs/merge-requests/${PR}/merge`)) // and names its /merge ref concretely
+  assert.match(ci, /parent_ids/) // and reports the merge commit's parents, which bind it to the head
+  // #1211 review I-1: the head is read FIRST and again LAST. Read only before the wait, a head that
+  // moved during it lets the previous head's green /merge pipeline pass.
+  const at = (s) => { const i = ci.indexOf(s); assert.ok(i >= 0, `ci prompt must contain ${s}`); return i }
+  assert.ok(at('report it as head_sha,') < at('Call sdlc-server ci_wait_run'), 'the first head read comes before ci_wait_run')
+  assert.ok(at('report it as head_sha_final') > at('DIRECT READ'), 'the final head read comes after ci_wait_run AND the direct read')
+  assert.match(ci, /return wait: \{\}/) // the schema requires wait, so "no wait" would be a schema error
   // #476: the gate must REQUIRE a merge-result pipeline. Without this flag the tool
   // will happily grade a branch pipeline — or a SKIPPED one, which GitLab normalizes
   // to "success" — as though it validated the merge. That is a silent false PASS on
@@ -83,7 +99,7 @@ try {
   // grades belongs to the CURRENT head — a green merge-result run for a PREVIOUS
   // commit would satisfy the gate and merge code CI never saw.
   assert.match(ci, /pr_number=/)
-  assert.match(ci, /not_merge_result/) // and must FAIL on it, never fall back
+  assert.match(ci, /not_merge_result/) // no verdict ⇒ the direct merge-result read, never a branch fallback
   assert.match(ci, /changed files/) // diff-scoped (§3.4)
   assert.match(ci, new RegExp(`PR #${PR}`)) // #5: waits on the gate-opened draft PR by number
   assert.match(ci, /do NOT search for it/i) // #5: deterministic, no race to "find" the PR
@@ -238,6 +254,79 @@ try {
   }
   ok('trivy coverage: 2-of-4 HOLDs, a named unscanned lock HOLDs, a lone bun.lockb HOLDs declared or not, full passes through, a fail never becomes a pass and keeps its cause, bad counts (and found 0 beside a named unscanned lock) conservative-fail, wired in source and bundle (#1247)')
 } catch (e) { bad('trivy coverage (#1247)', e) }
+
+// ── 2c. #1211: the CI merge-result rule is CODE, shared with the campaign release gate ───────
+try {
+  const HEAD = '1'.repeat(40) // the MR's current head
+  const TARGET = '2'.repeat(40) // the integration base's tip
+  const MERGE = '3'.repeat(40) // the ephemeral merge commit a merged-results pipeline runs on
+  const REF = `refs/merge-requests/${PR}/merge`
+  const NOT_FOUND = { ok: false, error: "No CI run found for ref 'kahuna/692-x'" } // sdlc#585's signature
+  // The measured shape of a green GitLab merged-results pipeline (15/15 on 2026-10-19).
+  const direct = (over = {}) => ({
+    pr_number: PR,
+    head_sha: HEAD,
+    head_sha_final: HEAD, // the head read again after the last read, unmoved
+    wait: NOT_FOUND,
+    merge_pipelines: [{ id: 9, ref: REF, status: 'success', sha: MERGE }],
+    merge_commit: { sha: MERGE, parent_ids: [TARGET, HEAD] },
+    ...over,
+  })
+
+  const primary = ciVerdict({ pr_number: PR, head_sha: HEAD, head_sha_final: HEAD, wait: { ok: true, final_status: 'success' } }, PR)
+  assert.equal(primary.signal, 'ci')
+  assert.equal(primary.passed, true, 'a ci_wait_run success passes on the primary path')
+  assert.match(primary.detail, /^PASS \(ci_wait_run\)/)
+
+  // The case #1035's step 2b could never pass: its sha is the merge commit, never the head.
+  const green = ciVerdict(direct(), PR)
+  assert.equal(green.passed, true, 'a green 2-parent /merge pipeline whose parent[1] is the head must PASS')
+  assert.match(green.detail, /^PASS \(direct\): .*merges the head 11111111/)
+
+  const stale = ciVerdict(direct({ merge_commit: { sha: MERGE, parent_ids: [TARGET, '4'.repeat(40)] } }), PR)
+  assert.equal(stale.passed, false, 'parent[1] != head is a stale run and must HOLD')
+  assert.match(stale.detail, /^HOLD \(direct\): .*stale run/)
+
+  const red = ciVerdict(direct({ merge_pipelines: [{ id: 9, ref: REF, status: 'failed', sha: MERGE }] }), PR)
+  assert.equal(red.passed, false, 'a red direct read must HOLD')
+  assert.match(red.detail, /^HOLD \(direct\): .*is failed/)
+
+  const moved = ciVerdict(direct({ wait: { ok: false, final_status: 'not_merge_result', reason: 'not_merge_result' }, head_sha_final: '7'.repeat(40) }), PR)
+  assert.equal(moved.passed, false, "a head that moved while it was graded HOLDs, even with the old head's green /merge pipeline")
+  assert.match(moved.detail, /^HOLD \(none\): the head moved during grading/)
+
+  const graded = ciVerdict(direct({ wait: { ok: false, final_status: 'failure' } }), PR)
+  assert.equal(graded.passed, false, 'a red ci_wait_run is final: a green direct read never overrides it')
+  assert.match(graded.detail, /^HOLD \(ci_wait_run\): .*never overrides a graded red/)
+
+  // The PR is the gate's, not the agent's: evidence about another PR HOLDs ...
+  const other = ciVerdict(direct({ pr_number: PR + 1 }), PR)
+  assert.equal(other.passed, false, 'evidence about another PR must HOLD')
+  assert.match(other.detail, new RegExp(`evidence is for PR #${PR + 1}, but the gate opened PR #${PR}`))
+  // ... and the /merge ref the direct read is filtered on is the gate's PR's, numbered or not.
+  const { pr_number: _n, ...unnumbered } = direct()
+  assert.equal(ciVerdict(unnumbered, PR).passed, true, 'a missing agent pr_number takes the gate PR')
+  const otherRef = { ...unnumbered, merge_pipelines: [{ id: 9, ref: `refs/merge-requests/${PR + 1}/merge`, status: 'success', sha: MERGE }] }
+  assert.equal(ciVerdict(otherRef, PR).passed, false, "another MR's /merge pipeline never counts")
+
+  for (const ev of [{}, null, undefined]) {
+    assert.equal(ciVerdict(ev, PR).passed, false, `evidence ${JSON.stringify(ev)} must HOLD`)
+  }
+  // A HOLD keeps the agent's own notes after the rule, so the cause it read is not lost.
+  const noted = ciVerdict(direct({ merge_pipelines: [], notes: 'glab api 401 Unauthorized' }), PR)
+  assert.equal(noted.passed, false)
+  assert.match(noted.detail, /^HOLD \(direct\): .*\| agent: glab api 401 Unauthorized$/)
+  ok('ciVerdict: a ci_wait_run success or a head-bound green /merge pipeline PASSes; stale, red, graded-red, other-PR and missing evidence HOLD (#1211)')
+
+  // The committed bundle (the artifact the Workflow tool runs) must INLINE merge-result.js. A module
+  // dropped from bundle.mjs MODULES still bundles "in sync" and parses, then throws a ReferenceError
+  // at the gate's first CI signal, so pin the definitions rather than the call sites.
+  const bundle = readFileSync(new URL('../../skills/nextwave/per-wave-workflow.bundled.js', import.meta.url), 'utf8')
+  for (const def of ['function mergeResultVerdict(', 'function directMergeReadSteps(', 'const MERGE_RESULT_EVIDENCE =', 'function ciVerdict(']) {
+    assert.ok(bundle.includes(def), `per-wave-workflow.bundled.js must define ${def.replace(/[ (=]+$/, '')} (merge-result.js inlined, #1211)`)
+  }
+  ok('per-wave bundle inlines merge-result.js: mergeResultVerdict, directMergeReadSteps, MERGE_RESULT_EVIDENCE and ciVerdict are defined (#1211)')
+} catch (e) { bad('ci verdict (#1211)', e) }
 
 // ── 3. promotion is CODE: mark-ready → pr_merge → delete-branch (#5) ──────────────────
 // #5: promotion no longer OPENS a PR (the gate's PR-OPEN node already did) — it marks the

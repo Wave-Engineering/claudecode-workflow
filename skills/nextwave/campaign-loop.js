@@ -17,6 +17,8 @@
 // on PASS+integrated+continue, ends on a HOLD/flag" procedures are deterministic unit tests, not
 // integration runs. No LLM in the loop CONTROL FLOW ⇒ it provably cannot stall (#736 dissolves).
 
+import { directMergeReadSteps, headReadLines, isMergeSha } from './merge-result.js'
+
 // ── args intake (same contract as per-wave-workflow.js #1/#3: the runtime global is `args`,
 //    which may arrive as an object OR a JSON string from tool-call quoting) ──────────────────
 export function parseArgs(raw) {
@@ -325,6 +327,9 @@ export const DOD_VERDICT = {
   },
 }
 
+// The release-CI node returns MERGE_RESULT_EVIDENCE (merge-result.js): facts that
+// mergeResultVerdict() grades before the merge node is reached at all (#1211).
+//
 // The release-node result contract — `released` must reflect an ACTUALLY-LANDED merge, never a
 // merge-requested-but-pending one (the same discipline the per-wave promote node carries: catalog
 // signal I, "promoted ≠ delivered").
@@ -376,23 +381,27 @@ export function dodVerificationPrompt({ planId, targetRepo, targetRepoDir, campa
   ].join('\n')
 }
 
-// ── release-merge prompt (#1052 — the ONE write to the protected branch) ─────────────────────
-// Reached only when routeRelease() returned release:true. Carries its own merge-result CI gate
-// against the protected branch, which is NOT redundant with the per-wave signals — see below.
-export function releaseMergePrompt({ planId, targetRepo, campaignBranch, protectedBranch, wavesIntegrated }) {
+// ── release-CI prompt (#1052, #1211 — the release gate's merge-result EVIDENCE step) ──────────
+// Reached only when routeRelease() returned release:true. Opens (or finds) the draft release PR
+// and reports what CI says about its merge-result pipeline against the protected branch. That gate
+// is NOT redundant with the per-wave signals; see step 2. Like the DoD node it only ANSWERS:
+// mergeResultVerdict() decides, so "red or unproven CI ⇒ no trunk write" holds in code rather than
+// in a prompt read generously. #1211: it used to be prose inside the merge node, with no fallback,
+// so a GitLab ci_wait_run that saw nothing (sdlc#585) waited 1800s and could only hold.
+export function releaseCiPrompt({ planId, targetRepo, campaignBranch, protectedBranch, wavesIntegrated }) {
+  const head = (field) => headReadLines({ targetRepo, field }).map((l) => `   ${l}`)
   return [
-    `You are the CAMPAIGN RELEASE node for plan ${planId ?? '<unknown>'} of ${targetRepo}. The campaign`,
+    `You are the CAMPAIGN RELEASE-CI node for plan ${planId ?? '<unknown>'} of ${targetRepo}. The campaign`,
     `is complete (waves [${(wavesIntegrated ?? []).join(', ') || 'none'}] all integrated onto`,
-    `${campaignBranch}) and the DoD gate PASSED. Land ${campaignBranch} → ${protectedBranch}.`,
-    ``,
-    `THIS IS THE ONLY WRITE TO ${protectedBranch} IN THE ENTIRE CAMPAIGN. It is a real increment for the`,
-    `first time: until this merge, ${protectedBranch} has been untouched since the campaign began, and`,
-    `everyone else has been working from a trunk this campaign never disturbed. Treat it accordingly.`,
+    `${campaignBranch}) and the DoD gate PASSED. Your job is EVIDENCE about the ${campaignBranch}→`,
+    `${protectedBranch} merge-result pipeline. Answer only: do NOT mark the PR ready, do NOT merge, do NOT`,
+    `close issues, do NOT delete branches. The gate decides in code from what you report.`,
     ``,
     `1. Open the ${campaignBranch}→${protectedBranch} PR (sdlc-server pr_create, or find the existing one`,
     `   — idempotent on the branch pair; do NOT open a second). Title: the plan's release summary.`,
     `   Body: the wave list + the DoD verdict. Open it as a DRAFT so a green CI cannot auto-merge it`,
-    `   before you have verified the merge-result pipeline yourself.`,
+    `   before the gate has graded the merge-result pipeline.`,
+    ...head('head_sha'),
     ``,
     `2. GATE ON THE MERGE-RESULT PIPELINE AGAINST ${protectedBranch}. This is a REQUIRED, INDEPENDENT`,
     `   check — not a re-run of the per-wave signals, and not optional:`,
@@ -407,24 +416,71 @@ export function releaseMergePrompt({ planId, targetRepo, campaignBranch, protect
     `   proves nothing about the merge) and the explicit timeout (#1035 — the default idle bleeds`,
     `   ~30-57 min/run). timeout_sec is 1800 here, not 420: this is a whole-campaign diff, and its`,
     `   pipeline is legitimately longer than a single wave's.`,
-    `   If it is NOT green: STOP. Return released=false with the failure in notes. Leave the PR open as`,
-    `   a DRAFT and do NOT merge — a red merge-result on the release is exactly the signal the whole`,
+    `   Report its answer as wait, copied as returned (ok, final_status, reason, error). Do not`,
+    `   interpret it: a red merge-result on the release is exactly the signal the whole`,
     `   no-interim-merge-back shape exists to be able to act on, while trunk is still clean.`,
     ``,
-    `3. On green: mark ready (gh -R ${targetRepo} pr ready <n>) and merge it. Then CONFIRM IT LANDED`,
-    `   before reporting released — poll until state=MERGED with a merge commit (pr_merge_wait, or`,
-    `   gh -R ${targetRepo} pr view <n> --json state,mergeCommit). Never treat a pending merge as done.`,
+    ...directMergeReadSteps({ targetRepo, windowSec: 600 }).map((l, i) => (i === 0 ? `3. ${l}` : `   ${l}`)),
+    ``,
+    `4. LAST, after step 2 and (if you ran it) step 3: the head again. If it moved, what was graded may`,
+    `   be the previous head's pipeline, and the release HOLDs; do not re-run anything to chase it.`,
+    ...head('head_sha_final'),
+    ``,
+    `Return: pr_number, pr_ref, head_sha (step 1), wait (step 2), and, ONLY if you ran step 3,`,
+    `merge_pipelines and merge_commit; head_sha_final (step 4); notes (1-2 sentences). Report what you`,
+    `READ. A missing fact holds the release; it never passes it.`,
+  ].join('\n')
+}
+
+// ── release-merge prompt (#1052 — the ONE write to the protected branch) ─────────────────────
+// Reached only when routeRelease() returned release:true AND mergeResultVerdict() passed on the
+// release PR (#1211: the CI gate moved out of this prompt, into code, ahead of it). The merge is
+// bound to the head the gate graded, so code that CI never saw cannot ride in on a late push.
+// Without a graded head it binds to nothing: the prompt STOPs (the workflow never gets here
+// without one; this is the fail-closed floor if it ever does).
+export function releaseMergePrompt({ planId, targetRepo, campaignBranch, protectedBranch, wavesIntegrated, prNumber, headSha, ciReason }) {
+  const n = prNumber != null ? prNumber : '<n>'
+  if (!isMergeSha(headSha)) {
+    return [
+      `You are the CAMPAIGN RELEASE node for plan ${planId ?? '<unknown>'} of ${targetRepo}. No graded head SHA`,
+      `was handed to you, so there is nothing to bind the merge of ${campaignBranch} → ${protectedBranch} to.`,
+      `STOP. Do NOT mark the PR ready and do NOT merge. Return released=false, with notes saying the release`,
+      `gate passed no graded head SHA.`,
+    ].join('\n')
+  }
+  const sha = headSha
+  return [
+    `You are the CAMPAIGN RELEASE node for plan ${planId ?? '<unknown>'} of ${targetRepo}. The campaign`,
+    `is complete (waves [${(wavesIntegrated ?? []).join(', ') || 'none'}] all integrated onto`,
+    `${campaignBranch}) and the DoD gate PASSED. Land ${campaignBranch} → ${protectedBranch}.`,
+    ``,
+    `THIS IS THE ONLY WRITE TO ${protectedBranch} IN THE ENTIRE CAMPAIGN. It is a real increment for the`,
+    `first time: until this merge, ${protectedBranch} has been untouched since the campaign began, and`,
+    `everyone else has been working from a trunk this campaign never disturbed. Treat it accordingly.`,
+    ``,
+    `The release PR #${n} is already open as a DRAFT, and the release gate graded its merge-result`,
+    `pipeline against ${protectedBranch} in code: ${ciReason || 'green'}. Do NOT re-gate CI and do NOT`,
+    `open another PR.`,
+    ``,
+    `1. Mark it ready, then merge it BOUND TO THE GRADED HEAD ${sha}:`,
+    `   GitHub: gh -R ${targetRepo} pr ready ${n}, then gh -R ${targetRepo} pr merge ${n} --match-head-commit ${sha}.`,
+    `   GitLab: glab mr update ${n} --ready -R ${targetRepo} (GitLab refuses to merge a draft), then the merge`,
+    `   API's sha parameter, glab api -X PUT "projects/<url-encoded ${targetRepo}>/merge_requests/${n}/merge?sha=${sha}".`,
+    `   If the head moved since the gate graded it, the merge refuses. Then STOP and return`,
+    `   released=false: code CI never saw must not land, and a re-run of the release re-grades it.`,
+    `   Then CONFIRM IT LANDED before reporting released — poll until state=MERGED with a merge commit`,
+    `   (pr_merge_wait, or gh -R ${targetRepo} pr view ${n} --json state,mergeCommit). Never treat a pending merge as done.`,
     `   The merge METHOD does not matter here (squash is fine): nothing continues from ${campaignBranch}`,
     `   after this point, so there is no persistent branch left to diverge (this is what dissolves #892`,
     `   rather than working around it).`,
     ``,
-    `4. Only AFTER the merge is confirmed landed: close the campaign's issues (#1046 — an issue closes`,
+    `2. Only AFTER the merge is confirmed landed: close the campaign's issues (#1046 — an issue closes`,
     `   when its work is on ${protectedBranch}, never before). Honor an explicit do-not-close: if a`,
     `   flight body used "Refs #N" rather than "Closes #N", do NOT close that issue by number — that`,
     `   was a deliberate signal, and overriding it is the #1046 defect. Verify each close by READING`,
     `   THE ISSUE STATE BACK, not by the mutation's return code.`,
     ``,
-    `5. Delete ${campaignBranch} on origin — the campaign is released and the branch is spent.`,
+    `3. Delete ${campaignBranch} on origin — the campaign is released and the branch is spent.`,
     ``,
     `Return: released (true ONLY if the merge actually landed on ${protectedBranch}), pr_ref, merge_sha,`,
     `notes (1-2 sentences; on any failure released=false with the reason).`,

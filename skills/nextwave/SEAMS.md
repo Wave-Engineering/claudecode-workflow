@@ -97,6 +97,10 @@ calls. Promotion is wired as CODE that runs only on a live wave's auto+PASS succ
 { signal: string, passed: boolean, detail?: string }
 // TRIVY_SIG (trivy only, cc-workflow#1247): SIG plus the coverage counts
 { ...SIG, found: integer, ingested: integer, unscanned: string[], declared: boolean }
+// MERGE_RESULT_EVIDENCE (ci only, cc-workflow#1211; merge-result.js): facts, not a verdict.
+// The schema leaves both head reads optional, but no pass without both: head_sha (read before
+// ci_wait_run) and head_sha_final (read after the last read), equal. Either missing HOLDs.
+{ pr_number: integer, pr_ref?, head_sha?, head_sha_final?, wait: <ci_wait_run's answer>, merge_pipelines?: [{id, ref, status, sha}], merge_commit?: {sha, parent_ids}, notes? }
 ```
 
 Trivy's result then runs through `trivyCoverage()` in code before the gate counts it. It HOLDs
@@ -107,6 +111,18 @@ declaration (`declared`). A declaration applies only when no lock is found, as i
 missing or inconsistent counts conservative-fail, and `found` 0 beside a named `unscanned` lock
 is inconsistent. It never turns a fail into a pass. The persisted signal is still projected to
 `{signal, passed, detail}`.
+
+The CI agent returns evidence, and `ciVerdict()` grades it into a `SIG` with `mergeResultVerdict()`
+(`merge-result.js`), the rule the campaign release gate shares (#1211). It grades against the PR
+the gate opened, so evidence about another PR HOLDs. A graded `failure`/`cancelled` is final. Any
+pass needs the head read twice, before `ci_wait_run` and after the last read, and equal: a head that
+moved while it was graded HOLDs, so `ci_wait_run`'s own "moved while waiting" refusal can never
+become a pass on the previous head's pipeline. A `ci_wait_run` success then passes. Only when
+`ci_wait_run` gives no verdict (not found, the sdlc#585 signature; `timed_out`; `not_merge_result`)
+does a direct GitLab read decide: the newest `refs/merge-requests/<n>/merge` pipeline must be green
+and bound to the head, its sha being the head or its merge commit's second parent being the head.
+A merged-results pipeline runs on an ephemeral merge commit, so #1035's "sha equals the head"
+could never pass on green (0 of 15 measured). Every gap HOLDs, and a HOLD keeps the agent's notes.
 
 **Order (live-gate finding #5 — reorders §3.4):** the gate FIRST opens the kahuna→**integration
 base** draft PR (`openPromotionPrPrompt` → `wave_finalize`, idempotent), THEN runs the four signals
@@ -125,7 +141,7 @@ written. A wave never decides to write trunk; it writes whatever base it was han
 | Signal | `agentType` | Real sdlc-server call | pass = |
 |---|---|---|---|
 | commutativity | `general-purpose` | `commutativity_verify(base_ref=<integrationBase>, changesets=[{id:"kahuna", head_ref:<kahuna>}])` | verdict ∈ {STRONG, MEDIUM}; `PROBE_UNAVAILABLE` **and** `ORACLE_REQUIRED` = **conservative-fail** (#6 — the gate HOLDs on what the probe can't prove safe; reconcile may adjudicate ORACLE_REQUIRED during integration, the gate does not) |
-| ci | `general-purpose` | `ci_wait_run(require_merge_result=true)` on the **gate-opened draft PR's merge-result pipeline** (passed in by number — NOT merge-commit branch HEAD) [sdlc #452, #476, #5] | `final_status == "success"`; `not_merge_result` HOLDs |
+| ci | `general-purpose` | `ci_wait_run(require_merge_result=true)` on the **gate-opened draft PR's merge-result pipeline** (passed in by number — NOT merge-commit branch HEAD) [sdlc #452, #476, #5]; with no verdict, a direct read of the MR's `/merge` pipelines (GitLab, #1211) | `ciVerdict`: `final_status == "success"`, or a green `/merge` pipeline bound to the current head; either way the head read before the wait and after the last read, equal; a graded red is final, and every gap HOLDs |
 | review | `feature-dev:code-reviewer` (`isolation:'worktree'` on kahuna [#667]) | code-reviewer over the **kahuna-vs-integration-base diff**, diff-scoped (§3.4) | no critical/important findings |
 | trivy | `general-purpose` | `trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet` on kahuna (#1169), plus each other pinned pip requirements file (`*requirements*.txt`, `requirements/*.txt`, check-scannable.sh's `REQ_FIND`) scanned alone as `requirements.txt` (#1247) | no HIGH/CRITICAL with available fixes, over FULL coverage: a partial run HOLDs (`trivyCoverage`). Out of the denominator, as `check-scannable.sh` leaves them out: a requirements file with no `==` pin, and a `bun.lockb` beside a `bun.lock` |
 

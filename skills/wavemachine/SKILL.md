@@ -183,7 +183,7 @@ vs. the post-STOP wave-status read) differs.
 | cost | budget floor | stop before the ceiling |
 | wave-hold | a wave returns HOLD/SKIPPED, **or (auto) PASS-but-not-integrated** | the per-wave gate fired, or the gate passed but the kahuna→campaign merge did not land → human review |
 | wave-breaker | a wave hit a non-advanceable verdict > `MAX_WAVE_RETRY` times | one wave won't reach PASS-and-integrated → human |
-| release-hold | the loop completed but the DoD is not met (or is undeterminable) | **not a failure** — the protected branch is untouched and the campaign branch holds every wave; resumable once the DoD genuinely holds (#1052) |
+| release-hold | the loop completed but the DoD is not met (or is undeterminable), **or** the release PR's merge-result CI is red or unproven | **not a failure** — the protected branch is untouched and the campaign branch holds every wave; resumable once the DoD genuinely holds and the release CI is green (#1052, #1211) |
 
 - **`waveRetry` counts EVERY non-advanceable verdict, regardless of cause.** A trust-gate `HOLD`,
   a `SKIPPED`, and an auto PASS-but-not-integrated all increment the same counter — the campaign
@@ -203,6 +203,16 @@ vs. the post-STOP wave-status read) differs.
 - **`release-hold` is conservative on absence.** An unreadable DoD manifest, a malformed verdict, or
   an errored DoD node all block the release: an undeterminable DoD is not a met DoD (SEAMS invariant
   6). Holding costs a conversation; releasing wrongly costs a revert of the whole campaign.
+- **The release CI gate is code, not prose (#1211).** The `release:ci` node only gathers evidence:
+  `ci_wait_run`'s answer and, when that gives no verdict (empty, "No CI run found", `timed_out`,
+  `not_merge_result`), a direct GitLab read of the MR's pipelines. `mergeResultVerdict()`
+  (`skills/nextwave/merge-result.js`) grades it. It passes on a `ci_wait_run` success or, when that
+  gave no verdict, on the newest `refs/merge-requests/<n>/merge` pipeline, green, and bound to the
+  head: its sha is the head, or its merge commit's second parent is. A merged-results pipeline's own
+  sha is an ephemeral merge commit, not the head. Either pass also needs the head read twice, before
+  the wait and after the last read, and equal: a head that moved while it was graded HOLDs. A graded
+  red from `ci_wait_run` is never overridden. The merge node runs only on a pass, and its merge is
+  bound to the head the verdict names.
 
 ## Pre-flight (refuse to start on failure)
 
