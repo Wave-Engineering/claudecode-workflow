@@ -131,10 +131,12 @@ else
 	while IFS= read -r f; do
 		SCRIPTS+=("$f")
 	done < <(find "$REPO_DIR" -maxdepth 1 -name "*.sh" -type f 2>/dev/null)
-	# All scripts in scripts/
+	# All scripts in scripts/, except vendored ones: scripts/sqtk is squawkie-talkie's CLI,
+	# kept byte-for-byte at its pin (scripts/ci/sqtk.pin), so it keeps upstream's formatting.
+	# The lint pass above still covers it. (#1236)
 	while IFS= read -r f; do
 		SCRIPTS+=("$f")
-	done < <(find "$REPO_DIR/scripts" -type f \( -executable -o -name "*.sh" \) 2>/dev/null)
+	done < <(find "$REPO_DIR/scripts" -type f \( -executable -o -name "*.sh" \) ! -path "$REPO_DIR/scripts/sqtk" 2>/dev/null)
 	# Container scripts (e.g. the oakandwave-workflow bootstrap) — mirror the
 	# selector used above so shfmt covers the same tree as the linter.
 	while IFS= read -r f; do

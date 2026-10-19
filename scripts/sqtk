@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+# sqtk — thin client CLI for Squawkie-Talkie's JSON API.
+# Lets AI agents manage squawklists without hand-writing HTTP calls.
+#
+#   sqtk lists                                     list all squawk lists
+#   sqtk show   <list>                             show a list + its squawks + glyph counts
+#   sqtk add    <list> "<text>"                    log a squawk (creates the list if new)
+#   sqtk set    <list> <seq> [--state S] [--text T]  update a squawk (S: open|confirmed|rejected|retired|recorded)
+#   sqtk new    <name>                             create an empty list
+#   sqtk rmlist <name> --yes                        delete a list (cascades — ALL its squawks go)
+#
+# Config (env):
+#   SQUAWK_URL        base URL of the instance   (REQUIRED; no default — e.g. http://localhost:7700)
+#   SQUAWK_INITIALS   your initials; else derived from ./.claude/agent-identity.json; else "AI"
+#
+# Flags:
+#   --json            emit raw API JSON instead of formatted text
+#
+# Note: squawks are never deleted — they change state (open → confirmed/rejected/retired/
+# recorded). confirmed (✓) and rejected (✗) are a yes/no verdict; to "remove" a squawk with
+# no verdict, `sqtk set <list> <seq> --state retired`. Squawks are referenced by their
+# per-list number (`#seq`, what `show`/`add` print), not the internal DB id.
+#
+# Each state prints with its glyph: ○ open · ✓ confirmed · ✗ rejected · ◌ retired · ↗ recorded.
+
+set -euo pipefail
+
+JSON_OUT=0
+
+die() { printf 'sqtk: %s\n' "$*" >&2; exit 1; }
+command -v curl >/dev/null || die "curl not found on PATH"
+command -v jq   >/dev/null || die "jq not found on PATH"
+
+# An explicit instance URL is required for any API call — no silent localhost
+# default. Squawkie's SSE fan-out is per-process while every instance shares one DB,
+# so a write sent to the wrong instance persists but never reaches viewers on another
+# instance. The old :3000 default was exactly that split-brain footgun. Enforced
+# lazily in api() (below) so `sqtk help` still works without any config (#97).
+BASE="${SQUAWK_URL:-}"
+
+# Match the server's normalizeInitials: uppercase, alphanumerics only, <=3 chars.
+norm_initials() { printf '%s' "${1:-}" | tr '[:lower:]' '[:upper:]' | tr -cd 'A-Z0-9' | cut -c1-3; }
+
+resolve_initials() {
+  if [[ -n "${SQUAWK_INITIALS:-}" ]]; then norm_initials "$SQUAWK_INITIALS"; return; fi
+  local f="./.claude/agent-identity.json" name=""
+  [[ -f "$f" ]] && name="$(jq -r '.dev_name // empty' "$f" 2>/dev/null || true)"
+  local i; i="$(norm_initials "$name")"
+  if [[ -n "$i" ]]; then printf '%s' "$i"; else printf 'AI'; fi
+}
+
+# api METHOD PATH [JSON_BODY] -> prints the response body; dies on non-2xx or network error.
+# Call it via `local x; x="$(api ...)"` (own line) so a die() propagates through set -e —
+# in argument position (`f "$(api ...)"`) the subshell's exit is swallowed.
+api() {
+  [[ -n "$BASE" ]] || die "SQUAWK_URL is not set — point it at your instance, e.g. export SQUAWK_URL=http://localhost:7700 (local dev) or your deployed URL"
+  local method="$1" path="$2" body="${3:-}" resp code out
+  if [[ -n "$body" ]]; then
+    resp="$(curl -sS -X "$method" -H 'Content-Type: application/json' -d "$body" -w $'\n%{http_code}' "$BASE$path")" \
+      || die "cannot reach $BASE — is the server running? (set SQUAWK_URL)"
+  else
+    resp="$(curl -sS -X "$method" -w $'\n%{http_code}' "$BASE$path")" \
+      || die "cannot reach $BASE — is the server running? (set SQUAWK_URL)"
+  fi
+  code="${resp##*$'\n'}"
+  out="${resp%$'\n'*}"
+  if (( code < 200 || code >= 300 )); then
+    local msg; msg="$(printf '%s' "$out" | jq -r '.error // empty' 2>/dev/null || true)"
+    die "$method $path -> HTTP $code${msg:+: $msg}"
+  fi
+  printf '%s' "$out"
+}
+
+urienc() { jq -rn --arg s "${1:-}" '$s|@uri'; }
+
+# jq definitions prepended to every formatted filter. The state order and glyphs mirror
+# SQUAWK_STATES / STATE_GLYPHS in src/server/types.ts; tests/cli.test.ts holds them in step.
+#   glyph   — a state's glyph (an unknown state prints "?")
+#   tally   — "○3 ✓2 ✗1 ◌4 ↗1" for an array of squawks, in state order, zeros omitted
+# shellcheck disable=SC2016  # the $vars here are jq's, not the shell's
+JQ_DEFS='
+def states: ["open","confirmed","rejected","retired","recorded"];
+def glyph: {open:"○",confirmed:"✓",rejected:"✗",retired:"◌",recorded:"↗"}[.] // "?";
+def tally: . as $sq | [states[] as $s | ([$sq[] | select(.state==$s)] | length) as $n
+  | select($n > 0) | "\($s|glyph)\($n)"] | join(" ");
+'
+
+# emit RAW_JSON JQ_FILTER : print formatted text, or raw JSON under --json.
+emit() {
+  local data="$1"; shift
+  if (( JSON_OUT )); then printf '%s\n' "$data" | jq .; else printf '%s' "$data" | jq -r "$JQ_DEFS $1"; fi
+}
+
+# Resolve a list name to its full record (list + squawks); dies on 404.
+get_list() { api GET "/api/lists/by-name?name=$(urienc "$1")"; }
+
+cmd_lists() {
+  local data; data="$(api GET /api/lists)"
+  emit "$data" 'if length==0 then "(no lists)" else (.[] | "#\(.id)  \(.name)") end'
+}
+
+cmd_show() {
+  [[ $# -ge 1 && -n "${1:-}" ]] || die "usage: sqtk show <list>"
+  local data; data="$(get_list "$1")"
+  emit "$data" '
+    "List #\(.id)  \(.name)",
+    (if (.squawks|length)==0 then "  (no squawks)"
+     else "  \(.squawks|tally)", (.squawks[] | "  #\(.seq) \(.state|glyph) [\(.state)] \(.text)  (\(.initials))") end)'
+}
+
+cmd_add() {
+  [[ $# -ge 2 && -n "${1:-}" ]] || die "usage: sqtk add <list> \"<text>\""
+  local ini; ini="$(resolve_initials)"
+  local body; body="$(jq -n --arg l "$1" --arg t "$2" --arg i "$ini" '{list_name:$l,text:$t,initials:$i}')"
+  local data; data="$(api POST /api/squawks "$body")"
+  emit "$data" '"squawked #\(.seq) \(.state|glyph) [\(.state)] \(.text)  (\(.initials))"'
+}
+
+cmd_set() {
+  [[ $# -ge 2 && -n "${1:-}" && "${2:-}" =~ ^[0-9]+$ ]] \
+    || die "usage: sqtk set <list> <seq> [--state open|confirmed|rejected|retired|recorded] [--text \"<t>\"]"
+  local list="$1" seq="$2"; shift 2
+  local state="" text="" have=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --state) [[ $# -ge 2 ]] || die "--state needs a value"; state="$2"; shift 2; [[ -z "$state" ]] || have=1 ;;
+      --text)  [[ $# -ge 2 ]] || die "--text needs a value";  text="$2";  shift 2; [[ -z "$text" ]]  || have=1 ;;
+      *) die "unknown flag for set: $1" ;;
+    esac
+  done
+  (( have )) || die "provide --state and/or --text"
+  # Resolve the per-list #seq the caller sees to the internal squawk id the API needs.
+  local id; id="$(get_list "$list" | jq -r --argjson q "$seq" 'first(.squawks[] | select(.seq==$q) | .id) // empty')"
+  [[ -n "$id" ]] || die "no squawk #$seq in list \"$list\""
+  local ini; ini="$(resolve_initials)"
+  local body; body="$(jq -n --arg i "$ini" --arg s "$state" --arg t "$text" \
+    '{initials:$i} + (if $s!="" then {state:$s} else {} end) + (if $t!="" then {text:$t} else {} end)')"
+  local data; data="$(api PATCH "/api/squawks/$id" "$body")"
+  emit "$data" '"updated #\(.seq) \(.state|glyph) [\(.state)] \(.text)  (\(.initials))"'
+}
+
+cmd_new() {
+  [[ $# -ge 1 && -n "${1:-}" ]] || die "usage: sqtk new <name>"
+  local body; body="$(jq -n --arg n "$1" '{name:$n}')"
+  local data; data="$(api POST /api/lists "$body")"
+  emit "$data" '"created list #\(.id)  \(.name)"'
+}
+
+cmd_rmlist() {
+  local name="" yes=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in --yes|-y) yes=1; shift ;; *) name="$1"; shift ;; esac
+  done
+  [[ -n "$name" ]] || die "usage: sqtk rmlist <name> --yes"
+  (( yes )) || die "rmlist DELETES the list and ALL its squawks (cascade). Re-run with --yes to confirm."
+  local id; id="$(get_list "$name" | jq -r '.id')"
+  api DELETE "/api/lists/$id" >/dev/null
+  printf 'deleted list #%s  %s\n' "$id" "$name"
+}
+
+usage() {
+  cat >&2 <<'EOF'
+sqtk — client CLI for Squawkie-Talkie
+
+  sqtk lists                                       list all squawk lists
+  sqtk show   <list>                               show a list + its squawks + glyph counts
+  sqtk add    <list> "<text>"                      log a squawk (creates the list if new)
+  sqtk set    <list> <seq> [--state S] [--text T]  update a squawk
+                                                   (S: open|confirmed|rejected|retired|recorded)
+  sqtk new    <name>                               create an empty list
+  sqtk rmlist <name> --yes                          delete a list (cascades)
+
+  --json    emit raw API JSON
+
+env: SQUAWK_URL (REQUIRED — e.g. http://localhost:7700) · SQUAWK_INITIALS (else from agent identity)
+squawks are referenced by their per-list #seq (what show/add print), and change state, never delete.
+states: ○ open · ✓ confirmed · ✗ rejected · ◌ retired · ↗ recorded
+EOF
+}
+
+main() {
+  JSON_OUT=0
+  local args=() a
+  for a in "$@"; do
+    if [[ "$a" == "--json" ]]; then JSON_OUT=1; else args+=("$a"); fi
+  done
+  local sub="${args[0]:-help}"
+  local rest=(); [[ ${#args[@]} -gt 1 ]] && rest=("${args[@]:1}")
+  case "$sub" in
+    lists)  cmd_lists  "${rest[@]}" ;;
+    show)   cmd_show   "${rest[@]}" ;;
+    add)    cmd_add    "${rest[@]}" ;;
+    set)    cmd_set    "${rest[@]}" ;;
+    new)    cmd_new    "${rest[@]}" ;;
+    rmlist) cmd_rmlist "${rest[@]}" ;;
+    help|-h|--help) usage ;;
+    *) die "unknown command: $sub  (try: sqtk help)" ;;
+  esac
+}
+
+main "$@"

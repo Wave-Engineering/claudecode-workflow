@@ -230,6 +230,12 @@
             "_comment": "Reseed revive acknowledgement (cc-workflow#1225). Removes <cwd>/.claude/reseed-ack when the submitted prompt is exactly /reseed revive, which is how reseed-kick.sh knows its keystrokes landed. Prints nothing, never blocks.",
             "type": "command",
             "command": "~/.claude/scripts/hooks/workflow/reseed-ack.sh"
+          },
+          {
+            "_comment": "sqtk drain (cc-workflow#1236). When one of this repo's squawks (.claude/sqtk-mine.json, written by sqtk add) is answered, confirmed, rejected, retired or recorded, injects the change into the agent's context once, at the start of its next turn. No mine file or no SQUAWK_URL: exits before any network call. Fails open, never blocks.",
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/sqtk-drain.sh",
+            "timeout": 10
           }
         ]
       }
