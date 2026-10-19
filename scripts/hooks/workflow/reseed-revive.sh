@@ -6,7 +6,8 @@
 # which types `/reseed revive` into the pane until the session acknowledges it.
 #
 # Contract (CC SessionStart hook, matcher: "clear"):
-#   stdin:  JSON with .session_id, .cwd, .source
+#   stdin:  JSON with .session_id, .cwd, .source, .transcript_path (handed to the
+#           kicker, which reads it to see a revive that submitted no prompt, #1244)
 #   stdout: injected as system-reminder into the fresh agent context
 #   exit:   always 0 (best-effort; never block session start)
 #
@@ -39,6 +40,7 @@ FRESH_WINDOW_SECS=300 # 5 minutes
 INPUT=$(cat 2>/dev/null || true)
 HOOK_CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || true)
 HOOK_CWD="${HOOK_CWD:-$(pwd)}"
+TRANSCRIPT=$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null || true)
 
 ARMED_FILE="${HOOK_CWD}/.claude/reseed-armed.json"
 SEED_PATH="${HOOK_CWD}/.claude/reseed-revive.md"
@@ -91,7 +93,7 @@ fi
 # lack -f). Not `nohup … &`: that stays in this hook's process group.
 launched=""
 if command -v setsid &>/dev/null &&
-	setsid -f bash "$KICK" "$TMUX_PANE" "$HOOK_CWD" </dev/null >/dev/null 2>&1; then
+	setsid -f bash "$KICK" "$TMUX_PANE" "$HOOK_CWD" "$TRANSCRIPT" </dev/null >/dev/null 2>&1; then
 	launched="setsid"
 elif python3 -I -c '
 import os, sys
@@ -101,7 +103,7 @@ os.setsid()
 if os.fork():
     os._exit(0)
 os.execvp("bash", ["bash"] + sys.argv[1:])
-' "$KICK" "$TMUX_PANE" "$HOOK_CWD" </dev/null >/dev/null 2>&1; then
+' "$KICK" "$TMUX_PANE" "$HOOK_CWD" "$TRANSCRIPT" </dev/null >/dev/null 2>&1; then
 	launched="python3 setsid"
 fi
 

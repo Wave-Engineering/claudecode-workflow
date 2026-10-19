@@ -8,7 +8,12 @@
 #   - sends dropped twice, the third acknowledged → stops, logs "acked after 3";
 #   - no acknowledgement ever → stops after the schedule, logs FAILED, pages BJ
 #     (stubbed) naming the pane, and leaves no nonce behind;
-#   - it types exactly `/reseed revive` into the pane it was given.
+#   - it types exactly `/reseed revive` into the pane it was given;
+#   - #1244: the agent's own read of the seed in the transcript acks, by any tool
+#     or the Skill tool, while the hook's notice and pre-clear entries do not; a
+#     busy session gets no stacked sends, an idle unrevived one gets one send per
+#     idle spell, a session that goes live late still gets the live wait, and a
+#     live session pages only if it never revives.
 
 set -uo pipefail
 
@@ -129,6 +134,281 @@ if [[ ! -s "$C/calls" ]] && grep -q '%42' "$C/notified" 2>/dev/null; then
 	pass "…sends nothing and pages BJ"
 else
 	fail "unwritable nonce: sent=$(wc -l <"$C/calls") paged=$([[ -e "$C/notified" ]] && echo yes || echo no)"
+fi
+
+# --- #1244: the seed read in the transcript is an ack ----------------------------------
+# No send ever lands (ACK_ON_CALL empty), so only the transcript can acknowledge.
+# Timestamps are pinned far from the kick's start, so no case depends on a second
+# boundary: 2099 is "after the kick started", 2000 is "before /clear".
+entry() { # <timestamp> <tool name> <input json>
+	jq -cn --arg t "$1" --arg n "$2" --argjson i "$3" \
+		'{type: "assistant", timestamp: $t, message: {content: [{type: "tool_use", name: $n, input: $i}]}}'
+}
+LATER="2099-01-01T00:00:00.000Z"
+BEFORE="2000-01-01T00:00:00.000Z"
+SEED_CAT='{"command": "cat .claude/reseed-revive.md"}'
+
+run_kick_t() { # <case-dir> <transcript> [<ack-on-call>]   env KB overrides the backoff
+	local d="$1"
+	mkdir -p "$d/root"
+	: >"$d/calls"
+	env PATH="$SHIM:$PATH" TMUX_CALLS="$d/calls" ACK_ON_CALL="${3:-}" ACK_ROOT="$d/root" \
+		NOTIFIED="$d/notified" RESEED_KICK_BACKOFF="${KB:-0 0.1 0.1 0.1}" \
+		RESEED_KICK_LIVE_WAIT=2 RESEED_KICK_POLL=1 \
+		RESEED_KICK_LOG="$d/kick.log" RESEED_KICK_NOTIFY="$SHIM/notify" \
+		bash "$KICK" "%42" "$d/root" "$2"
+}
+
+# A Bash `cat` of the seed: a revive by any tool counts, not only Read.
+C="$WORK/seedread"
+mkdir -p "$C"
+entry "$LATER" Bash "$SEED_CAT" >"$C/t.jsonl"
+run_kick_t "$C" "$C/t.jsonl"
+rc=$?
+if [[ $rc -eq 0 ]] && grep -q 'acked (seed read) after 0' "$C/kick.log"; then
+	pass "seed read in the transcript acks, with no prompt submitted"
+else
+	fail "seed read: rc=$rc log=$(cat "$C/kick.log")"
+fi
+if [[ ! -s "$C/calls" && ! -e "$C/notified" && ! -e "$C/root/.claude/reseed-ack" ]]; then
+	pass "…sends nothing, pages nobody, removes the nonce"
+else
+	fail "seed read: sent=$(wc -l <"$C/calls") paged=$([[ -e "$C/notified" ]] && echo yes || echo no)"
+fi
+
+# A Skill-tool revive (#1244's first report).
+C="$WORK/skill"
+mkdir -p "$C"
+entry "$LATER" Skill '{"skill": "reseed", "args": "revive"}' >"$C/t.jsonl"
+run_kick_t "$C" "$C/t.jsonl"
+rc=$?
+if [[ $rc -eq 0 ]] && grep -q 'acked (seed read)' "$C/kick.log"; then
+	pass "Skill(reseed, revive) acks"
+else
+	fail "Skill revive: rc=$rc log=$(cat "$C/kick.log")"
+fi
+
+# The SessionStart notice names the seed too; it is not the agent reading it.
+C="$WORK/notice"
+mkdir -p "$C"
+jq -cn --arg t "$LATER" '{type: "attachment", timestamp: $t,
+	attachment: {type: "hook_success", content: "[RESEED AUTO-REVIVE] … /p/.claude/reseed-revive.md"}}' >"$C/t.jsonl"
+run_kick_t "$C" "$C/t.jsonl"
+rc=$?
+if [[ $rc -eq 1 ]] && grep -q 'FAILED no ack after 4 send' "$C/kick.log"; then
+	pass "the hook's own notice naming the seed does not ack"
+else
+	fail "notice: rc=$rc log=$(cat "$C/kick.log")"
+fi
+
+# A pre-clear tool call on the seed (the /reseed that wrote it) does not ack.
+C="$WORK/preclear"
+mkdir -p "$C"
+entry "$BEFORE" Write '{"file_path": "/p/.claude/reseed-revive.md", "content": "x"}' >"$C/t.jsonl"
+run_kick_t "$C" "$C/t.jsonl"
+rc=$?
+if [[ $rc -eq 1 ]] && grep -q 'FAILED no ack after 4 send' "$C/kick.log"; then
+	pass "a tool call from before the kick started does not ack"
+else
+	fail "pre-clear: rc=$rc log=$(cat "$C/kick.log")"
+fi
+
+# A live session (a turn a peer message started) that has not read the seed yet:
+# no sends stack up behind it, and the seed read during the wait acks.
+C="$WORK/livelater"
+mkdir -p "$C"
+entry "$LATER" Bash '{"command": "echo answering a peer"}' >"$C/t.jsonl"
+(
+	sleep 1
+	entry "$LATER" Read '{"file_path": "/p/.claude/reseed-revive.md"}' >>"$C/t.jsonl"
+) &
+run_kick_t "$C" "$C/t.jsonl"
+rc=$?
+wait
+if [[ $rc -eq 0 ]] && grep -q 'acked (seed read) after 0 (session was live' "$C/kick.log"; then
+	pass "live session: waits, then acks on the seed read"
+else
+	fail "live then read: rc=$rc log=$(cat "$C/kick.log")"
+fi
+if [[ ! -s "$C/calls" ]]; then
+	pass "…types nothing into a live session"
+else
+	fail "typed $(wc -l <"$C/calls") send(s) into a live session"
+fi
+
+# A live session that never reads the seed is a real failure: page after the wait.
+C="$WORK/livenever"
+mkdir -p "$C"
+entry "$LATER" Bash '{"command": "echo answering a peer"}' >"$C/t.jsonl"
+run_kick_t "$C" "$C/t.jsonl"
+rc=$?
+if [[ $rc -eq 1 ]] && grep -q 'FAILED session live but no revive seen' "$C/kick.log" &&
+	grep -q '%42' "$C/notified" 2>/dev/null && [[ ! -e "$C/root/.claude/reseed-ack" ]]; then
+	pass "live session that never reads the seed → FAILED, pages, no nonce left"
+else
+	fail "live never: rc=$rc log=$(cat "$C/kick.log")"
+fi
+
+# The peer turn ended (end_turn) and the agent never revived: the session is idle,
+# so ONE send goes in, and it lands (ack on call 1). Not a silent 10-minute wait.
+C="$WORK/idleunrevived"
+mkdir -p "$C"
+jq -cn --arg t "$LATER" '{type: "assistant", timestamp: $t,
+	message: {stop_reason: "end_turn", content: [{type: "text", text: "answered the peer"}]}}' >"$C/t.jsonl"
+run_kick_t "$C" "$C/t.jsonl" 1
+rc=$?
+if [[ $rc -eq 0 ]] && grep -q 'acked after 1$' "$C/kick.log" && [[ "$(wc -l <"$C/calls")" -eq 1 ]]; then
+	pass "idle session that has not revived gets one send, which acks"
+else
+	fail "idle unrevived: rc=$rc sends=$(wc -l <"$C/calls") log=$(cat "$C/kick.log")"
+fi
+
+# The session is idle and the one send is dropped: still one send per idle spell, not
+# a send every poll.
+C="$WORK/idledropped"
+mkdir -p "$C"
+cp "$WORK/idleunrevived/t.jsonl" "$C/t.jsonl"
+run_kick_t "$C" "$C/t.jsonl"
+rc=$?
+if [[ $rc -eq 1 && "$(wc -l <"$C/calls")" -eq 1 ]] && grep -q 'FAILED session live' "$C/kick.log"; then
+	pass "…one send per idle spell, then the live-session FAILED"
+else
+	fail "idle dropped: rc=$rc sends=$(wc -l <"$C/calls") log=$(cat "$C/kick.log")"
+fi
+
+# A turn that has only sent its first request (api-request-shape, no reply yet) is
+# busy: no sends stack behind it.
+C="$WORK/shapeonly"
+mkdir -p "$C"
+jq -cn --arg t "$LATER" '{type: "api-request-shape", timestamp: $t, shape: "x"}' >"$C/t.jsonl"
+run_kick_t "$C" "$C/t.jsonl"
+rc=$?
+if [[ $rc -eq 1 && ! -s "$C/calls" ]] && grep -q 'FAILED session live' "$C/kick.log"; then
+	pass "a request in flight (shape entry only) is busy: zero sends"
+else
+	fail "shape only: rc=$rc sends=$(wc -l <"$C/calls") log=$(cat "$C/kick.log")"
+fi
+
+# A second turn (a notification right after a turn ended) is busy from its
+# request, not only from its first reply: end_turn then api-request → zero sends.
+C="$WORK/nextturn"
+mkdir -p "$C"
+{
+	jq -cn --arg t "$LATER" '{type: "assistant", timestamp: $t,
+		message: {stop_reason: "end_turn", content: [{type: "text", text: "done"}]}}'
+	jq -cn --arg t "$LATER" '{type: "api-request", timestamp: $t, querySource: "repl_main_thread"}'
+} >"$C/t.jsonl"
+run_kick_t "$C" "$C/t.jsonl"
+rc=$?
+if [[ $rc -eq 1 && ! -s "$C/calls" ]] && grep -q 'FAILED session live' "$C/kick.log"; then
+	pass "a request in flight after end_turn is busy: zero sends"
+else
+	fail "next turn: rc=$rc sends=$(wc -l <"$C/calls") log=$(cat "$C/kick.log")"
+fi
+
+# A side query (another querySource) after end_turn is not a turn: still idle.
+C="$WORK/sidequery"
+mkdir -p "$C"
+{
+	head -1 "$WORK/nextturn/t.jsonl"
+	jq -cn --arg t "$LATER" '{type: "api-request", timestamp: $t, querySource: "session_title"}'
+} >"$C/t.jsonl"
+run_kick_t "$C" "$C/t.jsonl" 1
+rc=$?
+if [[ $rc -eq 0 ]] && grep -q 'acked after 1$' "$C/kick.log"; then
+	pass "a side-query api-request does not make an idle session busy"
+else
+	fail "side query: rc=$rc log=$(cat "$C/kick.log")"
+fi
+
+# A turn ended by an API error (synthetic stop_sequence) is idle, not busy forever.
+C="$WORK/apierror"
+mkdir -p "$C"
+jq -cn --arg t "$LATER" '{type: "assistant", timestamp: $t, isApiErrorMessage: true,
+	message: {stop_reason: "stop_sequence", content: [{type: "text", text: "API Error: 529"}]}}' >"$C/t.jsonl"
+run_kick_t "$C" "$C/t.jsonl" 1
+rc=$?
+if [[ $rc -eq 0 ]] && grep -q 'acked after 1$' "$C/kick.log"; then
+	pass "a turn ended by an API error is idle: one send, which acks"
+else
+	fail "api error: rc=$rc log=$(cat "$C/kick.log")"
+fi
+
+# A refused send (tmux exit non-zero) does not use up the idle spell: it retries.
+C="$WORK/tmuxfail"
+mkdir -p "$C/root" "$C/shim"
+cat >"$C/shim/tmux" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$TMUX_CALLS"
+exit 1
+SH
+chmod +x "$C/shim/tmux"
+: >"$C/calls"
+cp "$WORK/apierror/t.jsonl" "$C/t.jsonl"
+env PATH="$C/shim:$SHIM:$PATH" TMUX_CALLS="$C/calls" ACK_ON_CALL="" ACK_ROOT="$C/root" \
+	NOTIFIED="$C/notified" RESEED_KICK_BACKOFF="0 0.1 0.1 0.1" \
+	RESEED_KICK_LIVE_WAIT=1 RESEED_KICK_POLL=1 \
+	RESEED_KICK_LOG="$C/kick.log" RESEED_KICK_NOTIFY="$SHIM/notify" \
+	bash "$KICK" "%42" "$C/root" "$C/t.jsonl"
+if [[ "$(wc -l <"$C/calls")" -gt 1 ]]; then
+	pass "a refused idle send is retried, not counted as served"
+else
+	fail "refused send: $(wc -l <"$C/calls") attempt(s), want > 1"
+fi
+
+# The session goes live DURING the final wait (after all 4 sends): it must enter
+# the live wait, not page "no ack after 4 send(s)". Schedule 0 .1 .1 1: the 4th
+# check is at ~1.2 s and the final wait ends at ~2.2 s; the entry lands at ~1.7 s.
+C="$WORK/latelive"
+mkdir -p "$C"
+: >"$C/t.jsonl"
+(
+	sleep 1.7
+	jq -cn --arg t "$LATER" '{type: "api-request-shape", timestamp: $t, shape: "x"}' >>"$C/t.jsonl"
+) &
+KB="0 0.1 0.1 1" run_kick_t "$C" "$C/t.jsonl"
+rc=$?
+wait
+# 4 sends proves the entry landed AFTER the 4th check, i.e. in the final wait; a
+# loaded runner that lands it earlier fails here loudly instead of passing quietly.
+if [[ $rc -eq 1 && "$(wc -l <"$C/calls")" -eq 4 ]] && grep -q 'FAILED session live' "$C/kick.log" &&
+	! grep -q 'FAILED no ack' "$C/kick.log"; then
+	pass "a session that goes live during the final wait gets the live wait, not 'no ack'"
+else
+	fail "late live: rc=$rc log=$(cat "$C/kick.log")"
+fi
+
+# A fractional poll would be an arithmetic syntax error in the wait loop; it must
+# fall back to the default (5 s) and still reach a clean FAILED.
+C="$WORK/fracpoll"
+mkdir -p "$C/root"
+: >"$C/calls"
+cp "$WORK/shapeonly/t.jsonl" "$C/t.jsonl"
+env PATH="$SHIM:$PATH" TMUX_CALLS="$C/calls" ACK_ON_CALL="" ACK_ROOT="$C/root" \
+	NOTIFIED="$C/notified" RESEED_KICK_BACKOFF="0 0.1" \
+	RESEED_KICK_LIVE_WAIT=1 RESEED_KICK_POLL=0.5 \
+	RESEED_KICK_LOG="$C/kick.log" RESEED_KICK_NOTIFY="$SHIM/notify" \
+	bash "$KICK" "%42" "$C/root" "$C/t.jsonl" 2>"$C/stderr"
+rc=$?
+if [[ $rc -eq 1 && ! -s "$C/stderr" ]] && grep -q 'FAILED session live but no revive seen after 5s' "$C/kick.log"; then
+	pass "RESEED_KICK_POLL=0.5 falls back to 5 s, no arithmetic error"
+else
+	fail "fractional poll: rc=$rc stderr=$(cat "$C/stderr") log=$(cat "$C/kick.log")"
+fi
+
+# A half-written last line must not hide a hit before it.
+C="$WORK/partial"
+mkdir -p "$C"
+{
+	entry "$LATER" Bash "$SEED_CAT"
+	printf '{"type": "assistant", "timest'
+} >"$C/t.jsonl"
+run_kick_t "$C" "$C/t.jsonl"
+rc=$?
+if [[ $rc -eq 0 ]] && grep -q 'acked (seed read)' "$C/kick.log"; then
+	pass "a truncated last transcript line does not mask the seed read"
+else
+	fail "partial: log=$(cat "$C/kick.log")"
 fi
 
 # --- usage ------------------------------------------------------------------------
