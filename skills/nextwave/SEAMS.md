@@ -95,7 +95,18 @@ calls. Promotion is wired as CODE that runs only on a live wave's auto+PASS succ
 ```js
 // SIG schema:
 { signal: string, passed: boolean, detail?: string }
+// TRIVY_SIG (trivy only, cc-workflow#1247): SIG plus the coverage counts
+{ ...SIG, found: integer, ingested: integer, unscanned: string[], declared: boolean }
 ```
+
+Trivy's result then runs through `trivyCoverage()` in code before the gate counts it. It HOLDs
+when `0 < ingested < found`, when `ingested > 0` and `unscanned` names a path, when locks were
+found and none ingested, and when nothing was found without a `.no-scannable-dependencies`
+declaration (`declared`). A declaration applies only when no lock is found, as in
+`scripts/ci/check-scannable.sh`. Each HOLD keeps the agent's own `detail` after its rule. Only
+missing or inconsistent counts conservative-fail, and `found` 0 beside a named `unscanned` lock
+is inconsistent. It never turns a fail into a pass. The persisted signal is still projected to
+`{signal, passed, detail}`.
 
 **Order (live-gate finding #5 — reorders §3.4):** the gate FIRST opens the kahuna→**integration
 base** draft PR (`openPromotionPrPrompt` → `wave_finalize`, idempotent), THEN runs the four signals
@@ -116,7 +127,7 @@ written. A wave never decides to write trunk; it writes whatever base it was han
 | commutativity | `general-purpose` | `commutativity_verify(base_ref=<integrationBase>, changesets=[{id:"kahuna", head_ref:<kahuna>}])` | verdict ∈ {STRONG, MEDIUM}; `PROBE_UNAVAILABLE` **and** `ORACLE_REQUIRED` = **conservative-fail** (#6 — the gate HOLDs on what the probe can't prove safe; reconcile may adjudicate ORACLE_REQUIRED during integration, the gate does not) |
 | ci | `general-purpose` | `ci_wait_run(require_merge_result=true)` on the **gate-opened draft PR's merge-result pipeline** (passed in by number — NOT merge-commit branch HEAD) [sdlc #452, #476, #5] | `final_status == "success"`; `not_merge_result` HOLDs |
 | review | `feature-dev:code-reviewer` (`isolation:'worktree'` on kahuna [#667]) | code-reviewer over the **kahuna-vs-integration-base diff**, diff-scoped (§3.4) | no critical/important findings |
-| trivy | `general-purpose` | `trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet` on kahuna (#1169) | no HIGH/CRITICAL with available fixes |
+| trivy | `general-purpose` | `trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet` on kahuna (#1169), plus each other pinned pip requirements file (`*requirements*.txt`, `requirements/*.txt`, check-scannable.sh's `REQ_FIND`) scanned alone as `requirements.txt` (#1247) | no HIGH/CRITICAL with available fixes, over FULL coverage: a partial run HOLDs (`trivyCoverage`). Out of the denominator, as `check-scannable.sh` leaves them out: a requirements file with no `==` pin, and a `bun.lockb` beside a `bun.lock` |
 
 - The gate is a **unanimous** gate: `failed.length === 0` ⇒ PASS, else HOLD.
 - Static analysis must be **diff-scoped (kahuna-vs-integration-base), never tree-scoped** (§3.4) — or

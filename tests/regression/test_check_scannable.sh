@@ -62,6 +62,30 @@ rc="$(run_gate "$T")"
 	no "a pinned requirements.txt must satisfy the gate (rc=$rc)"
 rm -rf "$T/app"
 
+# --- #1247: pip locks in the other common layouts are counted ----------------
+# The basename glob `requirements*.txt` missed the prefix form and the pip-tools
+# directory layout: no count, no scan, no report. Each alone must satisfy the gate
+# AND be listed by path, because dependency-scan.sh takes its scan list from these
+# lines. A .in pip-tools input is ranges, not a lock, and must stay out.
+for layout in dev-requirements.txt requirements/base.txt app/requirements/test.txt; do
+	mkdir -p "$T/$(dirname "$layout")"
+	printf 'flask==3.1.3\n' >"$T/$layout"
+	out="$(bash "$GATE" "$T" 2>&1)"
+	rc=$?
+	if [[ "$rc" == "0" ]] && grep -qF "[scannable] ./$layout — 1 pinned entry" <<<"$out"; then
+		ok "pinned $layout is counted and listed (#1247)"
+	else
+		no "pinned $layout must be counted and listed (rc=$rc): $out"
+	fi
+	rm -rf "${T:?}/${layout%%/*}"
+done
+mkdir -p "$T/requirements"
+printf 'flask==3.1.3\n' >"$T/requirements/base.in"
+rc="$(run_gate "$T")"
+[[ "$rc" == "1" ]] && ok "a pip-tools requirements/base.in is not a lock" ||
+	no "requirements/base.in must not satisfy the gate (rc=$rc)"
+rm -rf "$T/requirements"
+
 # --- package.json without a lockfile is NOT scannable ------------------------
 mkdir -p "$T/svc"
 printf '{"name":"svc","dependencies":{"left-pad":"^1.0.0"}}\n' >"$T/svc/package.json"

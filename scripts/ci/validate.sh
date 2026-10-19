@@ -359,7 +359,7 @@ case "$dep_rc" in
 	info "scripts/ci/dependency-scan.sh — [SKIPPED] trivy not installed"
 	;;
 *)
-	err "scripts/ci/dependency-scan.sh — rc=$dep_rc (1=findings, 2=present-but-uningested, 4=nothing scannable, 5=scanner/tooling error)"
+	err "scripts/ci/dependency-scan.sh — rc=$dep_rc (1=findings, 2=present-but-uningested, 4=nothing scannable, 5=scanner/tooling error, 6=partial coverage)"
 	printf '%s\n' "$dep_out" >&2
 	FAIL=$((FAIL + 1))
 	;;
