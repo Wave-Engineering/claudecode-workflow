@@ -304,7 +304,7 @@ Merges an existing pull request or merge request with squash commits, a detailed
 /mmr 58       # Merge PR/MR #58 specifically
 ```
 
-It gathers the PR/MR context, confirms the `precheck` status on the head (running `/precheck rearm` if a push moved the head past the pass), verifies CI status, generates a thorough squash commit message, and merges. Typed after a precheck STOP, `/mmr` is itself the approval; reached any other way, it asks first. Post-merge, it switches to the target branch, pulls, and deletes the local source branch.
+It gathers the PR/MR context, confirms the `precheck` status on the head (running `/precheck rearm` if a push moved the head past the pass), verifies CI status, and merges. On a gated server it squashes from the PR/MR's `## Squash commit` block, which `/scpmr` wrote (mcp-server-sdlc#592). On an integration pair or an older server it drafts a thorough squash commit message itself. Typed after a precheck STOP, `/mmr` is itself the approval; reached any other way, it asks first. Post-merge, it switches to the target branch, pulls, and deletes the local source branch.
 
 **Hard rules:** Never merges with failing CI. Never merges without a `precheck` pass on the head. Never merges without the user's merge call (or a kahuna, autochain, or standing-grant exception). Always uses squash.
 
