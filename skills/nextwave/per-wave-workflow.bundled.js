@@ -1112,6 +1112,16 @@ function reviewSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRepoD
 // HOLD every wave that also has a real lock (a docs/requirements.txt of `sphinx>=7` is enough).
 // So does a bun.lockb beside a bun.lock: the same packages, and the one check-scannable.sh does not
 // count. A lone bun.lockb, which trivy cannot parse, stays in and HOLDs by design.
+//
+// cc-workflow#1277: both scans printed their JSON to stdout, and so into the Bash tool's output, which
+// is cut at about 30k characters. trivy lists a target's Packages before its Vulnerabilities, so a big
+// lock could be cut between the two and read as ingested and clean: a false PASS (one django==2.2.0
+// pin is ~95 KB of JSON). Each run now writes its JSON to a file and jq reads it there, as /precheck's
+// raw-trivy fallback has done since #1275, with stderr in its own file so a warning cannot corrupt the
+// JSON. The work directory is a <w> placeholder filled from mktemp -d's output, not a $w variable: a
+// shell variable does not survive between Bash calls, so `> $w/...` in a later call would write to
+// /trivy-0.json, fail, and HOLD every wave. The jq row carries hc_fixable because the pass predicate
+// fails only on a fixable finding.
 function trivySignalPrompt({ waveId, kahunaBranch, targetRepoDir }) {
   return [
     `Trust-gate TRIVY signal for wave ${waveId}. Scan ${kahunaBranch} for dependency vulnerabilities.`,
@@ -1129,8 +1139,17 @@ function trivySignalPrompt({ waveId, kahunaBranch, targetRepoDir }) {
     `cannot parse bun.lockb at all, so a bun.lockb with NO bun.lock beside it stays in and is UNSCANNED`,
     `by design; say in detail that the remedy is bun's text lockfile, bun.lock (bun 1.2+ writes it).`,
     `A file left out goes in detail, never in unscanned, and is never counted as ingested.`,
+    `Capture every trivy run to a file, never to the tool output (cc-workflow#1277). The Bash tool`,
+    `cuts its output at about 30k characters, and trivy lists a target's Packages BEFORE its`,
+    `Vulnerabilities, so a lock of a few hundred packages can be cut after its packages and before`,
+    `its findings: it reads as ingested with 0 HIGH/CRITICAL, a FALSE PASS. Create one work directory`,
+    `with mktemp -d, once, and write the path it prints in place of <w> in every command below: a`,
+    `shell variable does not survive from one Bash call to the next. Run each scan with`,
+    `run_in_background: true (a first DB pull can outlast the foreground limit), one at a time, never`,
+    `in parallel (they share one trivy cache), in the form shown, where <n> numbers the runs (0 for the`,
+    `main scan). stderr has its own file, so a warning cannot make good JSON unparseable.`,
     `THEN run:`,
-    `  trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet ${targetRepoDir}`,
+    `  trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet ${targetRepoDir} > <w>/trivy-0.json 2> <w>/trivy-0.err; echo "exit=$?"`,
     `(ensure ${kahunaBranch} is the checked-out / scanned state of ${targetRepoDir}).`,
     `--include-dev-deps is REQUIRED — trivy suppresses dev/test dependencies by default, and a`,
     `project whose entire tree is dev-only (e.g. a bun-based tools repo) would otherwise scan`,
@@ -1138,11 +1157,19 @@ function trivySignalPrompt({ waveId, kahunaBranch, targetRepoDir }) {
     `trivy <0.67.0, where it is not yet the default.`,
     `trivy's pip analyzer reads ONLY a file named exactly requirements.txt (cc-workflow#1247), so the`,
     `scan above skips every other pinned requirements file. Scan each of those ALONE, under`,
-    `the one name trivy reads, with the same flags, and count its result for that file:`,
-    `  d=$(mktemp -d) && cp '<that file>' $d/requirements.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet $d; rm -rf \${d:?}`,
+    `the one name trivy reads, with the same flags and the same capture, giving each its own <n>,`,
+    `and count its result for that file:`,
+    `  d=$(mktemp -d) && cp '<that file>' $d/requirements.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet $d > <w>/trivy-<n>.json 2> <w>/trivy-<n>.err; echo "exit=$?"; rm -rf \${d:?}`,
     `Its HIGH/CRITICAL findings count toward the verdict exactly like the main scan's.`,
-    `A lockfile in the denominator is INGESTED when a scan returned at least one package for it (for`,
-    `go.sum, a result for the go.mod beside it). Every other one is UNSCANNED. PARTIAL COVERAGE`,
+    `Read the packages and findings of every run per target FROM ITS FILE, with jq, never from tool`,
+    `output. hc_fixable counts the HIGH/CRITICAL findings that have a fixed version, the ones the pass`,
+    `predicate below fails on:`,
+    `  jq '[.Results[]? | {Target, pkgs: (.Packages // [] | length), hc: ([.Vulnerabilities[]? | select(.Severity=="HIGH" or .Severity=="CRITICAL")] | length), hc_fixable: ([.Vulnerabilities[]? | select((.Severity=="HIGH" or .Severity=="CRITICAL") and ((.FixedVersion // "") != ""))] | length)}]' <w>/trivy-<n>.json`,
+    `  jq '[.Results[]? | .Target as $t | .Vulnerabilities[]? | select(.Severity=="HIGH" or .Severity=="CRITICAL") | {target: $t, pkg: .PkgName, id: .VulnerabilityID, severity: .Severity, fixed: .FixedVersion}]' <w>/trivy-<n>.json`,
+    `A run that printed no exit=, printed a non-zero exit=, or left a file jq cannot parse scanned nothing: every lock it was to cover is UNSCANNED.`,
+    `A per-file scan's jq row has Target requirements.txt, and that row is that file's.`,
+    `A lockfile in the denominator is INGESTED when a jq row for it shows at least one package (for`,
+    `go.sum, the row for the go.mod beside it). Every other one is UNSCANNED. PARTIAL COVERAGE`,
     `FAILS: if some lockfiles are INGESTED and any is UNSCANNED, passed=false even when every`,
     `ingested one is clean, because an unscanned lock is not a clean one.`,
     `Pass predicate: passed = NO HIGH/CRITICAL finding that has an AVAILABLE FIXED VERSION. An`,
