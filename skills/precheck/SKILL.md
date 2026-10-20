@@ -32,6 +32,7 @@ Precheck is **the gate into a release branch** (#1233, #1235). Commits and pushe
 - `mcp__sdlc-server__spec_validate_structure` — linked issue has Changes / Tests / AC
 - `mcp__sdlc-server__pr_list` / `pr_create` (`draft: true`) — find or open the draft PR/MR
 - `mcp__sdlc-server__ci_wait_run` — CI's verdict for the pushed HEAD (`expected_sha`)
+- the Bash tool — Job B-local's lanes and Job C's `dependency-scan.sh`, each run as `<cmd> > <log> 2>&1; echo "exit=$?"`, so the exit code read is the instrument's own
 - `precheck-status.sh` — post and read the `precheck` commit status
 - `mcp__disc-server__disc_send` — post the merge-call request to `#precheck` (channel `1491195025198157834`)
 
@@ -87,94 +88,97 @@ Call `mcp__sdlc-server__branch_guard({ role: "base" })`. It resolves the **live*
 **Transition fallback** — *only* until `branch_guard` is deployed on this host's sdlc-server (#465): resolve the live default inline (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name`, or GitLab `glab api "projects/:id" --jq .default_branch`). If an open PR exists, compare its base (`gh pr view --json baseRefName -q .baseRefName`) and STOP if that base is a protected branch that is neither the live default nor matches `^kahuna/[0-9]+-`. Delete this paragraph once `branch_guard` is universal.
 
 ### Step 2 — Parallel verification batch
-After `ibm()` passes: first run `precheck-review-scope.sh reset <repo_root> <marker_dir>` (this is what makes pass 1 of the cycle mechanically full), then `… resolve …` to learn which Job D prompt to compose, then launch all four jobs **in a single message** as parallel Agent calls. Do NOT wait for one before starting the next — they have no data dependencies on each other. See the Job D section below for both prompts and the full rule.
+**No sub-agent report is a gate value. Jobs A, B and C are instruments the orchestrator runs itself; their JSON or exit code goes on the checklist as read. Only Job D, a judgment, is delegated.**
 
-**Job A — Spec validation** `model: haiku`
-```
-subagent_type: general-purpose
-model: haiku
-prompt: "Run mcp__sdlc-server__spec_validate_structure for issue #<N> in repo <repo>.
-         Return: PASS or FAIL, and if FAIL, list exactly which required H2 sections are missing."
-```
+After `ibm()` passes: first run `precheck-review-scope.sh reset <repo_root> <marker_dir>` (this is what makes pass 1 of the cycle mechanically full), then `… resolve …` to learn which Job D prompt to compose. Then, **in a single message**, dispatch Job D as an Agent call and start A, B and C directly in the same message: Job A's `spec_validate_structure` call, Job B's `ci_wait_run` call or its lane commands, and Job C's `dependency-scan.sh` command. Do NOT wait for one before starting the next — they have no data dependencies on each other. See the Job D section below for both prompts and the full rule.
 
-**Job B — Lanes: CI first** `model: haiku`
+**Why the orchestrator runs them (#1275).** Until #1275 these three were delegated too, and the gate read what the delegate wrote, not what the instrument returned. On 2026-10-19 that misreported twice. A Job A delegate never called `spec_validate_structure`: it read the issue by hand and labelled its own reading `Raw tool response: ... PASS`. A Job B delegate reported `shellcheck exit=0` while its own output listed SC1091 in two files; `shellcheck -f gcc` returns 1 there, and through `xargs` the code reads 123, because `xargs` maps any child exit from 1 to 125 to 123. Reading the instrument's own JSON or `$?` removes the layer that misreported.
 
-**Source rule (#1235).** Every push runs CI, so CI's verdict for the pushed HEAD is the lane result whenever it exists. Running the same lanes again locally spends a shared box on a question CI has already answered. Decide the source before dispatching:
+**Job A — Spec validation** (instrument: `spec_validate_structure`)
 
-- **The repo has CI** (`.github/workflows/*.yml` or `.gitlab-ci.yml`) → dispatch **Job B-ci**.
-- **It has none** → dispatch **Job B-local**.
-- **Job B-ci reports `NO-RUN`** (CI exists but never ran for this SHA) → dispatch Job B-local. Say so on the checklist.
+Call `mcp__sdlc-server__spec_validate_structure({ issue_ref: "<owner>/<repo>#<N>" })` yourself, in the same message as the Job D dispatch. The item reads two fields of the returned JSON. It passes only on `ok: true` with `valid: true`. On `valid: false` it FAILS and names the `missing_sections` exactly. Paste the JSON, or its `valid`/`missing_sections` excerpt, into the checklist evidence. A tool error (`ok: false`, or no response) is a FAIL for the item, never a pass.
+
+**Job B — Lanes: CI first** (instruments: `ci_wait_run`, or the lane commands)
+
+**Source rule (#1235).** Every push runs CI, so CI's verdict for the pushed HEAD is the lane result whenever it exists. Running the same lanes again locally spends a shared box on a question CI has already answered. Decide the source before starting:
+
+- **The repo has CI** (`.github/workflows/*.yml` or `.gitlab-ci.yml`) → run **Job B-ci**.
+- **It has none** → run **Job B-local**.
+- **Job B-ci finds `NO-RUN`** (CI exists but never ran for this SHA) → run Job B-local. Say so on the checklist.
 
 The checklist line names the source: `Validation (CI run <id> @ <sha7>)` or `Validation (local lanes)`.
 
 **Job B-ci**
+
+Call `mcp__sdlc-server__ci_wait_run({ ref: "<branch>", expected_sha: "<HEAD_SHA>", timeout_sec: 1800 })` yourself. It waits server-side until the run completes or times out, so start it in the same message as the Job D dispatch, and the review runs while CI is waited on. From its JSON, write exactly one line yourself:
+
 ```
-subagent_type: general-purpose
-model: haiku
-prompt: "Call mcp__sdlc-server__ci_wait_run with ref: '<branch>', expected_sha: '<HEAD_SHA>',
-         timeout_sec: 1800. Report its JSON VERBATIM, then exactly one line:
-           LANE ci:<workflow or pipeline name> | exit=<0 if final_status is success, else 1> | run=<id> sha=<sha>
-         If the response shows no run was found for that SHA, print instead:
-           NO-RUN <the response's reason>
-         Do not re-derive or soften the status; a timed_out or cancelled run is exit=1."
+LANE ci:<workflow_name> | exit=<0 if final_status is success, else 1> | run=<run_id> sha=<sha>
 ```
+
+- **`NO-RUN` is yours to decide, from the JSON.** `ok: false` with an `error` that begins `No CI run found` (and no `run_id` or `final_status`) means no run exists for that SHA. Write `NO-RUN <that error's first sentence>` and run Job B-local.
+- Any other `ok: false` is a FAIL for the item (`exit=1`), never `NO-RUN` and never a pass.
+- Do not re-derive or soften the status: a `timed_out`, `cancelled` or `failure` run is `exit=1`.
+- **On GitHub, cross-check `final_status` against the check-run conclusion:** `gh api repos/<repo>/commits/<HEAD_SHA>/check-runs --jq '.check_runs[] | {name,conclusion}'`. If `final_status` is `success` but any check-run's `conclusion` is `failure`, `cancelled`, `timed_out` or `action_required`, or is still `null` (not finished), the lane is `exit=1`. Name that check-run on the checklist. `gh run watch --exit-status` is never evidence (squawk #8): its exit code is the run summary's, which has read `success` while the job's own check-run still read `queued`.
 
 The `LANE … | exit=` line keeps the shape Step 5's autochain path reads.
 
 **Job B-local**
-```
-subagent_type: general-purpose
-model: haiku
-prompt: "Run EVERY validation and test lane in <repo_root> — not the first one you find.
-         Lanes: every command .claude-project.md declares under Toolchain (Validation, Tests,
-         and any other runnable lane). If it declares none, run EACH of these that is present:
-         ./scripts/ci/validate.sh, ./scripts/ci/test.sh, make test, python3 -m pytest tests/,
-         npm test. No lane is a superset of another: validate.sh passing says nothing about
-         the test suite.
 
-         Run each lane to completion in the FOREGROUND and capture its real exit code:
-           <cmd> > <log> 2>&1; echo \"exit=$?\"
-         Never pipe a lane into tail/head/grep before taking $? — the pipe reports the
-         filter's exit, not the lane's. Never return while a lane is still running: a
-         lane that has not finished has no result, and it dies with you.
+Run EVERY validation and test lane in `<repo_root>` yourself, with the Bash tool — not the first one you find. Lanes: every command `.claude-project.md` declares under Toolchain (Validation, Tests, and any other runnable lane). If it declares none, run EACH of these that is present: `./scripts/ci/validate.sh`, `./scripts/ci/test.sh`, `make test`, `python3 -m pytest tests/`, `npm test`. No lane is a superset of another: `validate.sh` passing says nothing about the test suite.
 
-         Return one line per lane, ALL lanes first, then the verdict:
-           LANE <command> | exit=<code> | <counts from its own summary line, e.g. '233 passed'>
-           VERDICT: PASS only if every lane exited 0; otherwise FAIL
-         Then, for each lane with a non-zero exit, its failing output verbatim (50 lines max)."
+Run one Bash command per lane, in exactly this form, with `run_in_background: true` for a long lane. `<log>` is a file in `<marker_dir>`, one per lane:
+
+```bash
+<cmd> > <log> 2>&1; echo "exit=$?"
 ```
 
-**Lanes and exit codes, not a verdict (#1101).** This prompt used to say "probe in order … run whatever exists", which reads as first-match-wins. In cc-workflow that ran `validate.sh` alone (233/233), reported "Validation (actually ran)", and CI then failed on the pytest lane, which runs as a separate step. The per-lane line is the same denominator-before-verdict discipline Job C uses. Step 5's autochain path reads these `exit=` fields directly, because the gate cannot be met from a PASS/FAIL summary.
+- Read `exit=` from that command's own output (for a background lane, its output once it reports completion). That is the lane's exit code, and nothing else is.
+- Never pipe a lane through `tail`, `head`, `grep` or `xargs` before `$?`. A pipe reports the filter's exit, not the lane's, and `xargs` maps any child exit from 1 to 125 to 123. Read `<log>` afterwards, as its own step, for counts and failures.
+- Invoke a multi-file linter once, with every file as argv: `shellcheck -f gcc <files...>`, never through `xargs`.
+- A lane that has not printed `exit=` has no result. Never write its `LANE` line, or assemble the checklist, while it is still running.
 
-**Job C — Dependency vulnerability scan** `model: haiku`
+Then write one line per lane yourself, ALL lanes first, then the verdict:
+
 ```
-subagent_type: general-purpose
-model: haiku
-prompt: "Run: bash <repo_root>/scripts/ci/dependency-scan.sh <repo_root>
-         Also run: git -C <repo_root> rev-parse HEAD
+LANE <command> | exit=<code> | <counts from its own summary line, e.g. '233 passed'>
+VERDICT: PASS only if every lane exited 0; otherwise FAIL
+```
 
-         Report the script's output VERBATIM, then its exit code, then the commit.
-         Do not summarise, do not re-derive the counts, do not substitute your own
-         judgement for the exit code.
+For each lane with a non-zero exit, add its failing output verbatim from `<log>` (50 lines max).
 
-         Exit codes:
-           0  scanned, zero HIGH/CRITICAL      -> checklist item PASSES
-           1  findings                          -> report each; do NOT auto-upgrade
-           2  manifests present, ZERO ingested  -> checklist item FAILS
-           3  trivy not installed               -> [SKIPPED]
-           4  nothing scannable, absence not declared -> checklist item FAILS
-           5  scanner/tooling error (timeout/no output/unparseable/partial
-              install) -> checklist item FAILS — this is NOT a skip and NOT
-              a pass. Ordinary triggers: first run pulling trivy's DB, a
-              rate-limited or air-gapped network. Never treat an
-              unmapped/unrecognized exit code as a pass.
-           6  PARTIAL COVERAGE (some ingested, some UNSCANNED) -> checklist
-              item FAILS — an unscanned lock is not a clean one (#1247)
+**Lanes and exit codes, not a verdict (#1101).** Job B-local used to say "probe in order … run whatever exists", which reads as first-match-wins. In cc-workflow that ran `validate.sh` alone (233/233), reported "Validation (actually ran)", and CI then failed on the pytest lane, which runs as a separate step. The per-lane line is the same denominator-before-verdict discipline Job C uses. Step 5's autochain path reads these `exit=` fields directly, because the gate cannot be met from a PASS/FAIL summary.
 
-         Report the `coverage:` line and every UNSCANNED lock by name, on every
-         exit — a run covering 1 of 2 manifests is a scan over half a
-         denominator, and it exits 6, not 0.
+**Job C — Dependency vulnerability scan** (instrument: `dependency-scan.sh`)
 
+Run both yourself, as two Bash commands (`<log>` is a file in `<marker_dir>`, as for the lanes):
+
+```bash
+bash <repo_root>/scripts/ci/dependency-scan.sh <repo_root> > <log> 2>&1; echo "exit=$?"
+git -C <repo_root> rev-parse HEAD
+```
+
+The item's value is that `exit=`, read from the command's own output and graded by the table below, at that commit. Then read `<log>` in full, and put its `coverage:` line and every UNSCANNED lock by name on the checklist, on every exit. A run covering 1 of 2 manifests is a scan over half a denominator, and it exits 6, not 0. Do not summarise, do not re-derive the counts, and do not substitute your own judgement for the exit code.
+
+```
+Exit codes:
+  0  scanned, zero HIGH/CRITICAL      -> checklist item PASSES
+  1  findings                          -> report each; do NOT auto-upgrade
+  2  manifests present, ZERO ingested  -> checklist item FAILS
+  3  trivy not installed               -> [SKIPPED]
+  4  nothing scannable, absence not declared -> checklist item FAILS
+  5  scanner/tooling error (timeout/no output/unparseable/partial
+     install) -> checklist item FAILS — this is NOT a skip and NOT
+     a pass. Ordinary triggers: first run pulling trivy's DB, a
+     rate-limited or air-gapped network. Never treat an
+     unmapped/unrecognized exit code as a pass.
+  6  PARTIAL COVERAGE (some ingested, some UNSCANNED) -> checklist
+     item FAILS — an unscanned lock is not a clean one (#1247)
+```
+
+**If the script is missing** (an older checkout, and today every repo but this one; see "Reach" below), run the raw-trivy fallback yourself, with its steps exactly as written:
+
+```
          If the script is MISSING (older checkout), say so and fall back to
          `trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps
          --list-all-pkgs --format json --quiet <repo_root>`, reporting the
@@ -217,16 +221,17 @@ prompt: "Run: bash <repo_root>/scripts/ci/dependency-scan.sh <repo_root>
          an unscanned lock is not a clean one. A declaration applies only when
          no lock is found; any found-but-unscanned lock FAILS. So an empty
          denominator FAILS unless a .no-scannable-dependencies at the repo
-         root declares it with a reason."
+         root declares it with a reason.
 ```
 
 **The denominator is emitted by the tool, not requested from the agent (#1137).** This job used to be prose asking a sub-agent to report the count. It complied — and compliance is the problem: an instruction can be forgotten by the next agent, misread, or quietly dropped in a rewrite, and the resulting verdict looks identical to a real one. `dependency-scan.sh` emits the number on every path including the passing one, so the report survives the agent.
 
 **Reach, stated honestly: cc-workflow only, for now.** `install` excludes `ci/*`
 from distribution (four sites), so `dependency-scan.sh` exists in a cc-workflow
-checkout and nowhere else. In every other repo this job takes the fallback above —
-raw `trivy` with an agent asked to report the count, i.e. exactly the prose path
-this replaces. The structural guarantee is real where the script is; the fallback
+checkout and nowhere else. In every other repo this job takes the fallback above:
+raw `trivy`, with the orchestrator counting the denominator by hand from those
+steps. That is prose, not a tool that emits the number, so it is exactly the path
+the script replaces. The structural guarantee is real where the script is; the fallback
 is what actually runs on flightdeck, mcp-server-sdlc and the rest until the kit
 ships it (#1141).
 
@@ -418,7 +423,7 @@ prompt: "Re-review after fixes in <repo_root>.
 **Why this optimisation and not a conditional gate.** The expensive thing about precheck is review wall-clock (~8 min/pass; three passes approaches 30 min, which is why a one-line fix can cost 15+ minutes and why agents drift toward filing follow-up issues instead of fixing inline). The tempting "fix" is to skip review for doc-only or chore-labelled work. **Do not.** #1191 was labelled `chore`, its own acceptance criteria said "no direct pytest coverage — it's a prose skill file," and its diff contained a real Bash defect: a rename guard that reported success while doing nothing. Issue type is self-reported *intent* and says nothing about what the diff contains. Scoping a re-read is safe because the skipped code was genuinely reviewed; skipping a gate on a label is not.
 
 ### Step 3 — Fix high+ findings (serial)
-Wait for all four jobs to return. **The moment Job D returns, run `record` — before touching any file** (or `reset`, if it errored/timed out rather than returning a verdict). Then, if Job D returned critical or important findings, fix them. Re-run Job D after **any** fix — not only "non-trivial" ones. That escape hatch existed because a re-run cost a full ~8-minute re-read; the delta removes the cost, so the judgment call is no longer worth its risk (#1191 is the standing example of a "trivial" change carrying a real defect). Ask `precheck-review-scope.sh resolve <repo_root> <marker_dir>` which prompt to use; do not decide by eye. Both arguments are required — the script exits 2 with usage if either is missing. Carry the prior pass's findings into the re-run prompt verbatim so it can verify each one rather than rediscover it. Haiku job failures (B or C) block the checklist item but do not block the gate unless validation itself fails.
+Wait for all four jobs to finish: Job D's Agent to return, and each of A, B and C to give its JSON or `exit=`. **The moment Job D returns, run `record` — before touching any file** (or `reset`, if it errored/timed out rather than returning a verdict). Then, if Job D returned critical or important findings, fix them. Re-run Job D after **any** fix — not only "non-trivial" ones. That escape hatch existed because a re-run cost a full ~8-minute re-read; the delta removes the cost, so the judgment call is no longer worth its risk (#1191 is the standing example of a "trivial" change carrying a real defect). Ask `precheck-review-scope.sh resolve <repo_root> <marker_dir>` which prompt to use; do not decide by eye. Both arguments are required — the script exits 2 with usage if either is missing. Carry the prior pass's findings into the re-run prompt verbatim so it can verify each one rather than rediscover it. A failed Job A, B or C result blocks its checklist item.
 
 **A fix is a commit (#1235).** Fix, then commit and push it (`/scp`), then re-run `ready`; its new SHA is the new `HEAD_SHA`. The pushed fix starts a new CI run, so Job B-ci runs again for the new SHA, and Job D re-runs as the delta `resolve` names. Reviewing an uncommitted fix and then pushing it is the defect this ordering prevents: the pass would describe a tree that is not the commit it gets posted on.
 
@@ -441,7 +446,7 @@ Run **sandbox-context detection** (see "Sandbox Auto-Approval" below): if the PR
 Otherwise, check for an **approved autochain** (CLAUDE.md "Exception: Approved Autochain", #1224). Resolve `autochain-gate.sh` with the same ladder as Step 0 — `PATH`, then `<repo_root>/.claude/bin/`, then `<repo_root>/scripts/` — and run `autochain-gate.sh check <repo_root> <N>`, where `<N>` is the `issue_number` that `ibm()` returned in Step 1. Auto-approve **only** when it exits 0 printing `approved <epic> armed_at=<ts>` **and** this cycle meets the mechanical pass definition:
 - every checklist item verified;
 - zero unresolved critical/important findings from the latest Job D pass;
-- **every** `LANE … | exit=` line from Job B reads `exit=0`, and there is at least one. A missing lane line, a lane still running, or a bare PASS with no lane lines is not a pass;
+- **every** `LANE … | exit=` line you wrote for Job B, from the instrument's own JSON or `$?`, reads `exit=0`, and there is at least one. A missing lane line, a lane still running, or a bare PASS with no lane lines is not a pass;
 - Job C exit 0.
 
 Then put the gate's two output lines (`approved … armed_at=…` and `approval: …`) on the checklist, so the approval being relied on is visible at the moment it is used, emit `[AUTO-APPROVED: autochain #<epic>]`, and invoke `/mmr`. A gate that cannot be found, a `not-approved` (including an expired approval), or any item short of a pass → STOP below. The gate fails closed; so does this step.
@@ -467,14 +472,14 @@ The full precheck runs on the exact commit the PR/MR opens ready with. **After t
 
 1. `"$SCOPE" ready` → `HEAD_SHA` (STOP on `not-ready`). Then `"$STATUS" pr-head <repo_root> <PR_NUMBER>` and **STOP unless its SHA equals `HEAD_SHA`.** Rearm reviews the local checkout, so the local checkout must be the PR/MR's head. Otherwise the status would land on another branch's commit while the PR/MR being merged was never reviewed.
 2. `git -C <repo_root> fetch -q origin <base>`, then `"$STATUS" last-success <repo_root> <base>` → `PREV`. It reads `origin/<base>`, so the fetch is what keeps a commit that another PR already landed from lending this branch its pass. On `none` (no commit on the branch carries a pass), there is nothing to rearm from: run the **full** precheck above. **Any non-zero exit → STOP**: 3 is an API error and 2 is a base it can't resolve. Never treat either as `none` or as a pass.
-3. `"$SCOPE" gather <repo_root> <marker_dir> <PREV>`, then Job D-delta (below) with that diff and one more instruction: *"Also answer, first line of your reply: `BEHAVIOUR-CHANGE: yes|no — <one sentence>`. Yes means this delta changes what the MR does: new or removed behaviour, scope, interface or acceptance criteria, as opposed to fixes and adjustments inside what was already reviewed."* Then Job B for `HEAD_SHA`, by the same source rule as the full gate: B-ci when a CI run exists for `HEAD_SHA`; B-local when B-ci reports `NO-RUN` or the repo has no CI. Otherwise a repo without CI could never rearm clean.
+3. `"$SCOPE" gather <repo_root> <marker_dir> <PREV>`, then Job D-delta (below) with that diff and one more instruction: *"Also answer, first line of your reply: `BEHAVIOUR-CHANGE: yes|no — <one sentence>`. Yes means this delta changes what the MR does: new or removed behaviour, scope, interface or acceptance criteria, as opposed to fixes and adjustments inside what was already reviewed."* Then run Job B yourself for `HEAD_SHA`, by the same source rule as the full gate: B-ci when a CI run exists for `HEAD_SHA`; B-local when B-ci finds `NO-RUN` or the repo has no CI. Otherwise a repo without CI could never rearm clean.
 4. **Clean:** no critical or important findings, `BEHAVIOUR-CHANGE: no`, and every lane `exit=0`. Post the status on `HEAD_SHA` with the description `#<N> rearm from <PREV7>: delta clean; lanes <ci|local>`. Make no announcement and no STOP. If BJ's merge go was already given, it still stands: continue to `/mmr`. Re-request platform approvals the push reset (GitLab MR approvals), and say so.
 5. **Not clean:** fix it as in Step 3 and rearm again. **`BEHAVIOUR-CHANGE: yes`**, or a reviewer that does not answer the question → run the **full** precheck from Step 0.5, including its checklist, notification and STOP.
 
 The last reviewed SHA comes from the commit status, not from the session marker, so rearm survives a `/clear`, a reseed and a different session.
 
 ## Dependency Vulnerability Scan
-Delegated to Job C (Haiku sub-agent) in the parallel batch. Interpret the result as:
+Job C in the parallel batch: the orchestrator runs `dependency-scan.sh` (or the raw-trivy fallback) itself and reads its exit code. Interpret the result as:
 - **PASS** → checklist item passes.
 - **SKIP** → emit `[SKIPPED — trivy not installed]` on the checklist. Do not fail the gate.
 - **FINDINGS** (`dependency-scan.sh` exit 1) → report each finding (package, CVE, severity, fixed version if any) as a deferred checklist item. Do NOT auto-upgrade dependencies — the user approves the codebase state at the gate. **The checklist item FAILS on any HIGH/CRITICAL finding, with or without a fix available** — `dependency-scan.sh` does not distinguish them (no `--ignore-unfixed` support; `.trivyignore` is explicitly disabled via `--ignorefile /dev/null`, not merely undocumented), which is stricter than this skill's own prose promised before this scan was a real tool rather than an agent's judgment call. Tracked for a policy decision: #1188. **Escape hatch that exists today, undocumented until now:** `DEP_SCAN_SEVERITY` (env var, default `HIGH,CRITICAL`) overrides the severity filter — e.g. `DEP_SCAN_SEVERITY=CRITICAL ./scripts/ci/validate.sh` to stop blocking on HIGH while #1188 is unresolved. This is a manual, visible override for an operator to reach for, not something Job C or this skill invokes on its own.
