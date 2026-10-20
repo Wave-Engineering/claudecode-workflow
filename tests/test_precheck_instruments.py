@@ -112,7 +112,9 @@ def test_precheck_fallback_captures_every_trivy_run_to_a_file(jobs: dict[str, st
     runs = [ln.strip() for ln in c.splitlines() if "trivy fs " in ln and ln.strip().startswith(("trivy fs ", "d=$("))]
     assert len(runs) >= 2, f"expected the main and the per-file fallback scans, found {runs}"
     for run in runs:
-        assert "> <marker_dir>/trivy-" in run and "2> <marker_dir>/trivy-" in run, f"uncaptured trivy run: {run}"
+        # `\s>` and not a bare `>`: `2> <marker_dir>/trivy-0.err` contains `> <marker_dir>/trivy-`.
+        assert re.search(r"\s>\s*<marker_dir>/trivy-\S+\.json\s", run), f"stdout not captured: {run}"
+        assert re.search(r"\s2>\s*<marker_dir>/trivy-\S+\.err", run), f"stderr not captured: {run}"
         assert 'echo "exit=$?"' in run, f"trivy run without its own exit=: {run}"
     flat = _flat(c)
     assert "Capture every trivy run to a file, never to the tool output" in flat
