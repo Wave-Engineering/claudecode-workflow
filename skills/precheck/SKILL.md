@@ -137,6 +137,7 @@ Run one Bash command per lane, in exactly this form, with `run_in_background: tr
 - Never pipe a lane through `tail`, `head`, `grep` or `xargs` before `$?`. A pipe reports the filter's exit, not the lane's, and `xargs` maps any child exit from 1 to 125 to 123. Read `<log>` afterwards, as its own step, for counts and failures.
 - Invoke a multi-file linter once, with every file as argv: `shellcheck -f gcc <files...>`, never through `xargs`.
 - A lane that has not printed `exit=` has no result. Never write its `LANE` line, or assemble the checklist, while it is still running.
+- Run the lanes one at a time, never in parallel with each other: they share the box and its caches (in cc-workflow, `validate.sh` itself runs `dependency-scan.sh`, and so trivy and its cache).
 
 Then write one line per lane yourself, ALL lanes first, then the verdict:
 
@@ -195,6 +196,24 @@ Exit codes:
          flags — this fallback exists only for a checkout that predates the
          script.
 
+         Capture every trivy run to a file, never to the tool output (#1275).
+         The Bash tool cuts its output at about 30k characters, and trivy
+         lists a target's Packages BEFORE its Vulnerabilities, so a lock of a
+         few hundred packages can be cut after its packages and before its
+         findings: it reads as ingested with 0 HIGH/CRITICAL, a FALSE PASS.
+         Run the main scan, and each per-file scan below, with
+         run_in_background: true (a first DB pull can outlast the foreground
+         limit), in this form, where <n> numbers the runs (0 for this one):
+           trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet <repo_root> > <marker_dir>/trivy-0.json 2> <marker_dir>/trivy-0.err; echo "exit=$?"
+         stderr has its own file, so a warning cannot make good JSON
+         unparseable. Read the packages and findings per target FROM THE
+         FILE, with jq, never from tool output:
+           jq '[.Results[]? | {Target, pkgs: (.Packages // [] | length), hc: ([.Vulnerabilities[]? | select(.Severity=="HIGH" or .Severity=="CRITICAL")] | length)}]' <marker_dir>/trivy-<n>.json
+           jq '[.Results[]? | .Target as $t | .Vulnerabilities[]? | select(.Severity=="HIGH" or .Severity=="CRITICAL") | {target: $t, pkg: .PkgName, id: .VulnerabilityID, severity: .Severity, fixed: .FixedVersion}]' <marker_dir>/trivy-<n>.json
+         A run that printed no exit=, printed a non-zero exit=, or left a
+         file jq cannot parse scanned nothing: every lock it was to cover is
+         UNSCANNED.
+
          On the fallback, FIRST enumerate the lockfiles. Run this exactly (one
          command, do not split it); it is the trust gate's own find:
            find <repo_root> \( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \) -prune -o -type f \( -name 'bun.lock' -o -name 'bun.lockb' -o -name 'package-lock.json' -o -name 'yarn.lock' -o -name 'pnpm-lock.yaml' -o -name 'go.sum' -o -name 'Cargo.lock' -o -name '*requirements*.txt' -o -path '*/requirements/*.txt' \) -print
@@ -212,11 +231,12 @@ Exit codes:
          trivy's pip analyzer reads ONLY a file named exactly requirements.txt
          (#1247), so the scan above skips every other pinned requirements
          file. Scan each of those ALONE, under the name trivy reads, with the
-         same flags:
-           d=$(mktemp -d) && cp '<that file>' $d/requirements.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet $d; rm -rf ${d:?}
+         same flags and the same capture, giving each its own <n>:
+           d=$(mktemp -d) && cp '<that file>' $d/requirements.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet $d > <marker_dir>/trivy-<n>.json 2> <marker_dir>/trivy-<n>.err; echo "exit=$?"; rm -rf ${d:?}
          Its HIGH/CRITICAL findings count toward the verdict exactly like the
-         main scan's. A lock in the denominator is INGESTED when a scan
-         returned at least one package for it (for go.sum, a result for the
+         main scan's. Its jq row's Target reads requirements.txt, and that row
+         is that file's. A lock in the denominator is INGESTED when a jq row
+         for it shows at least one package (for go.sum, the row for the
          go.mod beside it); every other one is UNSCANNED. Report the
          denominator and the ingested count, and name each UNSCANNED lock,
          before any verdict. Any UNSCANNED lock -> the checklist item FAILS:

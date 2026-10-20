@@ -99,6 +99,26 @@ def test_precheck_lane_no_filter_before_rc(jobs: dict[str, str]) -> None:
         "B-local must ban tail, head, grep and xargs before `$?` in one explicit sentence"
     )
     assert "shellcheck -f gcc <files...>" in body, "the single-argv linter form is missing"
+    assert "Run the lanes one at a time, never in parallel with each other" in _flat(body)
+
+
+def test_precheck_fallback_captures_every_trivy_run_to_a_file(jobs: dict[str, str]) -> None:
+    """The raw-trivy fallback never prints trivy's JSON into the tool output. trivy
+    lists a target's Packages before its Vulnerabilities, and the tool cuts output
+    near 30k characters (one pinned django==2.2.0 is ~95 KB of JSON), so a cut can
+    land between them and read as ingested with 0 HIGH/CRITICAL: a false PASS.
+    Every trivy command line is captured to a file, and jq reads it from there."""
+    c = jobs["C"]
+    runs = [ln.strip() for ln in c.splitlines() if "trivy fs " in ln and ln.strip().startswith(("trivy fs ", "d=$("))]
+    assert len(runs) >= 2, f"expected the main and the per-file fallback scans, found {runs}"
+    for run in runs:
+        assert "> <marker_dir>/trivy-" in run and "2> <marker_dir>/trivy-" in run, f"uncaptured trivy run: {run}"
+        assert 'echo "exit=$?"' in run, f"trivy run without its own exit=: {run}"
+    flat = _flat(c)
+    assert "Capture every trivy run to a file, never to the tool output" in flat
+    assert "jq '[.Results[]? | {Target, pkgs: (.Packages // [] | length)" in c, "packages are not read from the file"
+    assert "or left a file jq cannot parse scanned nothing: every lock it was to cover is UNSCANNED" in flat
+    assert re.search(r"main scan, and each per-file scan below, with run_in_background: true", flat)
 
 
 def test_precheck_instruments_name_what_they_read(jobs: dict[str, str]) -> None:
@@ -115,7 +135,8 @@ def test_precheck_instruments_name_what_they_read(jobs: dict[str, str]) -> None:
     assert "git -C <repo_root> rev-parse HEAD" in c
     # trivy may run past the Bash tool's foreground limit; a killed scan prints no exit=.
     flat_c = _flat(c)
-    assert "run_in_background: true" in flat_c, "Job C must run the scan in the background"
+    # The script's own sentence, not a bare substring: the fallback says run_in_background too.
+    assert "Run the scan with `run_in_background: true`." in flat_c, "Job C must run the scan in the background"
     assert "has not printed `exit=` has no result, and is never a pass" in flat_c
 
 
