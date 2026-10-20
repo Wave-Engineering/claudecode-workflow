@@ -19,6 +19,62 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.11.0] - 2026-10-20
+
+### Changed
+
+- **`/precheck`: no sub-agent report is a gate value (#1275, PR #1276).** Jobs A, B and C used to
+  be haiku sub-agents, and the gate read what they wrote rather than what the instrument returned.
+  On 2026-10-19 that misreported twice:
+  - a Job A agent never called `spec_validate_structure`, and labelled its own reading of the
+    issue `Raw tool response: ... PASS`;
+  - a Job B agent reported `shellcheck exit=0` while its output listed SC1091. The real code was 1,
+    and through `xargs` it reads 123.
+
+  The orchestrator now runs each instrument itself and puts its JSON or exit code on the checklist
+  as read. Only Job D, the code review, is delegated.
+  - **Job A** calls `spec_validate_structure` and reads `valid` / `missing_sections`. A tool error
+    FAILs.
+  - **Job B-ci** calls `ci_wait_run` and writes the `LANE` line from `final_status`. `NO-RUN` is
+    `ok:false` with an error beginning `No CI run found`, and any other `ok:false` is `exit=1`.
+    On GitHub it cross-checks the paginated check-run conclusions. `gh run watch --exit-status` is
+    never evidence.
+  - **Job B-local** runs each lane as `<cmd> > <log> 2>&1; echo "exit=$?"`, one at a time, with a
+    long lane in the background. It never pipes a lane through `tail`, `head`, `grep` or `xargs` before `$?`. A
+    multi-file linter takes every file as argv.
+  - **Job C** runs `dependency-scan.sh` the same way, in the background. A scan that printed no
+    `exit=` has no result, and is never a pass.
+  - Pinned by `tests/test_precheck_instruments.py`.
+
+  This replaces the interim rule posted to Discord #precheck on 2026-10-19. It reaches a host with
+  the next install.
+
+### Fixed
+
+- **trivy's JSON no longer passes through the tool output (#1275, PR #1276; #1277, PR #1279).** The
+  Bash tool cuts output at about 30k characters, and trivy lists a target's `Packages` before its
+  `Vulnerabilities`. A large lock could be cut between the two and read as ingested with 0
+  HIGH/CRITICAL, a false PASS (one `django==2.2.0` pin is about 95 KB of JSON). Two paths had it:
+  - `/precheck`'s raw-trivy fallback, the path every repo but cc-workflow takes;
+  - the nextwave trust gate's trivy signal, `trivySignalPrompt()`.
+
+  Both now write each run's JSON to its own file, with stderr in a separate file so a warning can't
+  make good JSON unparseable. Each run prints its own `exit=` and runs in the background (the trust
+  gate's, one at a time). Packages
+  and findings are read per target from the file with `jq`. The trust gate's row also carries
+  `hc_fixable`, because its pass predicate fails only on a fixable finding. A run with no `exit=`,
+  a non-zero one, or an unparseable file is UNSCANNED.
+  - The trust gate's work directory is a `<w>` placeholder, filled in from the path `mktemp -d`
+    printed. A shell variable doesn't survive between Bash calls, so a `$w` would have written to
+    `/trivy-0.json` and held every wave.
+  - Not yet seen live: `run_in_background` inside a Workflow `agent()`. If it fails there, the
+    signal HOLDs; it never passes.
+
+### Image
+
+- **The MCP servers are unchanged from 8.10.0:** mcp-server-sdlc v5.0.2, mcp-server-wtf v1.5.2,
+  mcp-server-discord v1.4.3, mcp-server-discord-watcher v1.6.1 and mcp-server-nerf v2.0.0.
+
 ## [8.10.0] - 2026-10-19
 
 ### Fixed
