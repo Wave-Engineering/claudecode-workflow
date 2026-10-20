@@ -113,13 +113,19 @@ def test_precheck_instruments_name_what_they_read(jobs: dict[str, str]) -> None:
     c = jobs["C"]
     assert 'bash <repo_root>/scripts/ci/dependency-scan.sh <repo_root> > <log> 2>&1; echo "exit=$?"' in c
     assert "git -C <repo_root> rev-parse HEAD" in c
+    # trivy may run past the Bash tool's foreground limit; a killed scan prints no exit=.
+    flat_c = _flat(c)
+    assert "run_in_background: true" in flat_c, "Job C must run the scan in the background"
+    assert "has not printed `exit=` has no result, and is never a pass" in flat_c
 
 
 def test_precheck_ci_cross_checks_the_check_run(jobs: dict[str, str]) -> None:
     """On GitHub, final_status is cross-checked against the check-runs, and the run
     summary that `gh run watch --exit-status` reports is never evidence (squawk #8)."""
     ci = _flat(jobs["B-ci"])
-    assert "gh api repos/<repo>/commits/<HEAD_SHA>/check-runs --jq '.check_runs[] | {name,conclusion}'" in ci
+    # --paginate: the endpoint returns 30 check-runs a page, and a failure on page 2 is
+    # exactly what the cross-check exists to catch.
+    assert "gh api --paginate repos/<repo>/commits/<HEAD_SHA>/check-runs --jq '.check_runs[] | {name,conclusion}'" in ci
     assert re.search(r"`gh run watch --exit-status` is never evidence", ci)
 
 

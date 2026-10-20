@@ -119,7 +119,7 @@ LANE ci:<workflow_name> | exit=<0 if final_status is success, else 1> | run=<run
 - **`NO-RUN` is yours to decide, from the JSON.** `ok: false` with an `error` that begins `No CI run found` (and no `run_id` or `final_status`) means no run exists for that SHA. Write `NO-RUN <that error's first sentence>` and run Job B-local.
 - Any other `ok: false` is a FAIL for the item (`exit=1`), never `NO-RUN` and never a pass.
 - Do not re-derive or soften the status: a `timed_out`, `cancelled` or `failure` run is `exit=1`.
-- **On GitHub, cross-check `final_status` against the check-run conclusion:** `gh api repos/<repo>/commits/<HEAD_SHA>/check-runs --jq '.check_runs[] | {name,conclusion}'`. If `final_status` is `success` but any check-run's `conclusion` is `failure`, `cancelled`, `timed_out` or `action_required`, or is still `null` (not finished), the lane is `exit=1`. Name that check-run on the checklist. `gh run watch --exit-status` is never evidence (squawk #8): its exit code is the run summary's, which has read `success` while the job's own check-run still read `queued`.
+- **On GitHub, cross-check `final_status` against the check-run conclusion:** `gh api --paginate repos/<repo>/commits/<HEAD_SHA>/check-runs --jq '.check_runs[] | {name,conclusion}'` (`--paginate`, because the endpoint returns 30 check-runs a page). If `final_status` is `success` but any check-run's `conclusion` is `failure`, `cancelled`, `timed_out` or `action_required`, or is still `null` (not finished), the lane is `exit=1`. Name that check-run on the checklist. `gh run watch --exit-status` is never evidence (squawk #8): its exit code is the run summary's, which has read `success` while the job's own check-run still read `queued`.
 
 The `LANE … | exit=` line keeps the shape Step 5's autochain path reads.
 
@@ -157,6 +157,8 @@ Run both yourself, as two Bash commands (`<log>` is a file in `<marker_dir>`, as
 bash <repo_root>/scripts/ci/dependency-scan.sh <repo_root> > <log> 2>&1; echo "exit=$?"
 git -C <repo_root> rev-parse HEAD
 ```
+
+Run the scan with `run_in_background: true`. Each trivy run inside it may take up to `DEP_SCAN_TIMEOUT` (300 s by default), which is longer than the Bash tool lets a foreground command run, and a killed command never reaches `echo`. A scan that has not printed `exit=` has no result, and is never a pass.
 
 The item's value is that `exit=`, read from the command's own output and graded by the table below, at that commit. Then read `<log>` in full, and put its `coverage:` line and every UNSCANNED lock by name on the checklist, on every exit. A run covering 1 of 2 manifests is a scan over half a denominator, and it exits 6, not 0. Do not summarise, do not re-derive the counts, and do not substitute your own judgement for the exit code.
 
