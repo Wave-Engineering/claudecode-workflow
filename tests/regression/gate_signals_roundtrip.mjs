@@ -193,8 +193,9 @@ try {
   ok('trivy prompt: pip siblings scanned alone, partial coverage fails, unpinned requirements out of the denominator as in check-scannable.sh, counts returned (#1247)')
   // #1277: trivy's JSON goes to a file, never to the tool output, which is cut at ~30k characters
   // between a lock's Packages and its Vulnerabilities (a false PASS). Every command line that runs
-  // trivy is checked, so a third scan added later without the capture fails here too.
-  const runs = tv.split('\n').filter((l) => /^  (trivy fs |d=\$\()/.test(l) && l.includes('trivy fs '))
+  // trivy is checked, so a third scan added later without the capture fails here too: any indented
+  // command line that runs `trivy fs `, however it begins (`cd x && trivy fs …`, a `for` loop).
+  const runs = tv.split('\n').filter((l) => l.startsWith('  ') && l.includes('trivy fs '))
   assert.ok(runs.length >= 2, `expected the main and the per-file trivy scans, found ${runs.length}`)
   for (const run of runs) {
     // `\s>` and not a bare `>`: `2> <w>/trivy-0.err` contains `> <w>/trivy-` (the #1276 vacuity).
