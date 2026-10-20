@@ -165,7 +165,7 @@ try {
   // #1247: trivy reads only the exact name requirements.txt, so siblings are scanned alone under it,
   // a partial run fails, and the agent returns the counts the code-side rule below re-checks.
   assert.match(tv, /pip analyzer reads ONLY a file named exactly requirements\.txt/)
-  assert.match(tv, /cp '<that file>' \$d\/requirements\.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet \$d; rm -rf \$\{d:\?\}/)
+  assert.match(tv, /cp '<that file>' \$d\/requirements\.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet \$d > <w>\/trivy-<n>\.json 2> <w>\/trivy-<n>\.err; echo "exit=\$\?"; rm -rf \$\{d:\?\}/)
   assert.match(tv, /PARTIAL COVERAGE\s+FAILS/)
   assert.match(tv, /rm -rf \$\{d:\?\}\nIts HIGH\/CRITICAL findings count toward the verdict exactly like the main scan's\./) // as in SKILL.md's fallback
   assert.match(tv, /found \(the denominator: lines the find printed, less the two exclusions above\), ingested\s+\(how many of those are INGESTED\), unscanned/)
@@ -191,6 +191,29 @@ try {
   assert.ok(tv.includes(` -o ${reqFind} \\) -print`), 'trivy find must carry check-scannable.sh\'s REQ_FIND')
   assert.match(tv, /where it prints 0, leave that file OUT of the denominator/)
   ok('trivy prompt: pip siblings scanned alone, partial coverage fails, unpinned requirements out of the denominator as in check-scannable.sh, counts returned (#1247)')
+  // #1277: trivy's JSON goes to a file, never to the tool output, which is cut at ~30k characters
+  // between a lock's Packages and its Vulnerabilities (a false PASS). Every command line that runs
+  // trivy is checked, so a third scan added later without the capture fails here too.
+  const runs = tv.split('\n').filter((l) => /^  (trivy fs |d=\$\()/.test(l) && l.includes('trivy fs '))
+  assert.ok(runs.length >= 2, `expected the main and the per-file trivy scans, found ${runs.length}`)
+  for (const run of runs) {
+    // `\s>` and not a bare `>`: `2> <w>/trivy-0.err` contains `> <w>/trivy-` (the #1276 vacuity).
+    assert.match(run, /\s>\s*<w>\/trivy-\S+\.json\s/, `stdout not captured: ${run}`)
+    assert.match(run, /\s2>\s*<w>\/trivy-\S+\.err/, `stderr not captured: ${run}`)
+    assert.ok(run.includes('; echo "exit=$?"'), `trivy run without its own exit=: ${run}`)
+  }
+  assert.match(tv, /--quiet \/tmp\/repo > <w>\/trivy-0\.json 2> <w>\/trivy-0\.err; echo "exit=\$\?"\n/)
+  // <w> is the literal path mktemp -d printed, never a variable: a variable does not survive
+  // between Bash calls, so `> $w/...` in a later call writes to /trivy-0.json and HOLDs every wave.
+  assert.match(tv, /Create one work directory\s+with mktemp -d, once, and write the path it prints in place of <w>/)
+  assert.doesNotMatch(tv, /\$w\b/, 'the work directory must be the <w> placeholder, not a $w variable')
+  assert.match(tv, /run_in_background: true .*, one at a time, never\s+in parallel/)
+  assert.ok(tv.includes(`jq '[.Results[]? | {Target, pkgs: (.Packages // [] | length), hc: ([.Vulnerabilities[]? | select(.Severity=="HIGH" or .Severity=="CRITICAL")] | length), hc_fixable: ([.Vulnerabilities[]? | select((.Severity=="HIGH" or .Severity=="CRITICAL") and ((.FixedVersion // "") != ""))] | length)}]' <w>/trivy-<n>.json`), 'the per-target jq read with hc_fixable is missing')
+  assert.match(tv, /\| \{target: \$t, pkg: \.PkgName, id: \.VulnerabilityID, severity: \.Severity, fixed: \.FixedVersion\}\]' <w>\/trivy-<n>\.json/)
+  assert.match(tv, /FROM ITS FILE, with jq, never from tool\s+output/)
+  assert.match(tv, /A run that printed no exit=, printed a non-zero exit=, or left a file jq cannot parse scanned nothing: every lock it was to cover is UNSCANNED\./)
+  assert.match(tv, /INGESTED when a jq row for it shows at least one package/)
+  ok('trivy prompt: every scan captured to <w>/trivy-<n>.json + .err with its own exit=, read with jq (hc_fixable), no exit=/non-zero/unparseable = UNSCANNED (#1277)')
 } catch (e) { bad('signal prompts', e) }
 
 // ── 2b. #1247: the TRIVY coverage rule is CODE, not a prompt instruction ──────────────
