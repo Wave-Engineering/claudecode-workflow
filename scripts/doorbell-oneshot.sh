@@ -160,11 +160,27 @@ fi
 
 # Warn (do not fail) when identity is unresolvable — the watcher would fail closed
 # and this script would just hang, which reads as "no messages" rather than "deaf".
+# The watcher fails closed on ANY unresolved field, not only a missing file (#1283):
+# an unparseable file, or an empty dev_name or dev_team, is just as deaf.
 IDENTITY_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
-if [[ ! -f "$IDENTITY_ROOT/.claude/agent-identity.json" ]]; then
-	echo "doorbell-oneshot: WARNING no $IDENTITY_ROOT/.claude/agent-identity.json —" >&2
+IDENTITY_FILE="$IDENTITY_ROOT/.claude/agent-identity.json"
+identity_problem=""
+if [[ ! -f "$IDENTITY_FILE" ]]; then
+	identity_problem="no $IDENTITY_FILE"
+elif ! command -v jq >/dev/null 2>&1; then
+	identity_problem="jq is not installed, so $IDENTITY_FILE cannot be checked"
+elif ! jq -e . "$IDENTITY_FILE" >/dev/null 2>&1; then
+	identity_problem="$IDENTITY_FILE is not valid JSON"
+elif ! jq -er '.dev_name | select(type == "string" and length > 0)' "$IDENTITY_FILE" >/dev/null 2>&1; then
+	identity_problem="$IDENTITY_FILE has an empty or missing dev_name"
+elif ! jq -er '.dev_team | select(type == "string" and length > 0)' "$IDENTITY_FILE" >/dev/null 2>&1; then
+	identity_problem="$IDENTITY_FILE has an empty or missing dev_team"
+fi
+if [[ -n "$identity_problem" ]]; then
+	echo "doorbell-oneshot: WARNING $identity_problem —" >&2
 	echo "  the delivery gate fails closed on unresolved identity, so NOTHING will" >&2
-	echo "  be delivered. Run from the project root or set CLAUDE_PROJECT_DIR." >&2
+	echo "  be delivered. Run from the project root or set CLAUDE_PROJECT_DIR, and" >&2
+	echo "  run /name if the identity is incomplete." >&2
 fi
 
 # A private directory rather than `mktemp -u` + mkfifo: no TOCTOU window on the
