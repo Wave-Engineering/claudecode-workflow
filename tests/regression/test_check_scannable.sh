@@ -86,6 +86,49 @@ rc="$(run_gate "$T")"
 	no "requirements/base.in must not satisfy the gate (rc=$rc)"
 rm -rf "$T/requirements"
 
+# --- #1289: a Python lock alone is counted -----------------------------------
+# A repo whose only lock was a uv.lock read "0 scannable" and was never scanned.
+# Each lock trivy 0.74.0 ingests must satisfy the gate alone, at the root and
+# nested, with or without a pyproject.toml beside it, and be listed by path,
+# because dependency-scan.sh takes its denominator from these lines.
+for lock in uv.lock poetry.lock Pipfile.lock py/uv.lock svc/api/poetry.lock app/Pipfile.lock; do
+	mkdir -p "$T/$(dirname "$lock")"
+	printf 'version = 1\n' >"$T/$lock"
+	out="$(bash "$GATE" "$T" 2>&1)"
+	rc=$?
+	if [[ "$rc" == "0" ]] && grep -qxF "  [scannable] ./$lock" <<<"$out" &&
+		grep -qF "check-scannable: 1 scannable manifest(s)" <<<"$out"; then
+		ok "a lone $lock is counted and listed (#1289)"
+	else
+		no "a lone $lock must be counted and listed (rc=$rc): $out"
+	fi
+	rm -rf "${T:?}/${lock%%/*}"
+done
+mkdir -p "$T/py"
+printf '[project]\nname = "p"\n' >"$T/py/pyproject.toml"
+printf 'version = 1\n' >"$T/py/uv.lock"
+out="$(bash "$GATE" "$T" 2>&1)"
+rc=$?
+[[ "$rc" == "0" ]] && grep -qxF "  [scannable] ./py/uv.lock" <<<"$out" &&
+	ok "a uv.lock beside its pyproject.toml is counted once" ||
+	no "a uv.lock beside its pyproject.toml must be counted (rc=$rc): $out"
+# A pyproject.toml alone is often tool config (ruff, pytest), not a dependency
+# manifest: it adds nothing to the count and no UNSCANNABLE line.
+rm -f "$T/py/uv.lock"
+out="$(bash "$GATE" "$T" 2>&1)"
+rc=$?
+[[ "$rc" == "1" ]] && ! grep -qF "pyproject.toml" <<<"$out" &&
+	ok "a pyproject.toml with no lock is neither counted nor called UNSCANNABLE" ||
+	no "a lone pyproject.toml must not count or be flagged (rc=$rc): $out"
+rm -rf "$T/py"
+# pdm.lock is left out on purpose: trivy 0.74.0 has no pdm analyzer and emits no
+# Result for one, so counting it would fail every repo carrying it as UNSCANNED.
+printf 'version = 1\n' >"$T/pdm.lock"
+rc="$(run_gate "$T")"
+[[ "$rc" == "1" ]] && ok "a pdm.lock is not counted (trivy 0.74.0 cannot read it, #1289)" ||
+	no "pdm.lock must stay uncounted until a trivy that reads it is measured (rc=$rc)"
+rm -f "$T/pdm.lock"
+
 # --- package.json without a lockfile is NOT scannable ------------------------
 mkdir -p "$T/svc"
 printf '{"name":"svc","dependencies":{"left-pad":"^1.0.0"}}\n' >"$T/svc/package.json"

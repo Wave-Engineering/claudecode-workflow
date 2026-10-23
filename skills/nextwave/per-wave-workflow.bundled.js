@@ -1097,9 +1097,10 @@ function reviewSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRepoD
 // real lockfile, prunes the nested copy). Also added bun.lockb — scripts/ci/check-scannable.sh's
 // own enumeration (the sibling authority in this repo) already carries it; trivySignalPrompt's
 // list mirrors that one now, on purpose, so the two lockfile lists in this repo drift together
-// instead of separately (widening beyond that shared set, e.g. poetry.lock/Gemfile.lock, is a
-// real gap too, but a bigger scope change than this fix — check-scannable.sh doesn't cover them
-// either, so parity with it is the bar this fix targets, not universal ecosystem coverage).
+// instead of separately (widening beyond that shared set, e.g. Gemfile.lock, is a real gap too,
+// but a bigger scope change than this fix — check-scannable.sh doesn't cover it either, so parity
+// with it is the bar this fix targets, not universal ecosystem coverage. The Python locks were
+// added later, by #1289 below).
 //
 // cc-workflow#1247: the find counts every pip requirements file (check-scannable.sh's REQ_FIND,
 // carried verbatim: *requirements*.txt and requirements/*.txt), but trivy's pip analyzer reads only
@@ -1122,11 +1123,17 @@ function reviewSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRepoD
 // shell variable does not survive between Bash calls, so `> $w/...` in a later call would write to
 // /trivy-0.json, fail, and HOLD every wave. The jq row carries hc_fixable because the pass predicate
 // fails only on a fixable finding.
+//
+// cc-workflow#1289: a repo whose only lock was a uv.lock found nothing here. The find now names the
+// Python locks trivy 0.74.0 was measured to ingest (uv.lock, poetry.lock, Pipfile.lock); pdm.lock is
+// left out because trivy has no pdm analyzer, and a found lock it cannot read would HOLD every wave
+// of a repo that carries one. The names are check-scannable.sh's JS_LOCKS / PAIRED_LOCKS /
+// LONE_LOCKS (the reasons per name live there), and test_lock_lists_agree fails when they differ.
 function trivySignalPrompt({ waveId, kahunaBranch, targetRepoDir }) {
   return [
     `Trust-gate TRIVY signal for wave ${waveId}. Scan ${kahunaBranch} for dependency vulnerabilities.`,
     `FIRST enumerate the dependency manifests/lockfiles under ${targetRepoDir} — run this exactly (one command, do not split it):`,
-    `  find ${targetRepoDir} \\( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \\) -prune -o -type f \\( -name 'bun.lock' -o -name 'bun.lockb' -o -name 'package-lock.json' -o -name 'yarn.lock' -o -name 'pnpm-lock.yaml' -o -name 'go.sum' -o -name 'Cargo.lock' -o -name '*requirements*.txt' -o -path '*/requirements/*.txt' \\) -print`,
+    `  find ${targetRepoDir} \\( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \\) -prune -o -type f \\( -name 'bun.lock' -o -name 'bun.lockb' -o -name 'package-lock.json' -o -name 'yarn.lock' -o -name 'pnpm-lock.yaml' -o -name 'go.sum' -o -name 'Cargo.lock' -o -name 'uv.lock' -o -name 'poetry.lock' -o -name 'Pipfile.lock' -o -name '*requirements*.txt' -o -path '*/requirements/*.txt' \\) -print`,
     `and report the count of lines it prints — this is the denominator the pass predicate below`,
     `needs, not optional context. Two exclusions, both matching scripts/ci/check-scannable.sh:`,
     `(1) a pip requirements file (a line the find printed for its *requirements*.txt or`,

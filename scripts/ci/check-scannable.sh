@@ -81,6 +81,31 @@ find_reqs() {
 	find . \( "${PRUNE[@]}" \) -prune -o -type f "${REQ_FIND[@]}" -print 2>/dev/null
 }
 
+# THE LOCK NAMES, one array per rule, each on ONE line (#1289). gate.js's
+# trivySignalPrompt find and SKILL.md's Job C fallback find carry the same names
+# by hand (a Workflow bundle and a prose fallback that runs in repos without this
+# script cannot read a shared file), and test_lock_lists_agree in
+# tests/test_dependency_scan.py reads these three lines and those two finds and
+# fails on any difference. Add a name here and in both finds, or the test fails.
+#
+#   JS_LOCKS      counted when a package.json sits beside one (first match wins)
+#   PAIRED_LOCKS  manifest:lock, counted when the manifest sits beside its lock
+#   LONE_LOCKS    counted wherever found, no manifest required
+JS_LOCKS=(bun.lock bun.lockb package-lock.json yarn.lock pnpm-lock.yaml)
+PAIRED_LOCKS=("go.mod:go.sum" "Cargo.toml:Cargo.lock")
+LONE_LOCKS=(uv.lock poetry.lock Pipfile.lock)
+# Python locks are LONE: a pyproject.toml is often tool config with no
+# dependencies (ruff, pytest), so a pyproject.toml without a lock cannot be
+# called UNSCANNABLE, and trivy reads each of these locks with no manifest beside
+# it. Each name is here only because trivy 0.74.0 ingests it (#1289, measured
+# with this repo's flags, `--include-dev-deps --list-all-pkgs`, on a minimal real
+# lock, with and without its manifest beside it): uv.lock (Type uv, 4 packages),
+# poetry.lock (Type poetry, 3), Pipfile.lock (Type pipenv, 2). LEFT OUT ON PURPOSE:
+# pdm.lock. trivy 0.74.0 has no pdm analyzer, so it emits no Result for one, with
+# or without its pyproject.toml. Counted, every repo carrying one would fail as
+# UNSCANNED (dependency-scan.sh exit 6, or 2) with no way to clear it. Add it only
+# after re-measuring on a trivy that reads it.
+
 scannable=0
 declare -a REPORT=()
 
@@ -100,7 +125,7 @@ while IFS= read -r manifest; do
 	[[ -n "$manifest" ]] || continue
 	dir="$(dirname "$manifest")"
 	found_lock=""
-	for lock in bun.lock bun.lockb package-lock.json yarn.lock pnpm-lock.yaml; do
+	for lock in "${JS_LOCKS[@]}"; do
 		[[ -f "$dir/$lock" ]] && {
 			found_lock="$lock"
 			break
@@ -114,7 +139,7 @@ while IFS= read -r manifest; do
 	fi
 done < <(find_files 'package.json')
 
-for pair in "go.mod:go.sum" "Cargo.toml:Cargo.lock"; do
+for pair in "${PAIRED_LOCKS[@]}"; do
 	manifest_name="${pair%%:*}"
 	lock_name="${pair##*:}"
 	while IFS= read -r manifest; do
@@ -127,6 +152,18 @@ for pair in "go.mod:go.sum" "Cargo.toml:Cargo.lock"; do
 			REPORT+=("  [UNSCANNABLE] $manifest — no $lock_name beside it")
 		fi
 	done < <(find_files "$manifest_name")
+done
+
+# --- shape 1b: a lockfile that stands alone (#1289) --------------------------
+# A uv.lock was invisible here: a repo whose only lock was one read "0
+# scannable" and never had it scanned. Presence is the test, as for the locks
+# above. The line shape is the one dependency-scan.sh reads its denominator from.
+for lock_name in "${LONE_LOCKS[@]}"; do
+	while IFS= read -r lock; do
+		[[ -n "$lock" ]] || continue
+		scannable=$((scannable + 1))
+		REPORT+=("  [scannable] $lock")
+	done < <(find_files "$lock_name")
 done
 
 # --- shape 2: requirements.txt with pinned entries ---------------------------

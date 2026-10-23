@@ -52,7 +52,13 @@
 # COVERAGE IS BY NAME (#1247). A lock is INGESTED only when a trivy Result names
 # it and carries at least one package, the rule the trust gate and the /precheck
 # fallback apply. Comparing counts let a Result check-scannable.sh never counts
-# (poetry.lock, uv.lock, Gemfile.lock, ...) stand in for a lock it does count.
+# (Gemfile.lock, pdm.lock, ...) stand in for a lock it does count.
+#
+# THIS SCRIPT CARRIES NO LOCK LIST (#1289). Its denominator is check-scannable.sh's
+# `[scannable]` lines, by name, so a lock type is counted and matched here exactly
+# when check-scannable.sh's JS_LOCKS / PAIRED_LOCKS / LONE_LOCKS name it. trivy
+# names each Python lock by its own path (measured, trivy 0.74.0: Target uv.lock,
+# poetry.lock, Pipfile.lock), so none needs an alias in names() below.
 #
 # A .no-scannable-dependencies declaration applies only when no lock is found:
 # it rescues 4, never 2 or 6. The trust gate's trivyCoverage() rules the same,

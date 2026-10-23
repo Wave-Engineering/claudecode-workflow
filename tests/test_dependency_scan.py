@@ -344,8 +344,11 @@ def test_stub_present_but_uningested_exits_2(tmp_path: Path):
     assert "delete the empty lockfile" not in proc.stderr, proc.stderr
 
 
-def _poetry_result(target: str = "poetry.lock") -> str:
-    return f'{{"Target":"{target}","Type":"poetry","Packages":[{{"Name":"requests"}}]}}'
+# A lock trivy reads but check-scannable.sh does not count. This was a poetry.lock
+# until #1289 counted the Python locks; a Gemfile.lock keeps these tests about a
+# Result OUTSIDE the denominator, which is what they pin.
+def _gemfile_result(target: str = "Gemfile.lock") -> str:
+    return f'{{"Target":"{target}","Type":"bundler","Packages":[{{"Name":"rack"}}]}}'
 
 
 def _web_bun_lockb(repo: Path) -> None:
@@ -355,20 +358,21 @@ def _web_bun_lockb(repo: Path) -> None:
 
 
 def test_a_result_outside_the_denominator_covers_no_counted_lock(tmp_path: Path):
-    """babelfish's #1269 finding, its exact tree: a root poetry.lock (which
-    check-scannable.sh does not count) and web/bun.lockb (which it does). The
-    count-based check read trivy's 1 Result as "1 of 1" and PASSED with the
-    bun.lockb never scanned. By name, nothing counted was ingested: exit 2, the
-    bun.lockb named, the poetry.lock listed but marked outside the denominator."""
+    """babelfish's #1269 finding, its tree: a root lock check-scannable.sh does
+    not count (a poetry.lock then, a Gemfile.lock since #1289 counts poetry.lock)
+    and web/bun.lockb (which it does). The count-based check read trivy's 1
+    Result as "1 of 1" and PASSED with the bun.lockb never scanned. By name,
+    nothing counted was ingested: exit 2, the bun.lockb named, the uncounted
+    lock listed but marked outside the denominator."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "poetry.lock").write_text("# poetry lock\n")
+    (repo / "Gemfile.lock").write_text("GEM\n")
     _web_bun_lockb(repo)
-    proc = _run_env(repo, _stub_trivy(tmp_path, f'{{"Results":[{_poetry_result()}]}}'))
+    proc = _run_env(repo, _stub_trivy(tmp_path, f'{{"Results":[{_gemfile_result()}]}}'))
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "coverage: 0 of 1 scannable manifest(s) ingested" in proc.stdout, proc.stdout
     assert "UNSCANNED — 1 lock(s) no scan ingested a package from:\n  - web/bun.lockb" in proc.stderr, proc.stderr
-    assert "poetry.lock  (poetry, 1 packages, 0 finding(s); NOT in the denominator, so it covers no counted lock)" in proc.stdout, proc.stdout
+    assert "Gemfile.lock  (bundler, 1 packages, 0 finding(s); NOT in the denominator, so it covers no counted lock)" in proc.stdout, proc.stdout
     assert "1 trivy Result(s) outside the denominator: listed, never counted toward coverage" in proc.stdout, proc.stdout
     assert "bun's text lockfile, bun.lock" in proc.stderr, proc.stderr
     assert "PASS" not in proc.stdout
@@ -379,11 +383,11 @@ def test_a_result_outside_the_denominator_with_a_counted_lock_ingested_exits_6(t
     counted locks ingested, one UNSCANNED, so PARTIAL COVERAGE (6)."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "poetry.lock").write_text("# poetry lock\n")
+    (repo / "Gemfile.lock").write_text("GEM\n")
     (repo / "requirements.txt").write_text("flask==3.0.0\n")
     _web_bun_lockb(repo)
     flask = '{"Target":"requirements.txt","Type":"pip","Packages":[{"Name":"flask"}]}'
-    proc = _run_env(repo, _stub_trivy(tmp_path, f'{{"Results":[{_poetry_result()},{flask}]}}'))
+    proc = _run_env(repo, _stub_trivy(tmp_path, f'{{"Results":[{_gemfile_result()},{flask}]}}'))
     assert proc.returncode == 6, proc.stdout + proc.stderr
     assert "coverage: 1 of 2 scannable manifest(s) ingested" in proc.stdout, proc.stdout
     assert "FAIL — PARTIAL COVERAGE: 1 of 2 scannable manifest(s) ingested, 1 lock(s) UNSCANNED" in proc.stderr, proc.stderr
@@ -396,13 +400,13 @@ def test_a_finding_outside_the_denominator_still_fails_first(tmp_path: Path):
     zero-ingested exit 2, so the CVE is reported rather than hidden behind it."""
     repo = tmp_path / "repo"
     repo.mkdir()
-    (repo / "poetry.lock").write_text("# poetry lock\n")
+    (repo / "Gemfile.lock").write_text("GEM\n")
     _web_bun_lockb(repo)
-    vuln = '"Vulnerabilities":[{"PkgName":"requests","VulnerabilityID":"CVE-9999-3","Severity":"CRITICAL","FixedVersion":"2.31.0"}]'
-    poetry = f'{{"Target":"poetry.lock","Type":"poetry","Packages":[{{"Name":"requests"}}],{vuln}}}'
-    proc = _run_env(repo, _stub_trivy(tmp_path, f'{{"Results":[{poetry}]}}'))
+    vuln = '"Vulnerabilities":[{"PkgName":"rack","VulnerabilityID":"CVE-9999-3","Severity":"CRITICAL","FixedVersion":"2.2.8"}]'
+    gemfile = f'{{"Target":"Gemfile.lock","Type":"bundler","Packages":[{{"Name":"rack"}}],{vuln}}}'
+    proc = _run_env(repo, _stub_trivy(tmp_path, f'{{"Results":[{gemfile}]}}'))
     assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert "requests | CVE-9999-3 | CRITICAL | 2.31.0" in proc.stderr, proc.stderr
+    assert "rack | CVE-9999-3 | CRITICAL | 2.2.8" in proc.stderr, proc.stderr
     assert "  - web/bun.lockb" in proc.stderr, "the UNSCANNED lock is still named before the verdict"
 
 
@@ -436,6 +440,119 @@ def test_a_go_module_is_ingested_under_its_go_mod(tmp_path: Path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "coverage: 1 of 1 scannable manifest(s) ingested" in proc.stdout, proc.stdout
     assert "NOT in the denominator" not in proc.stdout, proc.stdout
+
+
+# --- #1289: the Python locks ----------------------------------------------------
+# A repo whose only lock was a uv.lock read "0 scannable": no count, no scan. Each
+# lock below is one trivy 0.74.0 was measured to ingest (Type per lock), so each
+# alone must be counted, scanned and passed when clean.
+PY_LOCKS = {"uv.lock": "uv", "poetry.lock": "poetry", "Pipfile.lock": "pipenv"}
+
+
+@pytest.mark.parametrize("rel", [*PY_LOCKS, "py/uv.lock", "svc/poetry.lock", "app/Pipfile.lock"])
+def test_a_lone_python_lock_is_counted_and_ingested(tmp_path: Path, rel: str):
+    repo = tmp_path / "repo"
+    (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+    (repo / rel).write_text("version = 1\n")
+    rtype = PY_LOCKS[Path(rel).name]
+    result = f'{{"Target":"{rel}","Type":"{rtype}","Packages":[{{"Name":"six"}}]}}'
+    proc = _run_env(repo, _stub_trivy(tmp_path, f'{{"Results":[{result}]}}'))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"  [scannable] ./{rel}\n" in proc.stdout, "check-scannable.sh must count it"
+    assert "coverage: 1 of 1 scannable manifest(s) ingested" in proc.stdout, proc.stdout
+    assert "NOT in the denominator" not in proc.stdout, proc.stdout
+    assert "dependency-scan: PASS" in proc.stdout, proc.stdout
+
+
+def test_a_python_lock_trivy_reads_nothing_from_is_unscanned(tmp_path: Path):
+    """Counting the lock makes it a lock the scan must cover: a Result with no
+    packages leaves it UNSCANNED (exit 2), never a pass over nothing."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "uv.lock").write_text("version = 1\n")
+    empty = '{"Target":"uv.lock","Type":"uv","Packages":[]}'
+    proc = _run_env(repo, _stub_trivy(tmp_path, f'{{"Results":[{empty}]}}'))
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "UNSCANNED — 1 lock(s) no scan ingested a package from:\n  - uv.lock" in proc.stderr, proc.stderr
+
+
+# Minimal real locks, one clean package each (six 1.16.0: no advisories). The real
+# trivy test below proves the pinned scanner ingests every lock check-scannable.sh
+# counts by this rule, so a trivy that stops reading one fails here, not in the
+# field as an UNSCANNED lock with no way to clear it.
+_SIX_SDIST = (
+    "https://files.pythonhosted.org/packages/source/s/six/six-1.16.0.tar.gz",
+    "sha256:1e61c37477a1626458e36f7b1d82aa5c9b094fa4802892072e49de9c60c4c926",
+)
+REAL_PY_LOCKS = {
+    "uv.lock": (
+        'version = 1\nrequires-python = ">=3.8"\n\n'
+        '[[package]]\nname = "demo"\nversion = "0.1.0"\nsource = { virtual = "." }\n'
+        'dependencies = [\n    { name = "six" },\n]\n\n'
+        '[package.metadata]\nrequires-dist = [{ name = "six", specifier = "==1.16.0" }]\n\n'
+        '[[package]]\nname = "six"\nversion = "1.16.0"\nsource = { registry = "https://pypi.org/simple" }\n'
+        f'sdist = {{ url = "{_SIX_SDIST[0]}", hash = "{_SIX_SDIST[1]}" }}\n'
+    ),
+    "poetry.lock": (
+        "[[package]]\n"
+        'name = "six"\nversion = "1.16.0"\ndescription = "Python 2 and 3 compatibility utilities"\n'
+        'optional = false\npython-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*"\n'
+        f'files = [\n    {{file = "six-1.16.0.tar.gz", hash = "{_SIX_SDIST[1]}"}},\n]\n\n'
+        '[metadata]\nlock-version = "2.0"\npython-versions = "^3.8"\n'
+        'content-hash = "0000000000000000000000000000000000000000000000000000000000000000"\n'
+    ),
+    "Pipfile.lock": json.dumps({
+        "_meta": {"hash": {"sha256": "0" * 64}, "pipfile-spec": 6, "requires": {"python_version": "3.8"},
+                  "sources": [{"name": "pypi", "url": "https://pypi.org/simple", "verify_ssl": True}]},
+        "default": {"six": {"hashes": [_SIX_SDIST[1]], "version": "==1.16.0"}},
+        "develop": {},
+    }, indent=4) + "\n",
+}
+
+
+@trivy_required
+@pytest.mark.parametrize("name", sorted(REAL_PY_LOCKS))
+def test_the_pinned_trivy_ingests_each_counted_python_lock(tmp_path: Path, name: str):
+    """No stub: the installed trivy (CI pins 0.74.0) reads a real lock of each
+    counted Python type, alone, and the scan passes 1 of 1."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / name).write_text(REAL_PY_LOCKS[name])
+    proc = run(repo)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "coverage: 1 of 1 scannable manifest(s) ingested" in proc.stdout, proc.stdout
+    assert re.search(rf"^  - {re.escape(name)}  \({PY_LOCKS[name]}, [1-9]\d* packages", proc.stdout, re.M), proc.stdout
+
+
+def test_lock_lists_agree():
+    """#1289: the lock names live in three places a shared file cannot reach. The
+    Workflow bundle is one self-contained file, and the /precheck fallback runs in
+    repos that carry no scripts/ci. So check-scannable.sh's arrays, gate.js's
+    trivy find and SKILL.md's fallback find must name the same set, and this
+    test is what holds them together. dependency-scan.sh has no list: its
+    denominator is check-scannable.sh's `[scannable]` lines, by name."""
+    script = (REPO_ROOT / "scripts" / "ci" / "check-scannable.sh").read_text()
+    counted: set[str] = set()
+    for array in ("JS_LOCKS", "PAIRED_LOCKS", "LONE_LOCKS"):
+        m = re.search(rf"^{array}=\((.+)\)$", script, re.M)
+        assert m, f"check-scannable.sh {array} not found on one line; update this extraction with it"
+        counted |= {w.split(":")[-1] for w in shlex.split(m.group(1))}
+    assert {"uv.lock", "poetry.lock", "Pipfile.lock"} <= counted, counted
+    assert "pdm.lock" not in counted, "trivy 0.74.0 cannot read pdm.lock (#1289); re-measure before adding it"
+
+    def find_names(find: str) -> set[str]:
+        # Quoted -name operands are lock names; the prune list is unquoted, and
+        # the requirements predicate (a glob) is REQ_FIND's, pinned above.
+        return {n for n in re.findall(r"-name '([^']+)'", find) if "*" not in n}
+
+    gate = (REPO_ROOT / "skills" / "nextwave" / "gate.js").read_text()
+    g = re.search(r"^    `  (find \$\{targetRepoDir\} .+ -print)`,$", gate, re.M)
+    assert g, "gate.js trivy find not found; update this extraction with it"
+    body = (REPO_ROOT / "skills" / "precheck" / "SKILL.md").read_text()
+    s = re.search(r"^\s+(find <repo_root> .+ -print)$", body, re.M)
+    assert s, "the fallback find is missing from SKILL.md"
+    assert find_names(g.group(1)) == counted, f"gate.js find {sorted(find_names(g.group(1)))} != check-scannable.sh {sorted(counted)}"
+    assert find_names(s.group(1)) == counted, f"SKILL.md find {sorted(find_names(s.group(1)))} != check-scannable.sh {sorted(counted)}"
 
 
 def test_a_package_lock_beside_a_bun_lockb_fails_on_all_three_paths(tmp_path: Path):
