@@ -1097,9 +1097,10 @@ function reviewSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRepoD
 // real lockfile, prunes the nested copy). Also added bun.lockb — scripts/ci/check-scannable.sh's
 // own enumeration (the sibling authority in this repo) already carries it; trivySignalPrompt's
 // list mirrors that one now, on purpose, so the two lockfile lists in this repo drift together
-// instead of separately (widening beyond that shared set, e.g. poetry.lock/Gemfile.lock, is a
-// real gap too, but a bigger scope change than this fix — check-scannable.sh doesn't cover them
-// either, so parity with it is the bar this fix targets, not universal ecosystem coverage).
+// instead of separately (widening beyond that shared set, e.g. Gemfile.lock, is a real gap too,
+// but a bigger scope change than this fix — check-scannable.sh doesn't cover it either, so parity
+// with it is the bar this fix targets, not universal ecosystem coverage. The Python locks were
+// added later, by #1289 below).
 //
 // cc-workflow#1247: the find counts every pip requirements file (check-scannable.sh's REQ_FIND,
 // carried verbatim: *requirements*.txt and requirements/*.txt), but trivy's pip analyzer reads only
