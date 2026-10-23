@@ -309,7 +309,7 @@ def test_ready_checks_the_prs_own_head_not_local_head(world):
     assert _hook(world, "gh pr ready 12", prs=prs) == ""
 
 
-@pytest.mark.parametrize("ref", ["kahuna/56-w1", "campaign/56-blueshift"])
+@pytest.mark.parametrize("ref", ["kahuna/56-w1", "campaign/56-orion"])
 def test_integration_heads_are_governed_by_the_wave_gate(world, ref):
     prs = {"77": {"sha": "b" * 40, "ref": ref}}
     assert _hook(world, "gh -R Owner/Repo pr ready 77", prs=prs) == ""

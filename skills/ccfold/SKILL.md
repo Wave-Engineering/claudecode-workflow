@@ -212,35 +212,35 @@ After writing `.claude-project.md`, detect the project's git platform/org and pi
 
 ### Why
 
-Some git hosting orgs (notably AnalogicDev on GitLab) enforce a verified-email push-rule. The default global git identity many agents have set (e.g. `bakerb@waveeng.com`) is not verified on those accounts, so pushes are rejected with:
+Some git hosting orgs (notably a partner's GitLab group) enforce a verified-email push-rule. The default global git identity many agents have set (e.g. `bakerb@waveeng.com`) is not verified on those accounts, so pushes are rejected with:
 
 ```
 remote: GitLab: You cannot push commits for 'bakerb@waveeng.com'. You can only push commits if the committer email is one of your own verified emails.
 ```
 
-This step automates the previously-manual `git config user.email <verified-email>` fix. See `lesson_analogicdev_gitlab_setup.md` for the discovery story.
+This step automates the previously-manual `git config user.email <verified-email>` fix.
 
-### Storage choice — `~/.claude/identity-map.json` (per-user)
+### Storage choice — `~/.claude/identity-map.json` (per-user, the only source)
 
-The org → identity mapping lives in **`~/.claude/identity-map.json`**, not in `.claude-project.md`.
+The org → identity mapping lives in **`~/.claude/identity-map.json`**, not in `.claude-project.md`, and not in this skill.
 
 **Rationale:**
-- **Per-user, shared across projects.** Every clone of every analogicdev project gets the same identity; we don't want to reproduce the mapping in every `.claude-project.md`.
+- **Per-user, shared across projects.** Every clone of every project in a mapped org gets the same identity; we don't want to reproduce the mapping in every `.claude-project.md`.
 - **Cleanly extensible.** Users add new orgs by editing one JSON file, not by editing SKILL.md or every project's config.
-- **Hybrid baseline.** The skill ships with a hard-coded fallback (currently just `analogicdev`) so first-clone agents get the right behavior even before the file exists. The user's JSON, if present, overrides the baseline.
+- **No baseline in the skill.** An identity is the user's own data, and the kit ships publicly. A hard-coded fallback here also drifted from the user's real mapping once (a different committer name), so it was a second source of truth that disagreed with the first. Without the file, the step does nothing.
 
 ### File format
 
 ```json
 {
-  "analogicdev": {
-    "name": "Brian Baker",
-    "email": "brbaker@analogic.com"
+  "example-org": {
+    "name": "Ada Example",
+    "email": "ada@example.com"
   }
 }
 ```
 
-Org keys are lower-case. If `~/.claude/identity-map.json` does not exist, the skill falls back to the baseline mapping documented above.
+Org keys are lower-case. If `~/.claude/identity-map.json` does not exist, the step is a silent no-op.
 
 ### Procedure
 
@@ -255,15 +255,9 @@ Org keys are lower-case. If `~/.claude/identity-map.json` does not exist, the sk
      | tr '[:upper:]' '[:lower:]')
    ```
 
-   For nested GitLab groups (`gitlab.com/analogicdev/internal/tools/...`), the **top-level group** is the org. The sed expression above takes the first path segment after the host, which is correct.
+   For nested GitLab groups (`gitlab.com/example-org/internal/tools/...`), the **top-level group** is the org. The sed expression above takes the first path segment after the host, which is correct.
 
-2. **Look up the org.** Read `~/.claude/identity-map.json` if present; otherwise use the baseline below. If the org has no entry, **do nothing and emit no output** (silent for unmapped orgs — see ACs).
-
-   Baseline (hard-coded fallback when `~/.claude/identity-map.json` is missing or doesn't contain the org):
-
-   | Org | Name | Email |
-   |---|---|---|
-   | `analogicdev` | Brian Baker | `brbaker@analogic.com` |
+2. **Look up the org.** Read `~/.claude/identity-map.json`. If the file is missing, or the org has no entry, **do nothing and emit no output** (silent for unmapped orgs — see ACs).
 
 3. **Check the existing repo-local identity.** Distinguish three cases:
 
@@ -297,7 +291,7 @@ Org keys are lower-case. If `~/.claude/identity-map.json` does not exist, the sk
 
 ### Test scenarios (verified during implementation)
 
-- Fresh clone of an `analogicdev/*` repo with global `user.email=bakerb@waveeng.com` → repo-local set to `brbaker@analogic.com`, confirmation printed.
+- Fresh clone of a mapped org's repo with global `user.email=bakerb@waveeng.com` → repo-local set to the mapped email, confirmation printed.
 - Wave-Engineering clone → no mapping, silent.
 - Repo-local already manually set to a non-mapping value → warning printed, no override.
 - Repo-local already set to the mapping value → silent no-op.

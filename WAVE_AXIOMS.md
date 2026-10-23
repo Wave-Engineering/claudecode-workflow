@@ -253,7 +253,7 @@ The decisions are already made. The approved Dev Spec, the approved plan, the ap
 
 ### Why
 
-**Origin:** grimoire's self-analysis after stopping `/wavemachine` mid-loop for "checkpoint" approvals 5+ times during a 25-story docmancer-ui run, 2026-04-26. Five failure modes were named; the most durable was the human-attention cost of unnecessary checkpoints. The grimoire diagnostic line was the crispest: *"Every one of those 'should I continue?' moments, I already had the answer. The skill plan already had all the decisions baked in."*
+**Origin:** grimoire's self-analysis after stopping `/wavemachine` mid-loop for "checkpoint" approvals 5+ times during a 25-story partner-repo run, 2026-04-26. Five failure modes were named; the most durable was the human-attention cost of unnecessary checkpoints. The grimoire diagnostic line was the crispest: *"Every one of those 'should I continue?' moments, I already had the answer. The skill plan already had all the decisions baked in."*
 
 This axiom is the structural reframing: the autonomy clause exists to *protect the user*, not to *unblock the agent*. Anything that violates it — even with good intent ("I'll just check in real quick") — has weighted the human's time at zero, which is the failure mode this axiom forbids.
 

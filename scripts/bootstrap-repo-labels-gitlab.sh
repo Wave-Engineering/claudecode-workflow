@@ -16,7 +16,7 @@ Creates or updates the standard group::value label taxonomy (type, priority,
 urgency, size, severity, wave) on a GitLab project.
 
 Required:
-  --repo PATH         Target project path (e.g., 'analogicdev/internal/tools/blueshift/blueshift-docmancer-ui')
+  --repo PATH         Target project path (e.g., 'example-group/internal/tools/example-project')
 
 Options:
   --waves N           Number of wave::N labels to create (default: 9)

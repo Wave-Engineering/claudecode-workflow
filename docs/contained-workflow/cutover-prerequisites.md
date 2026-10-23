@@ -176,13 +176,13 @@ is what makes the restart cheap when a rotation is done the other way.
   removes. Big-bang means no mixed-mode window in which it stays fleet-global.
   Fix it after.
 - **Per-secret scoping across the IP boundary.** The whole-dir mount put every
-  Analogic and OaW credential in every container. #1061 closes this incidentally
+  partner and OaW credential in every container. #1061 closes this incidentally
   by mounting a single `.env`, so no scoping engine is needed today. Revisit if
   the set of container-required secrets ever grows beyond a handful.
 - **Mattermost + chat-backend abstraction.** Post-cut-over. Two constraints
   worth carrying forward: abstract at the **MCP-server layer**, not in skill
   prose (servers enforce, skills suggest); and derive backend selection from the
-  existing forge rule (GitLab/Analogic → Mattermost, GitHub/OaW → Discord), so
+  existing forge rule (GitLab/partner → Mattermost, GitHub/OaW → Discord), so
   the abstraction *enforces* the IP boundary rather than merely enabling a
   second chat system.
 

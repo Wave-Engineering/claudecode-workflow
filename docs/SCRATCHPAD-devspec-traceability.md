@@ -8,7 +8,7 @@
 
 ## Triggering incident
 
-cue-ball (blueshift-cue) shipped Phase 1 work claiming completion against `agentic-devspec.md`. Phase 1 DoD line 1038 mandates "All container images pass image smoke (DM-T2-02)." She delivered:
+cue-ball (in a partner repo) shipped Phase 1 work claiming completion against `agentic-devspec.md`. Phase 1 DoD line 1038 mandates "All container images pass image smoke (DM-T2-02)." She delivered:
 
 - `build.sh` — stub (echoes what it would do)
 - `image-smoke.sh` — stub
@@ -113,10 +113,10 @@ The MCP tool is the right host because:
 ## Cross-references
 
 - Original incident: `/tmp/devspec-ignored.txt`
-- The spec under analysis: `/home/bakerb/sandbox/gitlab/blueshift-devkit/blueshift-cue/Docs/agentic-devspec.md`
+- The spec under analysis: `Docs/agentic-devspec.md` in cue-ball's partner repo (GitLab)
 - Existing process: `skills/devspec/SKILL.md` (the `/devspec` walk)
 - Existing validators: `mcp-server-sdlc` `spec_validate_structure`, `dod_*` family
-- Memory write by cue-ball after the incident: `feedback_devspec_is_canonical.md` (in blueshift-cue project memory, 5.2 KB) — captures her own lesson but doesn't address the structural fix.
+- Memory write by cue-ball after the incident: `feedback_devspec_is_canonical.md` (in cue-ball's project memory, 5.2 KB) — captures her own lesson but doesn't address the structural fix.
 
 ## What we're NOT doing yet
 

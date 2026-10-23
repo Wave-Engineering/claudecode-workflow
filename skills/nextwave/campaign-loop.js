@@ -78,8 +78,8 @@ const safeRef = (s) => String(s ?? '').replace(/[^A-Za-z0-9._-]/g, '-').replace(
 // once, at the DoD gate. Lives for the whole campaign.
 //
 // LOWERCASED. The slug comes from a plan title, so it arrives mixed-case, and git refs ARE
-// case-sensitive while macOS/Windows checkouts are not — `campaign/56-Blueshift` and
-// `campaign/56-blueshift` are two refs that cannot coexist in one working tree. Since the whole
+// case-sensitive while macOS/Windows checkouts are not — `campaign/56-Orion` and
+// `campaign/56-orion` are two refs that cannot coexist in one working tree. Since the whole
 // point of this name is that a resume recomputes it identically, a case-only difference between a
 // plan title and its restatement would silently start a SECOND campaign. Lowercase removes the
 // axis.

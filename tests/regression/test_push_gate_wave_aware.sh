@@ -87,7 +87,7 @@ assert_block() {
 # 1 + 2: NO sentinel — integration refs exempt, protected refs still gate.
 cleanup
 assert_allow "git push origin kahuna/56"
-assert_allow "git push -u origin kahuna/56-quartermaster-docs-labs"
+assert_allow "git push -u origin kahuna/56-orion-docs-labs"
 assert_allow "git push origin wave-9101/issue-8"
 assert_allow "git push origin HEAD:kahuna/56"
 assert_block "git push origin main"

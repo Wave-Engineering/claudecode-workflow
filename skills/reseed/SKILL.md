@@ -108,7 +108,7 @@ for the right one by hand.
 
 First make sure the seed can never be committed. `info/exclude` is per-clone and untracked,
 so this adds no diff in any repo — and a seed carries session detail that, in a GitLab repo,
-is Analogic's:
+is the partner's:
 
 ```bash
 git check-ignore -q .claude/reseed-revive.md ||

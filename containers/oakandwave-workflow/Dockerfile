@@ -65,7 +65,7 @@ RUN apt-get update \
 
 # --- Container builder: podman (#1108) ----------------------------------------
 # Agents must be able to build, run and scan container images from inside their
-# own sandbox. blueshift-kb#8 (swap a runtime image to distroless, shedding 23
+# own sandbox. A partner repo's task (swap a runtime image to distroless, shedding 23
 # unfixable CVEs) could not be verified without it, and the agent that hit the
 # gap tried to route around the boundary rather than stop — a missing capability
 # generates pressure to solve the wrong problem.

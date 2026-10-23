@@ -160,7 +160,7 @@ Hygiene: dir 700, files 600, gitignored fleet-wide, never in an image layer, a
 **values-free manifest** of what belongs there, and **fail loud at boot** on any
 required secret missing. **Blast-radius tradeoff (open):** mounting the *whole*
 directory means every sandbox sees *every* client's credentials — including material
-across the GitLab/GitHub IP boundary (Analogic-proprietary vs OaW). The whole-dir
+across the GitLab/GitHub IP boundary (partner-proprietary vs OaW). The whole-dir
 mount is chosen for the inode/liveness reasons above; **least-privilege scoping of
 which secrets a given ring gets is not yet designed** and should be, before this
 carries real client material.
