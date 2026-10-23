@@ -112,10 +112,10 @@ Call `mcp__sdlc-server__spec_validate_structure({ issue_ref: "<owner>/<repo>#<N>
 "$CISRC" resolve <repo_root> <marker_dir> <branch> <HEAD_SHA>
 ```
 
-It prints one line:
+It finishes within the Bash tool's default timeout, even when it starts a pipeline and waits for it to appear. It prints one line:
 
-- `ci run=<id>` → run **Job B-ci**.
-- `ci triggered run=<id>` → run **Job B-ci**. No run existed, so the repo's declared `CI on demand` command started one. It runs at most once per SHA.
+- `ci run=<id> ref=<ref>` → run **Job B-ci**, waiting with that `<ref>`.
+- `ci triggered run=<id> ref=<ref>` → run **Job B-ci**, waiting with that `<ref>`. No run existed, so the repo's declared `CI on demand` command started one. It runs at most once per SHA.
 - `local no-ci` → run **Job B-local**. Checklist: `Validation (local lanes — no CI)`.
 - `local NO-RUN <reason>` → run **Job B-local**. Checklist: `Validation (local lanes — CI NO-RUN: <reason>)`.
 
@@ -134,7 +134,7 @@ The checklist line names the source: `Validation (CI run <id> @ <sha7>)` or `Val
 
 **Job B-ci**
 
-Call `mcp__sdlc-server__ci_wait_run({ ref: "<branch>", expected_sha: "<HEAD_SHA>", timeout_sec: 1800 })` yourself. It waits server-side until the run completes or times out, so start it in the same message as the Job D dispatch, and the review runs while CI is waited on. From its JSON, write exactly one line yourself:
+Call `mcp__sdlc-server__ci_wait_run({ ref: "<ref>", expected_sha: "<HEAD_SHA>", timeout_sec: 1800 })` yourself, where `<ref>` is the one `resolve` printed, not the branch name. On GitLab an MR pipeline's ref is `refs/merge-requests/<iid>/head`, and `ci_wait_run` filters by ref and SHA together, so the branch name would miss the run `resolve` found. (If `CISRC` is missing, use `<branch>`.) It waits server-side until the run completes or times out, so start it in the same message as the Job D dispatch, and the review runs while CI is waited on. From its JSON, write exactly one line yourself:
 
 ```
 LANE ci:<workflow_name> | exit=<0 if final_status is success, else 1> | run=<run_id> sha=<sha>

@@ -29,10 +29,14 @@
 # precheck-review-scope.sh: a non-zero exit inside an agent's `if` is easy to swallow.
 #
 #   resolve  -> local no-ci                       no CI config for this platform
-#               ci run=<id>                        a run exists for <sha>
-#               ci triggered run=<id>              none existed; the declared trigger
+#               ci run=<id> ref=<ref>              a run exists for <sha>
+#               ci triggered run=<id> ref=<ref>    none existed; the declared trigger
 #                                                  ran once and a run for <sha> appeared
 #               local NO-RUN <reason>              CI exists but cannot answer
+#
+#   <ref> is the run's own ref, and Job B-ci waits with it. On GitLab an MR pipeline's
+#   ref is refs/merge-requests/<iid>/head, and `ci_wait_run` filters by ref AND sha, so
+#   waiting with the branch name would miss the very run found here.
 #   coverage -> covered                            every declared job present and green
 #                                                  (or no jobs declared)
 #               missing <job>[,<job>...]           declared jobs the run does not contain
@@ -44,7 +48,9 @@
 
 set -euo pipefail
 
-TRIGGER_WAIT="${PRECHECK_CI_TRIGGER_WAIT:-120}"
+# 90 s keeps the slowest path (trigger, then polls that find nothing) inside the Bash
+# tool's default 120 s timeout, so the reason line is always printed.
+TRIGGER_WAIT="${PRECHECK_CI_TRIGGER_WAIT:-90}"
 POLL="${PRECHECK_CI_POLL:-10}"
 
 usage() {
@@ -117,17 +123,17 @@ has_ci() {
 	fi
 }
 
-# Prints the newest run/pipeline id for <sha>, or nothing. Returns non-zero only when
-# CI could not be read. By SHA alone: GitLab MR pipelines carry the ref
-# refs/merge-requests/<iid>/head, so a branch-ref filter would miss them.
+# Prints "<id> <ref>" for the newest run/pipeline for <sha>, or nothing. Returns
+# non-zero only when CI could not be read. By SHA alone: GitLab MR pipelines carry the
+# ref refs/merge-requests/<iid>/head, so a branch-ref filter would miss them.
 run_for_sha() {
 	local sha="$1" out
 	if [[ "$(platform)" == github ]]; then
 		out="$(gh api "repos/${SLUG}/actions/runs?head_sha=${sha}&per_page=100")" || return 1
-		jq -r '.workflow_runs[0].id // empty' <<<"$out" 2>/dev/null || return 1
+		jq -r '.workflow_runs[0] // empty | "\(.id) \(.head_branch)"' <<<"$out" 2>/dev/null || return 1
 	else
 		out="$(glab api --hostname "$HOST" "projects/${SLUG//\//%2F}/pipelines?sha=${sha}&per_page=20")" || return 1
-		jq -r '.[0].id // empty' <<<"$out" 2>/dev/null || return 1
+		jq -r '.[0] // empty | "\(.id) \(.ref)"' <<<"$out" 2>/dev/null || return 1
 	fi
 }
 
@@ -141,7 +147,7 @@ local_line() {
 cmd_resolve() {
 	[[ $# -eq 4 ]] || usage
 	ROOT="$1"
-	local marker_dir="$2" branch="$3" sha="$4" id trigger cmd rc waited
+	local marker_dir="$2" branch="$3" sha="$4" found trigger cmd rc waited marker
 	parse_origin "$ROOT"
 
 	if ! has_ci "$ROOT"; then
@@ -153,12 +159,12 @@ cmd_resolve() {
 		return 0
 	fi
 
-	if ! id="$(run_for_sha "$sha")"; then
+	if ! found="$(run_for_sha "$sha")"; then
 		local_line "NO-RUN cannot read CI runs for ${sha:0:7}"
 		return 0
 	fi
-	if [[ -n "$id" ]]; then
-		echo "ci run=$id"
+	if [[ -n "$found" ]]; then
+		echo "ci run=${found%% *} ref=${found#* }"
 		return 0
 	fi
 
@@ -173,15 +179,19 @@ cmd_resolve() {
 		return 0
 	fi
 	mkdir -p "$marker_dir"
-	if [[ -e "$marker_dir/ci-triggered-$sha" ]]; then
-		local_line "NO-RUN \`CI on demand\` already ran once for ${sha:0:7} and no run appeared"
+	marker="$marker_dir/ci-triggered-$sha"
+	if [[ -e "$marker" ]]; then
+		local_line "NO-RUN \`CI on demand\` already ran once for ${sha:0:7} (exit $(cat "$marker" 2>/dev/null || echo '?')), and no run appeared"
 		return 0
 	fi
 
+	# The marker is written BEFORE the trigger, so a killed or crashed run still counts
+	# as the one attempt; the exit code is filled in once the command returns.
 	cmd="${trigger//<branch>/$branch}"
-	: >"$marker_dir/ci-triggered-$sha"
+	echo "?" >"$marker"
 	rc=0
 	(cd "$ROOT" && bash -c "$cmd") >"$marker_dir/ci-trigger.log" 2>&1 || rc=$?
+	echo "$rc" >"$marker"
 	if [[ $rc -ne 0 ]]; then
 		local_line "NO-RUN \`CI on demand\` exited $rc (log: $marker_dir/ci-trigger.log)"
 		return 0
@@ -189,9 +199,9 @@ cmd_resolve() {
 
 	waited=0
 	while :; do
-		id="$(run_for_sha "$sha" || true)"
-		if [[ -n "$id" ]]; then
-			echo "ci triggered run=$id"
+		found="$(run_for_sha "$sha" || true)"
+		if [[ -n "$found" ]]; then
+			echo "ci triggered run=${found%% *} ref=${found#* }"
 			return 0
 		fi
 		((waited >= TRIGGER_WAIT)) && break
