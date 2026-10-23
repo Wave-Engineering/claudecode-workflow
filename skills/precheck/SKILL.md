@@ -43,7 +43,7 @@ Precheck is **the gate into a release branch** (#1233, #1235). Commits and pushe
 Before Step 1, resolve `precheck-review-scope.sh` and `precheck-status.sh` once and reuse those paths for every later call. Step 0.5 already invokes the first, so probing later is too late.
 
 ```bash
-SCOPE="" STATUS=""
+SCOPE="" STATUS="" CISRC=""
 for cand in \
   "$(command -v precheck-review-scope.sh 2>/dev/null)" \
   "<repo_root>/.claude/bin/precheck-review-scope.sh" \
@@ -56,9 +56,15 @@ for cand in \
   "<repo_root>/scripts/precheck-status.sh"; do
   [[ -n "$cand" && -x "$cand" ]] && { STATUS="$cand"; break; }
 done
+for cand in \
+  "$(command -v precheck-ci-source.sh 2>/dev/null)" \
+  "<repo_root>/.claude/bin/precheck-ci-source.sh" \
+  "<repo_root>/scripts/precheck-ci-source.sh"; do
+  [[ -n "$cand" && -x "$cand" ]] && { CISRC="$cand"; break; }
+done
 ```
 
-`PATH` covers a normal install; `.claude/bin` covers `install --local` (which is deliberately NOT on `PATH`); `scripts/` covers a cc-workflow checkout. If `SCOPE` misses on all three, the kit is genuinely absent: take the fallback documented in the Job D section and say so on the checklist. **If `STATUS` misses, STOP.** Without it a pass can't be recorded and the PR/MR can't be marked ready, and there's no fallback. Do not improvise.
+`PATH` covers a normal install; `.claude/bin` covers `install --local` (which is deliberately NOT on `PATH`); `scripts/` covers a cc-workflow checkout. If `SCOPE` misses on all three, the kit is genuinely absent: take the fallback documented in the Job D section and say so on the checklist. **If `STATUS` misses, STOP.** Without it a pass can't be recorded and the PR/MR can't be marked ready, and there's no fallback. Do not improvise. If `CISRC` misses, Job B goes straight to Job B-ci's `ci_wait_run`, as it did before #1268, and the checklist says so.
 
 ### Step 0.5 — The pushed commits, and a draft PR/MR (serial, hard stop)
 
@@ -90,7 +96,7 @@ Call `mcp__sdlc-server__branch_guard({ role: "base" })`. It resolves the **live*
 ### Step 2 — Parallel verification batch
 **No sub-agent report is a gate value. Jobs A, B and C are instruments the orchestrator runs itself; their JSON or exit code goes on the checklist as read. Only Job D, a judgment, is delegated.**
 
-After `ibm()` passes: first run `precheck-review-scope.sh reset <repo_root> <marker_dir>` (this is what makes pass 1 of the cycle mechanically full), then `… resolve …` to learn which Job D prompt to compose. Then, **in a single message**, dispatch Job D as an Agent call and start A, B and C directly in the same message: Job A's `spec_validate_structure` call, Job B's `ci_wait_run` call or its lane commands, and Job C's `dependency-scan.sh` command. Do NOT wait for one before starting the next — they have no data dependencies on each other. See the Job D section below for both prompts and the full rule.
+After `ibm()` passes: first run `precheck-review-scope.sh reset <repo_root> <marker_dir>` (this is what makes pass 1 of the cycle mechanically full), then `… resolve …` to learn which Job D prompt to compose. Then, **in a single message**, dispatch Job D as an Agent call and start A, B and C directly in the same message: Job A's `spec_validate_structure` call, Job B's `resolve` (then its `ci_wait_run` call or its lane commands), and Job C's `dependency-scan.sh` command. Do NOT wait for one before starting the next — they have no data dependencies on each other. See the Job D section below for both prompts and the full rule.
 
 **Why the orchestrator runs them (#1275).** Until #1275 these three were delegated too, and the gate read what the delegate wrote, not what the instrument returned. On 2026-10-19 that misreported twice. A Job A delegate never called `spec_validate_structure`: it read the issue by hand and labelled its own reading `Raw tool response: ... PASS`. A Job B delegate reported `shellcheck exit=0` while its own output listed SC1091 in two files; `shellcheck -f gcc` returns 1 there, and through `xargs` the code reads 123, because `xargs` maps any child exit from 1 to 125 to 123. Reading the instrument's own JSON or `$?` removes the layer that misreported.
 
@@ -100,17 +106,35 @@ Call `mcp__sdlc-server__spec_validate_structure({ issue_ref: "<owner>/<repo>#<N>
 
 **Job B — Lanes: CI first** (instruments: `ci_wait_run`, or the lane commands)
 
-**Source rule (#1235).** Every push runs CI, so CI's verdict for the pushed HEAD is the lane result whenever it exists. Running the same lanes again locally spends a shared box on a question CI has already answered. Decide the source before starting:
+**Source rule (#1235, #1268).** CI's verdict for the pushed HEAD is the lane result whenever CI can give one. Running the same lanes again locally spends a shared box on a question CI has already answered. Decide the source in code, before any wait:
 
-- **The repo has CI** (`.github/workflows/*.yml` or `.gitlab-ci.yml`) → run **Job B-ci**.
-- **It has none** → run **Job B-local**.
-- **Job B-ci finds `NO-RUN`** (CI exists but never ran for this SHA) → run Job B-local. Say so on the checklist.
+```bash
+"$CISRC" resolve <repo_root> <marker_dir> <branch> <HEAD_SHA>
+```
 
-The checklist line names the source: `Validation (CI run <id> @ <sha7>)` or `Validation (local lanes)`.
+Run it with a Bash `timeout` of 300000. It budgets itself 90 s of wall clock (`PRECHECK_CI_TRIGGER_WAIT`), including starting a pipeline and waiting for it to appear, so it always prints its line. It prints one line:
+
+- `ci run=<id> ref=<ref>` → run **Job B-ci**, waiting with that `<ref>`.
+- `ci triggered run=<id> ref=<ref>` → run **Job B-ci**, waiting with that `<ref>`. No run existed, so the repo's declared `CI on demand` command started one. It runs at most once per SHA.
+- `local no-ci` → run **Job B-local**. Checklist: `Validation (local lanes — no CI)`.
+- `local NO-RUN <reason>` → run **Job B-local**. Checklist: `Validation (local lanes — CI NO-RUN: <reason>)`.
+
+A `; shared host: …` suffix on a `local` line goes on the checklist as written. Book the host before running the lanes.
+
+`resolve` never starts a pipeline the repo has not declared, because a generic trigger can start publish or deploy jobs. It never leaves Job B waiting on a run that doesn't exist. The repo declares both under Toolchain in `.claude-project.md`, and both are optional:
+
+```
+- **CI on demand:** `glab ci run --branch <branch>`
+- **CI jobs:** validate, test
+```
+
+On GitHub the trigger is `gh workflow run <workflow> --ref <branch>`. `CI jobs` names the jobs a run must contain, all green, to count (see `coverage` below).
+
+The checklist line names the source: `Validation (CI run <id> @ <sha7>)` or `Validation (local lanes — <why>)`.
 
 **Job B-ci**
 
-Call `mcp__sdlc-server__ci_wait_run({ ref: "<branch>", expected_sha: "<HEAD_SHA>", timeout_sec: 1800 })` yourself. It waits server-side until the run completes or times out, so start it in the same message as the Job D dispatch, and the review runs while CI is waited on. From its JSON, write exactly one line yourself:
+Call `mcp__sdlc-server__ci_wait_run({ ref: "<ref>", expected_sha: "<HEAD_SHA>", timeout_sec: 1800 })` yourself, where `<ref>` is the one `resolve` printed, not the branch name. On GitLab an MR pipeline's ref is `refs/merge-requests/<iid>/head`, and `ci_wait_run` filters by ref and SHA together, so the branch name would miss the run `resolve` found. (If `CISRC` is missing, use `<branch>`.) It waits server-side until the run completes or times out, so start it in the same message as the Job D dispatch, and the review runs while CI is waited on. From its JSON, write exactly one line yourself:
 
 ```
 LANE ci:<workflow_name> | exit=<0 if final_status is success, else 1> | run=<run_id> sha=<sha>
@@ -122,6 +146,17 @@ LANE ci:<workflow_name> | exit=<0 if final_status is success, else 1> | run=<run
 - **On GitHub, cross-check `final_status` against the check-run conclusion:** `gh api --paginate repos/<repo>/commits/<HEAD_SHA>/check-runs --jq '.check_runs[] | {name,conclusion}'` (`--paginate`, because the endpoint returns 30 check-runs a page). If `final_status` is `success` but any check-run's `conclusion` is `failure`, `cancelled`, `timed_out` or `action_required`, or is still `null` (not finished), the lane is `exit=1`. Name that check-run on the checklist. `gh run watch --exit-status` is never evidence (squawk #8): its exit code is the run summary's, which has read `success` while the job's own check-run still read `queued`.
 
 The `LANE … | exit=` line keeps the shape Step 5's autochain path reads.
+
+Then check the run against the repo's declared jobs, with that JSON's `run_id`:
+
+```bash
+"$CISRC" coverage <repo_root> <run_id>
+```
+
+- `covered` → the `LANE` line stands. No `CI jobs` declared also prints `covered`.
+- `not-green <job>=<state>,…` → the lane is `exit=1`. Name those jobs on the checklist.
+- `missing <job>,…` → this run is not the lane result. Write `NO-RUN run <run_id> lacks <jobs>` and run Job B-local.
+- `unknown <reason>` → a FAIL for the item (`exit=1`), never a pass.
 
 **Job B-local**
 
