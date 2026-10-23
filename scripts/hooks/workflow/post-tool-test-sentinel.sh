@@ -40,15 +40,16 @@ TEST_PATTERN='(pytest|python[0-9.]* -m pytest|npm test|npx vitest|make (test|lin
 # arguments. Toolchain lines also backtick file paths and prose (`pyproject.toml`,
 # `bootstrap/`), so a match anywhere in the text would let `cat pyproject.toml` count.
 declared_match() {
-	local root cfg span segs seg
+	local root cfg span segs seg nl=$'\n'
 	[[ -n "$HOOK_CWD" ]] || return 1
 	root=$(git -C "$HOOK_CWD" rev-parse --show-toplevel 2>/dev/null) || return 1
 	cfg="$root/.claude-project.md"
 	[[ -f "$cfg" ]] || return 1
-	segs="${COMMAND//&&/$'\n'}"
-	segs="${segs//||/$'\n'}"
-	segs="${segs//;/$'\n'}"
-	segs="${segs//|/$'\n'}"
+	# $nl, not $'\n', inside the replacement: bash <= 4.2 (stock macOS 3.2) keeps the quotes.
+	segs="${COMMAND//&&/$nl}"
+	segs="${segs//||/$nl}"
+	segs="${segs//;/$nl}"
+	segs="${segs//|/$nl}"
 	# shellcheck disable=SC2016  # the backticks are literal markdown, not expansions
 	while IFS= read -r span; do
 		[[ ${#span} -ge 4 ]] || continue
