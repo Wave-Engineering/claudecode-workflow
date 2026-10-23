@@ -184,6 +184,8 @@ Use this template structure:
 - **Tests:** (command or "none")
 - **Build:** (command or "none")
 - **Lint:** (tools discovered)
+- **CI jobs:** (declared by hand, never discovered: the CI jobs whose green run is the lane result, e.g. "validate, test")
+- **CI on demand:** (declared by hand, never discovered: the ONE command that starts a validation-only pipeline when a push starts none, e.g. `glab ci run --branch <branch>`)
 
 ## CI
 - **System:** (GitHub Actions | GitLab CI | both)
@@ -194,6 +196,7 @@ Use this template structure:
 
 - **If `.claude-project.md` does not exist:** Create it from scratch using the template above, populated with discovered values.
 - **If `.claude-project.md` already exists:** Preserve any content outside the auto-generated sections. Update the auto-generated sections (those between `<!-- Auto-generated -->` markers) with fresh discovery results. Manual edits in non-templated areas are kept.
+- **Never discover `CI jobs` or `CI on demand`; carry them over.** Only the repo's maintainer can say which CI jobs are the lane result, and which on-demand pipeline is validation-only (a generic trigger can start publish or deploy jobs). On update, keep an existing value unchanged. If there is none, leave both lines out. `/precheck` Job B reads them (#1268).
 - **Strip any cached default branch (create AND update):** `.claude-project.md` must NEVER carry a `Default branch:` line. If an existing file has one (from an older template), delete it. The default is queried live at use-time via `branch_guard` — never cached — because a frozen value silently goes stale when the upstream default is renamed (see #888).
 
 ### Show the user what was written
