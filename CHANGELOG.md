@@ -60,8 +60,8 @@ are worth keeping apart:
   the real lock ever being scanned.
   - **Added:** `uv.lock`, `poetry.lock` and `Pipfile.lock`, to all three lock lists
     (`check-scannable.sh`'s arrays, the precheck fallback `find`, and the trust gate's
-    `gate.js`). `dependency-scan.sh` has no list of its own; it scans what `check-scannable.sh`
-    counts. Each type was confirmed against trivy 0.74 before it was added. A drift test now
+    `gate.js`). `dependency-scan.sh` has no list of its own; its coverage denominator is what
+    `check-scannable.sh` counts. Each type was confirmed against trivy 0.74 before it was added. A drift test now
     keeps the three lists in agreement.
   - **Left out:** `pdm.lock`, because trivy 0.74 has no analyzer for it. Counting it would have
     made every repo carrying one fail as UNSCANNED.
