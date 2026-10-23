@@ -279,8 +279,8 @@ const safeRef = (s) => String(s ?? '').replace(/[^A-Za-z0-9._-]/g, '-').replace(
 // once, at the DoD gate. Lives for the whole campaign.
 //
 // LOWERCASED. The slug comes from a plan title, so it arrives mixed-case, and git refs ARE
-// case-sensitive while macOS/Windows checkouts are not — `campaign/56-Blueshift` and
-// `campaign/56-blueshift` are two refs that cannot coexist in one working tree. Since the whole
+// case-sensitive while macOS/Windows checkouts are not — `campaign/56-Orion` and
+// `campaign/56-orion` are two refs that cannot coexist in one working tree. Since the whole
 // point of this name is that a resume recomputes it identically, a case-only difference between a
 // plan title and its restatement would silently start a SECOND campaign. Lowercase removes the
 // axis.
@@ -885,8 +885,8 @@ if (ALL_WAVES.length === 0) {
 // misconfiguration, not a defaultable case — same fail-loud stance as the empty-plan and
 // branch-equals-trunk guards below.
 // The explicit override is lowercased through the SAME normalization as the derived name. Otherwise a
-// launcher that hand-builds `campaign/56-Blueshift` and a resume that omits the param (deriving
-// `campaign/56-blueshift`) would name two different case-sensitive server refs for one campaign — the
+// launcher that hand-builds `campaign/56-Orion` and a resume that omits the param (deriving
+// `campaign/56-orion`) would name two different case-sensitive server refs for one campaign — the
 // exact fork the derived-path lowercasing exists to prevent, reached by nothing more exotic than
 // forgetting to re-pass the parameter.
 const CAMPAIGN_BRANCH = String(params.campaignBranch ?? campaignBranchFor({

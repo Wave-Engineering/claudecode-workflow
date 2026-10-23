@@ -165,7 +165,7 @@ jq -c --slurpfile seen "$WORK/seen.json" --slurpfile sq "$WORK/sq.json" \
 	' "$MINE" >"$WORK/changes.json" 2>/dev/null || none
 
 # The state files are per-checkout and must never be committed (in a GitLab repo they carry
-# session detail that is Analogic's). info/exclude is per-clone and untracked, so this adds
+# session detail that is the partner's). info/exclude is per-clone and untracked, so this adds
 # no diff. The `**/` keeps the pattern matching in a session rooted in a subdirectory, and
 # the newline check keeps it from fusing with an unterminated last line.
 ensure_excluded() {

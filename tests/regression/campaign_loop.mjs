@@ -65,7 +65,7 @@ ok(computePending(allWaves, ['wave-1', 'wave-2', 'wave-3', 'wave-4']).length ===
 ok(JSON.stringify(computePending(allWaves, ['wave-1'])) === JSON.stringify(computePending(allWaves, ['wave-1'])), 'computePending is idempotent')
 
 // ── #1052 branch topology (campaign/ vs kahuna/ — the git D/F constraint) ─────
-ok(campaignBranchFor({ planId: 56, slug: 'Blueshift Plan' }) === 'campaign/56-blueshift-plan', 'campaignBranchFor: campaign/<planId>-<slug>, slugified')
+ok(campaignBranchFor({ planId: 56, slug: 'Orion Plan' }) === 'campaign/56-orion-plan', 'campaignBranchFor: campaign/<planId>-<slug>, slugified')
 ok(waveKahunaFor({ planId: 56, waveId: 'W-1' }) === 'kahuna/56-W-1', 'waveKahunaFor: kahuna/<planId>-<waveId> (plan-namespaced — two campaigns cannot collide on kahuna/W-1)')
 // The prefixes MUST differ: git cannot hold a branch that is a directory prefix of another branch
 // (`campaign/56-x` + `campaign/56-x/W-1` → fatal: cannot lock ref … exists). A shared prefix would
@@ -80,7 +80,7 @@ ok(waveKahunaFor({ waveId: 'W-1' }) === 'kahuna/W-1', 'waveKahunaFor without pla
 // second campaign branch — git refs are case-sensitive but macOS/Windows checkouts are not, so the
 // two could never coexist anyway. The waveId is engine-generated and stays verbatim (one wave, one
 // spelling, matching resume.js's flight-branch names).
-ok(campaignBranchFor({ planId: 56, slug: 'BlueShift PLAN' }) === campaignBranchFor({ planId: 56, slug: 'blueshift plan' }),
+ok(campaignBranchFor({ planId: 56, slug: 'OrIon PLAN' }) === campaignBranchFor({ planId: 56, slug: 'orion plan' }),
   '#1052: campaign branch is case-INSENSITIVE in the slug (a retitled plan must not fork a second campaign branch)')
 ok(waveKahunaFor({ planId: 56, waveId: 'W-1' }) !== waveKahunaFor({ planId: 56, waveId: 'w-1' }),
   '#1052: waveId casing is preserved verbatim (resume.js builds flight branches + its cleanup glob from the same un-lowercased id)')

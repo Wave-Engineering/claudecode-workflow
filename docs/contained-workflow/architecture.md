@@ -343,7 +343,7 @@ Secrets enter as **named, read-only, single-file bind-mounts**
 landing under `/home/ubuntu/.secrets` — the default the bootstrap's
 `OAW_SECRETS_DIR` already resolves (Dev Spec §5.5). Story 1.5 mounted the *whole*
 dir; #1061 replaced that with named files, because the host dir spans both sides
-of the OaW/Analogic IP boundary and the kit consumes one entry of ~80.
+of the OaW/partner IP boundary and the kit consumes one entry of ~80.
 
 - **Never baked (R-12).** The image *is* the release: it ships to every ring and
   registry, so a secret baked into any layer would leak with the digest. Secrets
@@ -382,7 +382,7 @@ but its values are frozen at the boot source. Loose files stay path-modality and
 are **never auto-exported** (SKETCHBOOK D6), which is also why they stay live.
 
 **Blast radius — REOPENED deliberately (#1090).** #1061 replaced the whole-dir
-mount with named single files, citing the OaW/Analogic IP boundary. That scoping
+mount with named single files, citing the OaW/partner IP boundary. That scoping
 was reversed on an operator decision; the reasoning is recorded so nobody
 restores it on the retired rationale:
 
@@ -682,7 +682,7 @@ incident; only a behavioural one would have caught it.
 
 aoe mounts the operator's `~/.ssh` to `/root/.ssh`: keys **and** a host→identity
 config. Agents use them constantly — git over SSH for both forges, and
-troubleshooting remote installs (blueshift, perkollate, `agent-smith-ca`), where
+troubleshooting remote installs (partner hosts, `agent-smith-ca`), where
 no API token substitutes.
 
 **They were mounted and invisible.** The agent runs as `ubuntu` with
@@ -822,7 +822,7 @@ proving the mechanism is doing the work.
 ### 3.8 The container builder — podman, and the one host requirement (#1108)
 
 Agents build, run and scan container images from inside their own sandbox. The
-motivating case was `blueshift-kb#8` (swap a runtime image to distroless, shedding
+motivating case was a partner repo's task (swap a runtime image to distroless, shedding
 23 unfixable CVEs), which a containerised agent could not verify at all.
 
 **Not a docker socket mount.** Over a socket, `docker build` executes on the *host*

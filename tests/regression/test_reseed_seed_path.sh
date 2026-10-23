@@ -3,7 +3,7 @@
 #
 # The seed lives at ONE path, .claude/reseed-revive.md, and must never be
 # committable: it carries session detail, and in a GitLab repo that detail is
-# Analogic's. The ignore guard is prose in skills/reseed/SKILL.md that an agent
+# the partner's. The ignore guard is prose in skills/reseed/SKILL.md that an agent
 # runs, so this test EXTRACTS the guard from the skill and runs it — a test of a
 # copy would pass while the skill drifted.
 #

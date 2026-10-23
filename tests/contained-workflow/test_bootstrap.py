@@ -1507,7 +1507,7 @@ def test_absent_cli_config_is_created_not_bailed_on(tmp_path: Path) -> None:
 #
 # aoe mounts the operator's ~/.ssh to /root/.ssh — keys plus a host->identity
 # config. Agents use these constantly: git over SSH for both forges, and
-# troubleshooting remote installs (blueshift-prod, perkollate-*, agent-smith-ca).
+# troubleshooting remote installs (partner hosts, agent-smith-ca).
 #
 # They were mounted and INVISIBLE: the agent runs as ubuntu with HOME=/home/ubuntu,
 # so ssh looked in /home/ubuntu/.ssh, found nothing, fell back to default identity

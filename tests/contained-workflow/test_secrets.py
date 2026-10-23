@@ -80,7 +80,7 @@ def test_secrets_mount_is_readonly() -> None:
         assert m.mode == "ro", f"{m.name}: secrets mount must be ro (R-12), got {m.mode!r}"
         # The dir ITSELF is now a legitimate source (#1090 whole-dir mount), but
         # the separator check must survive: a bare `startswith` would also accept
-        # ~/.secrets-analogic/..., which is exactly the blast radius this guard
+        # ~/.secrets-partner/..., which is exactly the blast radius this guard
         # bounds. So: equal to the dir, or under it with the separator present.
         assert m.source == "/home/bakerb/.secrets" or m.source.startswith(
             "/home/bakerb/.secrets/"
@@ -100,7 +100,7 @@ def test_secrets_mount_is_readonly() -> None:
 def test_secrets_mount_is_whole_dir_and_read_only() -> None:
     """#1090 REPLACES #1061's scoping guard — it does not simply delete it.
 
-    #1061 forbade a whole-dir mount, citing the OaW/Analogic IP boundary. That
+    #1061 forbade a whole-dir mount, citing the OaW/partner IP boundary. That
     rationale was retired on an operator decision (#1090) after two corrections:
     mounted is not baked (R-12 keeps secrets out of every image layer; these are
     runtime binds), and the trust model is unchanged, since every HOST agent
@@ -137,7 +137,7 @@ def test_no_third_party_secret_is_projected_into_the_environment() -> None:
     opened. OAW_SECRET_ENV is limited to CLAUDE_CODE_OAUTH_TOKEN, the exception
     argued narrowly in #1076: that token IS the agent's identity, so a child
     stealing it gains nothing the agent already lacks. An org-admin PAT, a GitLab
-    token or an ANALOGIC key does not meet that bar.
+    token or a partner key does not meet that bar.
     """
     example = (
         pathlib.Path(__file__).resolve().parents[2]

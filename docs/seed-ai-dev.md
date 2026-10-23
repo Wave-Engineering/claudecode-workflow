@@ -77,8 +77,8 @@ You are in `claudecode-workflow` (cc-workflow). There are sibling repos; you wil
 
 ### Target-project examples (you may orchestrate against these)
 
-- `blueshift-docmancer-ui` (GitLab, AnalogicDev) — grimoire's KAHUNA proving-ground
-- `blueshift-cue` — cue-ball's project
+- grimoire's partner repo (GitLab) — its KAHUNA proving-ground
+- cue-ball's partner repo (GitLab)
 - `bernie` — deep-scan's chatbot platform
 
 Cross-repo orchestration is a real pattern. See `memory/lesson_cross_repo_wave_orchestration.md` before attempting one — there are seven non-obvious facts you will get wrong otherwise.
@@ -250,7 +250,7 @@ These are indexed here so when you hit the failure mode, you know where to look:
 - `memory/ref_scream_hole.md` — Discord API proxy
 - `memory/ref_clawback.md` — session replay tool
 - `memory/ref_asset_management.md` — DVC + Cloudflare R2 for binary assets
-- `memory/lesson_analogicdev_gitlab_setup.md` — singular `doc/` branch prefix, verified-email requirements
+- the GitLab setup lesson in memory — singular `doc/` branch prefix, verified-email requirements
 - `memory/lesson_gitlab_smoke_test.md` — pipeline-changing smoke test pattern
 
 ---

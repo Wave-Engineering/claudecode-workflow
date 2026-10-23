@@ -63,7 +63,7 @@ is_posint() { [[ "$1" =~ ^[1-9][0-9]*$ ]]; }
 # Keep the state file out of version control without touching any tracked file:
 # info/exclude is per-clone and untracked, so a repo that does not already ignore
 # .claude/ gets no diff noise. An approval quote is session material, and in a
-# GitLab repo it would be Analogic's.
+# GitLab repo it would be the partner's.
 ensure_ignored() {
 	local repo="$1" exclude
 	git -C "$repo" check-ignore -q "$STATE_REL" 2>/dev/null && return 0

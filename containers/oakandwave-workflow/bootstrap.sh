@@ -27,7 +27,7 @@
 #
 # Secrets (SKETCHBOOK D6 as amended by #1061, R-12/R-14): NAMED single-file
 # read-only bind-mounts under ~/.secrets — not the whole dir, which handed every
-# container both sides of the OaW/Analogic IP boundary. `.env` is the env modality
+# container both sides of the OaW/partner IP boundary. `.env` is the env modality
 # (sourced here) and carries POINTERS, never token values; loose files are the
 # path modality (NEVER auto-exported to env — that re-leaks via
 # /proc/<pid>/environ AND into every child process). The required-secret set is
@@ -908,7 +908,7 @@ report_stored_credential() {
 #
 # aoe mounts the operator's ~/.ssh to /root/.ssh — keys, and a config mapping
 # hosts to identities. Agents use these constantly: git over SSH for both forges,
-# and troubleshooting remote installs (blueshift-prod, perkollate-*, agent-smith-ca).
+# and troubleshooting remote installs (partner hosts, agent-smith-ca).
 #
 # THEY WERE MOUNTED AND INVISIBLE. The agent runs as `ubuntu` with HOME=/home/ubuntu,
 # so ssh looks in /home/ubuntu/.ssh, finds nothing, falls back to default identity
@@ -933,7 +933,7 @@ ensure_ssh_parity() {
 		# WARN, not info: this file's header codifies "missing mount -> WARN". As info,
 		# WARN_COUNT stayed 0 and the summary reported a clean boot for a container with
 		# no git-over-SSH and no reachable remote hosts.
-		warn "missing mount: no $src — git over SSH and remote hosts (blueshift, perkollate) unavailable"
+		warn "missing mount: no $src — git over SSH and remote hosts unavailable"
 		return 0
 	}
 	# PER-FILE LINKS, not a directory symlink (#1111). Two reasons, both learned

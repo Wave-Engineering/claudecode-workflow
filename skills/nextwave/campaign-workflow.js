@@ -83,8 +83,8 @@ if (ALL_WAVES.length === 0) {
 // misconfiguration, not a defaultable case — same fail-loud stance as the empty-plan and
 // branch-equals-trunk guards below.
 // The explicit override is lowercased through the SAME normalization as the derived name. Otherwise a
-// launcher that hand-builds `campaign/56-Blueshift` and a resume that omits the param (deriving
-// `campaign/56-blueshift`) would name two different case-sensitive server refs for one campaign — the
+// launcher that hand-builds `campaign/56-Orion` and a resume that omits the param (deriving
+// `campaign/56-orion`) would name two different case-sensitive server refs for one campaign — the
 // exact fork the derived-path lowercasing exists to prevent, reached by nothing more exotic than
 // forgetting to re-pass the parameter.
 const CAMPAIGN_BRANCH = String(params.campaignBranch ?? campaignBranchFor({

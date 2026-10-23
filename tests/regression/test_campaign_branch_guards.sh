@@ -16,7 +16,7 @@
 #   2. campaignBranch === protectedBranch → throw. A campaign whose "integration branch" IS trunk
 #      restores per-wave trunk writes under a name claiming otherwise.
 #   3. An explicitly-passed campaignBranch is lowercased through the same normalization as the derived
-#      name — otherwise a hand-built `campaign/56-Blueshift` and a derived `campaign/56-blueshift` are
+#      name — otherwise a hand-built `campaign/56-Orion` and a derived `campaign/56-orion` are
 #      two different case-sensitive server refs for one campaign.
 #   4. bootstrap.created && ALREADY_INTEGRATED.length > 0 → throw. A freshly-cut branch cannot already
 #      carry integrated waves; counting them would empty routeRelease's missing[] on the wrong branch.
