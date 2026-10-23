@@ -190,6 +190,35 @@ if compgen -G "$QUIET_DIR/doorbell.*" >/dev/null; then
 fi
 pass "no workdir survives the timeout path (behavioral)"
 
+# Behavioral (#1283): the identity warning fires on every way the watcher's gate fails closed,
+# not only a missing file, and names the failing field. A complete identity warns nothing.
+identity_stderr() { # <case-name> <identity-json or "MISSING">
+	local dir="$SANDBOX/ident-$1"
+	mkdir -p "$dir/.claude"
+	[[ "$2" == MISSING ]] || printf '%s\n' "$2" >"$dir/.claude/agent-identity.json"
+	# shellcheck disable=SC2069  # deliberate: keep stderr (the warning), drop stdout
+	(cd "$dir" && CLAUDE_PROJECT_DIR="$dir" TMPDIR="$dir" WATCHER="$QUIET_DIR/discord-watcher" TIMEOUT=1 "$WRAPPER" 2>&1 >/dev/null)
+}
+out="$(identity_stderr missing MISSING)"
+grep -q 'WARNING no .*agent-identity.json' <<<"$out" || fail "missing identity file: no warning naming it (got: $out)"
+out="$(identity_stderr junk '{not json')"
+grep -q 'WARNING .*is not valid JSON' <<<"$out" || fail "unparseable identity: no 'not valid JSON' warning (got: $out)"
+out="$(identity_stderr noname '{"dev_name":"","dev_team":"test"}')"
+grep -q 'WARNING .*empty or missing dev_name' <<<"$out" || fail "empty dev_name: no warning naming it (got: $out)"
+out="$(identity_stderr noteam '{"dev_name":"stub"}')"
+grep -q 'WARNING .*empty or missing dev_team' <<<"$out" || fail "missing dev_team: no warning naming it (got: $out)"
+out="$(identity_stderr whole '{"dev_name":"stub","dev_team":"test"}')"
+grep -q 'WARNING' <<<"$out" && fail "a complete identity must not warn (got: $out)"
+# The watcher falls back to the legacy /tmp/claude-agent-<md5(root)>.json when the durable file
+# does not resolve. A complete legacy file means it WILL deliver, so the wrapper must not warn.
+LEGACY_DIR="$SANDBOX/ident-legacy"
+LEGACY_FILE="/tmp/claude-agent-$(printf '%s' "$LEGACY_DIR" | md5sum | cut -d' ' -f1).json"
+printf '%s\n' '{"dev_name":"stub","dev_team":"test"}' >"$LEGACY_FILE"
+out="$(identity_stderr legacy '{"dev_name":"","dev_team":"test"}')"
+rm -f "$LEGACY_FILE"
+grep -q 'WARNING' <<<"$out" && fail "a complete legacy /tmp identity resolves for the watcher; must not warn (got: $out)"
+pass "identity warning names each fail-closed case; a complete identity (durable or legacy) warns nothing (behavioral)"
+
 # Behavioral: non-numeric TIMEOUT is rejected up front (exit 2), not silently unbounded.
 (cd "$QUIET_DIR" && TMPDIR="$QUIET_DIR" WATCHER="$QUIET_DIR/discord-watcher" TIMEOUT=30s timeout 10 "$WRAPPER" >/dev/null 2>&1)
 rc=$?
