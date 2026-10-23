@@ -58,16 +58,24 @@ are worth keeping apart:
 - **The dependency scan counts Python lockfiles (#1289, PR #1290).** A repo whose only lock was
   `uv.lock` read "0 scannable", so it was reported as having nothing to scan, or failed, without
   the real lock ever being scanned.
-  - **Added:** `uv.lock`, `poetry.lock` and `Pipfile.lock`, to all four lock lists
-    (`check-scannable.sh`, `dependency-scan.sh`, the precheck fallback `find`, and the trust
-    gate's `gate.js`). Each was confirmed against trivy 0.74 before it was added. A drift test now
-    keeps the four lists in agreement.
+  - **Added:** `uv.lock`, `poetry.lock` and `Pipfile.lock`, to all three lock lists
+    (`check-scannable.sh`'s arrays, the precheck fallback `find`, and the trust gate's
+    `gate.js`). `dependency-scan.sh` has no list of its own; it scans what `check-scannable.sh`
+    counts. Each type was confirmed against trivy 0.74 before it was added. A drift test now
+    keeps the three lists in agreement.
   - **Left out:** `pdm.lock`, because trivy 0.74 has no analyzer for it. Counting it would have
     made every repo carrying one fail as UNSCANNED.
 
-The MCP servers are unchanged from 8.11.0. In the same window, sdlc `main` gained the
-`ci_wait_run` platform fix (mcp-server-sdlc#603), and discord-watcher v1.7.0 shipped the doorbell
-cleanup. Both are separate releases.
+### Image
+
+- **MCP servers:** mcp-server-sdlc v5.0.2, mcp-server-wtf v1.5.2, mcp-server-discord v1.4.3,
+  mcp-server-discord-watcher **v1.7.0** and mcp-server-nerf v2.0.0. The watcher moved from
+  v1.6.1. v1.7.0 is the doorbell cleanup: a quiet channel's first message is no longer
+  swallowed, there is one poll core for both modes, `@agents` is the fleet broadcast, and the
+  cursor is saved per transport. The kit installs each server's latest release, so an 8.12.0
+  install or image build gets v1.7.0.
+- sdlc `main` also has the `ci_wait_run` platform fix (mcp-server-sdlc#603). It isn't released
+  yet, so it isn't in this image.
 
 ## [8.11.0] - 2026-10-20
 
