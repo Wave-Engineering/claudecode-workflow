@@ -34,16 +34,30 @@ TEST_PATTERN='(pytest|python[0-9.]* -m pytest|npm test|npx vitest|make (test|lin
 # The commands this repo declares under Toolchain in its .claude-project.md: every backtick
 # span on a Validation, Tests or Lint line. Spans shorter than 4 characters are ignored, so
 # a stray `x` cannot make every command count.
+#
+# A span counts only where a command STARTS: the whole command, or one segment of it split
+# on && || ; | (optionally after `bash `/`sh `), equal to the span or the span plus
+# arguments. Toolchain lines also backtick file paths and prose (`pyproject.toml`,
+# `bootstrap/`), so a match anywhere in the text would let `cat pyproject.toml` count.
 declared_match() {
-	local root cfg span
+	local root cfg span segs seg
 	[[ -n "$HOOK_CWD" ]] || return 1
 	root=$(git -C "$HOOK_CWD" rev-parse --show-toplevel 2>/dev/null) || return 1
 	cfg="$root/.claude-project.md"
 	[[ -f "$cfg" ]] || return 1
+	segs="${COMMAND//&&/$'\n'}"
+	segs="${segs//||/$'\n'}"
+	segs="${segs//;/$'\n'}"
+	segs="${segs//|/$'\n'}"
 	# shellcheck disable=SC2016  # the backticks are literal markdown, not expansions
 	while IFS= read -r span; do
 		[[ ${#span} -ge 4 ]] || continue
-		[[ "$COMMAND" == *"$span"* ]] && return 0
+		while IFS= read -r seg; do
+			seg="${seg#"${seg%%[![:space:]]*}"}"
+			seg="${seg#bash }"
+			seg="${seg#sh }"
+			[[ "$seg" == "$span" || "$seg" == "$span "* ]] && return 0
+		done <<<"$segs"
 	done < <(grep -E '^[[:space:]]*[-*][[:space:]]*\*\*(Validation|Tests|Lint):\*\*' "$cfg" |
 		grep -oE '`[^`]+`' | tr -d '`')
 	return 1

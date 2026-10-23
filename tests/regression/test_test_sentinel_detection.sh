@@ -36,7 +36,7 @@ cat >"$WORK/repo/.claude-project.md" <<'MD'
 ## Toolchain
 - **Validation:** `./tools/check-all.sh`
 - **Tests:** `make -C engine unit` and `ls`
-- **Lint:** none
+- **Lint:** `ruffle-lint` — configured in `pyproject.toml`, sources in `bootstrap/`
 - **Build:** `./tools/build-it.sh`
 MD
 mkdir -p "$WORK/home/.claude/logs"
@@ -65,6 +65,16 @@ check SENTINEL "./lint.sh"
 # Declared in .claude-project.md (no pattern would match these).
 check SENTINEL "./tools/check-all.sh --fast"
 check SENTINEL "make -C engine unit"
+check SENTINEL "cd engine && ./tools/check-all.sh" # a later segment of the command
+check SENTINEL "bash ./tools/check-all.sh"
+check SENTINEL "ruffle-lint src/"
+# A declared span counts only where a command starts, never as a mention: Toolchain lines
+# also backtick file paths and prose (#1288 review).
+check NONE "cat pyproject.toml"
+check NONE "ls bootstrap/src"
+check NONE "cd bootstrap/ && bun install"
+check NONE "echo ./tools/check-all.sh"
+check NONE "grep fast ./tools/check-all.sh"
 # Not counted.
 check NONE "./tools/other.sh"
 check NONE "./tools/check-all.sh" 1
