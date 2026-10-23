@@ -112,7 +112,7 @@ Call `mcp__sdlc-server__spec_validate_structure({ issue_ref: "<owner>/<repo>#<N>
 "$CISRC" resolve <repo_root> <marker_dir> <branch> <HEAD_SHA>
 ```
 
-It finishes within the Bash tool's default timeout, even when it starts a pipeline and waits for it to appear. It prints one line:
+Run it with a Bash `timeout` of 300000. It budgets itself 90 s of wall clock (`PRECHECK_CI_TRIGGER_WAIT`), including starting a pipeline and waiting for it to appear, so it always prints its line. It prints one line:
 
 - `ci run=<id> ref=<ref>` → run **Job B-ci**, waiting with that `<ref>`.
 - `ci triggered run=<id> ref=<ref>` → run **Job B-ci**, waiting with that `<ref>`. No run existed, so the repo's declared `CI on demand` command started one. It runs at most once per SHA.

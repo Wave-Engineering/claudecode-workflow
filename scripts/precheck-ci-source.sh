@@ -48,8 +48,8 @@
 
 set -euo pipefail
 
-# 90 s keeps the slowest path (trigger, then polls that find nothing) inside the Bash
-# tool's default 120 s timeout, so the reason line is always printed.
+# The wall-clock budget for one `resolve`, trigger and polls included (see cmd_resolve).
+# 90 s leaves room inside the Bash tool's default 120 s timeout.
 TRIGGER_WAIT="${PRECHECK_CI_TRIGGER_WAIT:-90}"
 POLL="${PRECHECK_CI_POLL:-10}"
 
@@ -130,11 +130,19 @@ run_for_sha() {
 	local sha="$1" out
 	if [[ "$(platform)" == github ]]; then
 		out="$(gh api "repos/${SLUG}/actions/runs?head_sha=${sha}&per_page=100")" || return 1
-		jq -r '.workflow_runs[0] // empty | "\(.id) \(.head_branch)"' <<<"$out" 2>/dev/null || return 1
+		jq -r '.workflow_runs[0] // empty | "\(.id) \(.head_branch // "")"' <<<"$out" 2>/dev/null || return 1
 	else
 		out="$(glab api --hostname "$HOST" "projects/${SLUG//\//%2F}/pipelines?sha=${sha}&per_page=20")" || return 1
 		jq -r '.[0] // empty | "\(.id) \(.ref)"' <<<"$out" 2>/dev/null || return 1
 	fi
+}
+
+# "run=<id> ref=<ref>" from run_for_sha's "<id> <ref>". A run with no ref (GitHub can
+# report a null head_branch) falls back to the branch, which is what Job B-ci used before.
+run_line() {
+	local id="${1%% *}" ref="${1#* }"
+	[[ -z "$ref" || "$ref" == "$1" || "$ref" == null ]] && ref="$2"
+	echo "run=$id ref=$ref"
 }
 
 local_line() {
@@ -147,7 +155,10 @@ local_line() {
 cmd_resolve() {
 	[[ $# -eq 4 ]] || usage
 	ROOT="$1"
-	local marker_dir="$2" branch="$3" sha="$4" found trigger cmd rc waited marker
+	local marker_dir="$2" branch="$3" sha="$4" found trigger cmd rc marker deadline
+	# One wall-clock budget for the whole call, trigger and API calls included, so the
+	# reason line is printed before the Bash tool's default 120 s timeout.
+	deadline=$((SECONDS + TRIGGER_WAIT))
 	parse_origin "$ROOT"
 
 	if ! has_ci "$ROOT"; then
@@ -164,7 +175,7 @@ cmd_resolve() {
 		return 0
 	fi
 	if [[ -n "$found" ]]; then
-		echo "ci run=${found%% *} ref=${found#* }"
+		echo "ci $(run_line "$found" "$branch")"
 		return 0
 	fi
 
@@ -190,23 +201,25 @@ cmd_resolve() {
 	cmd="${trigger//<branch>/$branch}"
 	echo "?" >"$marker"
 	rc=0
-	(cd "$ROOT" && bash -c "$cmd") >"$marker_dir/ci-trigger.log" 2>&1 || rc=$?
+	if command -v timeout >/dev/null; then
+		(cd "$ROOT" && timeout "$TRIGGER_WAIT" bash -c "$cmd") >"$marker_dir/ci-trigger.log" 2>&1 || rc=$?
+	else
+		(cd "$ROOT" && bash -c "$cmd") >"$marker_dir/ci-trigger.log" 2>&1 || rc=$?
+	fi
 	echo "$rc" >"$marker"
 	if [[ $rc -ne 0 ]]; then
 		local_line "NO-RUN \`CI on demand\` exited $rc (log: $marker_dir/ci-trigger.log)"
 		return 0
 	fi
 
-	waited=0
 	while :; do
 		found="$(run_for_sha "$sha" || true)"
 		if [[ -n "$found" ]]; then
-			echo "ci triggered run=${found%% *} ref=${found#* }"
+			echo "ci triggered $(run_line "$found" "$branch")"
 			return 0
 		fi
-		((waited >= TRIGGER_WAIT)) && break
+		((SECONDS + POLL > deadline)) && break
 		sleep "$POLL"
-		waited=$((waited + POLL))
 	done
 	local_line "NO-RUN \`CI on demand\` ran, but no run for ${sha:0:7} appeared within ${TRIGGER_WAIT}s"
 }

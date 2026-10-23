@@ -186,6 +186,23 @@ def test_no_run_declared_triggers_exactly_once(tmp_path: Path) -> None:
     assert _triggers(state) == [f"glab ci run --branch {BRANCH}"]
 
 
+def test_resolve_keeps_to_its_wall_clock_budget(tmp_path: Path) -> None:
+    """The budget covers the whole call, so the reason line always arrives before the
+    Bash tool's timeout would kill it (review finding, #1282)."""
+    repo = _repo(tmp_path, "gitlab", project=DECLARED_GL)
+    state = _state(tmp_path, **{"runs.json": GL_NO_RUNS})
+    start = time.monotonic()
+    line = _resolve(repo, state, wait="3")
+    assert time.monotonic() - start < 6
+    assert "no run for 0123456 appeared within 3s" in line
+
+
+def test_github_null_head_branch_falls_back_to_the_branch(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "github")
+    state = _state(tmp_path, **{"runs.json": '{"workflow_runs":[{"id":556,"head_branch":null}]}'})
+    assert _resolve(repo, state) == f"ci run=556 ref={BRANCH}"
+
+
 def test_failed_trigger_is_reported_as_failed_and_not_retried(tmp_path: Path) -> None:
     """Once per SHA holds even when the trigger fails, and the later line keeps its
     exit code instead of claiming it ran (review finding, #1282)."""
