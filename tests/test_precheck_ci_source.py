@@ -33,6 +33,7 @@ case "$*" in
 */jobs*) cat "$STUB_DIR/jobs.json"; exit 0 ;;
 *"runs?"* | *"pipelines?"*)
 	[ -f "$STUB_DIR/api_fail" ] && exit 1
+	[ -f "$STUB_DIR/slow_api" ] && sleep 1
 	if [ -f "$STUB_DIR/triggered" ] && [ -f "$STUB_DIR/runs_after.json" ]; then
 		cat "$STUB_DIR/runs_after.json"
 	else
@@ -187,13 +188,16 @@ def test_no_run_declared_triggers_exactly_once(tmp_path: Path) -> None:
 
 
 def test_resolve_keeps_to_its_wall_clock_budget(tmp_path: Path) -> None:
-    """The budget covers the whole call, so the reason line always arrives before the
-    Bash tool's timeout would kill it (review finding, #1282)."""
+    """The budget covers the whole call, API time included, so the reason line always
+    arrives before the Bash tool's timeout would kill it (review finding, #1282).
+
+    Each API read takes 1 s here. A budget that counted only its sleeps would spend
+    3 s sleeping plus 4+ s of reads (~7 s); the wall-clock budget stops at ~3-4 s."""
     repo = _repo(tmp_path, "gitlab", project=DECLARED_GL)
-    state = _state(tmp_path, **{"runs.json": GL_NO_RUNS})
+    state = _state(tmp_path, **{"runs.json": GL_NO_RUNS, "slow_api": ""})
     start = time.monotonic()
     line = _resolve(repo, state, wait="3")
-    assert time.monotonic() - start < 6
+    assert time.monotonic() - start < 5.5
     assert "no run for 0123456 appeared within 3s" in line
 
 
