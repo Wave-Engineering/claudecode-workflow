@@ -9,7 +9,8 @@
 # test-like commands (pytest, npm test, make test, validate.sh, etc).
 #
 # Two separate questions (#1232):
-#   1. Is this a PLAIN push we can read completely? A single-line `git push` with
+#   1. Is this a PLAIN push we can read completely? A single-line `git push` (or
+#      `git -C <plain path> push`, #1287) with
 #      allowlisted flags, a plain remote and plain refspecs (plus an optional trailing
 #      redirection or `| tail`/`| head`). If every destination is an agent's own working
 #      branch or a wave integration branch, it is exempt: /precheck gates the MR, not the
@@ -100,9 +101,17 @@ _exempt_plain_push() {
 	esac
 
 	read -ra _toks <<<"$cmd"
-	[[ ${#_toks[@]} -ge 4 && "${_toks[0]}" == "git" && "${_toks[1]}" == "push" ]] || return 1
+	# `git push …`, or `git -C <path> push …` (#1287): an agent working in a second repo
+	# cannot `cd` there and stay, because the session's cwd resets after each Bash call.
+	# Exactly one -C and a plain path; -C changes which repo, never which refs are exempt.
+	local first=2
+	if [[ "${_toks[1]:-}" == "-C" ]]; then
+		[[ "${_toks[2]:-}" =~ ^[A-Za-z0-9._/~-]+$ ]] || return 1
+		first=4
+	fi
+	[[ ${#_toks[@]} -ge $((first + 2)) && "${_toks[0]}" == "git" && "${_toks[first - 1]}" == "push" ]] || return 1
 
-	for tok in "${_toks[@]:2}"; do
+	for tok in "${_toks[@]:first}"; do
 		if [[ $skip -eq 1 ]]; then
 			skip=0
 			[[ "$tok" =~ ^[A-Za-z0-9._=-]+$ ]] || return 1 # a push option's plain value
