@@ -191,13 +191,14 @@ def test_resolve_keeps_to_its_wall_clock_budget(tmp_path: Path) -> None:
     """The budget covers the whole call, API time included, so the reason line always
     arrives before the Bash tool's timeout would kill it (review finding, #1282).
 
-    Each API read takes 1 s here. A budget that counted only its sleeps would spend
-    3 s sleeping plus 4+ s of reads (~7 s); the wall-clock budget stops at ~3-4 s."""
+    Each API read takes 1 s here. A budget that counted only its sleeps would do 5 reads
+    and 3 s of sleep (~8 s); the wall-clock budget stops at ~2 or ~4 s, depending on
+    where the start falls against bash's whole-second SECONDS."""
     repo = _repo(tmp_path, "gitlab", project=DECLARED_GL)
     state = _state(tmp_path, **{"runs.json": GL_NO_RUNS, "slow_api": ""})
     start = time.monotonic()
     line = _resolve(repo, state, wait="3")
-    assert time.monotonic() - start < 5.5
+    assert time.monotonic() - start < 6.5
     assert "no run for 0123456 appeared within 3s" in line
 
 
