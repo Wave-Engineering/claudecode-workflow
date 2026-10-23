@@ -19,6 +19,56 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.12.0] - 2026-10-23
+
+### Fixed
+
+- **`/precheck` Job B decides its lane source in code before any wait (#1268, PR #1282).** Job B
+  used to call `ci_wait_run(timeout_sec: 1800)` straight away, then fall back to the full local
+  suite on `NO-RUN`. On GitLab before sdlc#585, and on any repo whose branch pipelines only start
+  on demand, that fallback ran every time: a dead wait, followed by a heavy unbooked run on a
+  shared box. A new `scripts/precheck-ci-source.sh` answers the question first.
+  - **`resolve`** finds a run for the SHA by a direct read. It reads by SHA, so GitLab MR
+    pipelines count. It prints the run's own ref, and `ci_wait_run` waits with that ref.
+  - **`CI on demand`.** If the repo declares a `CI on demand` command in `.claude-project.md`,
+    `resolve` runs it once per SHA. It never starts an undeclared pipeline, because a generic
+    trigger can start publish or deploy jobs.
+  - **Local fallback.** Otherwise it returns the local fallback at once, with the reason named.
+    It works to one wall-clock budget, so it always prints its line.
+  - **`coverage`** refuses a run that is missing a declared `CI jobs` entry. On this repo it
+    rejected the `mirror` workflow's run, which had been the only run at `main`'s HEAD, as
+    `missing validate`.
+- **`doorbell-oneshot.sh` warns on an unresolved identity, not just a missing file (#1283,
+  PR #1285).** The watcher fails closed on any unresolved field. A file that existed but didn't
+  parse, or had an empty `dev_name` or `dev_team`, used to pass the check, and the oneshot then
+  hung, which looks exactly like a quiet channel. The check now names the field that failed.
+  Like the watcher, it falls back to the legacy `/tmp/claude-agent-<md5(root)>.json`, and it warns
+  only when neither file resolves.
+- **The push gate exempts `git -C <path> push`, and its test detector counts a repo's own entry
+  points (#1287, PR #1288).** Two gaps refused legitimate pushes to an agent's own working
+  branch.
+  - **`git -C` pushes.** An agent working in a second repo can't stay `cd`'d there, so it pushes
+    with `git -C`, and that was never exempt. Now `git -C <plain path> push …` is judged by the
+    same rules as a plain push.
+  - **Test detection.** `post-tool-test-sentinel.sh` matched only a fixed list. It now also
+    counts scripts named like `run_lint.sh`, `run-tests.sh` or `validate.sh`. It also counts any
+    command the repo declares on a `.claude-project.md` Toolchain `Validation`, `Tests` or `Lint`
+    line. A declared span counts only where a command *starts*: Toolchain lines also put file
+    paths in backticks, and `cat pyproject.toml` must not count as a test run.
+- **The dependency scan counts Python lockfiles (#1289, PR #1290).** A repo whose only lock was
+  `uv.lock` read "0 scannable", so it was reported as having nothing to scan, or failed, without
+  the real lock ever being scanned.
+  - **Added:** `uv.lock`, `poetry.lock` and `Pipfile.lock`, to all four lock lists
+    (`check-scannable.sh`, `dependency-scan.sh`, the precheck fallback `find`, and the trust
+    gate's `gate.js`). Each was confirmed against trivy 0.74 before it was added. A drift test now
+    keeps the four lists in agreement.
+  - **Left out:** `pdm.lock`, because trivy 0.74 has no analyzer for it. Counting it would have
+    made every repo carrying one fail as UNSCANNED.
+
+The MCP servers are unchanged from 8.11.0. In the same window, sdlc `main` gained the
+`ci_wait_run` platform fix (mcp-server-sdlc#603), and discord-watcher v1.7.0 shipped the doorbell
+cleanup. Both are separate releases.
+
 ## [8.11.0] - 2026-10-20
 
 ### Changed
