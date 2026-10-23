@@ -64,6 +64,16 @@ check PASS "git push -u origin fix/3-a > /dev/null"
 check PASS "git push origin feature/x &>/dev/null"
 check PASS "git push origin DEVOPS-2069-record-image-digests" "$DEVOPS"
 check PASS "git push -o ci.skip -u origin DEVOPS-2069-record-image-digests" "$DEVOPS"
+# #1287: an agent in a second repo pushes with -C (its cwd resets after each Bash call).
+check PASS "git -C /tmp/x push origin chore/x"
+check PASS "git -C ../repo push -u origin fix/3-a"
+check PASS "git -C ~/sandbox/github/other-repo push -q -u origin feature/9-y 2>&1 | tail -3"
+check BLOCK "git -C /tmp/x push origin release/0.2"
+check BLOCK "git -C /tmp/x push origin main"
+check BLOCK "git -C \$P push origin fix/x"
+check BLOCK "git -C /a -C /b push origin fix/x"
+check BLOCK "git -C /tmp/x push"
+check PASS "git -C /tmp/x commit -m push" # not a push at all
 
 # --- GATED: plain pushes to protected refs, tags and qualified names ---
 check BLOCK "git push origin main"
