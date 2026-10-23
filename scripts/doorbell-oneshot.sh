@@ -90,7 +90,8 @@
 # PREREQUISITE — must be launched from the project root
 # ----------------------------------------------------
 # The watcher resolves agent identity from `CLAUDE_PROJECT_DIR ?? process.cwd()`
-# and reads `<root>/.claude/agent-identity.json`. With identity unresolved,
+# and reads `<root>/.claude/agent-identity.json`, falling back to the legacy
+# `/tmp/claude-agent-<md5(root)>.json`. With identity unresolved in both,
 # `shouldDeliverMessage` FAILS CLOSED: the loop polls normally and delivers
 # nothing. Run from the project root, or export CLAUDE_PROJECT_DIR.
 #
@@ -161,26 +162,42 @@ fi
 # Warn (do not fail) when identity is unresolvable — the watcher would fail closed
 # and this script would just hang, which reads as "no messages" rather than "deaf".
 # The watcher fails closed on ANY unresolved field, not only a missing file (#1283):
-# an unparseable file, or an empty dev_name or dev_team, is just as deaf.
+# an unparseable file, or an empty dev_name or dev_team, is just as deaf. It reads the
+# durable file first and falls back to the legacy /tmp/claude-agent-<md5(root)>.json, so
+# this check does the same: warn only when NEITHER resolves, or it raises a false alarm.
 IDENTITY_ROOT="${CLAUDE_PROJECT_DIR:-$PWD}"
 IDENTITY_FILE="$IDENTITY_ROOT/.claude/agent-identity.json"
-identity_problem=""
-if [[ ! -f "$IDENTITY_FILE" ]]; then
-	identity_problem="no $IDENTITY_FILE"
-elif ! command -v jq >/dev/null 2>&1; then
-	identity_problem="jq is not installed, so $IDENTITY_FILE cannot be checked"
-elif ! jq -e . "$IDENTITY_FILE" >/dev/null 2>&1; then
-	identity_problem="$IDENTITY_FILE is not valid JSON"
-elif ! jq -er '.dev_name | select(type == "string" and length > 0)' "$IDENTITY_FILE" >/dev/null 2>&1; then
-	identity_problem="$IDENTITY_FILE has an empty or missing dev_name"
-elif ! jq -er '.dev_team | select(type == "string" and length > 0)' "$IDENTITY_FILE" >/dev/null 2>&1; then
-	identity_problem="$IDENTITY_FILE has an empty or missing dev_team"
+# The watcher hashes `CLAUDE_PROJECT_DIR ?? cwd`: only an UNSET variable falls back.
+LEGACY_IDENTITY_FILE=""
+if command -v md5sum >/dev/null 2>&1; then
+	LEGACY_IDENTITY_FILE="/tmp/claude-agent-$(printf '%s' "${CLAUDE_PROJECT_DIR-$PWD}" | md5sum | cut -d' ' -f1).json"
 fi
-if [[ -n "$identity_problem" ]]; then
-	echo "doorbell-oneshot: WARNING $identity_problem —" >&2
-	echo "  the delivery gate fails closed on unresolved identity, so NOTHING will" >&2
-	echo "  be delivered. Run from the project root or set CLAUDE_PROJECT_DIR, and" >&2
-	echo "  run /name if the identity is incomplete." >&2
+identity_file_problem() { # <file> -> prints why it does not resolve; prints nothing if it does
+	if [[ ! -f "$1" ]]; then
+		echo "no $1"
+	elif ! jq -e . "$1" >/dev/null 2>&1; then
+		echo "$1 is not valid JSON"
+	elif ! jq -er '.dev_name | select(type == "string" and length > 0)' "$1" >/dev/null 2>&1; then
+		echo "$1 has an empty or missing dev_name"
+	elif ! jq -er '.dev_team | select(type == "string" and length > 0)' "$1" >/dev/null 2>&1; then
+		echo "$1 has an empty or missing dev_team"
+	fi
+}
+if ! command -v jq >/dev/null 2>&1; then
+	# Without jq the fields cannot be read, so make no claim about delivery either way.
+	echo "doorbell-oneshot: note: jq is not installed, so the identity file was not checked" >&2
+else
+	identity_problem="$(identity_file_problem "$IDENTITY_FILE")"
+	if [[ -n "$identity_problem" && -n "$LEGACY_IDENTITY_FILE" &&
+		-z "$(identity_file_problem "$LEGACY_IDENTITY_FILE")" ]]; then
+		identity_problem="" # the legacy file resolves, as the watcher will find
+	fi
+	if [[ -n "$identity_problem" ]]; then
+		echo "doorbell-oneshot: WARNING $identity_problem —" >&2
+		echo "  the delivery gate fails closed on unresolved identity, so NOTHING will" >&2
+		echo "  be delivered. Run from the project root or set CLAUDE_PROJECT_DIR, and" >&2
+		echo "  run /name if the identity is incomplete." >&2
+	fi
 fi
 
 # A private directory rather than `mktemp -u` + mkfifo: no TOCTOU window on the

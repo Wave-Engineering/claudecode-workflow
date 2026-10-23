@@ -209,7 +209,15 @@ out="$(identity_stderr noteam '{"dev_name":"stub"}')"
 grep -q 'WARNING .*empty or missing dev_team' <<<"$out" || fail "missing dev_team: no warning naming it (got: $out)"
 out="$(identity_stderr whole '{"dev_name":"stub","dev_team":"test"}')"
 grep -q 'WARNING' <<<"$out" && fail "a complete identity must not warn (got: $out)"
-pass "identity warning names each fail-closed case; a complete identity warns nothing (behavioral)"
+# The watcher falls back to the legacy /tmp/claude-agent-<md5(root)>.json when the durable file
+# does not resolve. A complete legacy file means it WILL deliver, so the wrapper must not warn.
+LEGACY_DIR="$SANDBOX/ident-legacy"
+LEGACY_FILE="/tmp/claude-agent-$(printf '%s' "$LEGACY_DIR" | md5sum | cut -d' ' -f1).json"
+printf '%s\n' '{"dev_name":"stub","dev_team":"test"}' >"$LEGACY_FILE"
+out="$(identity_stderr legacy '{"dev_name":"","dev_team":"test"}')"
+rm -f "$LEGACY_FILE"
+grep -q 'WARNING' <<<"$out" && fail "a complete legacy /tmp identity resolves for the watcher; must not warn (got: $out)"
+pass "identity warning names each fail-closed case; a complete identity (durable or legacy) warns nothing (behavioral)"
 
 # Behavioral: non-numeric TIMEOUT is rejected up front (exit 2), not silently unbounded.
 (cd "$QUIET_DIR" && TMPDIR="$QUIET_DIR" WATCHER="$QUIET_DIR/discord-watcher" TIMEOUT=30s timeout 10 "$WRAPPER" >/dev/null 2>&1)
