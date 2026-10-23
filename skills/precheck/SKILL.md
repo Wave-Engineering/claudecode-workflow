@@ -251,7 +251,7 @@ Exit codes:
 
          On the fallback, FIRST enumerate the lockfiles. Run this exactly (one
          command, do not split it); it is the trust gate's own find:
-           find <repo_root> \( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \) -prune -o -type f \( -name 'bun.lock' -o -name 'bun.lockb' -o -name 'package-lock.json' -o -name 'yarn.lock' -o -name 'pnpm-lock.yaml' -o -name 'go.sum' -o -name 'Cargo.lock' -o -name '*requirements*.txt' -o -path '*/requirements/*.txt' \) -print
+           find <repo_root> \( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \) -prune -o -type f \( -name 'bun.lock' -o -name 'bun.lockb' -o -name 'package-lock.json' -o -name 'yarn.lock' -o -name 'pnpm-lock.yaml' -o -name 'go.sum' -o -name 'Cargo.lock' -o -name 'uv.lock' -o -name 'poetry.lock' -o -name 'Pipfile.lock' -o -name '*requirements*.txt' -o -path '*/requirements/*.txt' \) -print
          Every line it prints is in the denominator, less two exclusions, both
          matching check-scannable.sh:
          (1) a pip requirements file with no entry pinned by '==' is a range
