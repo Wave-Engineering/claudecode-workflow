@@ -292,7 +292,6 @@ Org keys are lower-case. If `~/.claude/identity-map.json` does not exist, the st
 ### Test scenarios (verified during implementation)
 
 - Fresh clone of a mapped org's repo with global `user.email=bakerb@waveeng.com` → repo-local set to the mapped email, confirmation printed.
-- No `~/.claude/identity-map.json` → silent, nothing set.
 - Wave-Engineering clone → no mapping, silent.
 - Repo-local already manually set to a non-mapping value → warning printed, no override.
 - Repo-local already set to the mapping value → silent no-op.
