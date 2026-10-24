@@ -101,9 +101,11 @@ def test_workflow_flights_are_exempt():
     # No gate instruction may still describe a flight that runs precheck, lands itself, or auto-merges.
     stale = re.compile(
         r"The Flight Agent is operating inside|Flight Agents? (inside|working inside|land into)|"
-        r"sandbox flight|Flight Agent's auto-merge|Flights implement, run precheck",
+        r"sandbox flight|Flight Agent's auto-merge|Flights implement, run precheck|mechanical half of `/precheck`|"
+        r"not per-flight",
+        re.IGNORECASE,
     )
-    for path in INSTRUCTIONS + [ROOT / "skills" / "ccwork" / "tours" / "sdlc.md"]:
+    for path in INSTRUCTIONS + [ROOT / "skills" / "ccwork" / "tours" / "sdlc.md", ROOT / "docs" / "kahuna-guide.md"]:
         m = stale.search(_text(path))
         assert not m, f"{path.relative_to(ROOT)} still says {m.group(0)!r}"
 
