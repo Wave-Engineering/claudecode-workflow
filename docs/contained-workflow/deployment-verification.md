@@ -110,8 +110,11 @@ registries to one content sha. The mirror also tags that digest with its release
 version, `docker.io/oakandwave/oakandwave-workflow:X.Y.Z`, read from the image's
 `org.opencontainers.image.version` label (#1324). A version tag is never re-pushed:
 if it already names a different digest, the run fails and pushes nothing. The job
-summary prints the digest-pinned ref, `…:X.Y.Z@sha256:<digest>`, which is what goes
-in the release notes. Only a release is mirrored: a `:stable` whose label isn't
+summary prints the digest-pinned ref, `…:X.Y.Z@sha256:<digest>`. After the
+re-sign, the workflow's `release-notes` job writes it into the `vX.Y.Z` GitHub
+release as an Images block, which a rerun replaces rather than duplicates (#1326).
+The fleet's other images do the same through the shared `oaw-mirror-image` and
+`oaw-release-images` actions, which run the same cores. Only a release is mirrored: a `:stable` whose label isn't
 `X.Y.Z` (a branch build promoted by hand) fails the run, so promote only tag-built
 digests. The spelling differs by registry on purpose: GHCR's build tag is
 `:vX.Y.Z`, and Docker Hub's is `:X.Y.Z`, the bare semver every OaW Hub repo uses,

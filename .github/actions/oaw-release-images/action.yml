@@ -1,0 +1,43 @@
+name: "OaW release images"
+description: >-
+  Write a release image's digest-pinned refs into its GitHub release, as one Images block
+  that a rerun replaces (#1326). Run it AFTER oaw-mirror-image and oaw-sign-image, so a
+  release-API failure can never leave a pushed image unsigned. Consume it via a SHA-pinned
+  `uses:`. The calling job needs `permissions: contents: write`.
+inputs:
+  release-tag:
+    description: "The release's tag, e.g. v0.11.0."
+    required: true
+  create-if-missing:
+    description: >-
+      "true" creates a missing release with generated notes. Leave it off where a release job
+      attaches assets: an empty release in its place would be marked latest, and that job's
+      own create would then fail. Off, a missing release fails the step.
+    required: false
+    default: "false"
+  release-refs:
+    description: "Newline-separated dest:tag@sha256:... refs: oaw-mirror-image's release-refs output."
+    required: true
+  source-digest-ref:
+    description: "Optional: the source registry/image@sha256:..., listed in the block too."
+    required: false
+    default: ""
+  github-token:
+    description: "Token for the release write."
+    required: false
+    default: ${{ github.token }}
+runs:
+  using: "composite"
+  steps:
+    - name: Write the Images block into the release
+      shell: bash
+      env:
+        RELEASE_TAG: ${{ inputs.release-tag }}
+        RELEASE_REFS: ${{ inputs.release-refs }}
+        SOURCE_DIGEST_REF: ${{ inputs.source-digest-ref }}
+        CREATE_IF_MISSING: ${{ inputs.create-if-missing }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        GH_REPO: ${{ github.repository }}
+      # Invoke via `bash`, as oaw-sign-image does, so a consumer checkout that loses the
+      # execute bit can't fail this with exit 126.
+      run: bash "${GITHUB_ACTION_PATH}/oaw-release-images.sh"

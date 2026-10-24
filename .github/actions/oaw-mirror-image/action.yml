@@ -1,0 +1,46 @@
+name: "OaW mirror image"
+description: >-
+  Copy an image digest to a second registry under its tags, never re-pushing a version tag,
+  and report the digest-pinned refs (#1326). The DRY core of the OaW Docker Hub mirror;
+  consume it via a SHA-pinned `uses:`. The calling job must be logged in to both
+  registries. Sign the destination digest next (oaw-sign-image), then write the refs into
+  the GitHub release (oaw-release-images).
+inputs:
+  source-digest-ref:
+    description: "The digest to copy (registry/image@sha256:...). Never a moving tag (R-23)."
+    required: true
+  tags:
+    description: >-
+      Newline-separated refs or bare tags, as docker/metadata-action outputs them. Only the
+      part after the last ':' is used, so GHCR refs work as-is.
+    required: true
+  dest-image:
+    description: "The destination repository, e.g. docker.io/oakandwave/squawkie-talkie."
+    required: true
+  immutable-tag-regex:
+    description: >-
+      Tags matching this are version tags: pushed only when absent, refused when they name
+      another digest. Every other tag is moving and always pushed.
+    required: false
+    default: '^[0-9]+\.[0-9]+\.[0-9]+$'
+outputs:
+  digest:
+    description: "The digest copied (sha256:...)."
+    value: ${{ steps.mirror.outputs.digest }}
+  release-refs:
+    description: "One dest-image:<version tag>@<digest> per version tag, newline-separated."
+    value: ${{ steps.mirror.outputs.release_refs }}
+runs:
+  using: "composite"
+  steps:
+    - name: Mirror the digest (version tags never re-pushed)
+      id: mirror
+      shell: bash
+      env:
+        SOURCE_DIGEST_REF: ${{ inputs.source-digest-ref }}
+        TAGS: ${{ inputs.tags }}
+        DEST_IMAGE: ${{ inputs.dest-image }}
+        IMMUTABLE_TAG_REGEX: ${{ inputs.immutable-tag-regex }}
+      # Invoke via `bash`, as oaw-sign-image does, so a consumer checkout that loses the
+      # execute bit can't fail this with exit 126.
+      run: bash "${GITHUB_ACTION_PATH}/oaw-mirror-image.sh"

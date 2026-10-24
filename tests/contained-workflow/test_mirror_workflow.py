@@ -159,6 +159,12 @@ class TestMirrorScript:
         docker = bindir / "docker"
         docker.write_text(DOCKER_STUB)
         docker.chmod(0o755)
+        # A logging gh shadows the real one, which would find this checkout's origin and the
+        # operator's credentials: the wrapper must never touch a release (#1326 review).
+        gh_log = tmp_path / "gh.log"
+        gh = bindir / "gh"
+        gh.write_text(f'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "{gh_log}"\nexit 0\n')
+        gh.chmod(0o755)
         create_log = tmp_path / "create.log"
         out = tmp_path / "gh_output"
         summary = tmp_path / "summary"
@@ -178,6 +184,7 @@ class TestMirrorScript:
         proc = subprocess.run(
             ["bash", str(MIRROR_SCRIPT)], check=False, env=env, capture_output=True, text=True
         )
+        assert not gh_log.exists(), f"the wrapper called gh: {gh_log.read_text()}"
         creates = create_log.read_text().splitlines() if create_log.exists() else []
         outputs = (
             dict(line.split("=", 1) for line in out.read_text().splitlines() if "=" in line)
