@@ -22,8 +22,9 @@ are worth keeping apart:
 ## [8.15.0] - 2026-10-24
 
 Docker Hub images now keep a name after `:stable` moves on: each release gets an immutable
-`:X.Y.Z` tag. The fleet's mirrors get two shared actions that never re-push a version tag, and
-write each image's digest into its GitHub release.
+`:X.Y.Z` tag. The fleet's mirrors get two shared actions: one mirrors without ever re-pushing a
+version tag, and the other writes each image's digest into its GitHub release. The kit's mirror
+now refuses a `:stable` that isn't a release build, so promote only tag-built digests.
 
 ### Added
 - **Docker Hub gets an immutable version tag (#1324).** The mirror pushed only `:stable`, so
