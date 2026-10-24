@@ -22,7 +22,7 @@ are worth keeping apart:
 ## [8.14.0] - 2026-10-24
 
 Two changes since 8.13.0: agents now settle stale squawks on their own, and the reseed gate works on
-Bedrock model ids. The image is unchanged from 8.11.0.
+Bedrock model ids. The image picks up discord-watcher v1.7.1.
 
 ### Added
 - **Squawk curation (#1320).** Squawks went stale: items stayed open after the work that resolved
@@ -48,6 +48,15 @@ Bedrock model ids. The image is unchanged from 8.11.0.
   given, without `[1m]`, then canonical, with the provider prefix, `-vN:M`, `@version` and the date
   stripped. A window configured for other models but matching none of these keys is reported once
   per session, instead of reading exactly like no window.
+
+### Image
+
+- **MCP servers:** mcp-server-sdlc v5.0.3, mcp-server-wtf v1.5.2, mcp-server-discord v1.4.3,
+  mcp-server-discord-watcher **v1.7.1** and mcp-server-nerf v2.0.0. The watcher moved from v1.7.0.
+  v1.7.1 is the scream-hole poll fix (mcp-server-discord-watcher#92). The poll cursor crept one
+  message per poll, batches arrived newest first, and a burst of more than 50 messages lost some.
+  The cursor now advances to the newest id, and batches arrive oldest first. The other four are
+  unchanged from 8.13.0.
 
 ## [8.13.0] - 2026-10-24
 
