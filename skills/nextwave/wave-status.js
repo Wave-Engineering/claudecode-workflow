@@ -43,6 +43,15 @@ export function toBlob(state) {
     const n = Number(k)
     if (Number.isFinite(n)) rework[String(n)] = Number(v) // string keys: JSON-stable; rehydrate Number-casts
   }
+  // #1213: why each re-opened issue was sent back, and the head reconcile rejected, so a resumed
+  // run hands the rework flight its reason. A merged issue's entry is spent, so it is dropped.
+  const mergedSet = new Set(intList(state.merged))
+  const reworkContext = {}
+  for (const [k, v] of Object.entries(state.reworkContext ?? {})) {
+    const n = Number(k)
+    if (!Number.isFinite(n) || mergedSet.has(n) || !v || typeof v.reason !== 'string') continue
+    reworkContext[String(n)] = { reason: v.reason, head: typeof v.head === 'string' ? v.head : null }
+  }
   return {
     waveId: state.waveId ?? null,
     schema: 1, // blob schema version — lets rehydrate() (#686) detect/upgrade old shapes
@@ -51,6 +60,7 @@ export function toBlob(state) {
     merged: intList(state.merged),
     pending: intList(state.pending),
     reworkCount: rework,
+    reworkContext,
     idleRounds: Number(state.idleRounds) || 0,
     groupsRun: Number(state.groupsRun) || 0,
     // ── terminal disposition (written by persistTerminal; absent until the wave ends) ──

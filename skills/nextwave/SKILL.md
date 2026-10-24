@@ -250,6 +250,7 @@ closed**: the only ways the per-wave Workflow stops are the script's coded exits
 | plan-failed | the plan agent returned null, threw, or returned a result without `done`/`group` | `haltReason` `plan agent failed: <reason>` → gate SKIPPED, wave held (#1210) |
 | reconcile-failed | the reconcile agent returned null, threw, or returned a result without `merged`/`needs_rework` | `haltReason` `reconcile agent failed: <reason>` → gate SKIPPED, wave held; that round is not recorded, so the durable blob keeps the last persisted state for a fresh run (#1210) |
 | per-issue breaker | issue reworked > `MAX_REWORK` | one issue keeps breaking → human |
+| rework-noop | a rework flight returned `already-present` or `rework_not_applied`, or the head reconcile rejected | `haltReason` `rework-noop:#N (head <sha> unchanged \| <not_applied_reason>)` → gate SKIPPED, wave held. The no-op is never sent to reconcile and never counts as progress; the rest of its group still merges. The flight was given the reason, so re-dispatching it tends to repeat the refusal (#1213) |
 | reconcile-blocked | reconcile returns `blocked` | a push to origin was rejected (pre-push gate / permissions / protected ref) → HOLD with the reason; reconcile never substitutes local merges (#724) |
 | gate HOLD | a trust signal failed | post-success gate fired → human review |
 
@@ -267,6 +268,12 @@ stalling on (#78/#79/#90), now expressed as bounded control flow.
 ## Non-Negotiables
 
 - EXECUTION primitive — NO design decisions. Workers are SPEC EXECUTORS.
+- **Reconcile does not fix a flight's own defect (#1213).** It sends the flight back in
+  `needs_rework` with the exact fix, and the rework flight is dispatched with that reason and the
+  head that was rejected (persisted as `reworkContext`, so a resumed run carries it too). Cross-flight
+  conflicts are still resolved in reconcile (`conflicts_resolved`). Code reconcile changes on one
+  flight's behalf anyway is listed in `reconcile_applied_fix`, copied into `concerns`, and returned
+  as `reconcileAppliedFixes` — never silent.
 - **NEVER merge directly to the integration base from a flight.** Flight PRs target the kahuna
   branch; the kahuna→base merge is the only path off the kahuna branch and is gated by the
   four-signal trust gate (§3.4).

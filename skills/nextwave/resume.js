@@ -28,7 +28,7 @@ import { blobPath, statusDir } from './wave-status.js'
 // ─────────────────────────────────────────────────────────────────────────────
 // PURE — the rehydrate read-back half (no I/O, no agent; fully unit-testable).
 // These are the exact inverse of wave-status.js toBlob(): blob → REHYDRATE loop seed.
-// The loop (per-wave-workflow.js) seeds pending/merged/reworkCount/groupsRun from this.
+// The loop (per-wave-workflow.js) seeds pending/merged/reworkCount/reworkContext/groupsRun from this.
 // idleRounds is parsed and persisted for observability but NOT seeded: it counts within one
 // run (#1204). reworkCount numeric keys are JSON-stringified in the blob and the loop
 // Number-casts them — parseRehydrate returns them faithfully (string-keyed object).
@@ -36,7 +36,7 @@ import { blobPath, statusDir } from './wave-status.js'
 
 // The empty/initial state for a cold start (no prior blob): every issue pending, nothing merged.
 export function coldStart(allIssues) {
-  return { merged: [], pending: [...(allIssues ?? [])].map(Number), reworkCount: {}, idleRounds: 0, groupsRun: 0 }
+  return { merged: [], pending: [...(allIssues ?? [])].map(Number), reworkCount: {}, reworkContext: {}, idleRounds: 0, groupsRun: 0 }
 }
 
 // Coerce one durable blob (as read from .claude/status/wave-<id>.json) into the REHYDRATE
@@ -72,11 +72,24 @@ export function parseRehydrate(blob, allIssues) {
     if (Number.isFinite(nk) && Number.isFinite(nv)) reworkCount[String(nk)] = Math.max(0, Math.trunc(nv))
   }
 
+  // reworkContext (#1213): string-keyed like reworkCount. An entry needs a string reason; a head
+  // that is not SHA-shaped becomes null. A merged issue's entry is dropped: its rework is done.
+  const reworkContext = {}
+  const ctxIn = blob.reworkContext && typeof blob.reworkContext === 'object' ? blob.reworkContext : {}
+  for (const [k, v] of Object.entries(ctxIn)) {
+    const nk = Number(k)
+    if (!Number.isFinite(nk) || mergedSet.has(nk) || !v || typeof v.reason !== 'string') continue
+    reworkContext[String(nk)] = { reason: v.reason, head: typeof v.head === 'string' && SHA_RE.test(v.head) ? v.head : null }
+  }
+
   const idleRounds = clampNonNeg(blob.idleRounds)
   const groupsRun = clampNonNeg(blob.groupsRun)
 
-  return { merged, pending, reworkCount, idleRounds, groupsRun }
+  return { merged, pending, reworkCount, reworkContext, idleRounds, groupsRun }
 }
+
+// A git object name, abbreviated or full. The loop uses the same test before comparing heads.
+export const SHA_RE = /^[0-9a-f]{7,40}$/i
 
 function uniqSorted(arr) {
   return [...new Set(arr)].sort((a, b) => a - b)
@@ -217,19 +230,21 @@ export function rehydratePrompt({ waveId, allIssues, targetRepo, targetRepoDir }
     ``,
     `STEP 2 — return the loop seed:`,
     `  COLD START (file absent / empty / unparseable JSON): return`,
-    `    merged=[], pending=[${[...(allIssues ?? [])].map(Number).join(', ')}], reworkCount={}, idleRounds=0, groupsRun=0.`,
+    `    merged=[], pending=[${[...(allIssues ?? [])].map(Number).join(', ')}], reworkCount={}, reworkContext={}, idleRounds=0, groupsRun=0.`,
     `  WARM START (file parses): return its fields VERBATIM —`,
     `    merged   = the blob's "merged" array (issues already on kahuna; the loop SKIPS these),`,
     `    pending  = the blob's "pending" array (issues still to do),`,
     `    reworkCount = the blob's "reworkCount" object EXACTLY (keys are issue numbers as strings —`,
     `                  do NOT renumber or drop them; the loop Number-casts the keys itself),`,
+    `    reworkContext = the blob's "reworkContext" object EXACTLY (same string keys; each value is`,
+    `                  {reason, head} — copy both, do NOT summarize the reason; the rework flight needs it),`,
     `    idleRounds  = the blob's "idleRounds" (integer, default 0),`,
     `    groupsRun   = the blob's "groupsRun" (integer, default 0).`,
-    `  If a field is missing from an otherwise-valid blob, default it (merged/pending → [], reworkCount → {},`,
+    `  If a field is missing from an otherwise-valid blob, default it (merged/pending → [], reworkCount/reworkContext → {},`,
     `  idleRounds/groupsRun → 0). Any issue in [${[...(allIssues ?? [])].map(Number).join(', ')}] that is`,
     `  neither merged nor pending in the blob MUST be added to pending (never silently dropped).`,
     ``,
-    `Return: merged (int[]), pending (int[]), reworkCount (object), idleRounds (int), groupsRun (int).`,
+    `Return: merged (int[]), pending (int[]), reworkCount (object), reworkContext (object), idleRounds (int), groupsRun (int).`,
   ].join('\n')
 }
 

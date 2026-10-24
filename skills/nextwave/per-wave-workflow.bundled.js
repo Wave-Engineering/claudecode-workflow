@@ -61,6 +61,15 @@ function toBlob(state) {
     const n = Number(k)
     if (Number.isFinite(n)) rework[String(n)] = Number(v) // string keys: JSON-stable; rehydrate Number-casts
   }
+  // #1213: why each re-opened issue was sent back, and the head reconcile rejected, so a resumed
+  // run hands the rework flight its reason. A merged issue's entry is spent, so it is dropped.
+  const mergedSet = new Set(intList(state.merged))
+  const reworkContext = {}
+  for (const [k, v] of Object.entries(state.reworkContext ?? {})) {
+    const n = Number(k)
+    if (!Number.isFinite(n) || mergedSet.has(n) || !v || typeof v.reason !== 'string') continue
+    reworkContext[String(n)] = { reason: v.reason, head: typeof v.head === 'string' ? v.head : null }
+  }
   return {
     waveId: state.waveId ?? null,
     schema: 1, // blob schema version — lets rehydrate() (#686) detect/upgrade old shapes
@@ -69,6 +78,7 @@ function toBlob(state) {
     merged: intList(state.merged),
     pending: intList(state.pending),
     reworkCount: rework,
+    reworkContext,
     idleRounds: Number(state.idleRounds) || 0,
     groupsRun: Number(state.groupsRun) || 0,
     // ── terminal disposition (written by persistTerminal; absent until the wave ends) ──
@@ -263,7 +273,7 @@ function persistTerminalPrompt({ waveId, targetRepo, targetRepoDir, kahunaBranch
 // ─────────────────────────────────────────────────────────────────────────────
 // PURE — the rehydrate read-back half (no I/O, no agent; fully unit-testable).
 // These are the exact inverse of wave-status.js toBlob(): blob → REHYDRATE loop seed.
-// The loop (per-wave-workflow.js) seeds pending/merged/reworkCount/groupsRun from this.
+// The loop (per-wave-workflow.js) seeds pending/merged/reworkCount/reworkContext/groupsRun from this.
 // idleRounds is parsed and persisted for observability but NOT seeded: it counts within one
 // run (#1204). reworkCount numeric keys are JSON-stringified in the blob and the loop
 // Number-casts them — parseRehydrate returns them faithfully (string-keyed object).
@@ -271,7 +281,7 @@ function persistTerminalPrompt({ waveId, targetRepo, targetRepoDir, kahunaBranch
 
 // The empty/initial state for a cold start (no prior blob): every issue pending, nothing merged.
 function coldStart(allIssues) {
-  return { merged: [], pending: [...(allIssues ?? [])].map(Number), reworkCount: {}, idleRounds: 0, groupsRun: 0 }
+  return { merged: [], pending: [...(allIssues ?? [])].map(Number), reworkCount: {}, reworkContext: {}, idleRounds: 0, groupsRun: 0 }
 }
 
 // Coerce one durable blob (as read from .claude/status/wave-<id>.json) into the REHYDRATE
@@ -307,11 +317,24 @@ function parseRehydrate(blob, allIssues) {
     if (Number.isFinite(nk) && Number.isFinite(nv)) reworkCount[String(nk)] = Math.max(0, Math.trunc(nv))
   }
 
+  // reworkContext (#1213): string-keyed like reworkCount. An entry needs a string reason; a head
+  // that is not SHA-shaped becomes null. A merged issue's entry is dropped: its rework is done.
+  const reworkContext = {}
+  const ctxIn = blob.reworkContext && typeof blob.reworkContext === 'object' ? blob.reworkContext : {}
+  for (const [k, v] of Object.entries(ctxIn)) {
+    const nk = Number(k)
+    if (!Number.isFinite(nk) || mergedSet.has(nk) || !v || typeof v.reason !== 'string') continue
+    reworkContext[String(nk)] = { reason: v.reason, head: typeof v.head === 'string' && SHA_RE.test(v.head) ? v.head : null }
+  }
+
   const idleRounds = clampNonNeg(blob.idleRounds)
   const groupsRun = clampNonNeg(blob.groupsRun)
 
-  return { merged, pending, reworkCount, idleRounds, groupsRun }
+  return { merged, pending, reworkCount, reworkContext, idleRounds, groupsRun }
 }
+
+// A git object name, abbreviated or full. The loop uses the same test before comparing heads.
+const SHA_RE = /^[0-9a-f]{7,40}$/i
 
 function uniqSorted(arr) {
   return [...new Set(arr)].sort((a, b) => a - b)
@@ -452,19 +475,21 @@ function rehydratePrompt({ waveId, allIssues, targetRepo, targetRepoDir }) {
     ``,
     `STEP 2 — return the loop seed:`,
     `  COLD START (file absent / empty / unparseable JSON): return`,
-    `    merged=[], pending=[${[...(allIssues ?? [])].map(Number).join(', ')}], reworkCount={}, idleRounds=0, groupsRun=0.`,
+    `    merged=[], pending=[${[...(allIssues ?? [])].map(Number).join(', ')}], reworkCount={}, reworkContext={}, idleRounds=0, groupsRun=0.`,
     `  WARM START (file parses): return its fields VERBATIM —`,
     `    merged   = the blob's "merged" array (issues already on kahuna; the loop SKIPS these),`,
     `    pending  = the blob's "pending" array (issues still to do),`,
     `    reworkCount = the blob's "reworkCount" object EXACTLY (keys are issue numbers as strings —`,
     `                  do NOT renumber or drop them; the loop Number-casts the keys itself),`,
+    `    reworkContext = the blob's "reworkContext" object EXACTLY (same string keys; each value is`,
+    `                  {reason, head} — copy both, do NOT summarize the reason; the rework flight needs it),`,
     `    idleRounds  = the blob's "idleRounds" (integer, default 0),`,
     `    groupsRun   = the blob's "groupsRun" (integer, default 0).`,
-    `  If a field is missing from an otherwise-valid blob, default it (merged/pending → [], reworkCount → {},`,
+    `  If a field is missing from an otherwise-valid blob, default it (merged/pending → [], reworkCount/reworkContext → {},`,
     `  idleRounds/groupsRun → 0). Any issue in [${[...(allIssues ?? [])].map(Number).join(', ')}] that is`,
     `  neither merged nor pending in the blob MUST be added to pending (never silently dropped).`,
     ``,
-    `Return: merged (int[]), pending (int[]), reworkCount (object), idleRounds (int), groupsRun (int).`,
+    `Return: merged (int[]), pending (int[]), reworkCount (object), reworkContext (object), idleRounds (int), groupsRun (int).`,
   ].join('\n')
 }
 
@@ -1504,6 +1529,15 @@ const REHYDRATE = {
     merged: { type: 'array', items: { type: 'integer' } },
     pending: { type: 'array', items: { type: 'integer' } },
     reworkCount: { type: 'object', additionalProperties: { type: 'integer' } },
+    reworkContext: { // #1213: {issue: {reason, head}} — why reconcile sent each issue back
+      type: 'object',
+      additionalProperties: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['reason'],
+        properties: { reason: { type: 'string' }, head: { type: ['string', 'null'] } },
+      },
+    },
     idleRounds: { type: 'integer' },
     groupsRun: { type: 'integer' },
   },
@@ -1524,7 +1558,10 @@ const WORK = {
   required: ['issue', 'status'],
   properties: {
     issue: { type: 'integer' },
-    status: { type: 'string', enum: ['implemented', 'blocked', 'already-present'] }, // already-present = idempotent resume hit (§3.3)
+    // already-present = idempotent resume hit (§3.3); rework_not_applied = a rework flight declined the fix (#1213)
+    status: { type: 'string', enum: ['implemented', 'blocked', 'already-present', 'rework_not_applied'] },
+    head_sha: { type: 'string' }, // #1213: the branch HEAD after the flight's last commit
+    not_applied_reason: { type: 'string' }, // #1213: why, when status is rework_not_applied
     branch: { type: 'string' },
     worktree: { type: 'string' },
     files_changed: { type: 'array', items: { type: 'string' } },
@@ -1558,6 +1595,15 @@ const RECONCILE = {
       },
     },
     conflicts_resolved: { type: 'array', items: { type: 'string' } }, // cross-flight fixes done here (§3.2.3)
+    reconcile_applied_fix: { // #1213: code reconcile changed on ONE flight's behalf — recorded, never silent
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['issue', 'summary'],
+        properties: { issue: { type: 'integer' }, summary: { type: 'string' } },
+      },
+    },
     concerns: { type: 'array', items: { type: 'string' } },
     suite_summary: { type: 'string' },
     blocked: { type: 'boolean' }, // #724: true ⇒ a push to origin was REJECTED (gate/permissions/protected ref) → HOLD; reconcile must NOT local-merge
@@ -1711,7 +1757,7 @@ function flightdeckWaveBegin() {
 
 // SEAM #686 — durable resume (FILLED). The script can't call MCP/CLI directly (§3.3), so a
 // cheap rehydrate agent READS the durable wave-status blob (.claude/status/, NEVER /tmp) and
-// returns the REHYDRATE loop seed: {merged, pending, reworkCount, idleRounds, groupsRun}. On a
+// returns the REHYDRATE loop seed: {merged, pending, reworkCount, reworkContext, idleRounds, groupsRun}. On a
 // COLD start (no blob) it returns all issues pending / nothing merged; on a WARM start it returns
 // the persisted core so the loop SKIPS finished work (SEAMS invariant 3 — `merged` is authoritative
 // for skip-on-resume). reworkCount keys come back JSON-string-keyed; the loop Number-casts them
@@ -1751,7 +1797,7 @@ async function persistIteration(state) {
   const blob = toBlob({
     waveId: WAVE_ID,
     merged: state.merged, pending: state.pending,
-    reworkCount: state.reworkCount, idleRounds: state.idleRounds, groupsRun: state.groupsRun,
+    reworkCount: state.reworkCount, reworkContext: state.reworkContext, idleRounds: state.idleRounds, groupsRun: state.groupsRun,
   })
   const newlyMerged = [...(state.newlyMerged || [])].map(Number)
   const path = blobPath(TARGET_REPO_DIR, WAVE_ID)
@@ -1782,7 +1828,7 @@ async function persistTerminal(disposition, detail) {
   // The terminal blob carries the FINAL loop state via closure (initialized before any call).
   const blob = toBlob({
     waveId: WAVE_ID,
-    merged, pending, reworkCount, idleRounds, groupsRun: groupsRunBase + groupsRun.length,
+    merged, pending, reworkCount, reworkContext: reworkCtx, idleRounds, groupsRun: groupsRunBase + groupsRun.length,
     terminal: { disposition, detail, at: null }, // `at` stamped by the persist agent at write time
   })
   const path = blobPath(TARGET_REPO_DIR, WAVE_ID)
@@ -1920,18 +1966,35 @@ function primePlanPrompt(merged, pending, lastRework) {
 
 // Worker: per-issue, worktree-isolated. SPEC EXECUTOR. Idempotent on resume.
 // Carries the §3.2 must-preserve fields (concerns/deferrals) as STRUCTURED RETURN.
-function workerPrompt(n, worktree) {
+// #1213: `rework` = {reason, head} when reconcile sent this issue back. The flight's earlier commit is
+// still on its branch, so the resume check would find it and return already-present without the fix.
+// A rework dispatch therefore drops that check and carries the reason and the rejected head instead.
+function workerPrompt(n, worktree, rework = null) {
   const branch = issueBranch(n)
+  const opening = rework
+    ? [
+        `REWORK (#1213): reconcile REJECTED this flight's previous head ${rework.head || '(head not recorded)'}. Its reason:`,
+        `  ${rework.reason}`,
+        `Your branch already holds an implementation — that is expected, and it is what was rejected. Do NOT return`,
+        `status="already-present". Apply the fix the reason describes on top of it, then return status="implemented"`,
+        `with the new head_sha. If you cannot or will not apply it, return status="rework_not_applied" and say why in`,
+        `not_applied_reason. Returning the rejected head unchanged halts the wave.`,
+        ``,
+        `SPEC EXECUTOR rules (the fix must still satisfy the issue's spec):`,
+      ]
+    : [
+        `IDEMPOTENT RESUME (§3.3): FIRST check if your branch already contains this implementation (e.g. the spec's`,
+        `target files exist + the acceptance test passes). If so, return status="already-present" and do NOT redo work.`,
+        ``,
+        `Otherwise — SPEC EXECUTOR rules:`,
+      ]
   return [
     `You are a FLIGHT worker for issue #${n} of ${TARGET_REPO}, wave ${WAVE_ID}.`,
     `Working directory: ${worktree} (handed to you — do NOT create your own worktree). Branch: ${branch}`,
     `(already checked out, based on origin/${KAHUNA_BRANCH}). Your PR targets ${KAHUNA_BRANCH} — NEVER`,
     `${INTEGRATION_BASE}${IN_CAMPAIGN ? ` (this wave's integration base)` : ''} and NEVER ${PROTECTED_BRANCH} (the trunk).`,
     ``,
-    `IDEMPOTENT RESUME (§3.3): FIRST check if your branch already contains this implementation (e.g. the spec's`,
-    `target files exist + the acceptance test passes). If so, return status="already-present" and do NOT redo work.`,
-    ``,
-    `Otherwise — SPEC EXECUTOR rules:`,
+    ...opening,
     `1. Fetch the spec + acceptance criteria via the REAL sdlc-server tools for #${n}: spec_get,`,
     `   spec_acceptance_criteria, work_item (the issue body + AC are the executable contract).`,
     `2. Implement EXACTLY what the issue specifies. Where the story has a canonical acceptance test, run it as an`,
@@ -1945,8 +2008,9 @@ function workerPrompt(n, worktree) {
     `  concerns:  things that feel off but are not blockers — "surface a concern and keep going" is the DEFAULT.`,
     `  deferrals: fixes you DECIDE to defer — {issue, reason, risk}. You decide; the script records and proceeds.`,
     ``,
-    `Return: issue (${n}), status ("implemented"|"blocked"|"already-present"), branch, worktree, files_changed,`,
-    `concerns (array), deferrals (array), notes (1-2 sentences).`,
+    `Return: issue (${n}), status ("implemented"|"blocked"|"already-present"${rework ? '|"rework_not_applied"' : ''}), head_sha (ALWAYS: the`,
+    `output of "git -C ${worktree} rev-parse HEAD" after your last commit), branch, worktree, files_changed,`,
+    `concerns (array), deferrals (array),${rework ? ' not_applied_reason (with rework_not_applied),' : ''} notes (1-2 sentences).`,
   ].join('\n')
 }
 
@@ -1965,6 +2029,10 @@ function primeReconcilePrompt(built, merged) {
     `   IDEMPOTENT (§3.3): if a branch is already in ${KAHUNA_BRANCH}, SKIP it (do not double-merge).`,
     `2. Resolve conflicts coherently — combine, do not drop. A shared interface two issues touch is a CROSS-FLIGHT`,
     `   fix you make HERE (you have the multi-branch view); record it in conflicts_resolved (§3.2.3).`,
+    `   Do NOT fix a flight's OWN defect (its red CI, a bug only its code has) — that is the flight's work.`,
+    `   Report it in needs_rework with the EXACT fix as the reason; the flight is re-dispatched with it (#1213).`,
+    `   If you do change code on ONE flight's behalf anyway, list it in reconcile_applied_fix as`,
+    `   {issue, summary} — never silently, so authorship and review stay visible.`,
     `3. Run the REAL sdlc-server tools: commutativity_verify (PAIRWISE mode across this group's branches —`,
     `   base_ref=${KAHUNA_BRANCH} — to prove the composed diff is safe to land) BEFORE merging, then`,
     `   pr_create + pr_merge to land each flight branch into ${KAHUNA_BRANCH}, plus the FULL suite.`,
@@ -1981,7 +2049,8 @@ function primeReconcilePrompt(built, merged) {
     `   A blocked push HOLDs the wave with a clear cause — the loop never promotes work that never reached origin.`,
     ``,
     `Return: merged (issues now green in ${KAHUNA_BRANCH} this round), needs_rework (list of {issue, reason} you`,
-    `reset), conflicts_resolved (files + 1-line how), concerns (array), suite_summary (final test line),`,
+    `reset), conflicts_resolved (files + 1-line how), reconcile_applied_fix (list of {issue, summary}, usually`,
+    `empty), concerns (array), suite_summary (final test line),`,
     `blocked (true ONLY if a push to origin was rejected — see step 5) + block_reason, notes.`,
   ].join('\n')
 }
@@ -2093,6 +2162,27 @@ const pending = new Set(seed.pending)
 const merged = new Set(seed.merged)
 const reworkCount = Object.fromEntries(Object.entries(seed.reworkCount || {}).map(([k, v]) => [Number(k), v])) // numeric keys (JSON resume returns them as strings)
 let lastRework = []
+// #1213: per issue, why reconcile last sent it back and the head it rejected. The rework flight is
+// dispatched with it, and it is persisted, because lastRework (the planner's view) lives only in memory.
+const reworkCtx = Object.fromEntries(Object.entries(seed.reworkContext || {}).map(([k, v]) => [Number(k), v]))
+const flightHead = {} // issue → the head its latest flight returned (SHA-shaped values only)
+const sameHead = (a, b) => {
+  if (!SHA_RE.test(a || '') || !SHA_RE.test(b || '')) return false
+  const [x, y] = [a.toLowerCase(), b.toLowerCase()]
+  return x.startsWith(y) || y.startsWith(x) // tolerate one side abbreviated
+}
+// A rework flight that did nothing: it said already-present or rework_not_applied, or returned the
+// head reconcile rejected. It never goes to reconcile and never counts as progress.
+const isNoopRework = (w) => {
+  const ctx = reworkCtx[Number(w.issue)]
+  if (!ctx) return false
+  return w.status === 'already-present' || w.status === 'rework_not_applied' || sameHead(w.head_sha, ctx.head)
+}
+const noopWhy = (w) => {
+  if (w.status === 'rework_not_applied') return w.not_applied_reason || 'rework_not_applied, no reason given'
+  const head = SHA_RE.test(w.head_sha || '') ? w.head_sha : reworkCtx[Number(w.issue)]?.head
+  return head ? `head ${head.slice(0, 7)} unchanged` : `${w.status} with no new head`
+}
 // #1204: idleRounds counts consecutive no-progress rounds WITHIN ONE RUN. It is persisted for
 // observability but never restored: a retried wave whose blob says idleRounds:2 used to hit the
 // thrash exit before planning anything, so every retry spent itself on a run that could not move.
@@ -2107,6 +2197,7 @@ let halt = null // null = still converging; else a HOLD reason (NEVER a success)
 // Collected §3.2 must-preserve data — recorded, never branched-on.
 const allConcerns = []
 const allDeferrals = []
+const reconcileAppliedFixes = [] // #1213: code reconcile changed on one flight's behalf
 
 while (true) {
   // ── CLOSED LEGAL EXITS (the whole safety story) ──
@@ -2147,7 +2238,7 @@ while (true) {
 
   // ── RUN group issues in PARALLEL (isolated workers; intra-flight fixes inside) ──
   const built = (await parallel(group.map((n) => () =>
-    agent(workerPrompt(n, wtMap[n]), {
+    agent(workerPrompt(n, wtMap[n], reworkCtx[n] ?? null), {
       label: `flight:#${n}`,
       phase: 'Flight loop',
       schema: WORK,
@@ -2163,7 +2254,10 @@ while (true) {
     for (const c of w.concerns || []) allConcerns.push({ issue: w.issue, concern: c })
     for (const d of w.deferrals || []) allDeferrals.push(d)
   }
-  const implemented = built.filter((w) => w.status === 'implemented' || w.status === 'already-present')
+  // #1213: a no-op rework stays out of reconcile; the rest of the group still merges, then the wave halts.
+  const noops = built.filter(isNoopRework)
+  for (const w of built) if (SHA_RE.test(w.head_sha || '')) flightHead[Number(w.issue)] = w.head_sha
+  const implemented = built.filter((w) => !noops.includes(w) && (w.status === 'implemented' || w.status === 'already-present'))
 
   // ── MERGE + RECONCILE (Prime(post-flight) — the ONLY cross-flight view) ──
   // #1210: same guard as the plan node. A failed reconcile tells us nothing about what landed, so
@@ -2181,6 +2275,10 @@ while (true) {
     break
   }
   for (const c of rec.concerns || []) allConcerns.push({ issue: 'reconcile', concern: c })
+  for (const f of rec.reconcile_applied_fix || []) {
+    reconcileAppliedFixes.push(f)
+    allConcerns.push({ issue: f.issue, concern: `reconcile_applied_fix: ${f.summary}` })
+  }
 
   // #724: a push rejected by the pre-push gate / permissions / protected-ref guard HOLDs the wave
   // LOUDLY. Reconcile is instructed never to substitute local merge commits (which strand work off
@@ -2190,13 +2288,14 @@ while (true) {
 
   // ── DETERMINISTIC state update + progress accounting ──
   const newlyMerged = (rec.merged || []).filter((n) => !merged.has(n))
-  newlyMerged.forEach((n) => { merged.add(n); pending.delete(n) })
+  newlyMerged.forEach((n) => { merged.add(n); pending.delete(n); delete reworkCtx[n] })
   idleRounds = newlyMerged.length ? 0 : idleRounds + 1 // thrash detector
   await cleanupMerged(newlyMerged) // SEAM #686 — per-merge worktree+branch removal (§4.3)
 
   lastRework = []
   for (const r of rec.needs_rework || []) {
     const ri = Number(r.issue) // normalize: pending/merged/reworkCount are numeric-keyed (string keys leak in via JSON resume)
+    reworkCtx[ri] = { reason: String(r.reason ?? ''), head: flightHead[ri] ?? null } // #1213: what the next flight is told
     if ((reworkCount[ri] = (reworkCount[ri] || 0) + 1) > MAX_REWORK) {
       halt = `rework:#${ri}` // per-issue breaker → HOLD, NOT success
       break
@@ -2210,7 +2309,8 @@ while (true) {
   groupsRun.push({ group, merged: newlyMerged, needs_rework: rec.needs_rework || [], suite: rec.suite_summary })
   // SEAM #688 — newlyMerged are the issues that need their MR recorded + issue closed THIS
   // iteration; merged/pending/etc. are the full loop blob (the rehydrate substrate, §3.3).
-  await persistIteration({ merged, pending, reworkCount, idleRounds, groupsRun: groupsRunBase + groupsRun.length, newlyMerged: newlyMerged.filter((n) => merged.has(n)) }) // defensive: drop any newlyMerged that the rework loop re-opened
+  await persistIteration({ merged, pending, reworkCount, reworkContext: reworkCtx, idleRounds, groupsRun: groupsRunBase + groupsRun.length, newlyMerged: newlyMerged.filter((n) => merged.has(n)) }) // defensive: drop any newlyMerged that the rework loop re-opened
+  if (!halt && noops.length) halt = `rework-noop:${noops.map((w) => `#${w.issue} (${noopWhy(w)})`).join(', ')}` // #1213
   if (halt) break // breaker tripped inside the for-loop → leave the while with pending still non-empty
 }
 
@@ -2392,6 +2492,7 @@ return {
   pending: [...pending],
   reworkCount,
   concerns: allConcerns, // §3.2 surfaced-and-continued — informational
+  reconcileAppliedFixes, // #1213: [{issue, summary}] — fixes reconcile made for a single flight
   deferrals: allDeferrals, // §3.2 decided-and-recorded — informational
   gate: result.gate,
   ...result,
