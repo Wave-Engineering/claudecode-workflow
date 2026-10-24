@@ -39,7 +39,8 @@ function assertHalted(run, reasonPrefix) {
   assert.equal(run.result.gate, 'SKIPPED')
   assert.equal(run.result.integrated, false)
   assert.ok(String(run.result.haltReason).startsWith(reasonPrefix), `haltReason was '${run.result.haltReason}'`)
-  assert.equal(run.result.reason, run.result.haltReason, 'the verdict reason the campaign surfaces is the halt reason')
+  // The reason the campaign surfaces leads with the halt; a halt before dispatch adds why (#1204).
+  assert.ok(String(run.result.reason).startsWith(run.result.haltReason), `reason was '${run.result.reason}'`)
   const term = terminalPrompt(run.calls)
   assert.equal(term.length, 1, 'persist:terminal runs exactly once')
   assert.ok(term[0].includes('Disposition: "held"'), 'persist:terminal records disposition held')
@@ -138,6 +139,57 @@ await check('plan returns {} → plan agent failed: schema-invalid result', asyn
 await check('plan says done → still the impasse halt, not a plan failure', async () => {
   const run = await runPerWave({ responder: only({ 'plan:*': { done: true, group: [] } }) })
   assertHalted(run, 'impasse')
+})
+
+// ── retries (#1204) ───────────────────────────────────────────────────────────────────────────
+// paresieve Plan #5, wave P1W2: the blob after a thrash exit. A retry must dispatch, not halt on a
+// counter from the previous run; the per-issue rework count and the lifetime group bound carry over.
+const RETRY_ARGS = { waveId: 'P1W2', planId: 'P5', targetRepo: 'Example-Org/harness-target', targetRepoDir: '/nonexistent/harness-target', issues: [31, 33], mode: 'auto' }
+const rehydrated = (over) => ({ merged: [], pending: [31, 33], reworkCount: {}, idleRounds: 0, groupsRun: 0, ...over })
+
+await check('retry after thrash (saved idleRounds:2) → dispatches flights instead of halting', async () => {
+  const run = await runPerWave({ args: RETRY_ARGS, responder: only({ rehydrate: rehydrated({ idleRounds: 2, reworkCount: { 31: 2 }, groupsRun: 2 }) }) })
+  assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
+  assert.ok(run.calls.some((c) => c.label.startsWith('flight:#')), `no flight dispatched; labels: ${run.calls.map((c) => c.label).join(' ')}`)
+  assert.equal(run.result.exitedBeforeDispatch, false)
+  assert.equal(run.result.integrated, true, 'the recoverable wave integrates')
+})
+
+await check('saved reworkCount {31:3} + reconcile flags #31 → rework:#31 after exactly one group', async () => {
+  const run = await runPerWave({
+    args: RETRY_ARGS,
+    responder: only({
+      rehydrate: rehydrated({ reworkCount: { 31: 3 } }),
+      'merge:*': { merged: [], needs_rework: [{ issue: 31, reason: 'interface break' }] },
+    }),
+  })
+  assertHalted(run, 'rework:#31')
+  assert.equal(run.result.haltReason, 'rework:#31')
+  assert.equal(run.calls.filter((c) => c.label.startsWith('plan:')).length, 1, 'exactly one group was planned')
+  assert.equal(run.result.exitedBeforeDispatch, false)
+})
+
+await check('resumed at groupsRun:24 → runaway before dispatch, and the reason says so', async () => {
+  const run = await runPerWave({ args: RETRY_ARGS, responder: only({ rehydrate: rehydrated({ groupsRun: 24 }) }) })
+  assertHalted(run, 'runaway')
+  assert.equal(run.result.haltReason, 'runaway', 'halt keeps its string')
+  assert.equal(run.result.loopOutcome, 'runaway', 'loopOutcome keeps its string')
+  assert.equal(run.result.exitedBeforeDispatch, true)
+  assert.ok(run.result.reason.includes('exited before dispatching any group this run (resumed groupsRun=24, maxGroups=24)'), run.result.reason)
+  assert.ok(!run.calls.some((c) => c.label.startsWith('flight:#')))
+})
+
+await check('a reconcile failure in round 1 is NOT "before dispatch" — its flights ran', async () => {
+  const run = await runPerWave({ responder: only({ 'merge:*': null }) })
+  assertHalted(run, 'reconcile agent failed')
+  assert.equal(run.result.exitedBeforeDispatch, false)
+  assert.ok(!run.result.reason.includes('exited before dispatching'), run.result.reason)
+})
+
+await check('a plan failure in round 1 IS "before dispatch"', async () => {
+  const run = await runPerWave({ responder: only({ 'plan:*': null }) })
+  assertHalted(run, 'plan agent failed')
+  assert.equal(run.result.exitedBeforeDispatch, true)
 })
 
 // ── the null sweep: every other dereferenced agent result ─────────────────────────────────────

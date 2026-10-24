@@ -244,7 +244,7 @@ closed**: the only ways the per-wave Workflow stops are the script's coded exits
 |---|---|---|
 | success | `pending` empty | all issues merged to kahuna → trust gate runs, then kahuna→integration base |
 | runaway | `groupsRun ≥ MAX_GROUPS` | too many groups → human review |
-| thrash | `idleRounds ≥ MAX_IDLE` | groups with zero net merges → not converging |
+| thrash | `idleRounds ≥ MAX_IDLE` | groups with zero net merges → not converging. Counted within one run: a retry starts at 0 (#1204) |
 | cost | `budget` floor | stop before the ceiling |
 | impasse | planner `done` with pending left | planner can't schedule remaining → human |
 | plan-failed | the plan agent returned null, threw, or returned a result without `done`/`group` | `haltReason` `plan agent failed: <reason>` → gate SKIPPED, wave held (#1210) |
