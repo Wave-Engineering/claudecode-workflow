@@ -120,7 +120,7 @@ expect "model_id with [1m] falls back to the base settings key" block
 # Provider-qualified ids resolve to the canonical key (#1318: Bedrock's statusline
 # says "us.anthropic.claude-opus-5-5"; the gate fell back to 1M and never fired).
 for m in us.anthropic.claude-opus-5-5 global.anthropic.claude-opus-5-5 apac.anthropic.claude-opus-5-5 \
-	anthropic.claude-opus-5-5-v1:0 'eu.anthropic.claude-opus-5-5-v2:0[1m]' \
+	anthropic.claude-opus-5-5-v1:0 'eu.anthropic.claude-opus-5-5-v2:0[1m]' us-gov.anthropic.claude-opus-5-5-v1:0 \
 	claude-opus-5-5@20261001 claude-opus-5-5-20261001; do
 	full_reading 345000 "$m"
 	expect "$m resolves to claude-opus-5-5 (400k) → block" block

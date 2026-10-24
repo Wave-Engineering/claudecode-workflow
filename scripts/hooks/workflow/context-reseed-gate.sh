@@ -55,7 +55,8 @@
 # Contract (CC Stop hook):
 #   stdin:  JSON with .session_id, .cwd, .stop_hook_active
 #   stdout: {"decision":"block","reason":…} to block, {"systemMessage":…} to
-#           report an unavailable reading, nothing otherwise
+#           report an unavailable reading or an unmatched autocompact window
+#           (a block carries that report in the same object), nothing otherwise
 #   exit:   always 0
 #
 # Env: RESEED_CONTEXT_THRESHOLD_PCT (default 15) — block at <= this many percent
@@ -140,12 +141,12 @@ WINDOW="$(jq -r '.window_tokens // empty' "$READING" 2>/dev/null || true)"
 MODEL="$(jq -r '.model_id // empty' "$READING" 2>/dev/null || true)"
 # The settings keys a model_id may be filed under, most specific first: as given,
 # without "[1m]", then canonical. Canonical strips a provider prefix (Bedrock's
-# "us." / "eu." / "apac." / "global." inference profiles, or a bare "anthropic."),
+# "us." / "eu." / "apac." / "global." / "us-gov." inference profiles, or a bare "anthropic."),
 # a Bedrock "-vN:M", a Vertex "@version" and a "-YYYYMMDD" date (#1318: the
 # statusline says "us.anthropic.claude-opus-5-5" where settings say "claude-opus-5-5").
 model_keys() {
 	local m="$1" c
-	c="$(sed -E 's/\[1m\]$//; s/^([a-z]{2,8}\.)?anthropic\.//; s/-v[0-9]+(:[0-9]+)?$//; s/@.*$//; s/-[0-9]{8}$//' <<<"$m")"
+	c="$(sed -E 's/\[1m\]$//; s/^([a-z]{2,8}(-[a-z]+)?\.)?anthropic\.//; s/-v[0-9]+(:[0-9]+)?$//; s/@.*$//; s/-[0-9]{8}$//' <<<"$m")"
 	printf '%s\n' "$m" "${m%\[1m\]}" "$c"
 }
 SETTINGS="${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.json}"
