@@ -10,8 +10,11 @@
 # a workflow input: the workflow stays input-free, so the public brand still can't be
 # pointed at an arbitrary digest (#1038 review).
 #
+# Only a release is mirrored: a :stable whose label isn't X.Y.Z (a branch build promoted by
+# hand reads like 8.14.0-3-g9334c4b) exits 1, and Docker Hub keeps its previous :stable.
+#
 # A version tag is never re-pushed. Read it first:
-#   absent ("not found")    -> push it with :stable, in the same imagetools create
+#   absent ("<tag>: not found") -> push it with :stable, in the same imagetools create
 #   already on this digest  -> skip it (an idempotent rerun); :stable is still pushed
 #   on any other digest     -> exit 1 and push nothing
 #   unreadable (any other inspect error) -> exit 1: absent and present can't be told apart
@@ -64,7 +67,7 @@ if inspect_out="$(docker buildx imagetools inspect "$version_tag" --format '{{js
 		exit 1
 	fi
 	echo "==> $version_tag already names $digest; not re-pushing it"
-elif [[ "$inspect_out" == *"not found"* ]]; then
+elif [[ "$inspect_out" == *"${version_tag}: not found"* ]]; then # the tag itself, not a blob
 	tags+=(--tag "$version_tag")
 else
 	echo "  [!] could not read $version_tag, so can't tell whether it exists: $inspect_out" >&2

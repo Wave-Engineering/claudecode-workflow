@@ -111,7 +111,11 @@ version, `docker.io/oakandwave/oakandwave-workflow:X.Y.Z`, read from the image's
 `org.opencontainers.image.version` label (#1324). A version tag is never re-pushed:
 if it already names a different digest, the run fails and pushes nothing. The job
 summary prints the digest-pinned ref, `…:X.Y.Z@sha256:<digest>`, which is what goes
-in the release notes. (§3's SBOM regexp is the broad `.../.*`, so the
+in the release notes. Only a release is mirrored: a `:stable` whose label isn't
+`X.Y.Z` (a branch build promoted by hand) fails the run, so promote only tag-built
+digests. The spelling differs by registry on purpose: GHCR's build tag is
+`:vX.Y.Z`, and Docker Hub's is `:X.Y.Z`, the bare semver every OaW Hub repo uses,
+so one Hub immutability rule covers them all. (§3's SBOM regexp is the broad `.../.*`, so the
 attestation already verifies on either registry.)
 
 ---
