@@ -73,9 +73,10 @@ program='
 	def not_integrated_reason($wave):
 		"/wavemachine is active and wave \($wave) is held: it did not integrate, or it awaits a human promotion. Do NOT launch the next wave. Record the pause with wave-status hold \"<reason>\" and surface it.";
 	# The block reason, or null when this turn end is legitimate. $nudged is the
-	# hook input stop_hook_active: the finished-wave reasons are a one-time
-	# nudge, because during the Workflow tail the wave is marked but its verdict
-	# is not yet delivered, and repeating the block there would loop.
+	# hook input stop_hook_active: finished_reason (awaiting-verdict on a
+	# finished wave) is a one-time nudge, because during the Workflow tail the
+	# wave is marked but its verdict is not yet delivered, and repeating the
+	# block there would loop. The promoting reasons block on every stop.
 	def block_reason:
 		if (.driver_action | type) == "object" then
 			(.driver_action.action // "") as $a

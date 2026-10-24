@@ -311,6 +311,12 @@ if echo "$out" | jq -e '.reason | test("Launch it now")' >/dev/null 2>&1; then
 else
 	pass "driver promoting P1W1, wave held → reason does not say launch"
 fi
+out=$(run_hook_nudged)
+if echo "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+	pass "driver promoting P1W1, wave held, stop_hook_active → still blocks"
+else
+	fail "driver promoting P1W1, wave held, stop_hook_active → did NOT block: '$out'"
+fi
 
 # The #600 launch stall is NOT a one-time nudge: it blocks on the re-fire too.
 write_state '{"wavemachine_active": true, "driver_action": {"action": "launching", "wave_id": "P1W2"}}'

@@ -965,8 +965,9 @@ def waiting_ci(root: Path, detail: str = "") -> dict:
 # ``driver_action``, so an in-wave write can no longer make it false-fire: it is
 # silent on ``hold``, and on ``awaiting-verdict`` or ``promoting`` while the
 # wave named in ``driver_action.wave_id`` is unfinished; once that wave is
-# completed or held it nudges once (scripts/hooks/workflow/
-# wavemachine-stall-guard.sh has the table). State with no ``driver_action``
+# completed or held, ``awaiting-verdict`` nudges once and ``promoting`` blocks
+# on every stop (scripts/hooks/workflow/wavemachine-stall-guard.sh has the
+# table). State with no ``driver_action``
 # (written before #1205) falls back to the old rule on ``current_action``.
 # ---------------------------------------------------------------------------
 
