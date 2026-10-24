@@ -221,7 +221,18 @@ export const OPEN_PR_RESULT = {
 // the agent to PASS only when the /merge pipeline's sha EQUALED the MR head. A merged-results
 // pipeline runs on an ephemeral merge commit, so that never holds on green (0 of 15 measured): the
 // fallback could only HOLD, or pass by an agent ignoring its own rule.
-export function ciSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRepo, prNumber }) {
+//
+// #1302: the wait is a per-repo budget (`CI wait budget` in .claude-project.md), because a repo
+// whose cold build outlasts 420s would HOLD every wave. CI still running when the budget runs out
+// stays a HOLD. 3600s is the cap; no wait over 1800s has been observed to survive one MCP call.
+export const CI_WAIT_DEFAULT_SEC = 420
+export const CI_WAIT_MAX_SEC = 3600
+export function ciWaitBudget(sec) {
+  return Number.isInteger(sec) && sec >= 60 && sec <= CI_WAIT_MAX_SEC ? sec : CI_WAIT_DEFAULT_SEC
+}
+
+export function ciSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRepo, prNumber, ciWaitSec }) {
+  const waitSec = ciWaitBudget(ciWaitSec)
   const prRef = prNumber != null ? `PR #${prNumber}` : `the open ${kahunaBranch}→${integrationBase} PR/MR`
   const head = (field) => headReadLines({ targetRepo, prNumber, field }).map((l) => `   ${l}`)
   return [
@@ -238,18 +249,19 @@ export function ciSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRe
     `   result), not the branch's own latest push.`,
     ...head('head_sha'),
     `2. Call sdlc-server ci_wait_run (repo=${targetRepo}) with require_merge_result=true, pr_number=${prNumber != null ? prNumber : '<the PR number>'},`,
-    `   AND explicit timeout_sec=420 + poll_interval_sec=15 (#1035 — do NOT omit them). All are load-bearing:`,
+    `   AND explicit timeout_sec=${waitSec} + poll_interval_sec=15 (#1035 — do NOT omit them). All are load-bearing:`,
     `     • require_merge_result makes the tool refuse to grade a BRANCH pipeline, a SKIPPED one, or a`,
     `       GitLab DETACHED (refs/merge-requests/N/head) pipeline — none of which validated the merge.`,
     `     • pr_number (#476) is the FRESHNESS anchor. Filtering to merge-result runs is not enough: a GREEN`,
     `       merge-result run for a PREVIOUS commit still sits in the list, and grading it would merge`,
     `       code CI never saw. The tool binds the run to the PR/MR's CURRENT head (GitHub: the PR head`,
     `       SHA; GitLab: the MR's head_pipeline) and HOLDs if it cannot prove freshness.`,
-    `     • timeout_sec=420 + poll_interval_sec=15 (#1035) are the BLEED FIX: these merge-result pipelines`,
+    `     • timeout_sec=${waitSec} + poll_interval_sec=15 (#1035) are the BLEED FIX: these merge-result pipelines`,
     `       finish in 2–5 min, but WITHOUT an explicit timeout the tool rides its ~1800s idle default and`,
-    `       burned ~30–57 min/wave (P5W12: 57 min to confirm a 156s pipeline). 420s is ample headroom.`,
+    `       burned ~30–57 min/wave (P5W12: 57 min to confirm a 156s pipeline). ${CI_WAIT_DEFAULT_SEC}s is the default; per-project`,
+    `       override (\`CI wait budget\` in .claude-project.md).`,
     `   Report its answer as wait, copied as returned (ok, final_status, reason, error). Do not interpret it.`,
-    ...directMergeReadSteps({ targetRepo, prNumber, windowSec: 420 }).map((l, i) => (i === 0 ? `3. ${l}` : `   ${l}`)),
+    ...directMergeReadSteps({ targetRepo, prNumber, windowSec: waitSec }).map((l, i) => (i === 0 ? `3. ${l}` : `   ${l}`)),
     `   The direct read is NOT a branch/head fallback: only a merge-result pipeline bound to the current`,
     `   head can pass, and the gate checks both in code.`,
     `   The project's lint + typecheck RIDE INSIDE this pipeline, diff-scoped to the wave's changed files`,

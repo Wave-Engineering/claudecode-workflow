@@ -1130,6 +1130,7 @@ async function runWave(wave) {
     planId: PLAN_ID,
     mode: 'auto', // the campaign Workflow is auto-mode by definition (§2.4); interactive is the skill driver
     dispatch: wave.dispatch ?? 'serialize', // #824 R-06: thread the per-wave dispatch hint (/prepwaves #823) into the spine's args; absent → serialize (CT-01)
+    ciWaitSec: params.ciWaitSec, // #1302: the repo's CI wait budget; absent → the spine's 420s default
     // NB: preserveKahuna is deliberately NOT threaded (#722 retired in campaign mode, #1052). The
     // branch that must survive across waves is the campaign branch, and it does; each wave's kahuna
     // is disposable again, which is what makes a squash merge harmless and #892 unreachable.

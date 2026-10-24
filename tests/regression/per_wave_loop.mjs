@@ -359,6 +359,37 @@ for (const label of MUST_NOT_THROW) {
   })
 }
 
+// ── CI wait budget (#1302) ────────────────────────────────────────────────────────────────────
+// The budget reaches the live gate:ci prompt; a rejected one falls back to 420 and says so.
+const ciPrompt = (run) => run.calls.find((c) => c.label === 'gate:ci').prompt
+const budgetLog = (run) => run.logs.filter((l) => l.startsWith('[#1302]'))
+const BUDGET_ARGS = { waveId: 'W1', planId: 'P1', targetRepo: 'Example-Org/harness-target', targetRepoDir: '/nonexistent/harness-target', issues: [1, 2], mode: 'auto' }
+
+await check('ciWaitSec 1800 → the gate:ci prompt waits 1800s, nothing logged', async () => {
+  const run = await runPerWave({ args: { ...BUDGET_ARGS, ciWaitSec: 1800 } })
+  assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
+  assert.match(ciPrompt(run), /timeout_sec=1800 \+ poll_interval_sec=15/)
+  assert.deepEqual(budgetLog(run), [])
+})
+
+await check('no ciWaitSec → the gate:ci prompt waits 420s, nothing logged', async () => {
+  const run = await runPerWave({ args: BUDGET_ARGS })
+  assert.match(ciPrompt(run), /timeout_sec=420 \+ poll_interval_sec=15/)
+  assert.deepEqual(budgetLog(run), [])
+})
+
+for (const bad of ['1800 s', '1800', 99999, 30]) {
+  await check(`ciWaitSec ${JSON.stringify(bad)} → falls back to 420 and logs why`, async () => {
+    const run = await runPerWave({ args: { ...BUDGET_ARGS, ciWaitSec: bad } })
+    assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
+    assert.match(ciPrompt(run), /timeout_sec=420 \+ poll_interval_sec=15/)
+    const logged = budgetLog(run)
+    assert.equal(logged.length, 1, `expected one [#1302] log line, got ${JSON.stringify(run.logs)}`)
+    assert.ok(logged[0].includes(`ciWaitSec=${JSON.stringify(bad)}`), logged[0])
+    assert.ok(logged[0].includes('CI wait budget'), 'the log points at the line to fix')
+  })
+}
+
 // The one deliberate throw: a wave whose integration branch could not be established refuses to run
 // before anything writes, rather than fail later and less clearly (#1052).
 await check('kahuna-bootstrap returns null → refuses loudly before any write', async () => {

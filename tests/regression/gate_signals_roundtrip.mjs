@@ -19,6 +19,8 @@ import {
   OPEN_PR_RESULT,
   commutativitySignalPrompt,
   ciSignalPrompt,
+  CI_WAIT_DEFAULT_SEC,
+  ciWaitBudget,
   ciVerdict,
   reviewStagePrompt,
   REVIEW_STAGE,
@@ -105,6 +107,28 @@ try {
   assert.match(ci, new RegExp(`PR #${PR}`)) // #5: waits on the gate-opened draft PR by number
   assert.match(ci, /do NOT search for it/i) // #5: deterministic, no race to "find" the PR
   ok('ci prompt: ci_wait_run on the gate-opened PR (#5) + MERGE-RESULT + success-only + diff-scoped (#452, §3.4)')
+
+  // #1302: the wait is a per-repo budget. Absent, it is today's 420s; a valid one sets the wait AND
+  // the direct-read window; anything else falls back to 420 rather than reaching the tool.
+  assert.equal(CI_WAIT_DEFAULT_SEC, 420)
+  assert.match(ci, /timeout_sec=420 \+ poll_interval_sec=15/)
+  assert.match(ci, /up to ~420s/) // the direct-read window follows the default too
+  assert.match(ci, /420s is the default; per-project/)
+  assert.match(ci, /`CI wait budget` in \.claude-project\.md/)
+  assert.doesNotMatch(ci, /ample headroom/)
+  const long = ciSignalPrompt({ ...A, prNumber: PR, ciWaitSec: 2700 })
+  assert.match(long, /timeout_sec=2700 \+ poll_interval_sec=15/)
+  assert.match(long, /up to ~2700s/)
+  assert.doesNotMatch(long, /timeout_sec=420/)
+  for (const v of [0, -5, 'abc', 99999, 59, 3601, 2700.5, null, undefined, '2700']) {
+    const p = ciSignalPrompt({ ...A, prNumber: PR, ciWaitSec: v })
+    assert.match(p, /timeout_sec=420 \+/, `ciWaitSec=${JSON.stringify(v)} must fall back to 420`)
+    assert.match(p, /up to ~420s/, `ciWaitSec=${JSON.stringify(v)}: the direct-read window must fall back too`)
+    assert.equal(ciWaitBudget(v), 420)
+  }
+  assert.equal(ciWaitBudget(60), 60)
+  assert.equal(ciWaitBudget(3600), 3600)
+  ok('ci prompt: the CI wait is a per-repo budget in [60, 3600], defaulting to 420 (#1302)')
 
   // #5 — the gate opens the kahuna→base DRAFT PR FIRST (before the signals)
   const op = openPromotionPrPrompt({ ...A, planId: 692 })

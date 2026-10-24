@@ -92,6 +92,7 @@ Supplied by the caller (`/wavemachine` per wave, or a human launching one wave):
 | `preserveKahuna` | #722: `true` ⇒ persistent per-plan kahuna (shared across a plan's waves) — promote does NOT delete it. Default `false` = per-wave disposable. **Retired inside a campaign (#1052)** — accepted but ignored when `integrationBase !== protectedBranch`. See lifecycle below. |
 | `dispatch` | #824: the wave's dispatch hint from `phases-waves.json` (written by `/prepwaves` #823). `fan` ⇒ the planner's conflict-free group runs in parallel; `serialize` / `serialize-preferred` / **absent** ⇒ single-file (one issue per flight-group). Threaded into the engine and **enforced** by the flight loop — see "Dispatch enforcement" below. Absent ⇒ `serialize` (CT-01). |
 | `protectedBranch` | the trunk. Used to *recognize* trunk (the engine derives "am I in a campaign?" from `integrationBase !== protectedBranch`), and as the default `integrationBase` for a standalone wave. A campaign wave never writes it. |
+| `ciWaitSec` | #1302: seconds the trust gate's CI signal waits on the merge-result pipeline, per phase (the `ci_wait_run` wait, then the direct `/merge` read's window, each up to this long), from `.claude-project.md`'s `CI wait budget` line. Pass it as a JSON **number** in [60, 3600]; absent ⇒ `420`, and anything else (a string, `"1800 s"`, out of range) falls back to `420` with a `[#1302] ignoring ciWaitSec` log line. CI still running when it runs out is a HOLD. Waits over 1800 s are unproven: none has been observed to survive one MCP call. It covers the per-wave gate only; the campaign release gate keeps its own 1800 s wait. |
 | `mode` | `auto` (verdict drives promotion) \| `interactive` (verdict returned; human routes) |
 | `planId` | wave plan id — the gate's PR-open node needs it to assemble the kahuna→protected MR body (#687/#5); also keys the FlightDeck activity id (`AID = PLAN_ID \|\| WAVE_ID`), so a standalone run without it degrades to a wave-scoped id (cc-workflow#1171). Read from `phases-waves.json`'s top-level `plan_id` (step 1), written by `/prepwaves`. |
 | `budget` | optional `{ total, remaining() }` cost guard (the `cost` legal exit) |
@@ -153,7 +154,9 @@ annotated `serialize` and never reaches the executor as `fan`.
    `.claude-project.md`), the **`integrationBase`** (the campaign branch when running under
    `/wavemachine`; omit for a standalone wave and it defaults to the protected branch, #1052),
    and the wave's **`dispatch`** field (from `phases-waves.json`;
-   absent ⇒ `serialize`, CT-01) to thread into `args.dispatch`. Refuse if `kahuna_branch` is
+   absent ⇒ `serialize`, CT-01) to thread into `args.dispatch`, and the **`CI wait budget`** line
+   of `.claude-project.md`, if present, as `args.ciWaitSec`, a JSON number (#1302; absent ⇒ omit it, and the gate
+   waits 420 s). Refuse if `kahuna_branch` is
    unset — wave state was not bootstrapped through the campaign launch sequence.
 
    **Also read `plan_id`** (top-level, in the SAME persisted plan file this step already reads
