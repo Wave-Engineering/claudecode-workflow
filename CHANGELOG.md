@@ -19,6 +19,12 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.15.0] - 2026-10-24
+
+Docker Hub images now keep a name after `:stable` moves on: each release gets an immutable
+`:X.Y.Z` tag. The fleet's mirrors get two shared actions that never re-push a version tag, and
+write each image's digest into its GitHub release.
+
 ### Added
 - **Docker Hub gets an immutable version tag (#1324).** The mirror pushed only `:stable`, so
   when `:stable` moved, the previous release's digest had no name on Docker Hub. The mirror now
@@ -49,6 +55,11 @@ are worth keeping apart:
   isn't `X.Y.Z`, such as a branch build promoted by hand (`8.14.0-3-g9334c4b`), used to reach
   Docker Hub `:stable`. Now the run fails and Docker Hub keeps its previous `:stable`, so GHCR and
   Docker Hub disagree until a tag-built digest is promoted. Promote only tag-built digests.
+
+### Image
+
+- **MCP servers:** mcp-server-sdlc v5.0.3, mcp-server-wtf v1.5.2, mcp-server-discord v1.4.3,
+  mcp-server-discord-watcher v1.7.1 and mcp-server-nerf v2.0.0, all unchanged from 8.14.0.
 
 ## [8.14.0] - 2026-10-24
 
