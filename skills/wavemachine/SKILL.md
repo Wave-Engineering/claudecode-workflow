@@ -357,13 +357,21 @@ per-phase lifecycle, which the engine no longer drives), via the `wave-status` C
 - (Optional, for dashboard truthfulness) `wave-status promoting <waveId>` while a PASS wave promotes.
 
 **This is the contract the stall-guard Stop hook depends on (#736).** The guard
-(`config/settings.template.json`, the `Stop` hook keyed on `wavemachine_active`) no-ops when
+(`scripts/hooks/workflow/wavemachine-stall-guard.sh`, the `Stop` hook in
+`config/settings.template.json`, keyed on `wavemachine_active`) no-ops when
 `current_action.action` is `awaiting-verdict` (a legitimate async await — NOT a stall),
 `hold` (a legitimate human pause), or `promoting` (an in-progress promotion); it blocks only
 when `wavemachine_active` is set and the action implies the driver should be launching the
 next wave but the turn ended without it. Writing `awaiting-verdict` in the same tool-use block
 as the launch is therefore **load-bearing** — omit it and the guard false-fires on the await
 (cc-workflow#736).
+
+**Stale state never blocks (#1109).** If `last_updated` is older than 24 h (the guard's
+`STALE_SECONDS`, equal to `WAVEMACHINE_STALE_SECONDS` from #1110) or unreadable, the guard
+does not block; it shows a `systemMessage` with the flag's age and owner. That flag most
+likely belongs to a run that died. **The right move is to verify, not to advance:** check the
+plan, then resume through `/wavemachine` (its pre-flight offers `--reclaim` to the human),
+clear it with `wave-status wavemachine-stop`, or pause with `wave-status hold "<reason>"`.
 
 ## Pending deferral resolution (#634)
 

@@ -721,3 +721,57 @@ def test_global_install_also_runs_the_guard(sandbox_home: Path) -> None:
     assert _install_ok(rc, out, err), f"install failed: {out}\n{err}"
     assert "collapsed" in out, f"global install did not run the guard:\n{out}"
     assert _guard(settings).returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# #1109: the inline wavemachine stall guard is replaced, not doubled
+# ---------------------------------------------------------------------------
+
+# The stall guard as it shipped inline before #1109 (the block reason is cut
+# short; everything the installer matches on is verbatim).
+_LEGACY_INLINE_GUARD = (
+    'state="${CLAUDE_PROJECT_DIR:-.}/.claude/status/state.json"; [ -f "$state" ] || exit 0; '
+    "active=$(jq -r '.wavemachine_active // false' \"$state\" 2>/dev/null); "
+    '[ "$active" = "true" ] || exit 0; '
+    "action=$(jq -r '.current_action.action // \"\"' \"$state\" 2>/dev/null); "
+    'case "$action" in awaiting-verdict|hold|promoting) exit 0 ;; esac; '
+    "printf '{\"decision\":\"block\",\"reason\":\"/wavemachine is active.\"}'"
+)
+
+
+def _stop_commands(settings: Path) -> list[str]:
+    return [h["command"] for g in _read_json(settings)["hooks"]["Stop"] for h in g["hooks"]]
+
+
+@_SKIP_NO_BASH
+@_SKIP_NO_JQ
+def test_inline_stall_guard_replaced_by_script(sandbox_home: Path) -> None:
+    """An upgraded host that holds the old inline guard ends with exactly one
+    guard, the script, and keeps its other Stop hooks; a re-run changes nothing."""
+    template = json.loads(_TEMPLATE_PATH.read_text())
+    local = {
+        "hooks": {
+            "Stop": [
+                {"matcher": "*", "hooks": [{"type": "command", "command": _LEGACY_INLINE_GUARD}]},
+                {"matcher": "*", "hooks": [{"type": "command", "command": "my-custom-stop-hook.sh"}]},
+            ]
+        }
+    }
+    settings = sandbox_home / ".claude" / "settings.json"
+    _write_json(settings, local)
+    install = _override_template(sandbox_home, template)
+
+    rc, out, err = _run_sandbox_install(install, ["--config"], sandbox_home)
+    assert _install_ok(rc, out, err), f"install failed: {out}\n{err}"
+    assert "removed 1 inline wavemachine stall guard" in out, out
+
+    commands = _stop_commands(settings)
+    assert not [c for c in commands if "wavemachine_active" in c], "inline guard survived the merge"
+    assert sum("wavemachine-stall-guard.sh" in c for c in commands) == 1
+    assert "my-custom-stop-hook.sh" in commands
+    assert all(g["hooks"] for g in _read_json(settings)["hooks"]["Stop"]), "empty matcher group left behind"
+
+    rc, out, err = _run_sandbox_install(install, ["--config"], sandbox_home)
+    assert _install_ok(rc, out, err), f"re-install failed: {out}\n{err}"
+    assert "inline wavemachine stall guard" not in out
+    assert _stop_commands(settings) == commands

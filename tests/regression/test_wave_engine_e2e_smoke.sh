@@ -45,10 +45,11 @@ if [[ ! -f "$SETTINGS" ]]; then
 	exit 1
 fi
 
-# The real stall-guard hook command, extracted from what ships (no re-typed copy).
-HOOK_CMD=$(jq -r '.hooks.Stop[] | .hooks[] | select(.command | test("wavemachine_active")) | .command' "$SETTINGS")
-if [[ -z "$HOOK_CMD" ]]; then
-	fail "could not extract the wavemachine_active Stop hook from $SETTINGS"
+# The real stall-guard script, found through the Stop hook that ships it (#1109).
+HOOK_CMD=$(jq -r '.hooks.Stop[] | .hooks[] | select(.command | test("wavemachine-stall-guard\\.sh")) | .command' "$SETTINGS")
+GUARD="$REPO_DIR/scripts/hooks/${HOOK_CMD#\~/.claude/scripts/hooks/}"
+if [[ -z "$HOOK_CMD" || ! -x "$GUARD" ]]; then
+	fail "could not resolve the wavemachine-stall-guard.sh Stop hook from $SETTINGS"
 	exit 1
 fi
 
@@ -86,7 +87,7 @@ JSON
 ws() { (cd "$FIX" && PYTHONPATH="$REPO_DIR/src" python3 -m wave_status "$@" >/dev/null 2>&1); }
 ws_out() { (cd "$FIX" && PYTHONPATH="$REPO_DIR/src" python3 -m wave_status "$@" 2>&1); }
 # The hook reads ${CLAUDE_PROJECT_DIR}/.claude/status/state.json.
-run_hook() { CLAUDE_PROJECT_DIR="$FIX" bash -c "$HOOK_CMD" 2>/dev/null; }
+run_hook() { CLAUDE_PROJECT_DIR="$FIX" "$GUARD" </dev/null 2>/dev/null; }
 state_get() { jq -r "$1" "$FIX/.claude/status/state.json" 2>/dev/null; }
 
 # ── Campaign init + start ─────────────────────────────────────────────────────

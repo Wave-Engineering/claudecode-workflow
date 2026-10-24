@@ -409,4 +409,4 @@ class TestSettingsWiring:
         cmds = " ".join(self._commands("Stop"))
         assert "precheck-asking-detector.sh" in cmds
         assert "stop-action-bias-detector.sh" in cmds
-        assert "wavemachine_active" in cmds  # the stall-guard inline command
+        assert "wavemachine-stall-guard.sh" in cmds  # the stall guard (#1109)
