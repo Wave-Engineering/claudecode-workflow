@@ -46,6 +46,8 @@ Four gates, each checking only what belongs to it (#1233):
 
 When work is done, run `/scpmr` (or `/precheck` on a pushed branch) immediately — don't ask permission, just run it. On a pass the PR/MR is ready; **STOP and WAIT** for the user's merge call: `/mmr`, `/scpmmr`, or an affirmative. No autonomous merges. No diff presentation. If in doubt, ask.
 
+**Workflow flight workers are exempt.** A flight run by the per-wave Workflow (`/nextwave`, `/wavemachine`) commits in its handed worktree and returns. It never pushes and never runs `/precheck`, `/scp*` or `/mmr`. Prime(reconcile) lands it on `kahuna/*`, and the wave trust gate's review signal is its review.
+
 **Never write phrases like "shall I run /precheck?", "ready for precheck?", "let me know when to run /precheck." Asking is itself a violation of this rule. The checklist that `/precheck` presents is the merge-approval surface; the *start* of `/precheck` is unilateral. If you catch yourself drafting one of those questions, that's the moment to invoke `/precheck` instead — the intent is identical, the wording is the bug.**
 
 The full procedure lives in `/precheck` (`skills/precheck/SKILL.md`).
@@ -54,14 +56,14 @@ The full procedure lives in `/precheck` (`skills/precheck/SKILL.md`).
 
 The "explicit user approval" requirement for the merge is **suspended** — and only suspended — when **both** of the following hold:
 
-1. The Flight Agent is operating inside a **Kahuna sandbox** — i.e. the current branch's base ref matches the regex `^kahuna/[0-9]+-` (a per-wave integration branch, not `main`).
+1. The PR/MR targets a **Kahuna sandbox** (an agent landing a branch on `kahuna/*` by hand, e.g. repairing a held wave; Workflow flights never reach this path) — i.e. the current branch's base ref matches the regex `^kahuna/[0-9]+-` (a per-wave integration branch, not `main`).
 2. The full `/precheck` checklist has passed end-to-end: validation, code-reviewer (no unresolved high+ findings), trivy dependency scan, the `precheck` status posted, plus the Discord `#precheck` post and `vox` announcement.
 
 When both conditions are met, `/precheck` emits the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invokes `/mmr` directly — no human STOP for the merge. The exception is enforced **by `/precheck`'s own detection logic, not by agent discretion**: an agent on a `main`-targeted feature branch never qualifies for *this* exception, regardless of context. Outside the sandbox the original rule applies — checklist, STOP, wait for the merge call (`/mmr` / `/scpmmr` / affirmative) — unless the separate Approved Autochain, Standing Merge Grant or Lead-Agent Grant exception below holds.
 
 **Platform prerequisite** (load-bearing — without it, the auto-approval is unsafe):
 
-- **GitHub:** branch-protection rules / rulesets scoped to the `kahuna/*` pattern must permit the Flight Agent's auto-merge path while leaving `main`'s required reviews intact. Standard Wave-Engineering merge-config policy provisions this.
+- **GitHub:** branch-protection rules / rulesets scoped to the `kahuna/*` pattern must permit the auto-merge path into `kahuna/*` while leaving `main`'s required reviews intact. Standard Wave-Engineering merge-config policy provisions this.
 - **GitLab:** a `kahuna-zero-approvals` MR approval rule with `approvals_required: 0`, scoped via `protected_branch_ids` to the protected `kahuna/*` pattern, must exist. **Must NOT use `merge_request_approval_settings`** (that endpoint is project-wide and would unprotect main). Standard deployment: `gl-settings kahuna-sandbox <project-url>` (composite operation from `gl-settings#27`).
 
 If the platform-specific config is not in place, `/precheck` emits a `[WARNING: kahuna sandbox — ... not detected]` checklist line; the wave Orchestrator and operator are the final safety net for missing prerequisites.

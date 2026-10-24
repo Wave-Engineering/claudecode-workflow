@@ -90,6 +90,20 @@ def test_exception_paths_invoke_mmr_not_scpmmr():
     assert claude.count("invokes `/mmr`") >= 2  # kahuna + autochain
 
 
+def test_workflow_flights_are_exempt():
+    # #1209: Workflow flights never run /precheck; the kahuna exception is for a PR/MR opened into kahuna/* by hand.
+    claude = _text(ROOT / "CLAUDE.md")
+    mr_gate = claude[claude.index("## MANDATORY: MR Gate") : claude.index("## MANDATORY: Story Completion")]
+    assert "Workflow flight workers are exempt" in mr_gate
+    s = _text(ROOT / "skills" / "precheck" / "SKILL.md")
+    sandbox = s[s.index("## Sandbox Auto-Approval") :]
+    assert "Workflow flights do not run `/precheck`" in sandbox
+    for path in (ROOT / "CLAUDE.md", ROOT / "skills" / "scpmmr" / "SKILL.md"):
+        text = _text(path)
+        for stale in ("The Flight Agent is operating inside", "for Flight Agents inside the sandbox"):
+            assert stale not in text, f"{path.relative_to(ROOT)} still says {stale!r}"
+
+
 def test_scp_is_free_and_opens_no_pr():
     s = _text(ROOT / "skills" / "scp" / "SKILL.md")
     assert "**This is free**" in s
