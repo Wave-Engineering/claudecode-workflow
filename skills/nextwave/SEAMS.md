@@ -38,6 +38,8 @@ wave-status and returns the loop blob; worktree setup/cleanup are idempotent fil
   merged:      number[],                       // issues already on kahuna (skip them)
   pending:     number[],                       // issues still to do
   reworkCount: { [issueNum: string]: number }, // optional; per-issue rework tally
+  reworkContext: { [issueNum: string]: { reason: string, head: string | null } },
+                                               // optional; why reconcile sent each issue back + the rejected head (#1213)
   idleRounds:  number,                         // optional; persisted for observability, NOT restored (#1204)
   groupsRun:   number,                         // optional; lifetime group count, seeds the MAX_GROUPS bound across retries
 }
@@ -46,7 +48,9 @@ wave-status and returns the loop blob; worktree setup/cleanup are idempotent fil
 - **Cold start (no prior state):** `{ merged: [], pending: [...ALL_ISSUES] }` — the stub's behavior.
 - **Real impl:** an `agent()` that reads `.claude/status/` (durable, NOT `/tmp`) for this
   `WAVE_ID` and returns the persisted loop blob. The loop seeds `pending`/`merged`/
-  `reworkCount` and the `groupsRunBase` bound from it. `idleRounds` is NOT seeded: it counts
+  `reworkCount`/`reworkContext` and the `groupsRunBase` bound from it. `reworkContext` is what
+  the rework flight is dispatched with; it lived only in memory before #1213, so a resumed run
+  sent a rework flight out with no reason. A merged issue's entry is dropped on write and on read. `idleRounds` is NOT seeded: it counts
   consecutive no-progress rounds within one run, so a retry after a `thrash` exit starts at 0
   instead of halting before it plans anything (#1204). **Idempotency is the
   crux** (§3.3): on resume the loop must skip finished work — which it does as long as
@@ -78,6 +82,12 @@ wave-status and returns the loop blob; worktree setup/cleanup are idempotent fil
 > idempotency: a worker whose branch already carries the implementation returns
 > `already-present` and does no work, so a killed run resumes exactly where it died.
 > The reconcile's "if a branch is already in kahuna, SKIP it" is the reconcile-side half.
+> A **rework** dispatch is the exception (#1213): the branch usually still holds the
+> implementation reconcile rejected, which the resume check would accept, so the worker is not
+> offered `already-present`. It is given the reason and the rejected head, and either commits a
+> new head or returns `rework_not_applied`. A rework that returns `already-present`,
+> `rework_not_applied` or the rejected head halts as `rework-noop:#N`. The no-op is not handed to
+> reconcile, and any merge or re-flag reconcile reports for it is ignored.
 
 ---
 
@@ -186,7 +196,8 @@ Three call sites in the script, all currently log-only stubs:
 ```js
 // state shape passed in:
 { merged: Set<number>, pending: Set<number>,
-  reworkCount: { [issue]: number }, idleRounds: number, groupsRun: number }
+  reworkCount: { [issue]: number }, reworkContext: { [issue]: { reason, head } },
+  idleRounds: number, groupsRun: number }
 ```
 
 - **Per merged issue:** `wave_record_mr(issue_number, mr_ref)` + `wave_close_issue(issue)`.

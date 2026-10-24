@@ -35,6 +35,7 @@ function seedFromBlob(blob) {
     merged: new Set((blob.merged || []).map(Number)),
     pending: new Set((blob.pending || []).map(Number)),
     reworkCount: Object.fromEntries(Object.entries(blob.reworkCount || {}).map(([k, v]) => [Number(k), v])),
+    reworkContext: Object.fromEntries(Object.entries(blob.reworkContext || {}).map(([k, v]) => [Number(k), v])),
     idleRounds: blob.idleRounds || 0,
     groupsRun: Number(blob.groupsRun) || 0,
   }
@@ -46,6 +47,8 @@ const state = {
   merged: new Set([12, 3, 45]),         // unsorted on purpose — toBlob sorts deterministically
   pending: new Set([8, 100]),
   reworkCount: { 8: 2, 45: 1 },          // numeric keys (loop-native)
+  // #1213: #8 is a pending rework; #45 merged, so its entry is spent and toBlob drops it
+  reworkContext: { 8: { reason: 'CI red: pin the ZIP mtime to UTC', head: 'abc1234' }, 45: { reason: 'old', head: 'def5678' } },
   idleRounds: 1,
   groupsRun: 4,
 }
@@ -76,9 +79,10 @@ try {
     assert.deepEqual([...seed.merged].sort((a, b) => a - b), [3, 12, 45])
     assert.deepEqual([...seed.pending].sort((a, b) => a - b), [8, 100])
     assert.deepEqual(seed.reworkCount, { 8: 2, 45: 1 })
+    assert.deepEqual(seed.reworkContext, { 8: { reason: 'CI red: pin the ZIP mtime to UTC', head: 'abc1234' } }, 'reworkContext round-trips; the merged #45 entry is dropped (#1213)')
     assert.equal(seed.idleRounds, 1)
     assert.equal(seed.groupsRun, 4)
-    ok('loop state round-trips through blob (merged/pending/reworkCount/idleRounds/groupsRun)')
+    ok('loop state round-trips through blob (merged/pending/reworkCount/reworkContext/idleRounds/groupsRun)')
 
     // reworkCount keys are numeric after re-read (JSON stringifies them; rehydrate Number-casts)
     for (const k of Object.keys(seed.reworkCount)) {

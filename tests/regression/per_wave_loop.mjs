@@ -219,6 +219,121 @@ await check('the next stuck retry (resumed at groupsRun:22) halts runaway, not t
   assert.equal(run.calls.filter((c) => c.label.startsWith('plan:')).length, 2, 'two rounds reach MAX_GROUPS (24)')
 })
 
+// ── rework (#1213) ────────────────────────────────────────────────────────────────────────────
+// paresieve P3W3: reconcile sent a flight back with the exact fix, and the rework flight returned
+// already-present on the same head, because its old commit was still on the branch and its prompt
+// never carried the reason. Serialized (one issue per round): round 1 builds #31 at H1 and reconcile
+// sends it back with REASON; round 2 is #31's rework flight, which returns `second`.
+const H1 = '1'.repeat(40)
+const H2 = '2'.repeat(40)
+const REASON = 'REWORK-REASON-SENTINEL: pin the ZIP mtime to UTC'
+function reworkScenario(second, merge2 = null) {
+  let flights31 = 0
+  return (label) => {
+    if (label === 'flight:#31') return ++flights31 === 1 ? { issue: 31, status: 'implemented', head_sha: H1 } : { issue: 31, ...second }
+    if (label === 'merge:1') return { merged: [], needs_rework: [{ issue: 31, reason: REASON }] }
+    if (label === 'merge:2' && merge2) return merge2
+    return HARNESS_DEFAULT
+  }
+}
+const flightPrompts = (calls, n) => calls.filter((c) => c.label === `flight:#${n}`).map((c) => c.prompt)
+const terminalBlob = (calls) => JSON.parse(terminalPrompt(calls)[0].match(/\n(\{\n[\s\S]*?\n\})\n/)[1])
+
+await check('a rework dispatch carries the reason and the rejected head; the first dispatch does not', async () => {
+  const run = await runPerWave({ args: RETRY_ARGS, responder: reworkScenario({ status: 'implemented', head_sha: H2 }, { merged: [31], needs_rework: [] }) })
+  const [first, second] = flightPrompts(run.calls, 31)
+  assert.ok(first.includes('IDEMPOTENT RESUME') && !first.includes('REWORK'), 'the first flight gets the resume check')
+  assert.ok(second.includes(REASON), 'the rework flight is told the reason')
+  assert.ok(second.includes(H1), 'the rework flight is told the rejected head')
+  assert.ok(!second.includes('IDEMPOTENT RESUME'), 'the rework flight is not offered the already-present shortcut')
+  assert.ok(second.includes('rework_not_applied'), 'the rework flight is offered rework_not_applied')
+})
+
+await check('rework returns already-present on the rejected head → rework-noop:#31, never sent to reconcile', async () => {
+  const run = await runPerWave({ args: RETRY_ARGS, responder: reworkScenario({ status: 'already-present', head_sha: H1 }) })
+  assertHalted(run, 'rework-noop:#31')
+  assert.ok(run.result.haltReason.includes('head 1111111 unchanged'), run.result.haltReason)
+  const merge2 = run.calls.find((c) => c.label === 'merge:2')
+  assert.ok(merge2 && !merge2.prompt.includes('issue #31'), 'the no-op is not handed to reconcile')
+  assert.deepEqual(run.result.reworkCount, { 31: 1 }, 'the no-op dispatch does not count as a rework cycle')
+  assert.equal(terminalBlob(run.calls).reworkContext['31'].reason, REASON, 'the held blob keeps the reason for the retry')
+})
+
+await check('rework returns "implemented" on the rejected head (abbreviated) → still a no-op', async () => {
+  const run = await runPerWave({ args: RETRY_ARGS, responder: reworkScenario({ status: 'implemented', head_sha: H1.slice(0, 12) }) })
+  assertHalted(run, 'rework-noop:#31 (head 1111111 unchanged)')
+})
+
+await check('rework returns already-present at a NEW head → still a no-op, and the reason does not say "unchanged"', async () => {
+  const run = await runPerWave({ args: RETRY_ARGS, responder: reworkScenario({ status: 'already-present', head_sha: H2 }) })
+  assertHalted(run, 'rework-noop:#31 (already-present at head 2222222)')
+  assert.ok(!run.result.haltReason.includes('unchanged'), run.result.haltReason)
+})
+
+// Fanned out, a no-op leaves its group: the sibling still merges, and whatever reconcile claims about
+// the no-op it was never given is ignored, so it neither merges nor counts as another rework cycle.
+await check('fan: a no-op rework next to a sibling — the sibling merges, reconcile\'s claims about the no-op are ignored', async () => {
+  let flights31 = 0
+  const run = await runPerWave({
+    args: { ...RETRY_ARGS, issues: [31, 33, 35], dispatch: 'fan' },
+    responder: (label) => {
+      if (label === 'flight:#31') return ++flights31 === 1 ? { issue: 31, status: 'implemented', head_sha: H1 } : { issue: 31, status: 'already-present', head_sha: H1 }
+      if (label === 'merge:1') return { merged: [33], needs_rework: [{ issue: 31, reason: REASON }] }
+      if (label === 'merge:2') return { merged: [35, 31], needs_rework: [{ issue: 31, reason: 'reconcile re-flags it anyway' }] }
+      return HARNESS_DEFAULT
+    },
+  })
+  assertHalted(run, 'rework-noop:#31')
+  const merge2 = run.calls.find((c) => c.label === 'merge:2').prompt
+  assert.ok(merge2.includes('issue #35') && !merge2.includes('issue #31'), 'only the sibling goes to reconcile')
+  assert.deepEqual([...run.result.merged].sort((a, b) => a - b), [33, 35], 'the sibling merged; the no-op did not')
+  assert.deepEqual(run.result.reworkCount, { 31: 1 }, 'the re-flag of a no-op is not another rework cycle')
+  assert.ok(run.logs.some((l) => l.includes('ignoring reconcile') && l.includes('#31')), 'the ignored claim is logged')
+})
+
+await check('rework returns rework_not_applied → halts with its reason', async () => {
+  const run = await runPerWave({ args: RETRY_ARGS, responder: reworkScenario({ status: 'rework_not_applied', not_applied_reason: 'the fix needs a schema change' }) })
+  assertHalted(run, 'rework-noop:#31 (the fix needs a schema change)')
+})
+
+await check('rework returns a new head → reconciled and merged; the spent context is dropped', async () => {
+  const run = await runPerWave({ args: RETRY_ARGS, responder: reworkScenario({ status: 'implemented', head_sha: H2 }, { merged: [31], needs_rework: [] }) })
+  assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
+  assert.ok(run.calls.find((c) => c.label === 'merge:2').prompt.includes('issue #31'), 'the rework goes to reconcile')
+  assert.equal(run.result.integrated, true)
+  assert.deepEqual([...run.result.merged].sort((a, b) => a - b), [31, 33])
+  assert.deepEqual(run.result.reworkCount, { 31: 1 })
+  assert.deepEqual(terminalBlob(run.calls).reworkContext, {}, 'a merged issue keeps no rework context')
+})
+
+await check('a first-time flight that returns already-present still goes to reconcile (resume is unchanged)', async () => {
+  const run = await runPerWave({
+    responder: only({ 'flight:#1': { issue: 1, status: 'already-present', head_sha: H1 }, 'merge:1': { merged: [1], needs_rework: [] } }),
+  })
+  assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
+  assert.ok(run.calls.find((c) => c.label === 'merge:1').prompt.includes('issue #1'))
+  assert.equal(run.result.integrated, true)
+})
+
+await check('reconcile_applied_fix is recorded in concerns and returned as reconcileAppliedFixes', async () => {
+  const fix = { issue: 1, summary: 'pinned the ZIP mtime to UTC in the packer' }
+  const run = await runPerWave({ responder: only({ 'merge:1': { merged: [1], needs_rework: [], reconcile_applied_fix: [fix] } }) })
+  assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
+  assert.deepEqual(run.result.reconcileAppliedFixes, [fix])
+  assert.ok(run.result.concerns.some((c) => c.issue === 1 && c.concern === `reconcile_applied_fix: ${fix.summary}`), JSON.stringify(run.result.concerns))
+  assert.ok(run.calls.find((c) => c.label === 'merge:1').prompt.includes('reconcile_applied_fix'), 'reconcile is told to record such a fix')
+})
+
+await check('a resumed run hands the rework flight the persisted reason and head', async () => {
+  const run = await runPerWave({
+    args: RETRY_ARGS,
+    responder: only({ rehydrate: rehydrated({ reworkCount: { 31: 1 }, reworkContext: { 31: { reason: REASON, head: H1 } } }) }),
+  })
+  const [first] = flightPrompts(run.calls, 31)
+  assert.ok(first.includes(REASON) && first.includes(H1), 'the first flight after a resume is the rework, with its context')
+  assert.ok(!flightPrompts(run.calls, 33)[0].includes('REWORK'), 'an issue with no context gets the ordinary prompt')
+})
+
 // ── the null sweep: every other dereferenced agent result ─────────────────────────────────────
 // Nodes after the gate decision cannot block integration, and the flight loop's soft-fail seams
 // carry on, so for those the claim is only "no throw". The gate and promote nodes must also leave

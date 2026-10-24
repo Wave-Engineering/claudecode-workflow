@@ -2,7 +2,7 @@
 //
 // Asserts the load-bearing #686 invariant: a wave-status blob representing a MID-RUN state
 // (some issues merged, some pending, a reworkCount) rehydrates to the EXACT loop seed
-// {merged, pending, reworkCount, idleRounds, groupsRun} the per-wave Workflow needs to SKIP
+// {merged, pending, reworkCount, reworkContext, idleRounds, groupsRun} the per-wave Workflow needs to SKIP
 // finished work — including the numeric-key round-trip (reworkCount keys are JSON-stringified
 // in the blob; the loop Number-casts them, parseRehydrate returns them faithfully string-keyed).
 //
@@ -60,6 +60,8 @@ const midRun = {
   merged: new Set([12, 3, 45]), // unsorted on purpose — toBlob sorts deterministically
   pending: new Set([8, 100]),
   reworkCount: { 8: 2, 45: 1 }, // numeric keys (loop-native)
+  // #1213: #8 was sent back and is pending; #45's entry is spent (it merged) and must not survive.
+  reworkContext: { 8: { reason: 'interface break: rename parse()', head: 'abc1234def' }, 45: { reason: 'old', head: null } },
   idleRounds: 1,
   groupsRun: 4,
 }
@@ -85,6 +87,8 @@ try {
     assert.deepEqual(seed.reworkCount, { 8: 2, 45: 1 }, 'reworkCount round-trips (numeric ↔ JSON-string keys)')
     assert.equal(seed.idleRounds, 1, 'idleRounds round-trips (persisted for observability; the loop does not seed it, #1204)')
     assert.equal(seed.groupsRun, 4, 'groupsRun (MAX_GROUPS bound seed) restored')
+    assert.deepEqual(seed.reworkContext, { 8: { reason: 'interface break: rename parse()', head: 'abc1234def' } },
+      'reworkContext round-trips, and the merged issue\'s entry is dropped (#1213)')
 
     // the load-bearing resume guarantee: a resumed loop SKIPS the merged issues.
     for (const m of [3, 12, 45]) assert.ok(!seed.pending.includes(m), `merged #${m} is NOT re-scheduled`)
@@ -108,6 +112,7 @@ try {
       merged: seed.merged,
       pending: seed.pending,
       reworkCount: seed.reworkCount,
+      reworkContext: seed.reworkContext,
       idleRounds: seed.idleRounds,
       groupsRun: seed.groupsRun,
     }), ALL_ISSUES)
@@ -134,6 +139,13 @@ try {
     const overlap = parseRehydrate({ merged: [3, 12], pending: [3, 8, 100] }, ALL_ISSUES)
     assert.ok(!overlap.pending.includes(3), 'overlap: a merged issue is removed from pending (no re-do of merged work)')
     assert.ok(overlap.pending.includes(8) && overlap.pending.includes(100), 'overlap: non-merged pending preserved')
+    // #1213: a hand-edited or drifted reworkContext degrades entry by entry, never throws
+    const ctx = parseRehydrate({
+      merged: [3],
+      reworkContext: { 3: { reason: 'spent' }, 8: { reason: 'r8', head: 'not-a-sha' }, 12: { head: 'abc1234' }, x: { reason: 'nan' }, 45: 'garbage' },
+    }, ALL_ISSUES).reworkContext
+    assert.deepEqual(ctx, { 8: { reason: 'r8', head: null } }, 'merged/reasonless/non-numeric/non-object entries dropped; a non-SHA head is null')
+    assert.deepEqual(parseRehydrate({ reworkContext: 'garbage' }, ALL_ISSUES).reworkContext, {}, 'a non-object reworkContext → {}')
     ok('a missing/empty/corrupt/partial blob degrades to a safe state — a killed run resumes, never dies on restart')
   } catch (e) { bad('robust cold start', e) }
 

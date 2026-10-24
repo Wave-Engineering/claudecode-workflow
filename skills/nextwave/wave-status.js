@@ -7,7 +7,7 @@
 // side-effect is an agent() call. This module owns the two things that make persistence
 // honor its contract WITHOUT bloating the loop:
 //   1. the canonical DURABLE BLOB shape + path — the exact `{merged, pending, reworkCount,
-//      idleRounds, groupsRun}` that rehydrate() (#686) reads back (same shape as REHYDRATE).
+//      reworkContext, idleRounds, groupsRun}` that rehydrate() (#686) reads back (same shape as REHYDRATE).
 //   2. the agent PROMPTS that perform the durable side-effects idempotently:
 //        - per newly-merged issue: wave_record_mr + wave_close_issue (sdlc-server)
 //        - then overwrite the single per-wave blob file under .claude/status/.
@@ -17,7 +17,7 @@
 //   - wave_record_mr / wave_close_issue are keyed on issue_number → recording an
 //     already-recorded MR or closing an already-closed issue is an overwrite/no-op.
 //   - the blob is a FULL OVERWRITE of one file per wave → replaying identical state
-//     produces a file whose rehydrate-core fields ({merged,pending,reworkCount,idleRounds,
+//     produces a file whose rehydrate-core fields ({merged,pending,reworkCount,reworkContext,idleRounds,
 //     groupsRun}) are identical; only the `updatedAt` metadata timestamp may differ.
 //   - the terminal record is a single keyed wave-completion entry → overwrite, not append.
 
@@ -43,6 +43,15 @@ export function toBlob(state) {
     const n = Number(k)
     if (Number.isFinite(n)) rework[String(n)] = Number(v) // string keys: JSON-stable; rehydrate Number-casts
   }
+  // #1213: why each re-opened issue was sent back, and the head reconcile rejected, so a resumed
+  // run hands the rework flight its reason. A merged issue's entry is spent, so it is dropped.
+  const mergedSet = new Set(intList(state.merged))
+  const reworkContext = {}
+  for (const [k, v] of Object.entries(state.reworkContext ?? {})) {
+    const n = Number(k)
+    if (!Number.isFinite(n) || mergedSet.has(n) || !v || typeof v.reason !== 'string') continue
+    reworkContext[String(n)] = { reason: v.reason, head: typeof v.head === 'string' ? v.head : null }
+  }
   return {
     waveId: state.waveId ?? null,
     schema: 1, // blob schema version — lets rehydrate() (#686) detect/upgrade old shapes
@@ -51,6 +60,7 @@ export function toBlob(state) {
     merged: intList(state.merged),
     pending: intList(state.pending),
     reworkCount: rework,
+    reworkContext,
     idleRounds: Number(state.idleRounds) || 0,
     groupsRun: Number(state.groupsRun) || 0,
     // ── terminal disposition (written by persistTerminal; absent until the wave ends) ──
