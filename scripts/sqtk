@@ -14,6 +14,13 @@
 #   sqtk new    <name>                             create an empty list
 #   sqtk rmlist <name> --yes                        delete a list (cascades — ALL its squawks go)
 #
+# Reserved list names (#147), for every command that takes a <list> (add, show, walk, set, attach):
+#   triage   this repo's triage list, "<repo>:triage" (<repo> as in add's prefix, below; outside
+#            a git checkout it is the cwd's name, and sqtk says so on stderr)
+#   needs    the shared "bj:needs"
+# Any other name means itself. Two repos with the same name share a triage list. new and rmlist
+# take names literally.
+#
 # Config (env):
 #   SQUAWK_URL        base URL of the instance   (REQUIRED; no default — e.g. http://localhost:7700)
 #   SQUAWK_INITIALS   your initials; else derived from ./.claude/agent-identity.json (or the
@@ -180,6 +187,31 @@ find_list() {
   unwrap GET /api/lists/by-name "$resp"
 }
 
+# resolve_list NAME -> the list NAME means (#147). Two names are reserved: "triage" is this repo's
+# triage list, "<repo>:triage", with the same repo_name as add's prefix so the two always agree;
+# "needs" is the shared "bj:needs". Every other name means itself. new and rmlist take names
+# literally and never call this: "rmlist needs --yes" must not reach bj:needs.
+resolve_list() {
+  case "$1" in
+    triage) printf '%s:triage' "$(repo_name)" ;;
+    needs)  printf 'bj:needs' ;;
+    *)      printf '%s' "$1" ;;
+  esac
+}
+
+# list_arg NAME LOUD -> resolve_list NAME, saying on stderr what a reserved name became: always
+# when "triage" is resolved outside a git checkout (its <repo> is then only the cwd's name, a
+# guess), and whenever one is resolved if LOUD is 1 (add, so the transcript shows where it went).
+list_arg() {
+  local r; r="$(resolve_list "$1")"
+  if [[ "$r" != "$1" ]]; then
+    local why=""
+    [[ "$1" == triage ]] && ! git rev-parse --git-common-dir >/dev/null 2>&1 && why=" (not in a git checkout)"
+    if [[ -n "$why" ]] || (( $2 )); then printf 'sqtk: "%s" resolved to "%s"%s\n' "$1" "$r" "$why" >&2; fi
+  fi
+  printf '%s' "$r"
+}
+
 # squawk_at LIST SEQ -> the squawk at a list's per-list #seq (resolving it to the record, and so
 # the internal id, the API needs); dies when there is none.
 squawk_at() {
@@ -256,7 +288,7 @@ cmd_lists() {
 
 cmd_show() {
   [[ $# -ge 1 && -n "${1:-}" ]] || die "usage: sqtk show <list>"
-  local data; data="$(get_list "$1")"
+  local data; data="$(get_list "$(list_arg "$1" 0)")"
   emit "$data" '
     "List #\(.id)  \(.name)",
     (if (.squawks|length)==0 then "  (no squawks)"
@@ -274,7 +306,8 @@ cmd_add() {
     shift
   done
   [[ ${#pos[@]} -ge 2 && -n "${pos[0]}" ]] || die "usage: sqtk add <list> \"<text>\" [--no-prefix] [--force]"
-  local list="${pos[0]}" text="${pos[1]}"
+  local list text="${pos[1]}"
+  list="$(list_arg "${pos[0]}" 1)"
   if (( prefix )); then text="$(prefix_text "$text")"; fi
   if (( ! force )); then
     local existing; existing="$(find_list "$list")"
@@ -304,7 +337,7 @@ ANSWER_JQ='(.text | split("→")) as $p
 cmd_set() {
   [[ $# -ge 2 && -n "${1:-}" && "${2:-}" =~ ^[0-9]+$ ]] \
     || die "usage: sqtk set <list> <seq> [--state open|confirmed|rejected|retired|recorded] [--text \"<t>\"] [--force]"
-  local list="$1" seq="$2"; shift 2
+  local list seq="$2"; list="$(list_arg "$1" 0)"; shift 2
   local state="" text="" have=0 force=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -348,7 +381,7 @@ image_mime() {
 
 cmd_attach() {
   [[ $# -ge 3 && -n "${1:-}" && "${2:-}" =~ ^[0-9]+$ ]] || die "usage: sqtk attach <list> <seq> <file>…"
-  local list="$1" seq="$2"; shift 2
+  local list seq="$2"; list="$(list_arg "$1" 0)"; shift 2
   local files=("$@") mimes=() f mime size
   local sq; sq="$(squawk_at "$list" "$seq")"
   jq -e 'has("image_ids")' <<<"$sq" >/dev/null \
@@ -404,7 +437,7 @@ cmd_mine() {
 # walk: the list's open squawks, oldest first, one "#seq  <text>" per line, for batch decisions.
 cmd_walk() {
   [[ $# -ge 1 && -n "${1:-}" ]] || die "usage: sqtk walk <list>"
-  local data; data="$(get_list "$1")"
+  local data; data="$(get_list "$(list_arg "$1" 0)")"
   local open; open="$(jq -c '[.squawks[] | select(.state == "open")] | sort_by(.seq)' <<<"$data")"
   emit "$open" 'if length == 0 then "(no open squawks)" else .[] | "#\(.seq)  \(.text)" end'
 }
@@ -447,6 +480,7 @@ sqtk — client CLI for Squawkie-Talkie
 
   --json    emit raw API JSON
 
+<list> "triage" is this repo's "<repo>:triage" and "needs" is "bj:needs" (not for new/rmlist).
 add prefixes the text "[<dev-name>·<repo>] " (--no-prefix skips it), refuses an open duplicate
   (exit 3; --force adds anyway) and records the squawk in .claude/sqtk-mine.json, which `mine` reads.
 set --text refuses to drop the existing text's trailing "→ …" answer, unless --force.

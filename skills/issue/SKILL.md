@@ -646,8 +646,7 @@ that is already tracked. Creating the issue is the one moment you know for certa
 it now (#1320).
 
 1. In the target repo's checkout, run `sqtk walk triage`. It prints the open items on this
-   repo's `<repo>:triage`, oldest first. (On an `sqtk` older than squawkie-talkie v0.10.0,
-   name the list in full: `sqtk walk <repo>:triage`.)
+   repo's `<repo>:triage`, oldest first.
 2. For each item the new issue **plainly covers**, meaning the issue would close what the
    item describes, record it with the issue as its answer:
 
