@@ -145,7 +145,12 @@ class TestFlightContract:
         # #1209: a flight is a subagent (no Agent tool) told not to push, so it cannot satisfy /precheck.
         # The prompt says so; the trust gate's review is its review, and reconcile opens and merges its PR.
         src = _worker_prompt_src()
-        for needle in ("Do NOT run /precheck", "/scpmr", "pr_merge", "trust gate"):
+        for needle in (
+            "Do NOT run /precheck, /scp, /scpmr, /scpmmr or /mmr",
+            "do NOT call pr_create, pr_ready or pr_merge",
+            "trust gate's review signal is this change's review",
+            "do NOT push",
+        ):
             assert needle in src, f"workerPrompt must say {needle!r}"
         assert "Your PR targets" not in src, "a flight opens no PR; reconcile does"
 

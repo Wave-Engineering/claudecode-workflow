@@ -23,7 +23,7 @@ The PR/MR gate in one command (#1235): `/scp`, then `/precheck`, which opens the
 
 1. **`/scp`**: commit and push, if anything is uncommitted. Free on a working branch.
 2. **Open the draft PR/MR**, if none exists (`pr_list({head: "<branch>"})`):
-   - **Resolve the base, then validate it.** The base is the **live** default branch (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name` / GitLab `glab api "projects/:id" --jq .default_branch`), unless you are deliberately targeting a non-default branch such as a `kahuna/*` integration branch on a sandbox flight. Call `branch_guard({ role: "target", branch: <that base> })` and on `verdict == "warn"` **STOP**, surfacing `reason`.
+   - **Resolve the base, then validate it.** The base is the **live** default branch (`gh repo view --json defaultBranchRef -q .defaultBranchRef.name` / GitLab `glab api "projects/:id" --jq .default_branch`), unless you are deliberately targeting a non-default branch such as a `kahuna/*` integration branch for a PR/MR opened into the sandbox by hand (Workflow flights never run `/scpmr`). Call `branch_guard({ role: "target", branch: <that base> })` and on `verdict == "warn"` **STOP**, surfacing `reason`.
    - On `pass`, **mark the issue in review FIRST**, per the lifecycle table (mark when you start a step): GitLab Status → `In Test`, then read it back. On GitHub the linked PR with `Closes #N` is the marker, so there's nothing to set.
    - Then call `pr_create({title, body, base, head, draft: true, squash_message})`. The title is 72 characters or fewer, in `type(scope): description` form. The body is in the CLAUDE.md PR/MR format: `## Summary`, `## Changes`, `## Linked Issues` with `Closes #N`, `## Test Plan` (what actually ran). If `pr_create` fails, put the issue back to `In progress`.
    - **`squash_message` is the exact commit that will land** (mcp-server-sdlc#592). The server stores it in the body as a `## Squash commit` block, and `pr_merge` squashes from that block verbatim, so write it as the commit you want in `git log`:
@@ -43,4 +43,4 @@ The PR/MR gate in one command (#1235): `/scp`, then `/precheck`, which opens the
 
 Do NOT merge. That is the distinction from `/scpmmr`.
 
-**Sandbox note.** In KAHUNA sandbox contexts `/precheck` auto-invokes `/mmr` after a pass, because Flight Agents land into the per-wave integration branch and the wave gate, not the flight gate, is where review happens. See `skills/precheck/SKILL.md` and Dev Spec §5.2.1.
+**Sandbox note.** On a PR/MR into a KAHUNA sandbox `/precheck` auto-invokes `/mmr` after a pass, because the change lands on the per-wave integration branch and the wave's trust gate is where review of the wave happens. Workflow flights never reach this path: reconcile lands them. See `skills/precheck/SKILL.md` and Dev Spec §5.2.1.
