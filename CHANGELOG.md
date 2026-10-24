@@ -25,10 +25,12 @@ are worth keeping apart:
   `remaining_percentage` against the *model's* window, and `/autocompact` doesn't change it. With a
   400k autocompact window on a 1M model, autocompact fired near 367k while the 15% gate waited for
   850k, so every session got a lossy `/compact` instead of a reseed. The statusline now also saves
-  `used_tokens`, `window_tokens` and `model_id`. `context-reseed-gate.sh` recomputes the percentage
-  against `min(window, autocompact window)`, taking the autocompact window from
-  `CLAUDE_CODE_AUTO_COMPACT_WINDOW` or else `modelSettings.<model>.autoCompactWindow` in settings. A
-  400k window now reseeds at 340k. Old readings and missing settings behave as before.
+  `used_tokens`, `window_tokens` and `model_id`. When an autocompact window sits below the model
+  window, `context-reseed-gate.sh` recomputes the percentage against what is usable before autocompact
+  fires: the window less a 33k buffer (`RESEED_AUTOCOMPACT_BUFFER_TOKENS`). The autocompact window
+  comes from `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, else `modelSettings.<model>.autoCompactWindow`, else
+  the top-level `autoCompactWindow`. A 400k window now reseeds from ~312k, and a 200k one from ~142k,
+  both ahead of autocompact. Old readings and missing settings behave as before.
 
 ## [8.12.0] - 2026-10-23
 

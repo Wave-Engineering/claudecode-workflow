@@ -96,20 +96,38 @@ full_reading() { # <used> [model] [window] — remaining_percentage is the model
 		  used_tokens: $u, window_tokens: $w, model_id: $m}' >"$CLAUDE_CONTEXT_STATE_DIR/$SID.json"
 }
 
+# Autocompact fires ~33k below its window, so 400k leaves 367k usable: the 15%
+# gate fires from ~312k used.
 full_reading 345000
-expect "345k of a 400k ceiling (13% left) → block, though 65% of 1M remains" block
+expect "345k of 367k usable (5% left) → block, though 65% of 1M remains" block
 out="$(gate)"
-if [[ "$(jq -r .reason <<<"$out")" == *"400k autocompact ceiling"* ]]; then
-	pass "block reason names the autocompact ceiling"
+if [[ "$(jq -r .reason <<<"$out")" == *"367k usable before the 400k autocompact"* ]]; then
+	pass "block reason names the usable ceiling and the autocompact window"
 else
 	fail "ceiling reason: $out"
 fi
+full_reading 315000
+expect "315k of 367k usable (14% left) → block" block
+full_reading 305000
+expect "305k of 367k usable (16% left) → no block" silent
 full_reading 300000
-expect "300k of a 400k ceiling (25% left) → no block" silent
+expect "300k of 367k usable (18% left) → no block" silent
+full_reading 335000
+expect "RESEED_AUTOCOMPACT_BUFFER_TOKENS=0 measures the raw window (335k of 400k, 16%)" silent RESEED_AUTOCOMPACT_BUFFER_TOKENS=0
 full_reading 345000 'claude-opus-5-5[1m]'
 expect "model_id with [1m] falls back to the base settings key" block
 full_reading 260000
-expect "CLAUDE_CODE_AUTO_COMPACT_WINDOW overrides settings (260k of 300k)" block CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000
+expect "CLAUDE_CODE_AUTO_COMPACT_WINDOW overrides settings (260k of 267k usable)" block CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000
+printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 200000}}}' >"$CLAUDE_SETTINGS_FILE"
+full_reading 160000
+expect "200k window: 160k of 167k usable → block before autocompact (~167k)" block
+printf '{"autoCompactWindow": 400000}' >"$CLAUDE_SETTINGS_FILE"
+full_reading 345000
+expect "top-level autoCompactWindow (pre-2.1.288 form) is honored" block
+printf '{"autoCompactWindow": 200000, "modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 400000}}}' >"$CLAUDE_SETTINGS_FILE"
+full_reading 300000
+expect "per-model autoCompactWindow outranks the top-level one" silent
+printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 400000}}}' >"$CLAUDE_SETTINGS_FILE"
 full_reading 345000 claude-other-model
 expect "no autocompact setting for the model → model-window figure (65%)" silent
 printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 2000000}}}' >"$CLAUDE_SETTINGS_FILE"
@@ -123,9 +141,11 @@ expect "malformed settings still blocks on the model-window figure (10%)" block
 printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": "lots"}}}' >"$CLAUDE_SETTINGS_FILE"
 full_reading 345000
 expect "non-numeric autocompact window → model-window figure" silent
-full_reading 345000
-expect "junk CLAUDE_CODE_AUTO_COMPACT_WINDOW is ignored" silent CLAUDE_CODE_AUTO_COMPACT_WINDOW=junk
 printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 400000}}}' >"$CLAUDE_SETTINGS_FILE"
+full_reading 345000
+expect "junk CLAUDE_CODE_AUTO_COMPACT_WINDOW falls through to settings (400k → block)" block CLAUDE_CODE_AUTO_COMPACT_WINDOW=junk
+full_reading 345000
+expect "junk RESEED_AUTOCOMPACT_BUFFER_TOKENS falls back to 33000" block RESEED_AUTOCOMPACT_BUFFER_TOKENS=junk
 full_reading 450000
 expect "used beyond the ceiling floors at 0% → block" block
 reading 50
