@@ -638,6 +638,31 @@ directly from it). Do not downgrade to Haiku.
 into the batch report table in Step 5. If any sub-agent fails, report the
 failure inline in the table row rather than aborting the whole batch.
 
+## Step 4.5: Settle what this issue covers
+
+A new issue is often the tracked form of something already squawked on the project's triage
+list, by you or by another agent. Left open, that item goes stale: it reads as untracked work
+that is already tracked. Creating the issue is the one moment you know for certain, so record
+it now (#1320).
+
+1. In the target repo's checkout, run `sqtk walk triage`. It prints the open items on this
+   repo's `<repo>:triage`, oldest first. (On an `sqtk` older than squawkie-talkie v0.10.0,
+   name the list in full: `sqtk walk <repo>:triage`.)
+2. For each item the new issue **plainly covers**, meaning the issue would close what the
+   item describes, record it with the issue as its answer:
+
+   ```bash
+   sqtk set triage <seq> --state recorded --text "<the item's text> → #<N>"
+   ```
+
+   If the text already ends with `→`, append ` #<N>` instead of adding a second arrow. An item
+   that is only related stays open.
+3. Name what you recorded in Step 5 (`Recorded triage #3, #7`).
+
+This step never blocks the issue. Skip it silently when `SQUAWK_URL` is unset or the list does
+not exist. On any other `sqtk` error, say so in Step 5 and carry on. In a batch (above), each
+sub-agent runs it for its own issue.
+
 ## Step 5: Report
 
 Confirm creation with the issue number, URL, and a nudge to review:
