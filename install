@@ -685,6 +685,38 @@ rewrite_old_hook_paths_in_settings() {
 	echo "$rewritten" >"$target"
 }
 
+# #1109: the wavemachine stall guard used to ship as ONE INLINE shell command
+# under hooks.Stop. The merge below keys template hooks on their exact command
+# text, so once the guard moved to a script, an upgraded host would keep the old
+# inline copy beside the new one and both would fire. Remove every inline (not
+# path-based: the command does not start with ~, / or $) Stop command that reads
+# wavemachine_active from .claude/status/state.json, and any matcher group left
+# empty. Modifies $1 in place; prints the number of commands removed.
+remove_legacy_inline_stall_guard() {
+	local target="$1"
+	if [[ ! -f "$target" ]] || ! command -v jq &>/dev/null; then
+		echo 0
+		return 0
+	fi
+	# shellcheck disable=SC2016 # $c is a jq variable, not a shell one
+	local legacy='def legacy: (.command // "") as $c
+		| ($c | test("^[~/$]") | not)
+		and ($c | contains("wavemachine_active"))
+		and ($c | contains(".claude/status/state.json"));'
+	local count rewritten
+	count=$(jq "$legacy"' [.hooks.Stop[]?.hooks[]? | select(legacy)] | length' "$target" 2>/dev/null) || count=0
+	if [[ "$count" -gt 0 ]]; then
+		rewritten=$(jq "$legacy"'
+			.hooks.Stop |= (map(.hooks |= map(select(legacy | not)))
+				| map(select((.hooks | length) > 0)))' "$target") || {
+			echo 0
+			return 0
+		}
+		echo "$rewritten" >"$target"
+	fi
+	echo "$count"
+}
+
 # --local only: rewrite KIT-OWNED hook command paths in a settings.json from
 # their global "~/"-relative form (which ALWAYS expands to $HOME, pointing at
 # the GLOBAL install) to ABSOLUTE project-local paths under <cwd>/.claude/.
@@ -833,6 +865,14 @@ merge_settings() {
 			[[ -z "$ev" ]] && continue
 			info "hooks.$ev — migrated old path(s) ~/.local/bin/hooks/... → ~/.claude/scripts/hooks/..."
 		done <<<"$old_path_events"
+	fi
+
+	# Drop the pre-#1109 inline stall guard, so the script version that the
+	# union below adds is the only one left.
+	local legacy_guards
+	legacy_guards=$(remove_legacy_inline_stall_guard "$target")
+	if [[ "$legacy_guards" -gt 0 ]]; then
+		info "hooks.Stop — removed $legacy_guards inline wavemachine stall guard(s), replaced by wavemachine-stall-guard.sh (#1109)"
 	fi
 
 	# Deep merge: template into local, preserving user customizations

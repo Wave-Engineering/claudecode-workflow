@@ -14,10 +14,14 @@
 # human pause (hold), or in-progress promotion (promoting); it still BLOCKS a
 # genuinely-synchronous gap (wavemachine_active=true with no in-flight marker).
 #
-# This test EXECUTES the actual hook command extracted from the settings template
-# against synthetic state.json files — it is behavioural, not a doc-shape check.
-# Full retire of the wavemachine_active plumbing is deferred to #751; this test
-# pins the interim behaviour so that retire is a deliberate, visible change.
+# #1109 moved the guard into scripts/hooks/workflow/wavemachine-stall-guard.sh
+# and made STALE state (last_updated older than 24 h, or unreadable) never block:
+# it gets a systemMessage telling the human to verify instead.
+#
+# This test EXECUTES the script the settings template's Stop hook names, against
+# synthetic state.json files — it is behavioural, not a doc-shape check. Full
+# retire of the wavemachine_active plumbing is deferred to #751; this test pins
+# the interim behaviour so that retire is a deliberate, visible change.
 
 set -uo pipefail
 
@@ -46,13 +50,29 @@ if [[ ! -f "$SETTINGS" ]]; then
 	exit 1
 fi
 
-# Extract the stall-guard hook command (the only Stop hook keyed on
-# wavemachine_active) straight from the template, so the test exercises exactly
-# what ships — not a re-typed copy that could drift.
-HOOK_CMD=$(jq -r '.hooks.Stop[] | .hooks[] | select(.command | test("wavemachine_active")) | .command' "$SETTINGS")
+# Find the stall-guard script through the template's Stop hook that names it, so
+# the test exercises exactly what ships — not a re-typed copy that could drift.
+HOOK_CMD=$(jq -r '.hooks.Stop[] | .hooks[] | select(.command | test("wavemachine-stall-guard\\.sh")) | .command' "$SETTINGS")
 if [[ -z "$HOOK_CMD" ]]; then
-	fail "could not extract the wavemachine_active Stop hook command from $SETTINGS"
+	fail "no Stop hook naming wavemachine-stall-guard.sh in $SETTINGS"
 	exit 1
+fi
+if jq -e '[.hooks.Stop[] | .hooks[] | select(.command | test("wavemachine_active"))] | length > 0' "$SETTINGS" >/dev/null; then
+	fail "an inline wavemachine_active Stop command is still in $SETTINGS (#1109)"
+fi
+GUARD="$REPO_DIR/scripts/hooks/${HOOK_CMD#\~/.claude/scripts/hooks/}"
+if [[ ! -x "$GUARD" ]]; then
+	fail "the template's guard does not resolve to an executable in the repo: $GUARD"
+	exit 1
+fi
+
+# The script's threshold must equal state.py's lease threshold (#1109, #1110).
+sh_stale=$(sed -n 's/^STALE_SECONDS=\([0-9]*\)$/\1/p' "$GUARD")
+py_stale=$(sed -n 's/^WAVEMACHINE_STALE_SECONDS = \([0-9]*\)$/\1/p' "$REPO_DIR/src/wave_status/state.py")
+if [[ -n "$sh_stale" && "$sh_stale" == "$py_stale" ]]; then
+	pass "STALE_SECONDS ($sh_stale) equals WAVEMACHINE_STALE_SECONDS in state.py"
+else
+	fail "STALE_SECONDS '$sh_stale' != WAVEMACHINE_STALE_SECONDS '$py_stale'"
 fi
 
 WORK="$(mktemp -d)"
@@ -61,12 +81,21 @@ mkdir -p "$WORK/.claude/status"
 STATE="$WORK/.claude/status/state.json"
 
 # Run the hook with CLAUDE_PROJECT_DIR pointed at the synthetic project. Returns
-# the hook's stdout (a decision:block JSON object iff it blocks; empty if no-op).
+# the hook's stdout (a decision:block JSON object iff it blocks; a systemMessage
+# on stale state; empty if no-op).
 run_hook() {
-	CLAUDE_PROJECT_DIR="$WORK" bash -c "$HOOK_CMD" 2>/dev/null
+	CLAUDE_PROJECT_DIR="$WORK" "$GUARD" </dev/null 2>/dev/null
 }
 
-write_state() { printf '%s' "$1" >"$STATE"; }
+FRESH=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+MINUTE_AGO=$(date -u -d '1 minute ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-1M +%Y-%m-%dT%H:%M:%SZ)
+STALE=$(date -u -d '95 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-95d +%Y-%m-%dT%H:%M:%SZ)
+
+# Write a state fixture. A bare object gets a fresh last_updated, so the
+# block-shaped cases test the same behaviour as before #1109.
+write_state() {
+	printf '%s' "$1" | jq -c --arg ts "$FRESH" 'if has("last_updated") then . else .last_updated = $ts end' >"$STATE"
+}
 
 # --- Case (a): wavemachine_active + legitimate async/human in-flight markers
 #     MUST NOT block (no output) -------------------------------------------------
@@ -139,6 +168,56 @@ if echo "$reason" | grep -qiE "awaiting-verdict|async"; then
 	pass "block reason references the async-aware advance path"
 else
 	fail "block reason does not reference the async advance path — guidance is stale"
+fi
+
+# --- Case (d): staleness (#1109). Stale state never blocks; it warns. --------
+write_state "{\"wavemachine_active\": true, \"current_action\": {\"action\": \"idle\"}, \"last_updated\": \"$STALE\", \"wavemachine_session_id\": \"old-sess\"}"
+out=$(run_hook)
+if echo "$out" | jq -e '(has("decision") | not) and (.systemMessage | test("stale") and test("verify") and test("old-sess"))' >/dev/null 2>&1; then
+	pass "active + idle + 95-day-old last_updated → systemMessage (stale, verify, owner), no block"
+else
+	fail "active + idle + stale → expected a stale/verify systemMessage and no decision: '$out'"
+fi
+
+write_state '{"wavemachine_active": true, "current_action": {"action": "idle"}, "last_updated": null}'
+out=$(run_hook)
+if [[ -n "$out" ]] && echo "$out" | jq -e 'has("decision") | not' >/dev/null 2>&1; then
+	pass "active + idle + no last_updated → no block"
+else
+	fail "active + idle + no last_updated → expected a non-blocking message: '$out'"
+fi
+
+write_state "{\"wavemachine_active\": true, \"current_action\": {\"action\": \"idle\"}, \"last_updated\": \"$MINUTE_AGO\"}"
+out=$(run_hook)
+if echo "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+	pass "active + idle + 1-minute-old last_updated → blocks (unchanged)"
+else
+	fail "active + idle + fresh → did NOT block: '$out'"
+fi
+
+write_state "{\"wavemachine_active\": true, \"current_action\": {\"action\": \"idle\"}, \"last_updated\": \"${MINUTE_AGO%Z}.123Z\"}"
+out=$(run_hook)
+if echo "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+	pass "fractional-second last_updated parses as fresh → blocks"
+else
+	fail "fractional-second last_updated → did NOT block (read as unparseable?): '$out'"
+fi
+
+write_state "{\"wavemachine_active\": true, \"current_action\": {\"action\": \"awaiting-verdict\"}, \"last_updated\": \"$STALE\"}"
+out=$(run_hook)
+if [[ -z "$out" ]]; then
+	pass "active + awaiting-verdict + stale → silent"
+else
+	fail "active + awaiting-verdict + stale → expected silence: '$out'"
+fi
+
+printf 'not json' >"$STATE"
+out=$(run_hook)
+rc=$?
+if [[ -z "$out" && $rc -eq 0 ]]; then
+	pass "unparseable state.json → exit 0, silent"
+else
+	fail "unparseable state.json → rc=$rc out='$out'"
 fi
 
 echo ""

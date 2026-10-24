@@ -97,15 +97,16 @@ fi
 #    decision:block contract conditional on wavemachine_active=true. This is
 #    the structural safety net for premature termination; if it has been
 #    removed, the in-turn-narration contract loses its complement.
+#    Since #1109 the guard is a script the template's Stop hook names, so check
+#    that the hook is wired and that the script carries both halves.
 if [[ -f "$SETTINGS" ]]; then
-	# Settings template stores the hook command as a JSON string, so the
-	# inner JSON-block payload appears with backslash-escaped quotes
-	# (\"decision\":\"block\"). Match the literal substring rather than the
-	# ERE form to be robust to that escaping.
-	if grep -qF 'decision\":\"block' "$SETTINGS" && grep -qF 'wavemachine_active' "$SETTINGS"; then
-		pass "Stop hook with decision:block + wavemachine_active conditional present in settings template"
+	hook_cmd=$(jq -r '.hooks.Stop[] | .hooks[] | select(.command | test("wavemachine-stall-guard\\.sh")) | .command' "$SETTINGS")
+	guard="$REPO_DIR/scripts/hooks/${hook_cmd#\~/.claude/scripts/hooks/}"
+	if [[ -n "$hook_cmd" && -f "$guard" ]] &&
+		grep -qF 'decision: "block"' "$guard" && grep -qF 'wavemachine_active' "$guard"; then
+		pass "Stop hook wired to wavemachine-stall-guard.sh, with decision:block + wavemachine_active conditional"
 	else
-		fail "Stop hook decision:block + wavemachine_active conditional not found in $SETTINGS"
+		fail "Stop hook decision:block + wavemachine_active conditional not found (template $SETTINGS, script '$guard')"
 	fi
 else
 	fail "settings template not found: $SETTINGS"
