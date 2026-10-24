@@ -19,6 +19,11 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.14.0] - 2026-10-24
+
+Two changes since 8.13.0: agents now settle stale squawks on their own, and the reseed gate works on
+Bedrock model ids. The image is unchanged from 8.11.0.
+
 ### Added
 - **Squawk curation (#1320).** Squawks went stale: items stayed open after the work that resolved
   them had landed, or after the issue that tracks them was filed. Agents now settle them at the two
