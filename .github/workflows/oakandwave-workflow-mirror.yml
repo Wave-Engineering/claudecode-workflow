@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # write the Images block into the v<version> GitHub release (#1326)
+  contents: read # the release-notes job alone widens this to write
   packages: read # pull the :stable image + resolve its digest from ghcr
   id-token: write # keyless cosign (Fulcio/Rekor) via OIDC — re-sign the Docker Hub digest
 
@@ -33,6 +33,10 @@ env:
 jobs:
   mirror:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.mirror.outputs.version }}
+      version_ref: ${{ steps.mirror.outputs.version_ref }}
+      digest_ref: ${{ steps.resolve.outputs.digest_ref }}
     steps:
       - uses: actions/checkout@v4
 
@@ -70,11 +74,9 @@ jobs:
         # Copy the EXACT digest (not the moving tag) cross-registry; imagetools copies the
         # manifest + blobs using each registry's own creds and rebuilds nothing. The
         # version tag comes from the image's own label and is never re-pushed (#1324).
+        id: mirror
         env:
           SRC_DIGEST: ${{ steps.resolve.outputs.digest_ref }}
-          PUBLISH_RELEASE: "true"
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
         run: ./scripts/ci/mirror-oakandwave-image.sh
 
       - name: Re-sign the Docker Hub digest (cosign keyless + syft SBOM)
@@ -84,3 +86,20 @@ jobs:
         env:
           DIGEST_REF: ${{ steps.resolve.outputs.dockerhub_digest_ref }}
         run: ./scripts/ci/sign-oakandwave-image.sh
+
+  release-notes:
+    # Its own job, after the re-sign (#1326): a release-API failure can't stop a signature,
+    # and contents: write sits on a job that runs no registry or signing tooling.
+    needs: mirror
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write the Docker Hub digest into the v<version> release
+        uses: ./.github/actions/oaw-release-images
+        with:
+          release-tag: v${{ needs.mirror.outputs.version }}
+          release-refs: ${{ needs.mirror.outputs.version_ref }}
+          source-digest-ref: ${{ needs.mirror.outputs.digest_ref }}

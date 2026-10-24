@@ -28,16 +28,19 @@ are worth keeping apart:
     nothing is pushed. A tag Docker Hub can't confirm as absent fails it too.
   - A rerun on the same digest pushes `:stable` alone.
   - The job summary prints the digest-pinned ref (`…:X.Y.Z@sha256:…`) for the release notes.
-- **A shared `oaw-mirror-image` action (#1326)** for the fleet's Docker Hub mirrors, next to
-  `oaw-sign-image`. squawkie-talkie, flightdeck and scream-hole each copied a loop that re-pushed
-  every tag, version tags included. The action:
-  - pushes a version tag (`^[0-9]+\.[0-9]+\.[0-9]+$` by default) only when absent;
-  - refuses one that names another digest or can't be read, with nothing pushed;
-  - pushes moving tags (`latest`, `X.Y`, `sha-…`) every time, all in one `imagetools create`.
+- **Shared `oaw-mirror-image` and `oaw-release-images` actions (#1326)** for the fleet's Docker
+  Hub mirrors, next to `oaw-sign-image`. squawkie-talkie, flightdeck and scream-hole each copied a
+  loop that re-pushed every tag, version tags included, and published no digest.
+  - `oaw-mirror-image` pushes a version tag (`^[0-9]+\.[0-9]+\.[0-9]+$` by default) only when
+    absent. It refuses, with nothing pushed, one that names another digest or can't be read. It
+    pushes moving tags (`latest`, `X.Y`, `sha-…`) every time, all in one `imagetools create`. Its
+    outputs and the job summary carry the digest-pinned refs.
+  - `oaw-release-images` writes those refs into the GitHub release as one Images block that a
+    rerun replaces, creating the release if it is missing. It runs after signing, so a
+    release-API failure can't leave a pushed image unsigned.
 
-  It writes the digest-pinned refs to its outputs and the job summary. Given `release-tag`, it
-  also writes them into that GitHub release as one Images block, creating the release if it is
-  missing. The kit's own mirror runs the same core, and now fills in the `vX.Y.Z` release itself.
+  The kit's own mirror runs the same core, and a separate `release-notes` job, the only one with
+  `contents: write`, now fills in the `vX.Y.Z` release.
 
 ### Changed
 - **The mirror refuses a `:stable` that isn't a release (#1324).** A digest whose version label

@@ -1,10 +1,10 @@
 name: "OaW mirror image"
 description: >-
   Copy an image digest to a second registry under its tags, never re-pushing a version tag,
-  and publish the digest in the job summary and (optionally) the GitHub release (#1326).
-  The DRY core of the OaW Docker Hub mirror; consume it via a SHA-pinned `uses:`. The
-  calling job must be logged in to both registries, and needs `contents: write` when
-  `release-tag` is set.
+  and report the digest-pinned refs (#1326). The DRY core of the OaW Docker Hub mirror;
+  consume it via a SHA-pinned `uses:`. The calling job must be logged in to both
+  registries. Sign the destination digest next (oaw-sign-image), then write the refs into
+  the GitHub release (oaw-release-images).
 inputs:
   source-digest-ref:
     description: "The digest to copy (registry/image@sha256:...). Never a moving tag (R-23)."
@@ -23,16 +23,6 @@ inputs:
       another digest. Every other tag is moving and always pushed.
     required: false
     default: '^[0-9]+\.[0-9]+\.[0-9]+$'
-  release-tag:
-    description: >-
-      A GitHub release (its tag, e.g. v0.11.0) to write the Images block into. It is created
-      with generated notes if it doesn't exist. Empty skips the release.
-    required: false
-    default: ""
-  github-token:
-    description: "Token for the release write."
-    required: false
-    default: ${{ github.token }}
 outputs:
   digest:
     description: "The digest copied (sha256:...)."
@@ -51,9 +41,6 @@ runs:
         TAGS: ${{ inputs.tags }}
         DEST_IMAGE: ${{ inputs.dest-image }}
         IMMUTABLE_TAG_REGEX: ${{ inputs.immutable-tag-regex }}
-        RELEASE_TAG: ${{ inputs.release-tag }}
-        GH_TOKEN: ${{ inputs.github-token }}
-        GH_REPO: ${{ github.repository }}
       # Invoke via `bash`, as oaw-sign-image does, so a consumer checkout that loses the
       # execute bit can't fail this with exit 126.
       run: bash "${GITHUB_ACTION_PATH}/oaw-mirror-image.sh"

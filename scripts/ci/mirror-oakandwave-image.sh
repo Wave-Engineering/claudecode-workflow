@@ -21,8 +21,7 @@
 #   SRC_DIGEST       the GHCR digest ref to mirror (registry/image@sha256:...)
 #   DOCKERHUB_IMAGE  docker.io/oakandwave/oakandwave-workflow
 #   STABLE_TAG       stable
-#   PUBLISH_RELEASE  "true" writes the Images block into GitHub release v<version>
-#                    (gh reads GH_TOKEN and GH_REPO); anything else skips it
+# It touches no GitHub release: the workflow's release-notes job does, after the re-sign.
 # Outputs (GITHUB_OUTPUT):
 #   version          the X.Y.Z read off the image
 #   version_ref      DOCKERHUB_IMAGE:X.Y.Z@sha256:... (also written to GITHUB_STEP_SUMMARY)
@@ -55,15 +54,11 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 	exit 1
 fi
 
-release_tag=""
-[[ "${PUBLISH_RELEASE:-}" == "true" ]] && release_tag="v${version}"
-
 core="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.github/actions/oaw-mirror-image/oaw-mirror-image.sh"
 SOURCE_DIGEST_REF="$SRC_DIGEST" \
 	TAGS="$(printf '%s\n%s\n' "$STABLE_TAG" "$version")" \
 	DEST_IMAGE="$DOCKERHUB_IMAGE" \
 	IMMUTABLE_TAG_REGEX='^[0-9]+\.[0-9]+\.[0-9]+$' \
-	RELEASE_TAG="$release_tag" \
 	bash "$core"
 
 version_ref="${DOCKERHUB_IMAGE}:${version}@${digest}"

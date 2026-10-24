@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # oaw-mirror-image.sh — copy an image digest to a second registry under its tags, never
-# re-pushing a version tag, and publish the digest (#1326).
+# re-pushing a version tag, and report the digest-pinned refs (#1326).
 #
 # The core of the oaw-mirror-image action, and of the kit's own mirror
 # (scripts/ci/mirror-oakandwave-image.sh). It replaces the copy-pasted
@@ -15,13 +15,14 @@
 # Every other tag (latest, X.Y, X, sha-*, stable) is moving, and is pushed.
 # Everything to push goes in ONE imagetools create; with nothing to push, none runs.
 #
+# This touches no GitHub release. That is oaw-release-images, which a caller runs AFTER
+# signing, so a release-API failure can never leave a pushed image unsigned.
+#
 # Inputs (env):
 #   SOURCE_DIGEST_REF    registry/image@sha256:... to copy
 #   TAGS                 newline-separated refs or bare tags; the part after the last ':' is used
 #   DEST_IMAGE           the destination repository, e.g. docker.io/oakandwave/squawkie-talkie
 #   IMMUTABLE_TAG_REGEX  default ^[0-9]+\.[0-9]+\.[0-9]+$
-#   RELEASE_TAG          optional: a GitHub release to write the Images block into
-#                        (gh reads GH_TOKEN and GH_REPO from the environment)
 # Outputs (GITHUB_OUTPUT):
 #   digest               sha256:...
 #   release_refs         one DEST_IMAGE:<version tag>@<digest> per version tag (multi-line)
@@ -43,6 +44,10 @@ names=()
 while IFS= read -r line; do
 	line="${line//[[:space:]]/}"
 	[[ -z "$line" ]] && continue
+	if [[ "$line" == *,* ]]; then
+		echo "  [!] TAGS is newline-separated, not comma-separated: $line" >&2
+		exit 1
+	fi
 	name="${line##*:}"
 	[[ " ${names[*]} " == *" $name "* ]] || names+=("$name")
 done <<<"$TAGS"
@@ -89,7 +94,7 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
 	{
 		echo "digest=${digest}"
 		echo "release_refs<<OAW_MIRROR_EOF"
-		printf '%s\n' "${release_refs[@]}"
+		[[ ${#release_refs[@]} -gt 0 ]] && printf '%s\n' "${release_refs[@]}"
 		echo "OAW_MIRROR_EOF"
 	} >>"$GITHUB_OUTPUT"
 fi
@@ -99,45 +104,4 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" && ${#release_refs[@]} -gt 0 ]]; then
 		# shellcheck disable=SC2016 # the backticks are markdown for the summary, not a substitution
 		printf -- '- `%s`\n' "${release_refs[@]}"
 	} >>"$GITHUB_STEP_SUMMARY"
-fi
-
-[[ -z "${RELEASE_TAG:-}" ]] && exit 0
-if [[ ${#release_refs[@]} -eq 0 ]]; then
-	echo "==> no version tag, so nothing to write into release $RELEASE_TAG"
-	exit 0
-fi
-
-# The Images block, between markers so a rerun replaces it instead of adding a second one.
-begin="<!-- oaw-mirror-image:begin -->"
-end="<!-- oaw-mirror-image:end -->"
-block="$(
-	echo "$begin"
-	echo "### Images"
-	# shellcheck disable=SC2016 # markdown backticks, as above
-	printf -- '- `%s`\n' "${release_refs[@]}"
-	echo "- also \`${SOURCE_DIGEST_REF}\`"
-	echo "$end"
-)"
-
-notes="$(mktemp)"
-trap 'rm -f "$notes"' EXIT
-if view_out="$(gh release view "$RELEASE_TAG" --json body -q .body 2>&1)"; then
-	if [[ "$view_out" == *"$begin"*"$end"* ]]; then
-		BLOCK="$block" awk -v b="$begin" -v e="$end" '
-			$0 == b { print ENVIRON["BLOCK"]; skip = 1; next }
-			$0 == e { skip = 0; next }
-			!skip
-		' <<<"$view_out" >"$notes"
-	else
-		printf '%s\n\n%s\n' "$view_out" "$block" >"$notes"
-	fi
-	gh release edit "$RELEASE_TAG" --notes-file "$notes" >/dev/null
-	echo "==> wrote the Images block into release $RELEASE_TAG"
-elif [[ "$view_out" == *"release not found"* ]]; then
-	printf '%s\n' "$block" >"$notes"
-	gh release create "$RELEASE_TAG" --verify-tag --generate-notes --notes-file "$notes" >/dev/null
-	echo "==> created release $RELEASE_TAG with the Images block"
-else
-	echo "  [!] could not read release $RELEASE_TAG: $view_out" >&2
-	exit 1
 fi
