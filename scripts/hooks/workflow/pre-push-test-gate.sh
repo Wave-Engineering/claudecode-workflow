@@ -68,7 +68,9 @@ _protected_re='^(main|master|develop|trunk|HEAD|release/.*|v[0-9].*|(heads|tags|
 # kahuna/* or wave-*/* are governed by the WAVE trust gate (commutativity +
 # kahuna→release merge-result CI + code-reviewer + trivy), not this session
 # sentinel — which is redundant for integration pushes and wrongly blocks
-# legitimate no-test (docs/config) waves.
+# legitimate no-test (docs/config) waves. #1299: campaign/* (the /wavemachine
+# campaign branch) is exempt on the same footing; nothing leaves it for a
+# protected branch except through the DoD-gated release PR.
 # #848/ENG-2 — flight branches use a STANDARD prefix (<type>/<issueNum>-<waveId>-<slug>);
 # one for the ACTIVE wave (WAVE_FLIGHT_ID) counts as an integration ref. Since #1232 every
 # flight branch also matches _working_re, so this check decides nothing today; it is kept,
@@ -144,8 +146,8 @@ _exempt_plain_push() {
 		# could otherwise exempt.
 		[[ "$dst" =~ ^[A-Za-z0-9] ]] || return 1
 		[[ "$dst" =~ $_protected_re ]] && return 1
-		if [[ "$dst" == kahuna/* || "$dst" == wave-*/* ]]; then
-			: # legacy integration refs (kahuna, old wave-*/ flight stem)
+		if [[ "$dst" == kahuna/* || "$dst" == campaign/* || "$dst" == wave-*/* ]]; then
+			: # integration refs (kahuna, /wavemachine campaign, old wave-*/ flight stem)
 		elif [[ -n "$_flight_re" && "$dst" =~ $_flight_re ]]; then
 			: # #848: a flight branch for the ACTIVE wave
 		elif [[ "$dst" =~ $_working_re ]]; then

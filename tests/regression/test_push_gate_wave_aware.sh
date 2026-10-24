@@ -6,7 +6,7 @@
 # That sentinel heuristic is the WRONG gate for integration pushes inside a wave
 # campaign (kahuna/* and wave-*/* are governed by the wave trust gate), and it wrongly
 # blocks legitimate no-test (docs/config) waves. This test pins:
-#   1. push to kahuna/* / wave-*/* exits 0 with NO sentinel (the exemption),
+#   1. push to kahuna/* / campaign/* / wave-*/* exits 0 with NO sentinel (the exemption),
 #   2. push to a protected ref (main) still BLOCKS with no sentinel (since #1232 a plain
 #      feature/* push is exempt; see test_push_gate_working_branches.sh)
 #      (no safety regression — the load-bearing AC),
@@ -90,6 +90,9 @@ assert_allow "git push origin kahuna/56"
 assert_allow "git push -u origin kahuna/56-orion-docs-labs"
 assert_allow "git push origin wave-9101/issue-8"
 assert_allow "git push origin HEAD:kahuna/56"
+# #1299: the /wavemachine campaign branch is an integration ref too.
+assert_allow "git push origin campaign/26-mattermost-p1"
+assert_allow "git push -u origin HEAD:campaign/26-mattermost-p1"
 assert_block "git push origin main"
 assert_block "git push origin release/1.0"
 # #1232: a working branch (feature/fix/chore/doc) now pushes freely — /precheck gates the
@@ -99,6 +102,7 @@ assert_allow "git push origin feature/123-foo"
 # 3: mixed push (integration + protected) must still BLOCK (strict — never let a
 #    protected-ref push ride in on an integration ref in the same command).
 assert_block "git push origin main kahuna/56"
+assert_block "git push origin main campaign/26-mattermost-p1"
 
 # #848: standard-prefix flight branches (<type>/<issueNum>-<waveId>-<slug>) for the ACTIVE wave
 # (WAVE_FLIGHT_ID) are exempt. Since #1232 every working branch is exempt anyway, so the sibling-wave
