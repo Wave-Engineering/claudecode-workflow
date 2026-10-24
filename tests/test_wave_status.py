@@ -788,6 +788,14 @@ class TestWavemachineFlag:
         rc, out, _ = run_cli(["wavemachine-lease"], temp_git_repo)
         assert rc == 0 and json.loads(out)["status"] == "lapsed"
 
+    def test_lease_without_plan_is_inactive(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """No ``state.json`` yet: still exit 0, and nothing holds the flag."""
+        rc, out, err = run_cli(["wavemachine-lease"], temp_git_repo)
+        assert rc == 0, err
+        assert json.loads(out)["status"] == "inactive"
+
 
 # ---------------------------------------------------------------------------
 # init --extend auto-advance current_wave (issue #382)

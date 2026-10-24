@@ -225,11 +225,13 @@ vs. the post-STOP wave-status read) differs.
    `{status, age_seconds, session_id, started_at, last_updated}`:
    - `inactive` → proceed.
    - `live` → refuse: another run holds the plan.
-   - `lapsed` → refuse, and put the decision to the human. Show the lease's age, its owner
+   - `lapsed` → stop and put the decision to the human. Show the lease's age, its owner
      session, and the pending waves from `wave_show()`. A lapsed flag means its run died
-     without `wavemachine-stop`, and its plan may no longer be right. Run
-     `wave-status wavemachine-start --launcher main --reclaim` **only on the human's
-     say-so**; never reclaim on your own.
+     without `wavemachine-stop`, and its plan may no longer be right. **Only on the human's
+     say-so**, continue with the reclaim approved: launch step 1 then adds `--reclaim`.
+     Don't run `wavemachine-start` here: it would emit before the FlightDeck card is pinned,
+     and launch step 1's own start would then refuse the lease it just took. Never reclaim on
+     your own.
 
 On any refusal: explain, suggest remediation, do NOT enter the loop. (Same gates as the
 legacy `/wavemachine` pre-flight; see that skill for the detailed rationale.)
@@ -276,7 +278,8 @@ the CLOSED ISSUE'S OWN wave (`_issue_wave_id`), not wherever `current_wave` happ
 since those two can legitimately drift (a straggler close after the campaign has advanced, a
 human recovery via `set_current_wave`, `extend_state`'s auto-advance).
 
-1. Set the `wavemachine_active` flag (`wave-status wavemachine-start --launcher main`).
+1. Set the `wavemachine_active` flag (`wave-status wavemachine-start --launcher main`, plus
+   `--reclaim` only when the human approved reclaiming a lapsed lease at pre-flight).
    Unset it on EVERY exit path (`wave-status wavemachine-stop`) — treat as a `finally`.
 2. Regenerate + open the status panel (`generate-status-panel` then `xdg-open`).
 3. **Campaign-branch bootstrap (#1052)** — once per Plan: ensure `campaign/<plan_id>-<slug>` exists

@@ -355,7 +355,10 @@ def _cmd_wavemachine_start(args: argparse.Namespace) -> None:
 def _cmd_wavemachine_lease(args: argparse.Namespace) -> None:
     """Handle ``wavemachine-lease`` — print the lease as JSON; always exit 0."""
     root = get_project_root()
-    state_data = load_state(status_dir(root) / "state.json")
+    try:
+        state_data = load_state(status_dir(root) / "state.json", write_back=False)
+    except FileNotFoundError:
+        state_data = {}  # no plan initialized: nothing holds the flag
     print(json.dumps(wavemachine_lease(state_data)))
 
 

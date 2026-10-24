@@ -626,6 +626,27 @@ class TestWavemachineStop:
         result = wavemachine_stop(project_root)
         assert not [k for k in result if k.startswith("wavemachine_")]
 
+    def test_resets_stale_waiting_ci_to_idle(self, project_root: Path) -> None:
+        """#636: a waiting-ci heartbeat left by post-merge CI polling must NOT
+        survive campaign exit and trip the next campaign's pre-flight."""
+        wavemachine_start(project_root, launcher="main")
+        waiting_ci(project_root, detail="PR #621 attempt 58: 0/0 passed")
+        # Sanity: the stale action is present before stop.
+        mid = load_json(status_dir(project_root) / "state.json")
+        assert mid["current_action"]["action"] == "waiting-ci"
+        # Exit resets it.
+        result = wavemachine_stop(project_root)
+        assert result["current_action"]["action"] == "idle"
+        persisted = load_json(status_dir(project_root) / "state.json")
+        assert persisted["current_action"]["action"] == "idle"
+
+    def test_idempotent_on_reentry(self, project_root: Path) -> None:
+        """Worker abort paths re-enter; idle->idle is a safe no-op."""
+        wavemachine_stop(project_root)
+        result = wavemachine_stop(project_root)
+        assert result["current_action"]["action"] == "idle"
+        assert "wavemachine_active" not in result
+
 
 class TestWavemachineLease:
     """#1110: liveness of the wavemachine flag is the age of ``last_updated``."""
@@ -676,27 +697,6 @@ class TestWavemachineLease:
         assert lease["session_id"] == "sess-1"
         assert lease["started_at"] == "2026-10-24T10:00:00Z"
         assert lease["last_updated"] == state["last_updated"]
-
-    def test_resets_stale_waiting_ci_to_idle(self, project_root: Path) -> None:
-        """#636: a waiting-ci heartbeat left by post-merge CI polling must NOT
-        survive campaign exit and trip the next campaign's pre-flight."""
-        wavemachine_start(project_root, launcher="main")
-        waiting_ci(project_root, detail="PR #621 attempt 58: 0/0 passed")
-        # Sanity: the stale action is present before stop.
-        mid = load_json(status_dir(project_root) / "state.json")
-        assert mid["current_action"]["action"] == "waiting-ci"
-        # Exit resets it.
-        result = wavemachine_stop(project_root)
-        assert result["current_action"]["action"] == "idle"
-        persisted = load_json(status_dir(project_root) / "state.json")
-        assert persisted["current_action"]["action"] == "idle"
-
-    def test_idempotent_on_reentry(self, project_root: Path) -> None:
-        """Worker abort paths re-enter; idle->idle is a safe no-op."""
-        wavemachine_stop(project_root)
-        result = wavemachine_stop(project_root)
-        assert result["current_action"]["action"] == "idle"
-        assert "wavemachine_active" not in result
 
 
 # ---------------------------------------------------------------------------
