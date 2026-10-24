@@ -8,6 +8,25 @@
 # awaiting-verdict (an async await), hold (a human pause) and promoting (a
 # promotion in progress), and blocks only a launch- or idle-shaped gap.
 #
+# THE DRIVER'S OWN FIELD (#1205). While a wave runs, the Workflow's agents write
+# fine-grained states (waiting-ci, in-flight, merging, planning...) to
+# current_action, overwriting the driver's awaiting-verdict, so a guard reading
+# current_action blocked mid-wave and told the driver to launch a duplicate
+# wave. The driver's coarse states now also go to driver_action, which nothing
+# else writes, and the guard decides from it:
+#   hold                                               → silent
+#   awaiting-verdict, awaited wave not completed/held  → silent (still running)
+#   awaiting-verdict, awaited wave completed or held   → block: act on its verdict
+#   promoting, its wave not completed/held             → silent (promotion running)
+#   promoting, its wave completed or held              → block: launch the next wave
+#   launching, or any other driver action              → block (the stall)
+# A driver wait is legitimate only while the wave it waits on is unfinished.
+# promoting is sticky (nothing overwrites driver_action after the promotion), so
+# without the wave check a driver that promoted and then stopped would never be
+# blocked, which is the #600 stall itself.
+# State with no driver_action (written before #1205) keeps the old rule on
+# current_action.
+#
 # STALE STATE NEVER BLOCKS (#1109). A flag whose state.json has not been written
 # for STALE_SECONDS, or that has no readable last_updated, most likely belongs to
 # a run that died without wavemachine-stop. Blocking would force another turn of
@@ -34,19 +53,41 @@ program='
 		if type == "string" then
 			(sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | try fromdateiso8601 catch null)
 		else null end;
+	def stall_reason:
+		"/wavemachine is active and the campaign has not reached a terminal exit. The turn ended without launching the next per-wave Workflow and without entering a legitimate async-await (awaiting-verdict), human-pause (hold), or promotion (promoting) state. If a wave is pending, advance the campaign loop now: write the coarse status (wave-status awaiting-verdict <waveId>) in the SAME tool-use block as the per-wave Workflow launch, then end the turn to await the async verdict. If all waves are promoted, take the success exit and run wave-status wavemachine-stop. Do NOT stall — emit the next tool call now.";
+	def finished_reason($wave; $status):
+		"/wavemachine is active and wave \($wave) has finished (\($status)) — act on its verdict: promote and launch the next wave, or wave-status hold \"<reason>\". Do NOT stall — emit the next tool call now.";
+	def promoted_reason($wave; $status):
+		"/wavemachine is active and wave \($wave) has been promoted (\($status)), but the turn ended without launching the next wave. Launch it now (wave-status awaiting-verdict <waveId> in the SAME tool-use block as the per-wave Workflow launch), or, if every wave is promoted, take the success exit and run wave-status wavemachine-stop. Do NOT stall — emit the next tool call now.";
+	# The block reason, or null when this turn end is legitimate.
+	def block_reason:
+		if (.driver_action | type) == "object" then
+			(.driver_action.action // "") as $a
+			| (.driver_action.wave_id // "") as $w
+			| ((.waves // {})[$w].status // "") as $st
+			| ($st == "completed" or $st == "held") as $done
+			| if $a == "hold" then null
+			elif $a == "awaiting-verdict" then (if $done then finished_reason($w; $st) else null end)
+			elif $a == "promoting" then (if $done then promoted_reason($w; $st) else null end)
+			else stall_reason end
+		elif ((.current_action.action // "") | IN("awaiting-verdict", "hold", "promoting")) then null
+		else stall_reason end;
 	if ((.wavemachine_active // false) | tostring) != "true" then empty
-	elif ((.current_action.action // "") | IN("awaiting-verdict", "hold", "promoting")) then empty
 	else
-		(.last_updated | parse_ts) as $t
-		| (.wavemachine_session_id // "unknown") as $owner
-		| if $t == null or ($now - $t) > $stale then
-			(if $t == null then "has no readable last_updated, so it is treated as stale"
-			 else (($now - $t) as $age
-				| "is \(($age / 86400) | floor)d\((($age % 86400) / 3600) | floor)h stale")
-			 end) as $how
-			| {systemMessage: ("/wavemachine campaign flag \($how) (last_updated \(.last_updated // "none"), owner session \($owner)). Do NOT advance on this state — verify the plan first. To resume: /wavemachine (pre-flight will offer --reclaim). To clear: wave-status wavemachine-stop. To pause honestly: wave-status hold \"<reason>\".")}
+		block_reason as $reason
+		| if $reason == null then empty
 		else
-			{decision: "block", reason: "/wavemachine is active and the campaign has not reached a terminal exit. The turn ended without launching the next per-wave Workflow and without entering a legitimate async-await (awaiting-verdict), human-pause (hold), or promotion (promoting) state. If a wave is pending, advance the campaign loop now: write the coarse status (wave-status awaiting-verdict <waveId>) in the SAME tool-use block as the per-wave Workflow launch, then end the turn to await the async verdict. If all waves are promoted, take the success exit and run wave-status wavemachine-stop. Do NOT stall — emit the next tool call now."}
+			(.last_updated | parse_ts) as $t
+			| (.wavemachine_session_id // "unknown") as $owner
+			| if $t == null or ($now - $t) > $stale then
+				(if $t == null then "has no readable last_updated, so it is treated as stale"
+				 else (($now - $t) as $age
+					| "is \(($age / 86400) | floor)d\((($age % 86400) / 3600) | floor)h stale")
+				 end) as $how
+				| {systemMessage: ("/wavemachine campaign flag \($how) (last_updated \(.last_updated // "none"), owner session \($owner)). Do NOT advance on this state — verify the plan first. To resume: /wavemachine (pre-flight will offer --reclaim). To clear: wave-status wavemachine-stop. To pause honestly: wave-status hold \"<reason>\".")}
+			else
+				{decision: "block", reason: $reason}
+			end
 		end
 	end
 '

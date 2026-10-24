@@ -366,6 +366,29 @@ next wave but the turn ended without it. Writing `awaiting-verdict` in the same 
 as the launch is therefore **load-bearing** — omit it and the guard false-fires on the await
 (cc-workflow#736).
 
+**Two fields, two owners (#1205).** `current_action` is shared: while a wave runs, the
+Workflow's agents call the sdlc `wave_*` tools, which overwrite it with fine-grained states
+(`planning`, `in-flight`, `waiting-ci`, `merging`...). It stays the dashboard's field. The four
+coarse writes above (`launching`, `awaiting-verdict`, `promoting`, `hold`) also write
+**`driver_action`** (`{action, wave_id, detail, at}`), which nothing else touches, and the guard
+decides from it:
+
+- `hold` → silent.
+- `awaiting-verdict` while the awaited wave is not yet `completed` or `held` → silent; it is
+  still running, whatever `current_action` says.
+- `awaiting-verdict` once that wave is `completed` or `held` → **block**: the verdict is in, so
+  act on it (promote and launch the next wave, or `wave-status hold "<reason>"`).
+- `promoting` while its wave is not yet `completed` or `held` → silent.
+- `promoting` once that wave is `completed` or `held` → **block**: the wave is promoted, so
+  launch the next one or take the success exit. `driver_action` is sticky, so without this a
+  driver that promoted and then stopped would never be blocked.
+- `launching` or anything else → block, the stall.
+
+A driver wait is legitimate only while the wave it waits on is unfinished.
+
+State written before #1205 has no `driver_action` and keeps the rule on `current_action`.
+`wave-status wavemachine-stop` clears `driver_action` with the `wavemachine_*` keys.
+
 **Stale state never blocks (#1109).** If `last_updated` is older than 24 h (the guard's
 `STALE_SECONDS`, equal to `WAVEMACHINE_STALE_SECONDS` from #1110) or unreadable, the guard
 does not block; it shows a `systemMessage` with the flag's age and owner. That flag most

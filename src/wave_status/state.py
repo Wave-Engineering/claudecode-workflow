@@ -868,8 +868,14 @@ def store_flight_plan(flights_data: list, root: Path) -> None:
     save_json(d / "flights.json", flights)
 
 
-def _set_action(root: Path, action: str, label: str, detail: str = "") -> dict:
-    """Update ``current_action`` in state.json and return the state dict."""
+def _set_action(
+    root: Path, action: str, label: str, detail: str = "", driver: dict | None = None
+) -> dict:
+    """Update ``current_action`` in state.json and return the state dict.
+
+    *driver*, when given, is also written as ``driver_action`` in the same save.
+    Only :func:`_set_driver_action` passes it (#1205).
+    """
     d = status_dir(root)
     state_data = load_state(d / "state.json")
     state_data["current_action"] = {
@@ -877,6 +883,8 @@ def _set_action(root: Path, action: str, label: str, detail: str = "") -> dict:
         "label": label,
         "detail": detail,
     }
+    if driver is not None:
+        state_data["driver_action"] = driver
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
     _emit_event(
@@ -945,33 +953,57 @@ def waiting_ci(root: Path, detail: str = "") -> dict:
 # (preflight/planning/flight/...), which is legacy-synchronous-orchestrator
 # vocabulary. Instead the /wavemachine driver writes these COARSE states at the
 # in-session boundaries it genuinely knows — the same boundaries where it sets
-# wavemachine_active. They keep the dashboard truthful during an async wave AND
-# are the signal the stall-guard Stop hook keys on (#736): it no-ops on
-# ``awaiting-verdict`` (legitimate async await) and ``hold`` (human adjudication
-# pause), and only blocks when the driver should be launching the next wave.
+# wavemachine_active.
+#
+# TWO FIELDS, TWO OWNERS (#1205). ``current_action`` is shared: while a wave
+# runs, the per-wave Workflow's agents call the sdlc ``wave_*`` tools, which
+# shell out to the fine-grained writers above (planning, review, waiting-ci,
+# flight, complete...) and overwrite it. It stays the dashboard's field.
+# ``driver_action`` belongs to the driver alone: only these four coarse states
+# write it (each also writes ``current_action``, so the dashboard is unchanged),
+# and no fine-grained writer touches it. The stall-guard Stop hook (#736) reads
+# ``driver_action``, so an in-wave write can no longer make it false-fire: it is
+# silent on ``hold`` and ``promoting``, and on ``awaiting-verdict`` while the
+# awaited wave is still running; an ``awaiting-verdict`` whose wave has finished
+# is a real stall. State with no ``driver_action`` (written before #1205) falls
+# back to the old rule on ``current_action``.
 # ---------------------------------------------------------------------------
+
+def _set_driver_action(root: Path, action: str, wave_id: str = "", detail: str = "") -> dict:
+    """Write a driver coarse state to ``driver_action`` AND ``current_action`` (#1205).
+
+    ``current_action`` gets exactly what :func:`_set_action` wrote before
+    #1205: its ``detail`` is *detail* when given, else *wave_id*.
+    """
+    driver = {"action": action, "wave_id": wave_id, "detail": detail, "at": _now_iso()}
+    return _set_action(root, action, action, detail or wave_id, driver=driver)
+
 
 def launching(root: Path, wave_id: str = "") -> dict:
     """Coarse state: the driver is about to launch the per-wave Workflow (#738)."""
-    return _set_action(root, "launching", "launching", wave_id)
+    return _set_driver_action(root, "launching", wave_id)
 
 
 def awaiting_verdict(root: Path, wave_id: str = "") -> dict:
     """Coarse state: the per-wave Workflow is in flight; the driver has ended its
     turn and is awaiting the async completion verdict (#738). The stall-guard
-    no-ops on this — it is a legitimate await, not a stall (#736)."""
-    return _set_action(root, "awaiting-verdict", "awaiting-verdict", wave_id)
+    no-ops on this while the awaited wave is still running (#736, #1205)."""
+    return _set_driver_action(root, "awaiting-verdict", wave_id)
 
 
 def promoting(root: Path, wave_id: str = "") -> dict:
     """Coarse state: a PASS verdict came back; the wave is being promoted (#738)."""
-    return _set_action(root, "promoting", "promoting", wave_id)
+    return _set_driver_action(root, "promoting", wave_id)
 
 
 def hold(root: Path, reason: str = "") -> dict:
     """Coarse state: the campaign is paused for human attention — a HOLD verdict
-    or interactive adjudication (#738). The stall-guard no-ops on this (#736)."""
-    return _set_action(root, "hold", "hold", reason)
+    or interactive adjudication (#738). The stall-guard no-ops on this (#736).
+    ``driver_action.wave_id`` is the current wave; the reason is its detail."""
+    state_data = load_state(status_dir(root) / "state.json")
+    return _set_driver_action(
+        root, "hold", state_data.get("current_wave") or "", detail=reason
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1096,6 +1128,7 @@ def set_kahuna_branch(branch: str | None, root: Path) -> dict:
 WAVEMACHINE_STALE_SECONDS = 86400
 
 _WAVEMACHINE_KEYS = (
+    "driver_action",
     "wavemachine_active",
     "wavemachine_started_at",
     "wavemachine_launcher",
@@ -1230,7 +1263,8 @@ def wavemachine_stop(root: Path) -> dict:
     """Clear wavemachine ownership from ``state.json``.
 
     Deletes every ``wavemachine_*`` key (active, started_at, launcher,
-    session_id, host, reclaimed).  Idempotent — succeeds even if no
+    session_id, host, reclaimed) and the driver's ``driver_action`` (#1205).
+    Idempotent — succeeds even if no
     wavemachine run is active (worker abort paths need this to be safe on
     re-entry).
 

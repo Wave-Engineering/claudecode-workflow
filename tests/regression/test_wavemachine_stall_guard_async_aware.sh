@@ -211,6 +211,80 @@ else
 	fail "active + awaiting-verdict + stale → expected silence: '$out'"
 fi
 
+# --- Case (e): the driver's own field (#1205). The incident replayed: the
+#     driver awaits P1W1 while the Workflow's agents overwrite current_action. -
+for action in waiting-ci in-flight merging planning; do
+	write_state "{\"wavemachine_active\": true, \"driver_action\": {\"action\": \"awaiting-verdict\", \"wave_id\": \"P1W1\"}, \"current_action\": {\"action\": \"$action\"}, \"waves\": {\"P1W1\": {\"status\": \"in_progress\"}}}"
+	out=$(run_hook)
+	if [[ -z "$out" ]]; then
+		pass "driver awaiting P1W1 (in_progress) + in-wave current_action=$action → silent (#1205)"
+	else
+		fail "driver awaiting P1W1 (in_progress) + current_action=$action → FALSE-FIRED (#1205): $out"
+	fi
+done
+
+for st in completed held; do
+	write_state "{\"wavemachine_active\": true, \"driver_action\": {\"action\": \"awaiting-verdict\", \"wave_id\": \"P1W1\"}, \"current_action\": {\"action\": \"idle\"}, \"waves\": {\"P1W1\": {\"status\": \"$st\"}}}"
+	out=$(run_hook)
+	if echo "$out" | jq -e --arg st "$st" '.decision == "block" and (.reason | test("P1W1") and test($st) and test("act on its verdict"))' >/dev/null 2>&1; then
+		pass "driver awaiting P1W1, wave $st → blocks, naming the wave and 'act on its verdict'"
+	else
+		fail "driver awaiting P1W1, wave $st → expected a block naming the finished wave: '$out'"
+	fi
+done
+
+write_state '{"wavemachine_active": true, "driver_action": {"action": "awaiting-verdict", "wave_id": "P9W9"}, "current_action": {"action": "idle"}, "waves": {}}'
+out=$(run_hook)
+if [[ -z "$out" ]]; then
+	pass "driver awaiting a wave with no entry yet → silent"
+else
+	fail "driver awaiting a wave with no entry → expected silence: '$out'"
+fi
+
+write_state '{"wavemachine_active": true, "driver_action": {"action": "launching", "wave_id": "P1W2"}, "current_action": {"action": "awaiting-verdict"}}'
+out=$(run_hook)
+if echo "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+	pass "driver_action=launching → blocks, whatever current_action says"
+else
+	fail "driver_action=launching → did NOT block: '$out'"
+fi
+
+for action in hold promoting; do
+	write_state "{\"wavemachine_active\": true, \"driver_action\": {\"action\": \"$action\", \"wave_id\": \"P1W1\"}, \"current_action\": {\"action\": \"merging\"}}"
+	out=$(run_hook)
+	if [[ -z "$out" ]]; then
+		pass "driver_action=$action → silent"
+	else
+		fail "driver_action=$action → expected silence: '$out'"
+	fi
+done
+
+# promoting is sticky: nothing overwrites driver_action once the wave is
+# promoted, so a promoted wave with no next launch is the #600 stall.
+write_state '{"wavemachine_active": true, "driver_action": {"action": "promoting", "wave_id": "P1W1"}, "current_action": {"action": "waiting-ci"}, "waves": {"P1W1": {"status": "in_progress"}}}'
+out=$(run_hook)
+if [[ -z "$out" ]]; then
+	pass "driver promoting P1W1, wave still in_progress → silent"
+else
+	fail "driver promoting P1W1 (in_progress) → expected silence: '$out'"
+fi
+
+write_state '{"wavemachine_active": true, "driver_action": {"action": "promoting", "wave_id": "P1W1"}, "current_action": {"action": "idle"}, "waves": {"P1W1": {"status": "completed"}}}'
+out=$(run_hook)
+if echo "$out" | jq -e '.decision == "block" and (.reason | test("P1W1") and test("promoted") and test("next wave"))' >/dev/null 2>&1; then
+	pass "driver promoting P1W1, wave completed → blocks: launch the next wave"
+else
+	fail "driver promoting P1W1, wave completed → expected a block (the #600 stall): '$out'"
+fi
+
+write_state "{\"wavemachine_active\": true, \"driver_action\": {\"action\": \"awaiting-verdict\", \"wave_id\": \"P1W1\"}, \"waves\": {\"P1W1\": {\"status\": \"completed\"}}, \"last_updated\": \"$STALE\"}"
+out=$(run_hook)
+if echo "$out" | jq -e '(has("decision") | not) and (.systemMessage | test("stale"))' >/dev/null 2>&1; then
+	pass "a finished-wave stall on stale state → systemMessage, not a block"
+else
+	fail "a finished-wave stall on stale state → expected a stale systemMessage: '$out'"
+fi
+
 printf 'not json' >"$STATE"
 out=$(run_hook)
 rc=$?
