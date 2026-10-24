@@ -38,15 +38,17 @@ wave-status and returns the loop blob; worktree setup/cleanup are idempotent fil
   merged:      number[],                       // issues already on kahuna (skip them)
   pending:     number[],                       // issues still to do
   reworkCount: { [issueNum: string]: number }, // optional; per-issue rework tally
-  idleRounds:  number,                         // optional; thrash counter to restore
-  groupsRun:   number,                         // optional; group count to seed the MAX_GROUPS bound
+  idleRounds:  number,                         // optional; persisted for observability, NOT restored (#1204)
+  groupsRun:   number,                         // optional; lifetime group count, seeds the MAX_GROUPS bound across retries
 }
 ```
 
 - **Cold start (no prior state):** `{ merged: [], pending: [...ALL_ISSUES] }` — the stub's behavior.
 - **Real impl:** an `agent()` that reads `.claude/status/` (durable, NOT `/tmp`) for this
   `WAVE_ID` and returns the persisted loop blob. The loop seeds `pending`/`merged`/
-  `reworkCount`/`idleRounds` and the `groupsRunBase` bound from it. **Idempotency is the
+  `reworkCount` and the `groupsRunBase` bound from it. `idleRounds` is NOT seeded: it counts
+  consecutive no-progress rounds within one run, so a retry after a `thrash` exit starts at 0
+  instead of halting before it plans anything (#1204). **Idempotency is the
   crux** (§3.3): on resume the loop must skip finished work — which it does as long as
   `rehydrate()` reports the already-merged set accurately.
 

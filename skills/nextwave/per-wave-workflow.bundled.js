@@ -263,8 +263,9 @@ function persistTerminalPrompt({ waveId, targetRepo, targetRepoDir, kahunaBranch
 // ─────────────────────────────────────────────────────────────────────────────
 // PURE — the rehydrate read-back half (no I/O, no agent; fully unit-testable).
 // These are the exact inverse of wave-status.js toBlob(): blob → REHYDRATE loop seed.
-// The loop (per-wave-workflow.js) seeds pending/merged/reworkCount/idleRounds/groupsRun
-// from this; reworkCount numeric keys are JSON-stringified in the blob and the loop
+// The loop (per-wave-workflow.js) seeds pending/merged/reworkCount/groupsRun from this.
+// idleRounds is parsed and persisted for observability but NOT seeded: it counts within one
+// run (#1204). reworkCount numeric keys are JSON-stringified in the blob and the loop
 // Number-casts them — parseRehydrate returns them faithfully (string-keyed object).
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1732,7 +1733,7 @@ async function rehydrate() {
   // overlap), clamps counters, string-keys reworkCount, backfills dropped issues. The live path now
   // gets the same guarantee the test pins, not the raw agent seed.
   const norm = parseRehydrate(seed, ALL_ISSUES)
-  log(`[#686] rehydrated — merged=[${norm.merged.join(',') || 'none'}] pending=[${norm.pending.join(',') || 'none'}] idle=${norm.idleRounds} groups=${norm.groupsRun}`)
+  log(`[#686] rehydrated — merged=[${norm.merged.join(',') || 'none'}] pending=[${norm.pending.join(',') || 'none'}] groups=${norm.groupsRun} (saved idle=${norm.idleRounds} is not restored; it counts within one run, #1204)`)
   return norm
 }
 
@@ -2092,9 +2093,15 @@ const pending = new Set(seed.pending)
 const merged = new Set(seed.merged)
 const reworkCount = Object.fromEntries(Object.entries(seed.reworkCount || {}).map(([k, v]) => [Number(k), v])) // numeric keys (JSON resume returns them as strings)
 let lastRework = []
-let idleRounds = seed.idleRounds || 0
+// #1204: idleRounds counts consecutive no-progress rounds WITHIN ONE RUN. It is persisted for
+// observability but never restored: a retried wave whose blob says idleRounds:2 used to hit the
+// thrash exit before planning anything, so every retry spent itself on a run that could not move.
+// reworkCount (per issue) and groupsRunBase (lifetime MAX_GROUPS bound) DO carry across retries —
+// they are what bound a genuinely stuck issue and an endless rework loop.
+let idleRounds = 0
 const groupsRun = [] // running record; length seeds from seed.groupsRun for the bound
 let groupsRunBase = Math.max(0, Number(seed.groupsRun) || 0) // rehydration-proof: corrupt/missing/negative seed → 0, so the runaway guard always fires
+let groupsDispatched = 0 // groups whose flights launched THIS run (a failed reconcile still dispatched)
 let halt = null // null = still converging; else a HOLD reason (NEVER a success)
 
 // Collected §3.2 must-preserve data — recorded, never branched-on.
@@ -2136,6 +2143,7 @@ while (true) {
 
   // ── SETUP: await a single worktree-creation step BEFORE parallel() (race-safe, §4.2) ──
   const wtMap = await setupWorktrees(group) // SEAM #686 (idempotent)
+  groupsDispatched++
 
   // ── RUN group issues in PARALLEL (isolated workers; intra-flight fixes inside) ──
   const built = (await parallel(group.map((n) => () =>
@@ -2207,6 +2215,10 @@ while (true) {
 }
 
 const loopOutcome = halt || (pending.size === 0 ? 'success' : 'incomplete')
+// #1204: a halt before any flight launched this run is a different fact from the same halt after
+// work was tried — a retry that cannot move says so, instead of reading as one more ordinary
+// thrash/runaway. `halt` and `loopOutcome` keep their strings (downstream code reads them).
+const exitedBeforeDispatch = !!halt && groupsDispatched === 0
 log(`Flight loop done: ${loopOutcome} in ${groupsRun.length} groups (concerns: ${allConcerns.length}, deferrals: ${allDeferrals.length})`)
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2303,7 +2315,13 @@ if (!halt && pending.size === 0) {
       : { verdict: 'HOLD', failing: failed, signals }
   }
 } else {
-  gate = { verdict: 'SKIPPED', reason: halt || 'loop did not reach clean success' }
+  gate = {
+    verdict: 'SKIPPED',
+    // The resumed count only means something on a resume (it is what explains a runaway retry).
+    reason: exitedBeforeDispatch
+      ? `${halt} — exited before dispatching any group this run${groupsRunBase > 0 ? ` (resumed groupsRun=${groupsRunBase}, maxGroups=${MAX_GROUPS})` : ''}`
+      : halt || 'loop did not reach clean success',
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2367,6 +2385,7 @@ return {
   kahunaBranch: KAHUNA_BRANCH,
   targetRepo: TARGET_REPO,
   loopOutcome,
+  exitedBeforeDispatch,
   groups: groupsRunBase + groupsRun.length,
   groupsRun,
   merged: [...merged],

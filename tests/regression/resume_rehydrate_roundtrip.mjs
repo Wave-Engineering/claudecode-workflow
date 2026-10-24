@@ -83,12 +83,12 @@ try {
     assert.deepEqual(seed.merged, [3, 12, 45], 'merged set reconstructed (the authoritative skip set)')
     assert.deepEqual(seed.pending, [8, 100], 'pending set reconstructed')
     assert.deepEqual(seed.reworkCount, { 8: 2, 45: 1 }, 'reworkCount round-trips (numeric ↔ JSON-string keys)')
-    assert.equal(seed.idleRounds, 1, 'idleRounds (thrash counter) restored')
+    assert.equal(seed.idleRounds, 1, 'idleRounds round-trips (persisted for observability; the loop does not seed it, #1204)')
     assert.equal(seed.groupsRun, 4, 'groupsRun (MAX_GROUPS bound seed) restored')
 
     // the load-bearing resume guarantee: a resumed loop SKIPS the merged issues.
     for (const m of [3, 12, 45]) assert.ok(!seed.pending.includes(m), `merged #${m} is NOT re-scheduled`)
-    ok('mid-run state rehydrates to a loop seed that skips finished work (merged/pending/reworkCount/idleRounds/groupsRun)')
+    ok('mid-run state rehydrates to a loop seed that skips finished work (merged/pending/reworkCount/groupsRun; idleRounds round-trips but is not seeded, #1204)')
 
     // reworkCount keys survive as clean integers (JSON stringifies them; the loop Number-casts)
     for (const k of Object.keys(seed.reworkCount)) {
