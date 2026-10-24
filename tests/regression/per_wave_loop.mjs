@@ -50,6 +50,20 @@ function assertHalted(run, reasonPrefix) {
 console.log('per_wave_loop (#1210)')
 console.log('──────────────────────────────────────────')
 
+// The harness's own stubs must be able to fail the way the runtime does, or every case below could
+// pass on a script the runtime would kill.
+for (const [what, body] of [['Date.now()', 'return Date.now()'], ['new Date()', 'return new Date()'], ['Math.random()', 'return Math.random()']]) {
+  await check(`harness: ${what} throws, as in the runtime`, async () => {
+    const run = await runPerWave({ source: body })
+    assert.ok(run.error && run.error.message.includes(what), `expected ${what} to throw, got ${run.error ?? run.result}`)
+  })
+}
+await check('harness: deterministic Date and Math still work', async () => {
+  const run = await runPerWave({ source: "return [new Date('2026-10-24T00:00:00Z').toISOString(), Math.max(1, 2)]" })
+  assert.equal(run.error, null, String(run.error))
+  assert.deepEqual(run.result, ['2026-10-24T00:00:00.000Z', 2])
+})
+
 await check('baseline: the defaults run a clean wave end to end and integrate', async () => {
   const run = await runPerWave()
   assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
@@ -94,8 +108,26 @@ await check('plan returns null → plan agent failed: agent returned no result',
 })
 
 await check('plan throws → the error text is the reason', async () => {
-  const run = await runPerWave({ responder: only({ 'plan:*': () => { throw new Error('budget ceiling reached') } }) })
-  assertHalted(run, 'plan agent failed: budget ceiling reached')
+  const run = await runPerWave({ responder: only({ 'plan:*': () => { throw new Error('subagent refused') } }) })
+  assertHalted(run, 'plan agent failed: subagent refused')
+})
+
+// The budget is not one failed call: every agent() after it throws, persist:terminal included. The
+// honest outcome is the verdict and a soft-failed terminal write, and no durable hold record.
+await check('budget spent at the plan → SKIPPED with the reason, terminal write soft-fails, no throw', async () => {
+  const run = await runPerWave({ exhaustBudgetAt: 'plan:' })
+  assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
+  assert.equal(run.result.gate, 'SKIPPED')
+  assert.equal(run.result.integrated, false)
+  assert.ok(String(run.result.haltReason).startsWith('plan agent failed: budget exhausted'), `haltReason was '${run.result.haltReason}'`)
+  assert.ok(run.logs.some((l) => l.includes('persistTerminal soft-fail')), 'the terminal write was attempted and soft-failed')
+})
+
+await check('budget spent at the reconcile → SKIPPED with the reason, no throw', async () => {
+  const run = await runPerWave({ exhaustBudgetAt: 'merge:' })
+  assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
+  assert.equal(run.result.gate, 'SKIPPED')
+  assert.ok(String(run.result.haltReason).startsWith('reconcile agent failed: budget exhausted'), `haltReason was '${run.result.haltReason}'`)
 })
 
 await check('plan returns {} → plan agent failed: schema-invalid result', async () => {

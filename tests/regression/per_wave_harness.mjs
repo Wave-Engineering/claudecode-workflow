@@ -11,6 +11,12 @@
 //     an account limit, a skip), and throws past the budget ceiling. A responder returns null or
 //     throws to model each.
 //   - parallel() never rejects: a thunk that throws resolves to null in the result array.
+//   - Once the token budget is spent, EVERY later agent() call throws, not just one. The
+//     `exhaustBudgetAt` option models that: from the first call whose label starts with it, all
+//     agent() calls throw.
+//   - Date.now(), argless new Date() and Math.random() throw (they would break resume). The body is
+//     handed shadowed Date and Math that throw the same way, so a future edit that calls one fails
+//     here as it would in the runtime.
 //
 // USAGE:
 //   const { result, error, calls, logs } = await runPerWave({ args, responder })
@@ -48,10 +54,24 @@ function loadBody() {
   return src.replace(/^export const meta = /m, 'const meta = ')
 }
 
-export async function runPerWave({ args = DEFAULT_ARGS, responder = () => HARNESS_DEFAULT } = {}) {
+// The runtime's Date and Math, as the script sees them: deterministic use works, the clock and
+// randomness throw.
+const forbidden = (what) => () => { throw new Error(`${what} is unavailable in a Workflow (it would break resume)`) }
+class WorkflowDate extends Date {
+  constructor(...a) {
+    if (a.length === 0) forbidden('new Date()')()
+    super(...a)
+  }
+  static now() { return forbidden('Date.now()')() }
+}
+const WorkflowMath = Object.create(Math, { random: { value: forbidden('Math.random()') } })
+
+// `source` replaces the bundle's body, for a test that proves a stub can fail.
+export async function runPerWave({ args = DEFAULT_ARGS, responder = () => HARNESS_DEFAULT, exhaustBudgetAt = null, source = null } = {}) {
   const calls = []
   const logs = []
   let flightsSinceMerge = [] // issues the flights since the last reconcile implemented
+  let budgetSpent = false
 
   const defaultFor = (label) => {
     if (label === 'rehydrate') return { merged: [], pending: [...args.issues], reworkCount: {}, idleRounds: 0, groupsRun: 0 }
@@ -83,6 +103,8 @@ export async function runPerWave({ args = DEFAULT_ARGS, responder = () => HARNES
   const agent = async (prompt, opts = {}) => {
     const label = opts.label || '(unlabelled)'
     calls.push({ label, prompt })
+    if (exhaustBudgetAt !== null && label.startsWith(exhaustBudgetAt)) budgetSpent = true
+    if (budgetSpent) throw new Error('budget exhausted: the turn token target is spent')
     const got = await responder(label, prompt)
     return got === HARNESS_DEFAULT || got === undefined ? defaultFor(label) : got
   }
@@ -90,9 +112,9 @@ export async function runPerWave({ args = DEFAULT_ARGS, responder = () => HARNES
   const log = (m) => { logs.push(String(m)) }
   const phase = () => {}
 
-  const run = new AsyncFunction('args', 'agent', 'parallel', 'log', 'phase', loadBody())
+  const run = new AsyncFunction('args', 'agent', 'parallel', 'log', 'phase', 'Date', 'Math', source ?? loadBody())
   try {
-    return { result: await run(args, agent, parallel, log, phase), error: null, calls, logs }
+    return { result: await run(args, agent, parallel, log, phase, WorkflowDate, WorkflowMath), error: null, calls, logs }
   } catch (error) {
     return { result: null, error, calls, logs }
   }
