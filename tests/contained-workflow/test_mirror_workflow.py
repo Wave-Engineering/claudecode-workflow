@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -57,7 +56,8 @@ class TestMirrorWorkflowShape:
         text = _workflow_text()
         assert DOCKERHUB_IMAGE in text, "must mirror to docker.io/oakandwave/oakandwave-workflow"
         assert "resolve-stable-digest.sh" in text, "must resolve the :stable digest"
-        assert "imagetools create" in text, "must mirror via imagetools create"
+        # The imagetools copy lives in the script since #1324; TestMirrorScript drives it.
+        assert "mirror-oakandwave-image.sh" in text, "must mirror via the mirror script"
         assert "sign-oakandwave-image.sh" in text, "must re-sign the mirrored Docker Hub digest"
         assert "dockerhub_digest_ref" in text, "re-sign must target the Docker Hub digest ref"
 
@@ -83,6 +83,7 @@ class TestResolveStableDigest:
         }
         return subprocess.run(
             ["bash", str(RESOLVE_SCRIPT)],
+            check=False,
             env=env,
             capture_output=True,
             text=True,
@@ -111,3 +112,128 @@ class TestResolveStableDigest:
         )
         assert proc.returncode != 0, "a non-digest pin must be rejected"
         assert "digest ref" in proc.stderr
+
+
+MIRROR_SCRIPT = REPO_ROOT / "scripts" / "ci" / "mirror-oakandwave-image.sh"
+DIGEST = "sha256:" + "e" * 64
+OTHER_DIGEST = "sha256:" + "f" * 64
+
+# A docker stub for the mirror script's three calls. The source digest's config answers
+# `--format {{json .Image}}`; the Docker Hub version tag answers `{{json .Manifest}}` per
+# STUB_TAG (absent | same | other | error); `imagetools create` logs its argv and exits 0.
+DOCKER_STUB = r"""#!/usr/bin/env bash
+if [[ "$*" == *"imagetools create"* ]]; then
+  printf '%s\n' "$*" >> "$STUB_CREATE_LOG"
+  exit 0
+fi
+if [[ "$*" == *"{{json .Image}}"* ]]; then
+  printf '%s\n' "$STUB_IMAGE_JSON"
+  exit 0
+fi
+case "$STUB_TAG" in
+  absent) echo "ERROR: docker.io/oakandwave/oakandwave-workflow:8.14.0: not found" >&2; exit 1 ;;
+  same) printf '{"digest":"%s"}\n' "$STUB_DIGEST" ;;
+  other) printf '{"digest":"%s"}\n' "$STUB_OTHER_DIGEST" ;;
+  *) echo "ERROR: failed to authorize: 401 Unauthorized" >&2; exit 1 ;;
+esac
+"""
+
+
+def _labels(version: str | None) -> dict:
+    labels = {"org.opencontainers.image.title": "oakandwave-workflow"}
+    if version is not None:
+        labels["org.opencontainers.image.version"] = version
+    return {"config": {"Labels": labels}}
+
+
+class TestMirrorScript:
+    """The mirror script, driven for real with a stubbed docker (#1324)."""
+
+    def _run(
+        self, tmp_path: Path, tag: str, image: dict | None = None
+    ) -> tuple[subprocess.CompletedProcess, list[str], dict, str]:
+        import json
+
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        docker = bindir / "docker"
+        docker.write_text(DOCKER_STUB)
+        docker.chmod(0o755)
+        create_log = tmp_path / "create.log"
+        out = tmp_path / "gh_output"
+        summary = tmp_path / "summary"
+        env = {
+            "SRC_DIGEST": f"{GHCR_IMAGE}@{DIGEST}",
+            "DOCKERHUB_IMAGE": DOCKERHUB_IMAGE,
+            "STABLE_TAG": "stable",
+            "GITHUB_OUTPUT": str(out),
+            "GITHUB_STEP_SUMMARY": str(summary),
+            "STUB_CREATE_LOG": str(create_log),
+            "STUB_IMAGE_JSON": json.dumps(image if image is not None else _labels("8.14.0")),
+            "STUB_TAG": tag,
+            "STUB_DIGEST": DIGEST,
+            "STUB_OTHER_DIGEST": OTHER_DIGEST,
+            "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+        }
+        proc = subprocess.run(
+            ["bash", str(MIRROR_SCRIPT)], check=False, env=env, capture_output=True, text=True
+        )
+        creates = create_log.read_text().splitlines() if create_log.exists() else []
+        outputs = (
+            dict(line.split("=", 1) for line in out.read_text().splitlines() if "=" in line)
+            if out.exists()
+            else {}
+        )
+        return proc, creates, outputs, summary.read_text() if summary.exists() else ""
+
+    def test_absent_version_tag_is_pushed_with_stable_in_one_create(self, tmp_path: Path) -> None:
+        proc, creates, outputs, summary = self._run(tmp_path, "absent")
+        assert proc.returncode == 0, proc.stderr
+        assert len(creates) == 1, creates
+        assert f"--tag {DOCKERHUB_IMAGE}:stable" in creates[0]
+        assert f"--tag {DOCKERHUB_IMAGE}:8.14.0" in creates[0]
+        assert creates[0].endswith(f"{GHCR_IMAGE}@{DIGEST}"), "copies the exact digest"
+        assert outputs["version"] == "8.14.0"
+        assert outputs["version_ref"] == f"{DOCKERHUB_IMAGE}:8.14.0@{DIGEST}"
+        assert f"{DOCKERHUB_IMAGE}:8.14.0@{DIGEST}" in summary
+
+    def test_version_tag_on_the_same_digest_is_not_repushed(self, tmp_path: Path) -> None:
+        proc, creates, outputs, _ = self._run(tmp_path, "same")
+        assert proc.returncode == 0, proc.stderr
+        assert len(creates) == 1, creates
+        assert f"--tag {DOCKERHUB_IMAGE}:stable" in creates[0]
+        assert ":8.14.0" not in creates[0], "an existing version tag is never re-pushed"
+        assert outputs["version_ref"] == f"{DOCKERHUB_IMAGE}:8.14.0@{DIGEST}"
+
+    def test_version_tag_on_another_digest_fails_and_pushes_nothing(self, tmp_path: Path) -> None:
+        proc, creates, _, _ = self._run(tmp_path, "other")
+        assert proc.returncode != 0
+        assert creates == [], "nothing is pushed, not even :stable"
+        assert OTHER_DIGEST in proc.stderr and "never re-pushed" in proc.stderr
+
+    def test_unreadable_version_tag_fails_and_pushes_nothing(self, tmp_path: Path) -> None:
+        # A 401 is not "absent": pushing on it could overwrite a tag we couldn't see.
+        proc, creates, _, _ = self._run(tmp_path, "error")
+        assert proc.returncode != 0
+        assert creates == []
+        assert "can't tell whether it exists" in proc.stderr
+
+    @pytest.mark.parametrize("version", [None, "", "v8.14.0", "8.14", "8.14.0-rc1"])
+    def test_missing_or_non_release_label_fails_and_pushes_nothing(
+        self, tmp_path: Path, version: str | None
+    ) -> None:
+        proc, creates, _, _ = self._run(tmp_path, "absent", image=_labels(version))
+        assert proc.returncode != 0
+        assert creates == []
+
+    def test_multi_platform_labels_must_agree(self, tmp_path: Path) -> None:
+        agree = {"linux/amd64": _labels("8.14.0"), "linux/arm64": _labels("8.14.0")}
+        proc, creates, _, _ = self._run(tmp_path, "absent", image=agree)
+        assert proc.returncode == 0, proc.stderr
+        assert f"--tag {DOCKERHUB_IMAGE}:8.14.0" in creates[0]
+
+        disagree = {"linux/amd64": _labels("8.14.0"), "linux/arm64": _labels("8.13.0")}
+        (tmp_path / "again").mkdir()
+        proc, creates, _, _ = self._run(tmp_path / "again", "absent", image=disagree)
+        assert proc.returncode != 0
+        assert creates == []

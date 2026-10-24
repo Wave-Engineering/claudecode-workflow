@@ -106,7 +106,12 @@ cosign verify \
 
 The Docker Hub digest is **identical** to the GHCR `:stable` digest — the mirror
 copies the exact digest (R-23) — so §5's digest-continuity check ties the two
-registries to one content sha. (§3's SBOM regexp is the broad `.../.*`, so the
+registries to one content sha. The mirror also tags that digest with its release
+version, `docker.io/oakandwave/oakandwave-workflow:X.Y.Z`, read from the image's
+`org.opencontainers.image.version` label (#1324). A version tag is never re-pushed:
+if it already names a different digest, the run fails and pushes nothing. The job
+summary prints the digest-pinned ref, `…:X.Y.Z@sha256:<digest>`, which is what goes
+in the release notes. (§3's SBOM regexp is the broad `.../.*`, so the
 attestation already verifies on either registry.)
 
 ---

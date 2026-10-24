@@ -1,7 +1,8 @@
 name: Mirror :stable to Docker Hub
 
 # Mirror the already-promoted GHCR :stable image to the public Docker Hub OaW brand
-# (docker.io/oakandwave/oakandwave-workflow) and RE-SIGN it there.
+# (docker.io/oakandwave/oakandwave-workflow), as :stable and as its immutable :X.Y.Z
+# version tag (#1324), and RE-SIGN it there.
 #
 # This is the OIDC half of publishing that cannot run in the operator's local
 # promote step: keyless cosign needs a Fulcio OIDC identity, which a GHA job has
@@ -65,13 +66,13 @@ jobs:
         id: resolve
         run: ./scripts/ci/resolve-stable-digest.sh
 
-      - name: Mirror the :stable digest to Docker Hub oakandwave
+      - name: Mirror the :stable digest to Docker Hub oakandwave, as :stable and :X.Y.Z
         # Copy the EXACT digest (not the moving tag) cross-registry; imagetools copies the
-        # manifest + blobs using each registry's own creds and rebuilds nothing.
+        # manifest + blobs using each registry's own creds and rebuilds nothing. The
+        # version tag comes from the image's own label and is never re-pushed (#1324).
         env:
           SRC_DIGEST: ${{ steps.resolve.outputs.digest_ref }}
-        run: |
-          docker buildx imagetools create --tag "${DOCKERHUB_IMAGE}:${STABLE_TAG}" "$SRC_DIGEST"
+        run: ./scripts/ci/mirror-oakandwave-image.sh
 
       - name: Re-sign the Docker Hub digest (cosign keyless + syft SBOM)
         # cosign signatures are registry+digest-bound, so the cross-registry copy does NOT

@@ -19,6 +19,16 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Added
+- **Docker Hub gets an immutable version tag (#1324).** The mirror pushed only `:stable`, so
+  when `:stable` moved, the previous release's digest had no name on Docker Hub. The mirror now
+  also tags the digest `:X.Y.Z`, read from the image's own `org.opencontainers.image.version`
+  label, so the workflow still takes no inputs.
+  - A version tag is never re-pushed: one already naming a different digest fails the run, and
+    nothing is pushed. A tag Docker Hub can't confirm as absent fails it too.
+  - A rerun on the same digest pushes `:stable` alone.
+  - The job summary prints the digest-pinned ref (`…:X.Y.Z@sha256:…`) for the release notes.
+
 ## [8.14.0] - 2026-10-24
 
 Two changes since 8.13.0: agents now settle stale squawks on their own, and the reseed gate works on
