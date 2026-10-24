@@ -61,6 +61,7 @@ import {
   commutativitySignalPrompt,
   ciSignalPrompt,
   CI_WAIT_DEFAULT_SEC,
+  ciWaitBudget,
   ciVerdict,
   reviewStagePrompt,
   REVIEW_STAGE,
@@ -149,8 +150,12 @@ const IN_CAMPAIGN = INTEGRATION_BASE !== PROTECTED_BRANCH
 // Accepted-but-ignored in campaign mode (a stale launcher passing true must not resurrect the
 // divergence); still honored for a standalone wave, where no campaign branch exists.
 // #1302: seconds the gate:ci node waits on merge-result CI, from the repo's `CI wait budget` in
-// .claude-project.md. ciSignalPrompt re-validates it, so a bad value falls back to the default.
+// .claude-project.md. ciSignalPrompt re-validates it, so a bad value falls back to the default,
+// loudly: a slow repo that HOLDs on a rejected budget must be told why.
 const CI_WAIT_SEC = params.ciWaitSec ?? CI_WAIT_DEFAULT_SEC
+if (ciWaitBudget(CI_WAIT_SEC) !== CI_WAIT_SEC) {
+  log(`[#1302] ignoring ciWaitSec=${JSON.stringify(params.ciWaitSec)}: not an integer in [60, 3600] seconds; the CI signal waits ${CI_WAIT_DEFAULT_SEC}s. Fix the CI wait budget line in .claude-project.md.`)
+}
 const PRESERVE_KAHUNA = IN_CAMPAIGN ? false : (params.preserveKahuna ?? false)
 if (IN_CAMPAIGN && params.preserveKahuna === true) {
   log(`[#1052] ignoring preserveKahuna:true — this wave integrates onto ${INTEGRATION_BASE}, so its kahuna is disposable (the campaign branch carries cross-wave state; see #892).`)

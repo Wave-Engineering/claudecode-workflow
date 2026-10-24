@@ -186,7 +186,7 @@ Use this template structure:
 - **Lint:** (tools discovered)
 - **CI jobs:** (declared by hand, never discovered: the CI jobs whose green run is the lane result, e.g. "validate, test")
 - **CI on demand:** (declared by hand, never discovered: the ONE command that starts a validation-only pipeline when a push starts none, e.g. `glab ci run --branch <branch>`)
-- **CI wait budget:** (declared by hand, never discovered: seconds the wave trust gate waits on merge-result CI; absent ⇒ 420)
+- **CI wait budget:** (declared by hand, never discovered: seconds the wave trust gate waits on merge-result CI, as a bare integer, e.g. `1800`; absent ⇒ 420)
 
 ## CI
 - **System:** (GitHub Actions | GitLab CI | both)
