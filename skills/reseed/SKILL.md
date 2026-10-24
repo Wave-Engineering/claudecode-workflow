@@ -42,7 +42,26 @@ auto-reloaded at session start — does not belong in the seed.
 
 ## Step 1 — Author the seed
 
-Write the seed following the kernel. **Carry:**
+**First, curate your squawks (#1320).** You can judge which of them are stale only now, while
+you still hold the context; the revived agent would be guessing from the seed. Run
+`sqtk mine`, and for each item still open (○), do one of two things:
+
+- **Stale:** it landed, was decided, was superseded, or is no longer true. Retire it, with the
+  reason as its answer:
+
+  ```bash
+  sqtk set <list> <seq> --state retired --text "<the item's text> → OBE: <reason, with the PR or issue>"
+  ```
+
+  If the text already ends with `→`, write the reason after that arrow instead of adding a
+  second. Retired (◌), never rejected: a stale item got no verdict.
+- **Still live:** carry it in the seed's open threads as `<list>#<seq>`, with one line on what
+  it is waiting for.
+
+Only your own squawks: `sqtk mine` lists exactly those. On `bj:needs` never touch another
+agent's item. Skip this silently when `SQUAWK_URL` is unset or nothing is recorded.
+
+Then write the seed following the kernel. **Carry:**
 
 - **Pointers to the durable artifacts that ARE the state** — design docs,
   memory file names, issue numbers, key `file:line` ranges. Reference them;

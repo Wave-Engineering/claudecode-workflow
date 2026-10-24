@@ -19,6 +19,31 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Added
+- **Squawk curation (#1320).** Squawks went stale: items stayed open after the work that resolved
+  them had landed, or after the issue that tracks them was filed. Agents now settle them at the two
+  moments they know for certain:
+  - **`/issue` Step 4.5**, after creating an issue: record each open item on the repo's triage
+    list that the issue plainly covers, with `→ #<N>` as its answer, qualified as
+    `<owner>/<repo>#<N>` on another repo's list.
+  - **`/reseed` Step 1**, before the seed, while the agent still has the context: walk
+    `sqtk mine`, retire what is stale with `→ OBE: <reason>`, and carry what is live in the seed.
+
+  A stale item is retired, never rejected, and on `bj:needs` an agent settles only its own.
+- **Reserved list names.** The vendored `sqtk` moves to squawkie-talkie v0.10.0, where `triage`
+  means this repo's `<repo>:triage` and `needs` means `bj:needs`. `/sqtk` now teaches those names
+  instead of hand-typed list names, which had drifted from agent to agent.
+
+### Fixed
+- **The reseed gate never fired on Bedrock (#1318).** The statusline reports `model_id` as
+  `us.anthropic.claude-opus-5-5`, but settings key the autocompact window on `claude-opus-5-5`. The
+  gate found no window and measured against the 1M model window, so it waited for about 822k
+  while autocompact fired at about 367k. One session auto-compacted four times on 2026-10-24
+  without a single reseed. The gate now tries the model's keys from most specific to least: as
+  given, without `[1m]`, then canonical, with the provider prefix, `-vN:M`, `@version` and the date
+  stripped. A window configured for other models but matching none of these keys is reported once
+  per session, instead of reading exactly like no window.
+
 ## [8.13.0] - 2026-10-24
 
 Most of this release is the wave-engine defect chain (#1303): ten fixes to the per-wave Workflow, the

@@ -42,22 +42,45 @@ wrong instance persists but never reaches the people watching.
 - **Any other scope you name** (`kessel:handoff`, `wave-12:retro`) is allowed. Name it for who
   will walk it.
 
+**Name the two standard lists by their reserved names, never by hand:** `triage` is this repo's
+`<repo>:triage` and `needs` is `bj:needs`. `sqtk` resolves them for `add`, `show`, `walk`, `set`
+and `attach`, using the same `<repo>` as the prefix (the main checkout's folder, also from a
+worktree), so every agent in a repo lands on the same list. `add` says on stderr what it
+resolved to. `new` and `rmlist` take names literally, so `rmlist needs` can never reach
+`bj:needs`.
+
 On a shared list a line must stand on its own, so `sqtk add` prefixes your context automatically,
 as `[<dev-name>·<repo>] …`. You don't type the prefix.
 
 ## Commands
 
 ```bash
-sqtk add  bj:needs "Cut sdlc v5.0.0? It's breaking. Recommend yes →"
-sqtk show bj:needs                  # the list, its squawks and state counts
-sqtk walk claudecode-workflow:triage  # the open items, numbered, oldest first
+sqtk add  needs "Cut sdlc v5.0.0? It's breaking. Recommend yes →"   # → bj:needs
+sqtk add  triage "the gate ignores the lock list →"                 # → <repo>:triage
+sqtk show needs                     # the list, its squawks and state counts
+sqtk walk triage                    # the open items, numbered, oldest first
 sqtk mine                           # your squawks from this checkout, with live states
-sqtk set  bj:needs 12 --state retired
-sqtk attach bj:needs 12 shot.webp   # up to 5 images: jpeg/png/webp, ≤2 MB each
+sqtk set  needs 12 --state retired
+sqtk attach needs 12 shot.webp      # up to 5 images: jpeg/png/webp, ≤2 MB each
 ```
 
 `add` refuses a duplicate of an open squawk on the same list. Pass `--force` only when the second
 one really is a different ask. `set --text` refuses to erase an answer after the last `→`.
+
+## Curation: settle what went stale
+
+An open squawk whose work has landed, or that became an issue, still reads as waiting. Settle
+squawks at the two moments you know for certain (#1320):
+
+- **When you create an issue** (`/issue` Step 4.5): record each open item on `triage` that the
+  new issue plainly covers, `--state recorded` with `→ #<N>` as its answer (`→ <owner>/<repo>#<N>`
+  on another repo's list). This covers other agents' items too.
+- **Before a reseed** (`/reseed` Step 1): walk `sqtk mine`. Retire what is stale, with
+  `→ OBE: <reason>`, and carry what is live in the seed as `<list>#<seq>`.
+
+Three rules for both: a stale item is **retired** (◌), never rejected, because it got no
+verdict; the **reason goes after the `→`**, so BJ can see why it left his list; and on
+`bj:needs` you settle **only your own** items.
 
 ## The rules for `bj:needs`
 

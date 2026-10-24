@@ -112,7 +112,7 @@ No arguments. If an identity file exists for this project, it reports the curren
 
 ### `/reseed` -- Guided Context-Window Reduction
 
-The careful, mid-flight context reduction: authors a detailed seed, then you `/clear` and revive from it. There is no decision step — seed-and-clear is the right call whenever work is mid-flight. For a cheap summarize where little is at stake, use `/compact` directly instead.
+The careful, mid-flight context reduction: authors a detailed seed, then you `/clear` and revive from it. Before writing the seed it curates your squawks: stale ones are retired with the reason, live ones are carried in the seed. There is no decision step — seed-and-clear is the right call whenever work is mid-flight. For a cheap summarize where little is at stake, use `/compact` directly instead.
 
 **When to use it:**
 - When the context window is getting full and you are mid-task
@@ -189,7 +189,7 @@ These drive the development loop: issues, commits, reviews, merges.
 
 ### `/issue` -- Structured Issue Creation
 
-Creates properly templated and labeled issues from a natural language prompt. Detects the platform (GitHub/GitLab), applies the correct template for the issue type, infers labels, and creates the issue directly.
+Creates properly templated and labeled issues from a natural language prompt. Detects the platform (GitHub/GitLab), applies the correct template for the issue type, infers labels, and creates the issue directly. Then it records any open item on the repo's triage list that the new issue covers, so the squawk doesn't go stale.
 
 **When to use it:**
 - When you need to create an issue following the project's template and labeling standards
@@ -527,7 +527,7 @@ For anything filled in at invocation time, write the text with the `Write` tool 
 
 ### `/sqtk` -- Squawk Lists
 
-Drives `sqtk`, the CLI for squawkie-talkie, the fleet's shared lists. A squawk is one line on a list, and it is never deleted. It changes state instead: `open` ○, `confirmed` ✓, `rejected` ✗, `retired` ◌, `recorded` ↗. A list is scoped by who walks it: `bj:needs` holds what only BJ can give, one list for every agent; `<project>:triage` holds one project's candidate work and concerns; any other name an agent picks is allowed. `sqtk add` prefixes each line with `[<dev-name>·<repo>]`, refuses a duplicate of an open squawk, and records what it created in `.claude/sqtk-mine.json`. The skill carries the 13 rules for `bj:needs`, from BJ's Stop-hook wait list.
+Drives `sqtk`, the CLI for squawkie-talkie, the fleet's shared lists. A squawk is one line on a list, and it is never deleted. It changes state instead: `open` ○, `confirmed` ✓, `rejected` ✗, `retired` ◌, `recorded` ↗. A list is scoped by who walks it: `bj:needs` holds what only BJ can give, one list for every agent; `<project>:triage` holds one project's candidate work and concerns; any other name an agent picks is allowed. `sqtk add` prefixes each line with `[<dev-name>·<repo>]`, refuses a duplicate of an open squawk, and records what it created in `.claude/sqtk-mine.json`. Two list names are reserved, so every agent names the standard lists the same way: `triage` is this repo's `<repo>:triage` and `needs` is `bj:needs`. The skill carries the 13 rules for `bj:needs`, from BJ's Stop-hook wait list, and the curation rules: stale squawks are settled when an issue is created (`/issue` Step 4.5) and before a reseed (`/reseed` Step 1), retired rather than rejected, with the reason after the `→`.
 
 **When to use it:**
 - When you need something only BJ can give: a production approval, a tag he owns, a credential
@@ -542,10 +542,10 @@ Drives `sqtk`, the CLI for squawkie-talkie, the fleet's shared lists. A squawk i
 **Examples:**
 
 ```bash
-sqtk add  bj:needs "Cut sdlc v5.0.0? It's breaking. Recommend yes →"
-sqtk walk claudecode-workflow:triage
+sqtk add  needs "Cut sdlc v5.0.0? It's breaking. Recommend yes →"
+sqtk walk triage
 sqtk mine
-sqtk set  bj:needs 12 --state retired
+sqtk set  needs 12 --state retired
 ```
 
 `SQUAWK_URL` must be set; there is no default. The kit's `sqtk` is vendored at the pin in `scripts/ci/sqtk.pin` by `scripts/ci/vendor-sqtk.sh`. Never edit it by hand.
