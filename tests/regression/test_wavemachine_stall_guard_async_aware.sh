@@ -289,11 +289,12 @@ if echo "$out" | jq -e '.decision == "block" and (.reason | test("P1W1") and tes
 else
 	fail "driver promoting P1W1, wave completed → expected a block (the #600 stall): '$out'"
 fi
+# No once-rule here: the driver writes promoting only once it holds the verdict.
 out=$(run_hook_nudged)
-if [[ -z "$out" ]]; then
-	pass "driver promoting P1W1, wave completed, stop_hook_active → silent (nudges once)"
+if echo "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+	pass "driver promoting P1W1, wave completed, stop_hook_active → still blocks"
 else
-	fail "driver promoting P1W1, wave completed, stop_hook_active → expected silence: '$out'"
+	fail "driver promoting P1W1, wave completed, stop_hook_active → did NOT block (#600 hole): '$out'"
 fi
 
 # held after a PASS is a promote soft-fail (not integrated) or an interactive

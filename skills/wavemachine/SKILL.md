@@ -381,18 +381,20 @@ decides from it:
   "<reason>"`). If it has not, launch nothing and end the turn again: the Workflow marks the
   wave **before** it cleans up and returns, so a driver woken in that tail (by the doorbell,
   say) sees a finished wave with no verdict yet.
-- `promoting` once its wave is `completed` → **block once**: the wave is promoted, so launch the
+- `promoting` once its wave is `completed` → **block**: the wave is promoted, so launch the
   next one or take the success exit. `driver_action` is sticky, so without this a driver that
   promoted and then stopped would never be blocked.
-- `promoting` once its wave is `held` → **block once** toward `wave-status hold "<reason>"`,
-  never toward a launch: after a PASS, `held` means the wave did not integrate, or awaits a
-  human promotion.
+- `promoting` once its wave is `held` → **block** toward `wave-status hold "<reason>"`, never
+  toward a launch: after a PASS, `held` means the wave did not integrate, or awaits a human
+  promotion.
 - `promoting` with its wave in any other state → silent.
-- `launching` or anything else → block, the stall, on every stop.
+- `launching` or anything else → block, the stall.
 
-"Block once" honours the Stop hook's `stop_hook_active`, so the second stop goes through. The
-status alone cannot tell "verdict not yet delivered" from "verdict delivered, driver stopped",
-so the guard nudges once, worded for both, rather than loop or stay silent.
+"Block once" honours the Stop hook's `stop_hook_active`, so the second stop goes through. Only
+`awaiting-verdict` gets it: the status alone cannot tell "verdict not yet delivered" from
+"verdict delivered, driver stopped", so the guard nudges once, worded for both, rather than
+loop or stay silent. `promoting` and `launching` block on every stop, because the driver writes
+them itself, and each has a write that clears it.
 
 State written before #1205 has no `driver_action` and keeps the rule on `current_action`.
 `wave-status wavemachine-stop` clears `driver_action` with the `wavemachine_*` keys.
