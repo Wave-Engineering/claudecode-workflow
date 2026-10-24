@@ -155,8 +155,11 @@ class TestCiSignal:
     def test_ci_wait_run_is_bounded(self) -> None:
         # #1035 bleed fix: with no explicit timeout the tool rode its ~1800s idle default
         # and burned ~30-57 min/wave to confirm a <3-min pipeline. Bound it explicitly.
+        # #1302: the bound is a per-repo budget whose default stays 420s.
         src = _gate_src()
-        assert "timeout_sec=420" in src, "ci_wait_run must pass an explicit bounded timeout_sec (#1035)"
+        assert "export const CI_WAIT_DEFAULT_SEC = 420" in src, "the CI wait must default to 420s (#1035/#1302)"
+        assert "timeout_sec=${waitSec}" in src, "ci_wait_run must pass an explicit bounded timeout_sec (#1035)"
+        assert "windowSec: waitSec" in src, "the direct-read window must follow the same budget (#1302)"
         assert "poll_interval_sec=15" in src, "ci_wait_run must pass an explicit poll_interval_sec (#1035)"
 
     def test_direct_merge_pipeline_fallback(self) -> None:

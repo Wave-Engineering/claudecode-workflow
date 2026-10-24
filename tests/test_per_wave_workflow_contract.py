@@ -48,6 +48,26 @@ class TestFourSignalFanout:
         assert "parallel(" in _wf_src(), "the four trust signals must fan out via parallel()"
 
 
+class TestCiWaitBudget:
+    """#1302: the gate's CI wait is a per-repo budget, reaching the CI signal from both
+    launch paths (a /nextwave launch and the campaign Workflow's per-wave args)."""
+
+    def test_per_wave_passes_ci_wait_sec(self) -> None:
+        src = _wf_src()
+        assert "const CI_WAIT_SEC = params.ciWaitSec ?? CI_WAIT_DEFAULT_SEC" in src
+        assert "prNumber: promotionPrNumber, ciWaitSec: CI_WAIT_SEC })" in src, (
+            "the gate:ci node must hand ciSignalPrompt the budget"
+        )
+
+    def test_campaign_threads_ci_wait_sec(self) -> None:
+        src = _WF.with_name("campaign-workflow.js").read_text(encoding="utf-8")
+        per_wave_args = src[src.index("const perWaveArgs = {") :]
+        per_wave_args = per_wave_args[: per_wave_args.index("\n  }\n")]
+        assert "ciWaitSec: params.ciWaitSec," in per_wave_args, (
+            "the campaign Workflow must pass ciWaitSec through perWaveArgs"
+        )
+
+
 class TestReviewStageThenReview:
     """ENG-5/#847: the review signal is a 2-step stage→review sub-pipeline that
     KEEPS the specialized feature-dev:code-reviewer (a stage agent materializes

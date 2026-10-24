@@ -60,6 +60,7 @@ import {
   OPEN_PR_RESULT,
   commutativitySignalPrompt,
   ciSignalPrompt,
+  CI_WAIT_DEFAULT_SEC,
   ciVerdict,
   reviewStagePrompt,
   REVIEW_STAGE,
@@ -147,6 +148,9 @@ const IN_CAMPAIGN = INTEGRATION_BASE !== PROTECTED_BRANCH
 // disposable again — deleted on integration, nothing continues from it, so a squash is harmless.
 // Accepted-but-ignored in campaign mode (a stale launcher passing true must not resurrect the
 // divergence); still honored for a standalone wave, where no campaign branch exists.
+// #1302: seconds the gate:ci node waits on merge-result CI, from the repo's `CI wait budget` in
+// .claude-project.md. ciSignalPrompt re-validates it, so a bad value falls back to the default.
+const CI_WAIT_SEC = params.ciWaitSec ?? CI_WAIT_DEFAULT_SEC
 const PRESERVE_KAHUNA = IN_CAMPAIGN ? false : (params.preserveKahuna ?? false)
 if (IN_CAMPAIGN && params.preserveKahuna === true) {
   log(`[#1052] ignoring preserveKahuna:true — this wave integrates onto ${INTEGRATION_BASE}, so its kahuna is disposable (the campaign branch carries cross-wave state; see #892).`)
@@ -1054,7 +1058,7 @@ if (!halt && pending.size === 0) {
       // 2. CI on the MR MERGE-RESULT pipeline of the draft PR opened above — NOT the merge-commit branch HEAD (sdlc #452, #5).
       //    The agent reports evidence; ciVerdict grades it against this PR in code (#1211).
       () => agent(
-        ciSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, integrationBase: INTEGRATION_BASE, targetRepo: TARGET_REPO, prNumber: promotionPrNumber }),
+        ciSignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, integrationBase: INTEGRATION_BASE, targetRepo: TARGET_REPO, prNumber: promotionPrNumber, ciWaitSec: CI_WAIT_SEC }),
         { label: 'gate:ci', phase: 'Trust gate', schema: MERGE_RESULT_EVIDENCE, agentType: 'general-purpose' },
       ).then((ev) => ciVerdict(ev, promotionPrNumber)).catch((e) => conservativeFail('ci', e)),
       // 3. review the kahuna-vs-base diff via a 2-STEP stage→review sub-pipeline (#847/ENG-5):

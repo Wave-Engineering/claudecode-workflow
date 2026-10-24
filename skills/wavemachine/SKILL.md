@@ -321,6 +321,7 @@ campaign driver supplies, per wave, from the approved phase/wave plan + project 
 | `kahunaBranch` | this wave's **disposable** integration branch, `kahuna/<planId>-<waveId>` (namespaced by plan so two concurrent campaigns can't collide on `kahuna/W-1`) |
 | `integrationBase` | **the campaign branch** from the launch-sequence bootstrap (step 3). This is where the wave lands (#1052). |
 | `protectedBranch` | from `.claude-project.md`. Passed so the engine can *recognize* trunk — it derives "am I in a campaign?" from `integrationBase !== protectedBranch`, which is what retires `preserveKahuna` and moves the platform issue-close to the release node. Omit it and the engine defaults to `'main'` and mis-detects a campaign on any repo whose trunk is named otherwise. |
+| `ciWaitSec` | `.claude-project.md`'s `CI wait budget` line, if present (#1302): seconds the trust gate waits on merge-result CI. An integer in [60, 3600]; absent or invalid ⇒ `420`. A repo whose cold build outlasts the budget HOLDs every wave, and a HOLD stops the campaign. Waits over 1800 s are unproven: none has been observed to survive one MCP call. |
 | `mode` | the campaign's `MODE` (`auto` \| `interactive`) — passed through unchanged |
 | `planId` | the wave Plan id (the promote node assembles the MR body from it) |
 | `budget` | the campaign cost guard, if any |
