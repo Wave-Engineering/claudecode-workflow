@@ -82,10 +82,12 @@ wave-status and returns the loop blob; worktree setup/cleanup are idempotent fil
 > idempotency: a worker whose branch already carries the implementation returns
 > `already-present` and does no work, so a killed run resumes exactly where it died.
 > The reconcile's "if a branch is already in kahuna, SKIP it" is the reconcile-side half.
-> A **rework** dispatch is the exception (#1213): the branch holds the implementation reconcile
-> rejected, so the worker is not offered `already-present`. It is given the reason and the
-> rejected head, and either commits a new head or returns `rework_not_applied`. A rework that
-> returns `already-present`, `rework_not_applied` or the rejected head halts as `rework-noop:#N`.
+> A **rework** dispatch is the exception (#1213): the branch usually still holds the
+> implementation reconcile rejected, which the resume check would accept, so the worker is not
+> offered `already-present`. It is given the reason and the rejected head, and either commits a
+> new head or returns `rework_not_applied`. A rework that returns `already-present`,
+> `rework_not_applied` or the rejected head halts as `rework-noop:#N`. The no-op is not handed to
+> reconcile, and any merge or re-flag reconcile reports for it is ignored.
 
 ---
 

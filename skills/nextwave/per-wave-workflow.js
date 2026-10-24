@@ -634,7 +634,7 @@ function primePlanPrompt(merged, pending, lastRework) {
 // Worker: per-issue, worktree-isolated. SPEC EXECUTOR. Idempotent on resume.
 // Carries the §3.2 must-preserve fields (concerns/deferrals) as STRUCTURED RETURN.
 // #1213: `rework` = {reason, head} when reconcile sent this issue back. The flight's earlier commit is
-// still on its branch, so the resume check would find it and return already-present without the fix.
+// usually still on its branch, so the resume check would find it and return already-present without the fix.
 // A rework dispatch therefore drops that check and carries the reason and the rejected head instead.
 function workerPrompt(n, worktree, rework = null) {
   const branch = issueBranch(n)
