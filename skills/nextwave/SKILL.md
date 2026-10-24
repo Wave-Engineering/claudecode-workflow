@@ -249,14 +249,14 @@ closed**: the only ways the per-wave Workflow stops are the script's coded exits
 | impasse | planner `done` with pending left | planner can't schedule remaining → human |
 | plan-failed | the plan agent returned null, threw, or returned a result without `done`/`group` | `haltReason` `plan agent failed: <reason>` → gate SKIPPED, wave held (#1210) |
 | reconcile-failed | the reconcile agent returned null, threw, or returned a result without `merged`/`needs_rework` | `haltReason` `reconcile agent failed: <reason>` → gate SKIPPED, wave held; that round is not recorded, so the durable blob keeps the last persisted state for a fresh run (#1210) |
-
-When either failure is the spent token budget, every later `agent()` call throws too, so the
-terminal hold record cannot be written (`persistTerminal` soft-fails and logs it). The run still
-returns the SKIPPED verdict with its `haltReason`, and the last persisted blob has no terminal
-disposition, so a fresh run resumes from it.
 | per-issue breaker | issue reworked > `MAX_REWORK` | one issue keeps breaking → human |
 | reconcile-blocked | reconcile returns `blocked` | a push to origin was rejected (pre-push gate / permissions / protected ref) → HOLD with the reason; reconcile never substitutes local merges (#724) |
 | gate HOLD | a trust signal failed | post-success gate fired → human review |
+
+When plan-failed or reconcile-failed is the spent token budget, every later `agent()` call throws
+too, so the terminal hold record cannot be written (`persistTerminal` soft-fails and logs it). The
+run still returns the SKIPPED verdict with its `haltReason`, and the last persisted blob has no
+terminal disposition, so a fresh run resumes from it.
 
 Unease that matches none of these is NOT an exit: it rides the `concerns[]` channel
 (Axiom 4) and the loop continues. The dynamic-flight insight: a dependency that surfaces
