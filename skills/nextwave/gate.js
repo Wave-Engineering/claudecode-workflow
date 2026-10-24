@@ -32,7 +32,7 @@
 // spuriously HOLDs an otherwise-clean wave. Lint/typecheck are NOT a fifth signal; they
 // ride INSIDE the CI signal (ci_wait_run runs the project's full gate on the merge result).
 
-import { mergeResultVerdict, directMergeReadSteps, headReadLines } from './merge-result.js'
+import { mergeResultVerdict, directMergeReadSteps, headReadLines, isMergeSha } from './merge-result.js'
 
 // ── Conservative-fail SIG (replaces the always-pass gateSignalStub) ──────────────────
 // SEAMS invariant 6: when #687 lands, the per-signal `.catch(() => gateSignalStub(...))`
@@ -53,7 +53,7 @@ export function conservativeFail(signal, err) {
 export const TRIVY_SIG = {
   type: 'object',
   additionalProperties: false,
-  required: ['signal', 'passed', 'found', 'ingested', 'unscanned', 'declared'],
+  required: ['signal', 'passed', 'found', 'ingested', 'unscanned', 'declared', 'scanned_sha', 'kahuna_sha'],
   properties: {
     signal: { type: 'string' },
     passed: { type: 'boolean' },
@@ -62,6 +62,8 @@ export const TRIVY_SIG = {
     ingested: { type: 'integer' }, // of those, how many a scan returned at least one package for
     unscanned: { type: 'array', items: { type: 'string' } }, // the rest, by path
     declared: { type: 'boolean' }, // a .no-scannable-dependencies with a reason exists at the repo root
+    scanned_sha: { type: 'string' }, // #1206: HEAD of the worktree the scans ran over
+    kahuna_sha: { type: 'string' }, // #1206: origin/<kahuna> as fetched; the gate requires the two to match
   },
 }
 
@@ -108,6 +110,21 @@ export function trivyCoverage(sig) {
     return trivyHold(sig, `PARTIAL COVERAGE (HOLD): ${why}; UNSCANNED: ${names}`)
   }
   return sig
+}
+
+// THE SCAN MUST BE OF THE TREE THE GATE JUDGES (cc-workflow#1206). The scan used to run over the
+// operator's checkout, on whatever branch it held, so a clean kahuna could HOLD and, worse, a wave
+// that added a vulnerable pin could PASS on a clean trunk checkout. The prompt now stages a detached
+// worktree of origin/<kahuna>, and this binds the verdict to it in code: both SHAs must be full git
+// object names and equal, or the signal HOLDs. Like trivyCoverage, it keeps the agent's detail after
+// the rule and never turns a failing signal into a passing one.
+export function trivyTreeBound(sig) {
+  const scanned = sig?.scanned_sha
+  const kahuna = sig?.kahuna_sha
+  if (isMergeSha(scanned) && isMergeSha(kahuna) && scanned === kahuna) return sig
+  const show = (v) => (typeof v === 'string' && v ? v : 'missing')
+  const why = `TREE NOT BOUND (HOLD): scanned_sha=${show(scanned)} kahuna_sha=${show(kahuna)}; the scan is not proven to be of the kahuna tip`
+  return sig && typeof sig === 'object' ? trivyHold(sig, why) : conservativeFail('trivy', why)
 }
 
 // ── 1. commutativity signal ──────────────────────────────────────────────────────────
@@ -408,11 +425,32 @@ export function reviewSignalPrompt({ waveId, kahunaBranch, integrationBase, targ
 // left out because trivy has no pdm analyzer, and a found lock it cannot read would HOLD every wave
 // of a repo that carries one. The names are check-scannable.sh's JS_LOCKS / PAIRED_LOCKS /
 // LONE_LOCKS (the reasons per name live there), and test_lock_lists_agree fails when they differ.
-export function trivySignalPrompt({ waveId, kahunaBranch, targetRepoDir }) {
+//
+// cc-workflow#1206: every scan ran over targetRepoDir, the operator's checkout, on whatever branch it
+// held; the prompt only asked the agent to "ensure" the kahuna branch was checked out, which it could
+// not safely do. The signal now stages its OWN detached worktree of origin/<kahuna> under <w>/tree
+// (not the review stage's workspace: that would serialize the two signals, and the review stage can
+// fall back to a diff file, which is not a tree), runs the find, the scans and the declaration check
+// there, and returns the worktree's HEAD and origin/<kahuna> so trivyTreeBound() binds the verdict to
+// the kahuna tip in code. It never checks out or switches in targetRepoDir.
+export function trivySignalPrompt({ waveId, kahunaBranch, integrationBase, targetRepoDir }) {
   return [
-    `Trust-gate TRIVY signal for wave ${waveId}. Scan ${kahunaBranch} for dependency vulnerabilities.`,
-    `FIRST enumerate the dependency manifests/lockfiles under ${targetRepoDir} — run this exactly (one command, do not split it):`,
-    `  find ${targetRepoDir} \\( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \\) -prune -o -type f \\( -name 'bun.lock' -o -name 'bun.lockb' -o -name 'package-lock.json' -o -name 'yarn.lock' -o -name 'pnpm-lock.yaml' -o -name 'go.sum' -o -name 'Cargo.lock' -o -name 'uv.lock' -o -name 'poetry.lock' -o -name 'Pipfile.lock' -o -name '*requirements*.txt' -o -path '*/requirements/*.txt' \\) -print`,
+    `Trust-gate TRIVY signal for wave ${waveId}. Scan the tip of ${kahunaBranch}, the tree the gate judges`,
+    `before it lands on ${integrationBase}, for dependency vulnerabilities.`,
+    `Do NOT run git checkout or git switch in ${targetRepoDir}: it is the operator's checkout, and the`,
+    `branch it holds is not the one being judged. STAGE A DETACHED WORKTREE OF THE KAHUNA TIP FIRST:`,
+    `  1. mktemp -d, once. Write the path it prints in place of <w> in every command below: a shell`,
+    `     variable does not survive from one Bash call to the next.`,
+    `  2. git -C ${targetRepoDir} fetch origin ${kahunaBranch}`,
+    `     (other gate signals fetch at the same time: on an error about a ref .lock, wait a few seconds and retry once)`,
+    `  3. git -C ${targetRepoDir} rev-parse origin/${kahunaBranch}   → kahuna_sha`,
+    `  4. git -C ${targetRepoDir} worktree add --detach <w>/tree origin/${kahunaBranch}`,
+    `  5. git -C <w>/tree rev-parse HEAD   → scanned_sha`,
+    `If step 2 or step 4 fails, nothing can be scanned: skip to the cleanup, and return passed=false,`,
+    `found=0, ingested=0, unscanned=[], declared=false, the error in detail, and the SHAs you have`,
+    `("" for one you do not). Every find, scan and file check below runs over <w>/tree, never ${targetRepoDir}.`,
+    `THEN enumerate the dependency manifests/lockfiles under <w>/tree — run this exactly (one command, do not split it):`,
+    `  find <w>/tree \\( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \\) -prune -o -type f \\( -name 'bun.lock' -o -name 'bun.lockb' -o -name 'package-lock.json' -o -name 'yarn.lock' -o -name 'pnpm-lock.yaml' -o -name 'go.sum' -o -name 'Cargo.lock' -o -name 'uv.lock' -o -name 'poetry.lock' -o -name 'Pipfile.lock' -o -name '*requirements*.txt' -o -path '*/requirements/*.txt' \\) -print`,
     `and report the count of lines it prints — this is the denominator the pass predicate below`,
     `needs, not optional context. Two exclusions, both matching scripts/ci/check-scannable.sh:`,
     `(1) a pip requirements file (a line the find printed for its *requirements*.txt or`,
@@ -428,15 +466,13 @@ export function trivySignalPrompt({ waveId, kahunaBranch, targetRepoDir }) {
     `Capture every trivy run to a file, never to the tool output (cc-workflow#1277). The Bash tool`,
     `cuts its output at about 30k characters, and trivy lists a target's Packages BEFORE its`,
     `Vulnerabilities, so a lock of a few hundred packages can be cut after its packages and before`,
-    `its findings: it reads as ingested with 0 HIGH/CRITICAL, a FALSE PASS. Create one work directory`,
-    `with mktemp -d, once, and write the path it prints in place of <w> in every command below: a`,
-    `shell variable does not survive from one Bash call to the next. Run each scan with`,
+    `its findings: it reads as ingested with 0 HIGH/CRITICAL, a FALSE PASS. Every run's JSON goes in`,
+    `<w> (the step-1 directory, beside the tree, never inside it). Run each scan with`,
     `run_in_background: true (a first DB pull can outlast the foreground limit), one at a time, never`,
     `in parallel (they share one trivy cache), in the form shown, where <n> numbers the runs (0 for the`,
     `main scan). stderr has its own file, so a warning cannot make good JSON unparseable.`,
     `THEN run:`,
-    `  trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet ${targetRepoDir} > <w>/trivy-0.json 2> <w>/trivy-0.err; echo "exit=$?"`,
-    `(ensure ${kahunaBranch} is the checked-out / scanned state of ${targetRepoDir}).`,
+    `  trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet <w>/tree > <w>/trivy-0.json 2> <w>/trivy-0.err; echo "exit=$?"`,
     `--include-dev-deps is REQUIRED — trivy suppresses dev/test dependencies by default, and a`,
     `project whose entire tree is dev-only (e.g. a bun-based tools repo) would otherwise scan`,
     `ZERO packages while still exiting clean (cc-workflow#1169). --list-all-pkgs is required on`,
@@ -464,16 +500,21 @@ export function trivySignalPrompt({ waveId, kahunaBranch, targetRepoDir }) {
     `of a scan — applies to trivy is not installed / the scan cannot run, AND to a manifest count`,
     `(found) greater than 0 where the JSON output has no Results key or Results carry an empty/absent`,
     `Packages list (a real lockfile existed but trivy extracted nothing from it).`,
-    `A .no-scannable-dependencies declaration at the repo root, with a reason, applies only when no`,
+    `A .no-scannable-dependencies declaration at the root of <w>/tree (the kahuna tip, not the operator's`,
+    `checkout), with a reason, applies only when no`,
     `lock is found (found 0): a repo can legitimately have nothing pinnable, and the declaration is`,
     `how it says so. It rescues nothing else; any found-but-unscanned lock FAILS, declared or not, as`,
     `scripts/ci/check-scannable.sh rules. Report the manifest count AND the actual package count`,
     `scanned in detail either way.`,
-    `Do NOT do any other work beyond the enumeration and scans above. Return signal="trivy", passed (bool),`,
+    `CLEANUP, always, even after a failure:`,
+    `  git -C ${targetRepoDir} worktree remove --force <w>/tree; git -C ${targetRepoDir} worktree prune`,
+    `Do NOT do any other work beyond the staging, enumeration, scans and cleanup above. Return signal="trivy", passed (bool),`,
     `found (the denominator: lines the find printed, less the two exclusions above), ingested`,
     `(how many of those are INGESTED), unscanned (the UNSCANNED paths), declared (true ONLY if a`,
-    `.no-scannable-dependencies file with a reason exists at the repo root), and detail (counts + 1`,
-    `line). The gate re-checks found, ingested, unscanned and declared itself.`,
+    `.no-scannable-dependencies file with a reason exists at the root of <w>/tree), scanned_sha and`,
+    `kahuna_sha (steps 5 and 3, the full SHAs exactly as git printed them, never abbreviated), and detail`,
+    `(scanned_sha + counts + 1 line). The gate re-checks found, ingested, unscanned, declared and the two`,
+    `SHAs itself: a scan whose scanned_sha is not kahuna_sha HOLDs.`,
   ].join('\n')
 }
 
