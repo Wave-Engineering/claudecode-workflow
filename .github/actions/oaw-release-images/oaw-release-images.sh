@@ -9,18 +9,23 @@
 #
 #   release exists, with the block       -> the block is replaced in place; the rest survives
 #   release exists, without the block    -> the block is appended
-#   release missing ("release not found") -> created with --verify-tag --generate-notes, the
-#                                            block above the generated notes. If the create
-#                                            loses a race with another job creating it, the
-#                                            release is read again and edited instead.
+#   release missing ("release not found") -> exit 1, unless CREATE_IF_MISSING=true: a repo
+#                                            whose release job attaches assets must not get
+#                                            an empty release in their place, marked latest.
+#                                            With it, the release is created with
+#                                            --verify-tag --generate-notes, the block above the
+#                                            generated notes; a lost create race is absorbed
+#                                            by reading the release again and editing it.
 #   release unreadable (any other error) -> exit 1
-# A body whose markers aren't each on a line of their own (CRLF is tolerated) is refused
-# rather than edited, since replacing from an unmatched begin would drop everything after it.
+# A body whose markers aren't each on a line of their own (CRLF is tolerated), or whose end
+# marker comes first, is refused rather than edited: replacing from an unmatched begin
+# would drop everything after it.
 #
 # Inputs (env):
 #   RELEASE_TAG        the release's tag, e.g. v0.11.0
 #   RELEASE_REFS       newline-separated dest:tag@sha256:... (oaw-mirror-image's release-refs)
 #   SOURCE_DIGEST_REF  optional: the source registry/image@sha256:..., listed too
+#   CREATE_IF_MISSING  "true" creates a missing release; anything else fails on one
 #   GH_TOKEN, GH_REPO  for gh
 set -euo pipefail
 
@@ -61,17 +66,18 @@ edit_release() {
 	local body="$1" lines
 	lines="$(awk -v b="$begin" -v e="$end" '
 		{ sub(/\r$/, "") }
-		$0 == b { nb++ } $0 == e { ne++ }
-		END { print nb + 0, ne + 0 }
+		$0 == b { nb++ }
+		$0 == e { ne++; if (nb == 0) early = 1 }
+		END { print nb + 0, ne + 0, (early ? "end-first" : "ok") }
 	' <<<"$body")"
-	if [[ "$lines" == "1 1" ]]; then
+	if [[ "$lines" == "1 1 ok" ]]; then
 		BLOCK="$block" awk -v b="$begin" -v e="$end" '
 			{ sub(/\r$/, "") }
 			$0 == b { print ENVIRON["BLOCK"]; skip = 1; next }
 			$0 == e { skip = 0; next }
 			!skip
 		' <<<"$body" >"$notes"
-	elif [[ "$lines" == "0 0" && "$body" != *"$begin"* && "$body" != *"$end"* ]]; then
+	elif [[ "$lines" == "0 0 ok" && "$body" != *"$begin"* && "$body" != *"$end"* ]]; then
 		printf '%s\n\n%s\n' "$body" "$block" >"$notes"
 	else
 		echo "  [!] release $RELEASE_TAG has its Images markers out of shape (begin/end lines: $lines); not editing it" >&2
@@ -84,6 +90,10 @@ edit_release() {
 if view_out="$(gh release view "$RELEASE_TAG" --json body -q .body 2>&1)"; then
 	edit_release "$view_out"
 elif [[ "$view_out" == *"release not found"* ]]; then
+	if [[ "${CREATE_IF_MISSING:-}" != "true" ]]; then
+		echo "  [!] release $RELEASE_TAG doesn't exist; its release job creates it (set create-if-missing to create it here)" >&2
+		exit 1
+	fi
 	printf '%s\n' "$block" >"$notes"
 	if gh release create "$RELEASE_TAG" --verify-tag --generate-notes --notes-file "$notes" >/dev/null; then
 		echo "==> created release $RELEASE_TAG with the Images block"

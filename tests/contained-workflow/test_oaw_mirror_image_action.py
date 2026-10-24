@@ -73,6 +73,8 @@ if [[ "$1 $2" == "release view" ]]; then
     withblock) printf '%s\n' "## What's changed" "" "$STUB_BEGIN" "### Images" "- old" "$STUB_END" "" "tail line" ;;
     crlf) printf '%s\r\n' "## What's changed" "$STUB_BEGIN" "- old" "$STUB_END" "tail line" ;;
     inline) printf '%s\n' "## What's changed" "see $STUB_BEGIN here" "- old" "$STUB_END" ;;
+    inlineboth) printf '%s\n' "## What's changed" "see $STUB_BEGIN and $STUB_END here" ;;
+    endfirst) printf '%s\n' "## What's changed" "$STUB_END" "middle" "$STUB_BEGIN" "- old" "tail line" ;;
     *) echo "HTTP 502: Server Error" >&2; exit 1 ;;
   esac
   exit 0
@@ -239,7 +241,11 @@ class Release:
 
 
 def _release(
-    tmp_path: Path, release: str, refs: str = f"{REF}\n", create: str = "ok"
+    tmp_path: Path,
+    release: str,
+    refs: str = f"{REF}\n",
+    create: str = "ok",
+    create_if_missing: str = "",
 ) -> Release:
     bindir = _stubs(tmp_path)
     gh_log, notes = tmp_path / "gh.log", tmp_path / "notes"
@@ -248,6 +254,7 @@ def _release(
         "RELEASE_TAG": "v0.11.0",
         "RELEASE_REFS": refs,
         "SOURCE_DIGEST_REF": f"{SRC}@{DIGEST}",
+        "CREATE_IF_MISSING": create_if_missing,
         "STUB_GH_LOG": str(gh_log),
         "STUB_NOTES": str(notes),
         "STUB_RELEASE": release,
@@ -263,8 +270,16 @@ def _release(
 
 
 class TestRelease:
-    def test_missing_release_is_created_with_the_block(self, tmp_path: Path) -> None:
+    def test_missing_release_fails_unless_creating_is_opted_into(self, tmp_path: Path) -> None:
+        # The kit's release job attaches the install tarball; an empty release made here
+        # would be marked latest and break install-remote.sh (#1327 review).
         r = _release(tmp_path, "absent")
+        assert r.proc.returncode != 0
+        assert "doesn't exist" in r.proc.stderr
+        assert r.edits() == []
+
+    def test_missing_release_is_created_with_the_block(self, tmp_path: Path) -> None:
+        r = _release(tmp_path, "absent", create_if_missing="true")
         assert r.proc.returncode == 0, r.proc.stderr
         assert len(r.edits()) == 1 and r.edits()[0].startswith("gh release create v0.11.0")
         assert "--verify-tag" in r.edits()[0] and "--generate-notes" in r.edits()[0]
@@ -296,15 +311,18 @@ class TestRelease:
         assert r.notes.count(BEGIN) == 1 and "- old" not in r.notes
         assert r.notes.rstrip().endswith("tail line")
 
-    def test_markers_out_of_shape_are_refused_not_edited(self, tmp_path: Path) -> None:
-        r = _release(tmp_path, "inline")
+    @pytest.mark.parametrize("shape", ["inline", "inlineboth", "endfirst"])
+    def test_markers_out_of_shape_are_refused_not_edited(
+        self, tmp_path: Path, shape: str
+    ) -> None:
+        r = _release(tmp_path, shape)
         assert r.proc.returncode != 0
         assert "out of shape" in r.proc.stderr
         assert r.edits() == []
 
     def test_losing_the_create_race_edits_the_release_instead(self, tmp_path: Path) -> None:
         # Another job created it between our view and our create: read it again and edit.
-        r = _release(tmp_path, "absent plain", create="exists")
+        r = _release(tmp_path, "absent plain", create="exists", create_if_missing="true")
         assert r.proc.returncode == 0, r.proc.stderr
         assert [c.split()[2] for c in r.edits()] == ["create", "edit"]
         assert r.notes.startswith("## What's changed\n- a thing\n")
@@ -355,4 +373,6 @@ class TestShape:
         step = next(s for s in notes["steps"] if s.get("uses") == "./.github/actions/oaw-release-images")
         assert step["with"]["release-tag"] == "v${{ needs.mirror.outputs.version }}"
         assert step["with"]["release-refs"] == "${{ needs.mirror.outputs.version_ref }}"
+        # release.yml creates the kit's release with the install tarball; never create it here.
+        assert step["with"].get("create-if-missing", "false") == "false"
         assert jobs["mirror"]["outputs"]["version"] == "${{ steps.mirror.outputs.version }}"

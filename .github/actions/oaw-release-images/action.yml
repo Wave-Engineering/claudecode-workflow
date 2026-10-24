@@ -6,8 +6,15 @@ description: >-
   `uses:`. The calling job needs `permissions: contents: write`.
 inputs:
   release-tag:
-    description: "The release's tag, e.g. v0.11.0. A missing release is created with generated notes."
+    description: "The release's tag, e.g. v0.11.0."
     required: true
+  create-if-missing:
+    description: >-
+      "true" creates a missing release with generated notes. Leave it off where a release job
+      attaches assets: an empty release in its place would be marked latest, and that job's
+      own create would then fail. Off, a missing release fails the step.
+    required: false
+    default: "false"
   release-refs:
     description: "Newline-separated dest:tag@sha256:... refs: oaw-mirror-image's release-refs output."
     required: true
@@ -28,6 +35,7 @@ runs:
         RELEASE_TAG: ${{ inputs.release-tag }}
         RELEASE_REFS: ${{ inputs.release-refs }}
         SOURCE_DIGEST_REF: ${{ inputs.source-digest-ref }}
+        CREATE_IF_MISSING: ${{ inputs.create-if-missing }}
         GH_TOKEN: ${{ inputs.github-token }}
         GH_REPO: ${{ github.repository }}
       # Invoke via `bash`, as oaw-sign-image does, so a consumer checkout that loses the

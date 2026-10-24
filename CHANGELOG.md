@@ -36,8 +36,10 @@ are worth keeping apart:
     pushes moving tags (`latest`, `X.Y`, `sha-…`) every time, all in one `imagetools create`. Its
     outputs and the job summary carry the digest-pinned refs.
   - `oaw-release-images` writes those refs into the GitHub release as one Images block that a
-    rerun replaces, creating the release if it is missing. It runs after signing, so a
-    release-API failure can't leave a pushed image unsigned.
+    rerun replaces. It runs after signing, so a release-API failure can't leave a pushed image
+    unsigned. A missing release fails the step, unless `create-if-missing` is set. A repo whose
+    release job attaches assets, like the kit's install tarball, must not get an empty release
+    in their place, marked latest.
 
   The kit's own mirror runs the same core, and a separate `release-notes` job, the only one with
   `contents: write`, now fills in the `vX.Y.Z` release.
