@@ -707,7 +707,7 @@ remove_legacy_inline_stall_guard() {
 	count=$(jq "$legacy"' [.hooks.Stop[]?.hooks[]? | select(legacy)] | length' "$target" 2>/dev/null) || count=0
 	if [[ "$count" -gt 0 ]]; then
 		rewritten=$(jq "$legacy"'
-			.hooks.Stop |= (map(.hooks |= map(select(legacy | not)))
+			.hooks.Stop |= (map(.hooks |= ((. // []) | map(select(legacy | not))))
 				| map(select((.hooks | length) > 0)))' "$target") || {
 			echo 0
 			return 0
