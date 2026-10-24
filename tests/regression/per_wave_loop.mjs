@@ -264,6 +264,33 @@ await check('rework returns "implemented" on the rejected head (abbreviated) →
   assertHalted(run, 'rework-noop:#31 (head 1111111 unchanged)')
 })
 
+await check('rework returns already-present at a NEW head → still a no-op, and the reason does not say "unchanged"', async () => {
+  const run = await runPerWave({ args: RETRY_ARGS, responder: reworkScenario({ status: 'already-present', head_sha: H2 }) })
+  assertHalted(run, 'rework-noop:#31 (already-present at head 2222222)')
+  assert.ok(!run.result.haltReason.includes('unchanged'), run.result.haltReason)
+})
+
+// Fanned out, a no-op leaves its group: the sibling still merges, and whatever reconcile claims about
+// the no-op it was never given is ignored, so it neither merges nor counts as another rework cycle.
+await check('fan: a no-op rework next to a sibling — the sibling merges, reconcile\'s claims about the no-op are ignored', async () => {
+  let flights31 = 0
+  const run = await runPerWave({
+    args: { ...RETRY_ARGS, issues: [31, 33, 35], dispatch: 'fan' },
+    responder: (label) => {
+      if (label === 'flight:#31') return ++flights31 === 1 ? { issue: 31, status: 'implemented', head_sha: H1 } : { issue: 31, status: 'already-present', head_sha: H1 }
+      if (label === 'merge:1') return { merged: [33], needs_rework: [{ issue: 31, reason: REASON }] }
+      if (label === 'merge:2') return { merged: [35, 31], needs_rework: [{ issue: 31, reason: 'reconcile re-flags it anyway' }] }
+      return HARNESS_DEFAULT
+    },
+  })
+  assertHalted(run, 'rework-noop:#31')
+  const merge2 = run.calls.find((c) => c.label === 'merge:2').prompt
+  assert.ok(merge2.includes('issue #35') && !merge2.includes('issue #31'), 'only the sibling goes to reconcile')
+  assert.deepEqual([...run.result.merged].sort((a, b) => a - b), [33, 35], 'the sibling merged; the no-op did not')
+  assert.deepEqual(run.result.reworkCount, { 31: 1 }, 'the re-flag of a no-op is not another rework cycle')
+  assert.ok(run.logs.some((l) => l.includes('ignoring reconcile') && l.includes('#31')), 'the ignored claim is logged')
+})
+
 await check('rework returns rework_not_applied → halts with its reason', async () => {
   const run = await runPerWave({ args: RETRY_ARGS, responder: reworkScenario({ status: 'rework_not_applied', not_applied_reason: 'the fix needs a schema change' }) })
   assertHalted(run, 'rework-noop:#31 (the fix needs a schema change)')

@@ -642,10 +642,12 @@ function workerPrompt(n, worktree, rework = null) {
     ? [
         `REWORK (#1213): reconcile REJECTED this flight's previous head ${rework.head || '(head not recorded)'}. Its reason:`,
         `  ${rework.reason}`,
-        `Your branch already holds an implementation — that is expected, and it is what was rejected. Do NOT return`,
-        `status="already-present". Apply the fix the reason describes on top of it, then return status="implemented"`,
-        `with the new head_sha. If you cannot or will not apply it, return status="rework_not_applied" and say why in`,
-        `not_applied_reason. Returning the rejected head unchanged halts the wave.`,
+        `Your branch may already hold an implementation — that is expected; the rejected head is what reconcile saw.`,
+        `Do NOT return status="already-present". Apply the fix the reason describes, then return status="implemented"`,
+        `with the new head_sha. If your branch ALREADY has a commit after the rejected head that makes this fix (a`,
+        `resumed run), verify it and return status="implemented" with that HEAD — do not redo it. If you cannot or will`,
+        `not apply the fix, return status="rework_not_applied" and say why in not_applied_reason. Returning the`,
+        `rejected head unchanged halts the wave.`,
         ``,
         `SPEC EXECUTOR rules (the fix must still satisfy the issue's spec):`,
       ]
@@ -847,8 +849,10 @@ const isNoopRework = (w) => {
 }
 const noopWhy = (w) => {
   if (w.status === 'rework_not_applied') return w.not_applied_reason || 'rework_not_applied, no reason given'
-  const head = SHA_RE.test(w.head_sha || '') ? w.head_sha : reworkCtx[Number(w.issue)]?.head
-  return head ? `head ${head.slice(0, 7)} unchanged` : `${w.status} with no new head`
+  const ctx = reworkCtx[Number(w.issue)]
+  // "unchanged" only when it is: an already-present at a NEW head did commit something, and says so.
+  if (sameHead(w.head_sha, ctx?.head)) return `${w.status === 'implemented' ? '' : `${w.status}, `}head ${ctx.head.slice(0, 7)} unchanged`
+  return SHA_RE.test(w.head_sha || '') ? `${w.status} at head ${w.head_sha.slice(0, 7)}` : `${w.status} with no new head`
 }
 // #1204: idleRounds counts consecutive no-progress rounds WITHIN ONE RUN. It is persisted for
 // observability but never restored: a retried wave whose blob says idleRounds:2 used to hit the
@@ -954,13 +958,19 @@ while (true) {
   if (rec.blocked) { halt = `reconcile-blocked: ${rec.block_reason || 'push to origin rejected'}`; break }
 
   // ── DETERMINISTIC state update + progress accounting ──
-  const newlyMerged = (rec.merged || []).filter((n) => !merged.has(n))
+  // #1213: a no-op rework was not handed to reconcile, so reconcile cannot have merged or re-flagged it.
+  // Ignoring any claim that it did keeps the no-op out of merged and out of reworkCount.
+  const noopIssues = new Set(noops.map((w) => Number(w.issue)))
+  const ignored = [...(rec.merged || []), ...(rec.needs_rework || []).map((r) => r.issue)].filter((n) => noopIssues.has(Number(n)))
+  if (ignored.length) log(`[#1213] ignoring reconcile's report on no-op rework(s) it was not given: #${[...new Set(ignored)].join(', #')}`)
+  const newlyMerged = (rec.merged || []).filter((n) => !merged.has(n) && !noopIssues.has(Number(n)))
+  const reworked = (rec.needs_rework || []).filter((r) => !noopIssues.has(Number(r.issue)))
   newlyMerged.forEach((n) => { merged.add(n); pending.delete(n); delete reworkCtx[n] })
   idleRounds = newlyMerged.length ? 0 : idleRounds + 1 // thrash detector
   await cleanupMerged(newlyMerged) // SEAM #686 — per-merge worktree+branch removal (§4.3)
 
   lastRework = []
-  for (const r of rec.needs_rework || []) {
+  for (const r of reworked) {
     const ri = Number(r.issue) // normalize: pending/merged/reworkCount are numeric-keyed (string keys leak in via JSON resume)
     reworkCtx[ri] = { reason: String(r.reason ?? ''), head: flightHead[ri] ?? null } // #1213: what the next flight is told
     if ((reworkCount[ri] = (reworkCount[ri] || 0) + 1) > MAX_REWORK) {
@@ -973,7 +983,7 @@ while (true) {
     log(`Surfaced dependency: #${ri} re-opened (rework #${reworkCount[ri]}) — ${r.reason}`)
   }
 
-  groupsRun.push({ group, merged: newlyMerged, needs_rework: rec.needs_rework || [], suite: rec.suite_summary })
+  groupsRun.push({ group, merged: newlyMerged, needs_rework: reworked, suite: rec.suite_summary })
   // SEAM #688 — newlyMerged are the issues that need their MR recorded + issue closed THIS
   // iteration; merged/pending/etc. are the full loop blob (the rehydrate substrate, §3.3).
   await persistIteration({ merged, pending, reworkCount, reworkContext: reworkCtx, idleRounds, groupsRun: groupsRunBase + groupsRun.length, newlyMerged: newlyMerged.filter((n) => merged.has(n)) }) // defensive: drop any newlyMerged that the rework loop re-opened

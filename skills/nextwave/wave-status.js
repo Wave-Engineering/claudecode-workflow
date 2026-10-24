@@ -7,7 +7,7 @@
 // side-effect is an agent() call. This module owns the two things that make persistence
 // honor its contract WITHOUT bloating the loop:
 //   1. the canonical DURABLE BLOB shape + path — the exact `{merged, pending, reworkCount,
-//      idleRounds, groupsRun}` that rehydrate() (#686) reads back (same shape as REHYDRATE).
+//      reworkContext, idleRounds, groupsRun}` that rehydrate() (#686) reads back (same shape as REHYDRATE).
 //   2. the agent PROMPTS that perform the durable side-effects idempotently:
 //        - per newly-merged issue: wave_record_mr + wave_close_issue (sdlc-server)
 //        - then overwrite the single per-wave blob file under .claude/status/.
@@ -17,7 +17,7 @@
 //   - wave_record_mr / wave_close_issue are keyed on issue_number → recording an
 //     already-recorded MR or closing an already-closed issue is an overwrite/no-op.
 //   - the blob is a FULL OVERWRITE of one file per wave → replaying identical state
-//     produces a file whose rehydrate-core fields ({merged,pending,reworkCount,idleRounds,
+//     produces a file whose rehydrate-core fields ({merged,pending,reworkCount,reworkContext,idleRounds,
 //     groupsRun}) are identical; only the `updatedAt` metadata timestamp may differ.
 //   - the terminal record is a single keyed wave-completion entry → overwrite, not append.
 
