@@ -95,7 +95,7 @@ export async function runPerWave({ args = DEFAULT_ARGS, responder = () => HARNES
     if (label === 'gate:ci') return { pr_number: 99, head_sha: HEAD, head_sha_final: HEAD, wait: { ok: true, final_status: 'success' } }
     if (label === 'gate:review:stage') return { staged: true, workspaceDir: '/nonexistent/ws', changedFiles: ['a.js'] }
     if (label === 'gate:review') return { signal: 'review', passed: true, detail: 'harness: clean' }
-    if (label === 'gate:trivy') return { signal: 'trivy', passed: true, found: 1, ingested: 1, unscanned: [], declared: false }
+    if (label === 'gate:trivy') return { signal: 'trivy', passed: true, found: 1, ingested: 1, unscanned: [], declared: false, scanned_sha: HEAD, kahuna_sha: HEAD }
     if (label === 'promote') return { promoted: true, mr_ref: '#99' }
     throw new Error(`harness: no default response for agent label '${label}' — add one`)
   }

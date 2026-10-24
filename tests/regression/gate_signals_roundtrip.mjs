@@ -26,6 +26,7 @@ import {
   trivySignalPrompt,
   TRIVY_SIG,
   trivyCoverage,
+  trivyTreeBound,
   promotePrompt,
   PROMOTE_RESULT,
 } from '../../skills/nextwave/gate.js'
@@ -145,7 +146,7 @@ try {
 
   const tv = trivySignalPrompt(A)
   assert.match(tv, /trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet/) // #1169 round 2: JSON output required — the predicate reasons over it
-  assert.match(tv, /FIRST enumerate the dependency manifests/i) // #1169 round 2: denominator is a prescribed step, not left to the agent to think of
+  assert.match(tv, /THEN enumerate the dependency manifests/i) // #1169 round 2: denominator is a prescribed step, not left to the agent to think of (after #1206's staging)
   // #1169 round 3: the enumeration is a REAL, single-line, runnable find command (round 2's
   // version was split across template-literal array elements with no line-continuation, i.e.
   // broken bash if pasted literally) — pin the actual prune clause and the lockfile set,
@@ -158,7 +159,7 @@ try {
   // #1247 (babelfish's ruling, reversing #1169 round 3 M-1): the declaration applies only when no
   // lock is found, as check-scannable.sh rules. A found lock that yields nothing is UNSCANNED, and
   // a declaration of "nothing scannable" beside it is a contradiction, not a rescue.
-  assert.match(tv, /declaration at the repo root, with a reason, applies only when no\s+lock is found \(found 0\)/)
+  assert.match(tv, /declaration at the root of <w>\/tree \(the kahuna tip, not the operator's\s+checkout\), with a reason, applies only when no\s+lock is found \(found 0\)/)
   assert.match(tv, /It rescues nothing else; any found-but-unscanned lock FAILS, declared or not/)
   assert.doesNotMatch(tv, /rescues BOTH/i)
   ok('trivy prompt: HIGH,CRITICAL + --include-dev-deps + --list-all-pkgs + JSON output + a real runnable enumeration command + declaration applies only when nothing is found')
@@ -203,10 +204,10 @@ try {
     assert.match(run, /\s2>\s*<w>\/trivy-\S+\.err/, `stderr not captured: ${run}`)
     assert.ok(run.includes('; echo "exit=$?"'), `trivy run without its own exit=: ${run}`)
   }
-  assert.match(tv, /--quiet \/tmp\/repo > <w>\/trivy-0\.json 2> <w>\/trivy-0\.err; echo "exit=\$\?"\n/)
+  assert.match(tv, /--quiet <w>\/tree > <w>\/trivy-0\.json 2> <w>\/trivy-0\.err; echo "exit=\$\?"\n/)
   // <w> is the literal path mktemp -d printed, never a variable: a variable does not survive
   // between Bash calls, so `> $w/...` in a later call writes to /trivy-0.json and HOLDs every wave.
-  assert.match(tv, /Create one work directory\s+with mktemp -d, once, and write the path it prints in place of <w>/)
+  assert.match(tv, /mktemp -d, once\. Write the path it prints in place of <w> in every command below/)
   assert.doesNotMatch(tv, /\$w\b/, 'the work directory must be the <w> placeholder, not a $w variable')
   assert.match(tv, /run_in_background: true .*, one at a time, never\s+in parallel/)
   assert.ok(tv.includes(`jq '[.Results[]? | {Target, pkgs: (.Packages // [] | length), hc: ([.Vulnerabilities[]? | select(.Severity=="HIGH" or .Severity=="CRITICAL")] | length), hc_fixable: ([.Vulnerabilities[]? | select((.Severity=="HIGH" or .Severity=="CRITICAL") and ((.FixedVersion // "") != ""))] | length)}]' <w>/trivy-<n>.json`), 'the per-target jq read with hc_fixable is missing')
@@ -215,6 +216,24 @@ try {
   assert.match(tv, /A run that printed no exit=, printed a non-zero exit=, or left a file jq cannot parse scanned nothing: every lock it was to cover is UNSCANNED\./)
   assert.match(tv, /INGESTED when a jq row for it shows at least one package/)
   ok('trivy prompt: every scan captured to <w>/trivy-<n>.json + .err with its own exit=, read with jq (hc_fixable), no exit=/non-zero/unparseable = UNSCANNED (#1277)')
+  // #1206: the scans run over a detached worktree of origin/<kahuna>, never the operator's checkout.
+  assert.ok(tv.includes('git -C /tmp/repo fetch origin kahuna/692-x'), 'the kahuna ref is fetched')
+  assert.ok(tv.includes('git -C /tmp/repo rev-parse origin/kahuna/692-x'), 'kahuna_sha is read from the fetched ref')
+  assert.ok(tv.includes('worktree add --detach <w>/tree origin/kahuna/692-x'), 'a detached kahuna worktree is staged')
+  assert.ok(tv.includes('git -C <w>/tree rev-parse HEAD'), 'scanned_sha is the worktree HEAD')
+  assert.ok(tv.includes('worktree remove --force <w>/tree') && tv.includes('worktree prune'), 'the worktree is removed')
+  assert.ok(tv.indexOf('worktree add --detach') < tv.indexOf('find <w>/tree'), 'the tree is staged before the enumeration')
+  assert.match(tv, /^ {2}find <w>\/tree \\\(/m, 'the enumeration is rooted at the kahuna worktree')
+  for (const run of runs.filter((l) => l.includes('--quiet') && !l.includes('$d'))) {
+    assert.match(run, /--quiet <w>\/tree >/, `a main scan not rooted at the kahuna worktree: ${run}`)
+  }
+  assert.doesNotMatch(tv, /find \/tmp\/repo/, 'no enumeration over the operator checkout')
+  assert.doesNotMatch(tv, /trivy fs [^\n]*\/tmp\/repo/, 'no scan over the operator checkout')
+  assert.doesNotMatch(tv, /ensure [^\n]* is the checked-out/, 'the instruction-only safeguard is gone')
+  assert.match(tv, /Do NOT run git checkout or git switch in \/tmp\/repo/)
+  assert.match(tv, /\.no-scannable-dependencies file with a reason exists at the root of <w>\/tree/)
+  assert.match(tv, /campaign\/692-x/, 'the prose names the integration base')
+  ok('trivy prompt: stages a detached origin/<kahuna> worktree, scans and checks only it, returns both SHAs, removes it, never touches the checkout (#1206)')
 } catch (e) { bad('signal prompts', e) }
 
 // ── 2b. #1247: the TRIVY coverage rule is CODE, not a prompt instruction ──────────────
@@ -269,15 +288,52 @@ try {
     assert.equal(r.passed, false, `missing or inconsistent counts must conservative-fail: ${JSON.stringify(counts)}`)
   }
   assert.equal(trivyCoverage(undefined).passed, false)
-  assert.deepEqual(TRIVY_SIG.required, ['signal', 'passed', 'found', 'ingested', 'unscanned', 'declared'])
+  assert.deepEqual(TRIVY_SIG.required, ['signal', 'passed', 'found', 'ingested', 'unscanned', 'declared', 'scanned_sha', 'kahuna_sha'])
   // A pure rule proves nothing if the workflow stops calling it: pin the wiring in source AND bundle.
   for (const f of ['per-wave-workflow.js', 'per-wave-workflow.bundled.js']) {
     const src = readFileSync(new URL(`../../skills/nextwave/${f}`, import.meta.url), 'utf8')
     assert.match(src, /label: 'gate:trivy', phase: 'Trust gate', schema: TRIVY_SIG,/, `${f}: trivy signal must use TRIVY_SIG`)
-    assert.match(src, /\)\.then\(trivyCoverage\)\.catch\(\(e\) => conservativeFail\('trivy', e\)\)/, `${f}: trivyCoverage must run on the agent result`)
+    assert.match(src, /\)\.then\(trivyTreeBound\)\.then\(trivyCoverage\)\.catch\(\(e\) => conservativeFail\('trivy', e\)\)/, `${f}: trivyTreeBound then trivyCoverage must run on the agent result`)
+    assert.match(src, /trivySignalPrompt\(\{ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, integrationBase: INTEGRATION_BASE, targetRepoDir: TARGET_REPO_DIR \}\)/, `${f}: the trivy prompt gets the integration base`)
   }
   ok('trivy coverage: 2-of-4 HOLDs, a named unscanned lock HOLDs, a lone bun.lockb HOLDs declared or not, full passes through, a fail never becomes a pass and keeps its cause, bad counts (and found 0 beside a named unscanned lock) conservative-fail, wired in source and bundle (#1247)')
 } catch (e) { bad('trivy coverage (#1247)', e) }
+
+// ── 2b'. #1206: the trivy verdict is bound to the kahuna tip in CODE ──────────────────
+try {
+  const K = 'a'.repeat(40)
+  const O = 'b'.repeat(40)
+  const clean = { signal: 'trivy', passed: true, detail: '0 HIGH/CRITICAL', found: 1, ingested: 1, unscanned: [], declared: false, scanned_sha: K, kahuna_sha: K }
+  assert.deepEqual(trivyTreeBound(clean), clean, 'equal full SHAs pass through unchanged')
+  assert.deepEqual(trivyTreeBound({ ...clean, scanned_sha: 'c'.repeat(64), kahuna_sha: 'c'.repeat(64) }).passed, true, 'a SHA-256 repo binds too')
+  const holds = {
+    'mismatched SHAs (the operator checkout was scanned)': { scanned_sha: O },
+    'missing scanned_sha': { scanned_sha: undefined },
+    'missing kahuna_sha': { kahuna_sha: undefined },
+    'empty SHAs (staging failed)': { scanned_sha: '', kahuna_sha: '' },
+    'an abbreviated SHA': { scanned_sha: K.slice(0, 12), kahuna_sha: K.slice(0, 12) },
+    'an uppercase SHA': { scanned_sha: K.toUpperCase(), kahuna_sha: K.toUpperCase() },
+  }
+  for (const [what, over] of Object.entries(holds)) {
+    const r = trivyTreeBound({ ...clean, ...over })
+    assert.equal(r.passed, false, `${what} must HOLD`)
+    assert.equal(r.signal, 'trivy')
+    assert.match(r.detail, /^TREE NOT BOUND \(HOLD\): scanned_sha=\S+ kahuna_sha=\S+; .*0 HIGH\/CRITICAL$/, `${what}: detail names both SHAs, then keeps the agent's: ${r.detail}`)
+    assert.equal(r.found, 1, `${what}: the coverage counts survive for trivyCoverage`)
+  }
+  const mm = trivyTreeBound({ ...clean, scanned_sha: O })
+  assert.ok(mm.detail.includes(`scanned_sha=${O}`) && mm.detail.includes(`kahuna_sha=${K}`), mm.detail)
+  assert.match(trivyTreeBound({ ...clean, scanned_sha: undefined }).detail, /scanned_sha=missing/)
+  const failing = { ...clean, passed: false, detail: 'CVE-1 fixable' }
+  assert.equal(trivyTreeBound(failing).passed, false, 'a bound failing scan stays failing')
+  assert.equal(trivyTreeBound({ ...failing, scanned_sha: O }).passed, false, 'an unbound failing scan stays failing')
+  assert.equal(trivyTreeBound(null).passed, false, 'a null result HOLDs')
+  // Composed as wired: an unbound scan with good coverage still HOLDs, and keeps the tree rule first.
+  const composed = trivyCoverage(trivyTreeBound({ ...clean, scanned_sha: O }))
+  assert.equal(composed.passed, false)
+  assert.match(composed.detail, /^TREE NOT BOUND/)
+  ok('trivyTreeBound: equal full SHAs pass; mismatch / missing / empty / short / uppercase HOLD naming both SHAs; never turns a fail into a pass; composes with trivyCoverage (#1206)')
+} catch (e) { bad('trivy tree bound (#1206)', e) }
 
 // ── 2c. #1211: the CI merge-result rule is CODE, shared with the campaign release gate ───────
 try {

@@ -67,6 +67,7 @@ import {
   trivySignalPrompt,
   TRIVY_SIG,
   trivyCoverage,
+  trivyTreeBound,
   promotePrompt,
   PROMOTE_RESULT,
 } from './gate.js'
@@ -1082,10 +1083,11 @@ if (!halt && pending.size === 0) {
       })().catch((e) => conservativeFail('review', e)),
       // 4. trivy HIGH/CRITICAL dependency scan of kahuna. trivyCoverage HOLDs a pass over part of
       //    the lockfiles found (#1247); the agent reports the counts, code applies the rule.
+      //    trivyTreeBound HOLDs a scan not proven to be of the kahuna tip (#1206).
       () => agent(
-        trivySignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, targetRepoDir: TARGET_REPO_DIR }),
+        trivySignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, integrationBase: INTEGRATION_BASE, targetRepoDir: TARGET_REPO_DIR }),
         { label: 'gate:trivy', phase: 'Trust gate', schema: TRIVY_SIG, agentType: 'general-purpose' },
-      ).then(trivyCoverage).catch((e) => conservativeFail('trivy', e)),
+      ).then(trivyTreeBound).then(trivyCoverage).catch((e) => conservativeFail('trivy', e)),
       // A null/undefined slot (an SDK-level failure upstream of the per-signal .catch) must become a
       // conservative-fail, NEVER be dropped — the gate must always weigh exactly 4 signals, or a
       // missing signal silently becomes a PASS (absence-of-evidence-as-safety). #687 review.

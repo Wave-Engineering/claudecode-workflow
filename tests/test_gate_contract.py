@@ -216,3 +216,30 @@ class TestCiSignal:
         assert ".then((ev) => ciVerdict(ev, promotionPrNumber))" in wf, (
             "the gate:ci node must be graded by ciVerdict against the gate's own PR number"
         )
+
+
+class TestTrivySignal:
+    """Trivy trust signal — #1206: scans a detached worktree of origin/<kahuna>, never the
+    operator's checkout, and code binds the verdict to the kahuna tip by SHA."""
+
+    def test_scan_root_is_kahuna_worktree(self) -> None:
+        src = _gate_src()
+        assert "worktree add --detach <w>/tree origin/${kahunaBranch}" in src, (
+            "the trivy signal must stage a detached worktree of origin/<kahuna>"
+        )
+        assert "  find <w>/tree \\\\(" in src, "the enumeration must be rooted at the kahuna worktree"
+        assert "--quiet <w>/tree > <w>/trivy-0.json" in src, "the main scan must be rooted at the kahuna worktree"
+        assert "find ${targetRepoDir}" not in src and "--quiet ${targetRepoDir}" not in src, (
+            "no find or trivy fs may be rooted at the operator's checkout"
+        )
+        assert "Do NOT run git checkout or git switch in ${targetRepoDir}" in src
+        assert "worktree remove --force <w>/tree" in src, "the kahuna worktree must be removed"
+
+    def test_trivy_sig_requires_scanned_sha(self) -> None:
+        src = _gate_src()
+        assert "'declared', 'scanned_sha', 'kahuna_sha']" in src, "TRIVY_SIG must require both SHAs"
+        assert "export function trivyTreeBound(sig)" in src
+        wf = _WF_JS.read_text(encoding="utf-8")
+        assert ".then(trivyTreeBound).then(trivyCoverage)" in wf, (
+            "the gate:trivy node must bind the verdict to the kahuna tip before the coverage rule"
+        )
