@@ -129,7 +129,7 @@ full_reading 300000
 expect "per-model autoCompactWindow outranks the top-level one" silent
 printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 400000}}}' >"$CLAUDE_SETTINGS_FILE"
 full_reading 345000 claude-other-model
-expect "no autocompact setting for the model → model-window figure (65%)" silent
+expect "no autocompact setting for the model → 1M window less the buffer (64%)" silent
 printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 2000000}}}' >"$CLAUDE_SETTINGS_FILE"
 full_reading 345000
 expect "autocompact window above the model window is ignored (min)" silent
@@ -137,19 +137,32 @@ printf 'not json' >"$CLAUDE_SETTINGS_FILE"
 full_reading 345000
 expect "malformed settings → model-window figure, exit 0" silent
 full_reading 900000
-expect "malformed settings still blocks on the model-window figure (10%)" block
+expect "malformed settings still blocks on the model window (900k of 967k usable, 6%)" block
 printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": "lots"}}}' >"$CLAUDE_SETTINGS_FILE"
 full_reading 345000
 expect "non-numeric autocompact window → model-window figure" silent
 printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 400000}}}' >"$CLAUDE_SETTINGS_FILE"
 full_reading 345000
 expect "junk CLAUDE_CODE_AUTO_COMPACT_WINDOW falls through to settings (400k → block)" block CLAUDE_CODE_AUTO_COMPACT_WINDOW=junk
-full_reading 345000
-expect "junk RESEED_AUTOCOMPACT_BUFFER_TOKENS falls back to 33000" block RESEED_AUTOCOMPACT_BUFFER_TOKENS=junk
+full_reading 335000
+expect "junk RESEED_AUTOCOMPACT_BUFFER_TOKENS falls back to 33000 (335k: 8%, not 16%)" block RESEED_AUTOCOMPACT_BUFFER_TOKENS=junk
 full_reading 450000
 expect "used beyond the ceiling floors at 0% → block" block
 reading 50
 expect "legacy reading (no token fields) ignores the settings ceiling" silent
+
+# The buffer applies to the model's own window too, with no autocompact setting.
+full_reading 160000 claude-other-model 200000
+expect "native 200k window: 160k of 167k usable → block (raw: 20%, silent)" block
+full_reading 830000 claude-other-model
+expect "native 1M window: 830k of 967k usable (14%) → block (raw: 17%, silent)" block
+# Claude Code's own forms for the env var, and its 100k floor.
+full_reading 260000 claude-other-model
+expect "CLAUDE_CODE_AUTO_COMPACT_WINDOW=300k is 300000" block CLAUDE_CODE_AUTO_COMPACT_WINDOW=300k
+full_reading 345000 claude-other-model
+expect "CLAUDE_CODE_AUTO_COMPACT_WINDOW=0.4M is 400000" block CLAUDE_CODE_AUTO_COMPACT_WINDOW=0.4M
+full_reading 50000 claude-other-model
+expect "CLAUDE_CODE_AUTO_COMPACT_WINDOW=50000 is raised to 100k (50k of 67k usable, 25%)" silent CLAUDE_CODE_AUTO_COMPACT_WINDOW=50000
 rm -f "$CLAUDE_CONTEXT_STATE_DIR"/*
 
 # --- loop guards ------------------------------------------------------------------
