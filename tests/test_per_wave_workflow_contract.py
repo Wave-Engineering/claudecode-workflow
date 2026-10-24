@@ -135,11 +135,30 @@ class TestFlightContract:
         )
 
     def test_flight_pr_targets_kahuna_never_protected(self) -> None:
-        # Flight PRs target the kahuna integration branch, NEVER the protected branch directly.
-        src = _wf_src()
-        assert "Your PR targets" in src and "NEVER" in src and "PROTECTED_BRANCH" in src, (
-            "flight PRs must target KAHUNA_BRANCH, never the protected branch directly"
+        # A flight's branch lands on the kahuna integration branch (through reconcile), NEVER the protected branch.
+        src = _worker_prompt_src()
+        assert "lands on" in src and "NEVER" in src and "PROTECTED_BRANCH" in src, (
+            "a flight must land on KAHUNA_BRANCH, never the protected branch directly"
         )
+
+    def test_flight_does_not_run_precheck(self) -> None:
+        # #1209: a flight is a subagent (no Agent tool) told not to push, so it cannot satisfy /precheck.
+        # The prompt says so; the trust gate's review is its review, and reconcile opens and merges its PR.
+        src = _worker_prompt_src()
+        for needle in (
+            "Do NOT run /precheck, /scp, /scpmr, /scpmmr or /mmr",
+            "do NOT call pr_create, pr_ready or pr_merge",
+            "trust gate's review signal is this change's review",
+            "do NOT push",
+        ):
+            assert needle in src, f"workerPrompt must say {needle!r}"
+        assert "Your PR targets" not in src, "a flight opens no PR; reconcile does"
+
+
+def _worker_prompt_src() -> str:
+    src = _wf_src()
+    start = src.index("function workerPrompt(")
+    return src[start : src.index("\n}\n", start)]
 
 
 class TestPrimePlanningAndReconcile:

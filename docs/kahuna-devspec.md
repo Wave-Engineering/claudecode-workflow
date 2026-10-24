@@ -161,7 +161,7 @@ Requirements follow the **EARS** notation:
 |----|------|-------------|
 | **R-05** | Ubiquitous | The Flight Agent shall branch its implementation work from the active kahuna branch, not from main. |
 | **R-06** | Ubiquitous | The Flight Agent shall open its merge request with `base = <active-kahuna-branch>`, not `base = main`. |
-| **R-07** | State-driven | While a Flight Agent is operating inside a Kahuna sandbox (its branch base ref matches the `kahuna/*` pattern), `/precheck` shall auto-approve the Flight's own merge (`/mmr`; before cc-workflow#1235, `/scpmmr`) after completing the full checklist (validation, code-reviewer, trivy, notifications) with no STOP-and-wait step. |
+| **R-07** | State-driven | While a Flight Agent is operating inside a Kahuna sandbox (its branch base ref matches the `kahuna/*` pattern), `/precheck` shall auto-approve the Flight's own merge (`/mmr`; before cc-workflow#1235, `/scpmmr`) after completing the full checklist (validation, code-reviewer, trivy, notifications) with no STOP-and-wait step. *Amended by cc-workflow#1209: Workflow flights no longer run `/precheck`; reconcile lands them on `kahuna/*` and the trust gate reviews the wave. R-07 now applies to a PR/MR opened into `kahuna/*` by hand, and the Flight-Agent wording elsewhere in this spec describes the retired architecture.* |
 
 ### 3.3 Platform Enforcement
 
