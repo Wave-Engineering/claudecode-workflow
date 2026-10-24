@@ -88,7 +88,7 @@ try {
 
     // the load-bearing resume guarantee: a resumed loop SKIPS the merged issues.
     for (const m of [3, 12, 45]) assert.ok(!seed.pending.includes(m), `merged #${m} is NOT re-scheduled`)
-    ok('mid-run state rehydrates to a loop seed that skips finished work (merged/pending/reworkCount/idleRounds/groupsRun)')
+    ok('mid-run state rehydrates to a loop seed that skips finished work (merged/pending/reworkCount/groupsRun; idleRounds round-trips but is not seeded, #1204)')
 
     // reworkCount keys survive as clean integers (JSON stringifies them; the loop Number-casts)
     for (const k of Object.keys(seed.reworkCount)) {

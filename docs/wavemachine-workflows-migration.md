@@ -134,7 +134,7 @@ Two layers, different failures:
 | within-session | pause / script-edit | `Workflow({scriptPath, resumeFromRunId})` — cached `agent()` results replay; side-effects already on disk aren't repeated |
 | cross-session | session death / **reboot** | mirror canonical state to **wave-status** (`.claude/status/`, durable) every iteration; **rehydrate** on cold start so the loop skips finished work |
 
-- The script can't call MCP/CLI directly → a cheap **rehydrate agent** reads wave-status and returns `{merged, pending, reworkCount, idleRounds, groupsRun}`; the script seeds its variables. **Persistence is folded into Prime(post-flight)** (it already writes wave-status): record each merged issue's MR + close it, then write the loop blob.
+- The script can't call MCP/CLI directly → a cheap **rehydrate agent** reads wave-status and returns `{merged, pending, reworkCount, idleRounds, groupsRun}`; the script seeds its variables from all but `idleRounds`, which counts within one run so a retry after a thrash exit can still dispatch (#1204). **Persistence is folded into Prime(post-flight)** (it already writes wave-status): record each merged issue's MR + close it, then write the loop blob.
 - **Idempotency is the crux of safe cross-session resume:** the **worker** must detect "my branch already has this implementation → return existing result," and **reconcile** must detect "this branch is already in kahuna → skip." `commutativity_verify` is read-only (idempotent for free). Make those two re-entrant and a killed run resumes exactly where it died.
 - **Durable state must NOT live in `/tmp`** (`lesson_tmp_identity_boot_wipe`). The `/tmp/wavemachine/` bus is fine for within-run comms; resume state belongs in `.claude/status/`.
 
