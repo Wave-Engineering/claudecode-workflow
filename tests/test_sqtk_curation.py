@@ -51,6 +51,7 @@ def test_issue_settle_step_names_its_commands():
 def test_issue_settle_step_qualifies_a_cross_repo_answer():
     s = section(ISSUE, "Step 4.5: Settle what this issue covers")
     assert "sqtk walk <target-repo>:triage" in s
+    assert "without its owner" in s
     assert "`<owner>/<repo>#<N>`" in s
     assert "only on the issue's own repo's list" in s
 

@@ -648,7 +648,9 @@ it now (#1320).
 
 1. Walk the triage list of the repo the issue was filed in. In that repo's checkout this is
    `sqtk walk triage`. Anywhere else, `triage` would resolve to the checkout you are in, so
-   name the list in full: `sqtk walk <target-repo>:triage`. When your checkout is a different
+   name the list in full: `sqtk walk <target-repo>:triage`, where `<target-repo>` is the bare
+   repo name without its owner (`sqtk walk claudecode-workflow:triage`; an `owner/repo` name
+   finds no list, and the step would skip it silently). When your checkout is a different
    repo, walk its `triage` too: a defect spotted there may be what this issue tracks.
 2. For each item the new issue **plainly covers**, meaning the issue would close what the
    item describes, record it with the issue as its answer, on the list you found it on:
