@@ -908,6 +908,8 @@ def planning(root: Path) -> dict:
     # Also set the current wave to in_progress.
     if current_wave and current_wave in state_data.get("waves", {}):
         state_data["waves"][current_wave]["status"] = "in_progress"
+        # Leaving ``held`` drops the hold's text; the ``concern`` event keeps it (#1208).
+        state_data["waves"][current_wave].pop("hold_detail", None)
 
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
@@ -1282,8 +1284,9 @@ def hold_wave(wave_id: str, root: Path, detail: str = "") -> dict:
     ``held`` is the honest "terminal for now" status: the wave stays the current
     wave so a resume re-attempts it.
 
-    Idempotent — re-holding an already-held wave only refreshes ``hold_detail``
-    and ``last_updated``. NEVER advances ``current_wave``.
+    Idempotent — re-holding an already-held wave only replaces ``hold_detail``
+    (removing it when no *detail* is given, so a previous hold's text never
+    survives) and refreshes ``last_updated``. NEVER advances ``current_wave``.
     """
     d = status_dir(root)
     state_data = load_state(d / "state.json")
@@ -1296,6 +1299,8 @@ def hold_wave(wave_id: str, root: Path, detail: str = "") -> dict:
     waves[wave_id]["status"] = "held"
     if detail:
         waves[wave_id]["hold_detail"] = detail
+    else:
+        waves[wave_id].pop("hold_detail", None)
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
     # S1.3 / #861 — coded escape hatch (ENG-1 gate-skip-but-hold). A held wave is
@@ -1345,6 +1350,7 @@ def complete(root: Path, wave_id: str | None = None) -> dict:
     # Mark the target (the run's actual) wave as completed.
     if target in state_data.get("waves", {}):
         state_data["waves"][target]["status"] = "completed"
+        state_data["waves"][target].pop("hold_detail", None)
 
     # Advance to the next pending wave AFTER the one we just completed.
     wave_ids = _all_wave_ids(plan_data)

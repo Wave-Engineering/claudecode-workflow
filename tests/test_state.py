@@ -915,6 +915,35 @@ class TestHoldWave:
         assert result["waves"]["wave-1"]["status"] == "held"
         assert result["waves"]["wave-1"]["hold_detail"] == "second"
 
+    # --- #1208: leaving 'held' (or re-holding bare) drops hold_detail ------
+
+    def test_held_then_complete_clears_detail(self, project_root: Path) -> None:
+        planning(project_root)
+        hold_wave("wave-1", project_root, detail="gate HOLD: review")
+        result = complete(project_root, wave_id="wave-1")
+        assert result["waves"]["wave-1"]["status"] == "completed"
+        assert "hold_detail" not in result["waves"]["wave-1"]
+
+    def test_held_then_planning_clears_detail(self, project_root: Path) -> None:
+        planning(project_root)
+        hold_wave("wave-1", project_root, detail="gate HOLD: review")
+        result = planning(project_root)
+        assert result["waves"]["wave-1"]["status"] == "in_progress"
+        assert "hold_detail" not in result["waves"]["wave-1"]
+
+    def test_bare_rehold_drops_previous_detail(self, project_root: Path) -> None:
+        planning(project_root)
+        hold_wave("wave-1", project_root, detail="first")
+        result = hold_wave("wave-1", project_root)
+        assert result["waves"]["wave-1"]["status"] == "held"
+        assert "hold_detail" not in result["waves"]["wave-1"]
+
+    def test_complete_never_held_wave(self, project_root: Path) -> None:
+        planning(project_root)
+        result = complete(project_root, wave_id="wave-1")
+        assert result["waves"]["wave-1"]["status"] == "completed"
+        assert "hold_detail" not in result["waves"]["wave-1"]
+
     def test_hold_wave_unknown_raises(self, project_root: Path) -> None:
         with pytest.raises(ValueError, match="Error: wave 'nope' not found"):
             hold_wave("nope", project_root)
