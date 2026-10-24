@@ -73,8 +73,8 @@ An open squawk whose work has landed, or that became an issue, still reads as wa
 squawks at the two moments you know for certain (#1320):
 
 - **When you create an issue** (`/issue` Step 4.5): record each open item on `triage` that the
-  new issue plainly covers, `--state recorded` with `→ #<N>` as its answer. This covers other
-  agents' items too.
+  new issue plainly covers, `--state recorded` with `→ #<N>` as its answer (`→ <owner>/<repo>#<N>`
+  on another repo's list). This covers other agents' items too.
 - **Before a reseed** (`/reseed` Step 1): walk `sqtk mine`. Retire what is stale, with
   `→ OBE: <reason>`, and carry what is live in the seed as `<list>#<seq>`.
 

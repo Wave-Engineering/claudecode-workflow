@@ -628,13 +628,14 @@ Label hints (override sub-agent judgment if supplied):
 - size: <S|M|L|XL, or omit>
 - wave: <N, or omit>
 
-Return: issue number and URL only. No other output."
+Return: issue number, URL, and the triage items Step 4.5 recorded (or none).
+No other output."
 ```
 
 **Model:** `sonnet` — issue body quality is load-bearing (Flight Agents execute
 directly from it). Do not downgrade to Haiku.
 
-**Collecting results:** each sub-agent returns `{number, url}`. Assemble these
+**Collecting results:** each sub-agent returns `{number, url, recorded}`. Assemble these
 into the batch report table in Step 5. If any sub-agent fails, report the
 failure inline in the table row rather than aborting the whole batch.
 
@@ -645,17 +646,21 @@ list, by you or by another agent. Left open, that item goes stale: it reads as u
 that is already tracked. Creating the issue is the one moment you know for certain, so record
 it now (#1320).
 
-1. In the target repo's checkout, run `sqtk walk triage`. It prints the open items on this
-   repo's `<repo>:triage`, oldest first.
+1. Walk the triage list of the repo the issue was filed in. In that repo's checkout this is
+   `sqtk walk triage`. Anywhere else, `triage` would resolve to the checkout you are in, so
+   name the list in full: `sqtk walk <target-repo>:triage`. When your checkout is a different
+   repo, walk its `triage` too: a defect spotted there may be what this issue tracks.
 2. For each item the new issue **plainly covers**, meaning the issue would close what the
-   item describes, record it with the issue as its answer:
+   item describes, record it with the issue as its answer, on the list you found it on:
 
    ```bash
-   sqtk set triage <seq> --state recorded --text "<the item's text> → #<N>"
+   sqtk set <list> <seq> --state recorded --text "<the item's text> → <ref>"
    ```
 
-   If the text already ends with `→`, append ` #<N>` instead of adding a second arrow. An item
-   that is only related stays open.
+   `<ref>` is `#<N>` only on the issue's own repo's list. On any other list write it in full,
+   `<owner>/<repo>#<N>`: a bare `#<N>` there names that list's repo's issue <N>, a different
+   issue. If the text already ends with `→`, append ` <ref>` instead of adding a second arrow.
+   An item that is only related stays open.
 3. Name what you recorded in Step 5 (`Recorded triage #3, #7`).
 
 This step never blocks the issue. Skip it silently when `SQUAWK_URL` is unset or the list does
@@ -690,10 +695,10 @@ When creating multiple issues in a batch (e.g., Plan decomposition from a
 devspec walk), report all of them at the end in a table rather than one at a
 time:
 
-> | # | Title | Labels |
-> |---|-------|--------|
-> | #10 | feat(auth): OAuth2 login | type::feature, priority::high, size::M |
-> | #11 | feat(auth): session management | type::feature, priority::high, size::M |
+> | # | Title | Labels | Recorded |
+> |---|-------|--------|----------|
+> | #10 | feat(auth): OAuth2 login | type::feature, priority::high, size::M | triage #3 |
+> | #11 | feat(auth): session management | type::feature, priority::high, size::M | (none) |
 >
 > Review in your project board: `<project URL>`
 

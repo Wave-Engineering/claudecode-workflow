@@ -24,7 +24,8 @@ are worth keeping apart:
   them had landed, or after the issue that tracks them was filed. Agents now settle them at the two
   moments they know for certain:
   - **`/issue` Step 4.5**, after creating an issue: record each open item on the repo's triage
-    list that the issue plainly covers, with `→ #<N>` as its answer.
+    list that the issue plainly covers, with `→ #<N>` as its answer, qualified as
+    `<owner>/<repo>#<N>` on another repo's list.
   - **`/reseed` Step 1**, before the seed, while the agent still has the context: walk
     `sqtk mine`, retire what is stale with `→ OBE: <reason>`, and carry what is live in the seed.
 

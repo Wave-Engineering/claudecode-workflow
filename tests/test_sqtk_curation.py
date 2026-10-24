@@ -44,8 +44,21 @@ def test_issue_settle_step_names_its_commands():
     s = section(ISSUE, "Step 4.5: Settle what this issue covers")
     assert "sqtk walk triage" in s
     assert "--state recorded" in s
-    assert "→ #<N>" in s
+    assert "→ <ref>" in s
     assert "plainly covers" in s
+
+
+def test_issue_settle_step_qualifies_a_cross_repo_answer():
+    s = section(ISSUE, "Step 4.5: Settle what this issue covers")
+    assert "sqtk walk <target-repo>:triage" in s
+    assert "`<owner>/<repo>#<N>`" in s
+    assert "only on the issue's own repo's list" in s
+
+
+def test_issue_batch_returns_what_it_recorded():
+    assert "the triage items Step 4.5 recorded" in ISSUE
+    assert "{number, url, recorded}" in ISSUE
+    assert "| Recorded |" in ISSUE
 
 
 def test_issue_settle_step_never_blocks():
