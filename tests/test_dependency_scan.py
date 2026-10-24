@@ -89,11 +89,12 @@ def test_precheck_fallback_scans_siblings_like_the_script():
     # The FULL denominator (babelfish's #1269 review): the fallback runs the trust
     # gate's own find, byte for byte, so a lone bun.lockb or a pinned lock trivy
     # read nothing from enters it and can be named UNSCANNED. The gate's find is
-    # taken from gate.js's source and un-escaped, so the two cannot drift.
+    # taken from gate.js's source and un-escaped, so the two cannot drift. The gate
+    # roots it at its detached kahuna worktree, <w>/tree (#1206); precheck at <repo_root>.
     gate = (REPO_ROOT / "skills" / "nextwave" / "gate.js").read_text()
-    g = re.search(r"^    `  (find \$\{targetRepoDir\} .+ -print)`,$", gate, re.M)
+    g = re.search(r"^    `  (find <w>/tree .+ -print)`,$", gate, re.M)
     assert g, "gate.js trivy find not found; update this extraction with it"
-    gate_find = g.group(1).replace("${targetRepoDir}", "<repo_root>").replace("\\\\", "\\")
+    gate_find = g.group(1).replace("<w>/tree", "<repo_root>").replace("\\\\", "\\")
     assert f"  {gate_find}\n" in body, "the fallback must run the trust gate's own find"
     # Its requirements predicate is check-scannable.sh's REQ_FIND, so all three agree.
     r = re.search(r"^REQ_FIND=\(\\\( (.+) \\\)\)$", script, re.M)
@@ -546,7 +547,7 @@ def test_lock_lists_agree():
         return {n for n in re.findall(r"-name '([^']+)'", find) if "*" not in n}
 
     gate = (REPO_ROOT / "skills" / "nextwave" / "gate.js").read_text()
-    g = re.search(r"^    `  (find \$\{targetRepoDir\} .+ -print)`,$", gate, re.M)
+    g = re.search(r"^    `  (find <w>/tree .+ -print)`,$", gate, re.M)
     assert g, "gate.js trivy find not found; update this extraction with it"
     body = (REPO_ROOT / "skills" / "precheck" / "SKILL.md").read_text()
     s = re.search(r"^\s+(find <repo_root> .+ -print)$", body, re.M)
