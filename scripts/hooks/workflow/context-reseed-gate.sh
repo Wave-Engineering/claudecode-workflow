@@ -10,6 +10,16 @@
 # A percentage, not a token count, so one threshold is right on a 200k window and
 # a 1M one alike.
 #
+# THE CEILING (#1297). Claude Code computes remaining_percentage against the
+# MODEL's window, and /autocompact does not change it. With a 400k autocompact
+# window on a 1M model, autocompact fires near 367k while the 15% gate waits for
+# 850k: autocompact always wins. So when the reading also carries used_tokens,
+# window_tokens and model_id, the percentage is recomputed against
+# min(window_tokens, autocompact window). The autocompact window comes from
+# CLAUDE_CODE_AUTO_COMPACT_WINDOW, else .modelSettings[model_id].autoCompactWindow
+# in the settings file (trying model_id with any "[1m]" suffix stripped too).
+# Anything missing or malformed falls back to remaining_percentage as-is.
+#
 # NEVER SILENTLY INERT. A gate that cannot read its input and says nothing is
 # indistinguishable from a gate that is happy — that is exactly how nerf measured
 # nothing for five months while reporting every session healthy. A missing or
@@ -43,6 +53,9 @@
 # Env: RESEED_CONTEXT_THRESHOLD_PCT (default 15) — block at <= this many percent
 #      RESEED_CONTEXT_GATE_DISABLED=1 — kill-switch
 #      CLAUDE_CONTEXT_STATE_DIR — where the statusline persists readings
+#      CLAUDE_CODE_AUTO_COMPACT_WINDOW — autocompact window override (tokens)
+#      CLAUDE_SETTINGS_FILE (default ~/.claude/settings.json) — where
+#        modelSettings.<model>.autoCompactWindow is read
 
 [[ "${RESEED_CONTEXT_GATE_DISABLED:-0}" == "1" ]] && exit 0
 
@@ -94,8 +107,26 @@ PCT="$(jq -r '.remaining_percentage // empty' "$READING" 2>/dev/null || true)"
 [[ "$PCT" =~ ^[0-9]+([.][0-9]+)?$ ]] || unavailable "the reading is malformed"
 rm -f "$STATE_DIR/${SESSION_ID}.misses" # a good reading resets the run of misses
 
+# Recompute against the autocompact ceiling when it sits below the model window.
+is_tokens() { [[ "$1" =~ ^[1-9][0-9]*$ ]]; }
+USED="$(jq -r '.used_tokens // empty' "$READING" 2>/dev/null || true)"
+WINDOW="$(jq -r '.window_tokens // empty' "$READING" 2>/dev/null || true)"
+MODEL="$(jq -r '.model_id // empty' "$READING" 2>/dev/null || true)"
+ACW="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}"
+if ! is_tokens "$ACW" && [[ -n "$MODEL" ]]; then
+	ACW="$(jq -r --arg m "$MODEL" --arg b "${MODEL%\[1m\]}" \
+		'.modelSettings // {} | (.[$m].autoCompactWindow // .[$b].autoCompactWindow // empty)' \
+		"${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.json}" 2>/dev/null || true)"
+fi
+OF=""
+if [[ "$USED" =~ ^[0-9]+$ ]] && is_tokens "$WINDOW" && is_tokens "$ACW" && ((ACW < WINDOW)); then
+	PCT=$(((ACW - USED) * 100 / ACW))
+	((PCT < 0)) && PCT=0
+	OF=" of the $((ACW / 1000))k autocompact ceiling"
+fi
+
 if awk -v p="$PCT" -v t="$THRESHOLD" 'BEGIN { exit !(p <= t) }'; then
-	jq -cn --arg r "Context at ${PCT%.*}% remaining (threshold ${THRESHOLD}%) — run /reseed now, before anything else." \
+	jq -cn --arg r "Context at ${PCT%.*}% remaining${OF} (threshold ${THRESHOLD}%) — run /reseed now, before anything else." \
 		'{decision: "block", reason: $r}'
 fi
 exit 0

@@ -28,8 +28,15 @@ if [ -n "$remaining_pct" ] && [[ "$session_id" =~ ^[A-Za-z0-9_-]+$ ]]; then
 		ctx_tmp=""
 		if mkdir -p "$ctx_state_dir" &&
 			ctx_tmp="$(mktemp "$ctx_state_dir/.${session_id}.XXXXXX")" &&
-			jq -n --arg s "$session_id" --argjson p "$remaining_pct" --argjson t "$(date +%s)" \
-				'{session_id: $s, remaining_percentage: $p, ts: $t}' >"$ctx_tmp"; then
+			# The raw numbers (#1297) let the gate measure against an autocompact
+			# window: Claude Code computes remaining_percentage against the model's.
+			echo "$input" | jq --arg s "$session_id" --argjson p "$remaining_pct" --argjson t "$(date +%s)" '
+				def num: if type == "number" then . else null end;
+				{session_id: $s, remaining_percentage: $p, ts: $t,
+				 used_tokens: (.context_window.total_input_tokens | num),
+				 window_tokens: (.context_window.context_window_size | num),
+				 model_id: (.model.id | if type == "string" and . != "" then . else null end)}
+				| with_entries(select(.value != null))' >"$ctx_tmp"; then
 			mv -f "$ctx_tmp" "$ctx_state_dir/${session_id}.json"
 		else
 			[ -n "$ctx_tmp" ] && rm -f "$ctx_tmp"

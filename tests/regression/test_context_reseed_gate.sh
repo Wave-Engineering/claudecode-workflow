@@ -84,6 +84,54 @@ else
 	fail "block reason: $out"
 fi
 
+# --- the autocompact ceiling (#1297) -------------------------------------------------
+# remaining_percentage is against the MODEL window; /autocompact does not move it.
+unset CLAUDE_CODE_AUTO_COMPACT_WINDOW
+export CLAUDE_SETTINGS_FILE="$WORK/settings.json"
+printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 400000}}}' >"$CLAUDE_SETTINGS_FILE"
+full_reading() { # <used> [model] [window] — remaining_percentage is the model-window figure
+	local used="$1" model="${2:-claude-opus-5-5}" window="${3:-1000000}"
+	jq -n --arg s "$SID" --arg m "$model" --argjson u "$used" --argjson w "$window" --argjson t "$(date +%s)" \
+		'{session_id: $s, remaining_percentage: (100 - ($u * 100 / $w | floor)), ts: $t,
+		  used_tokens: $u, window_tokens: $w, model_id: $m}' >"$CLAUDE_CONTEXT_STATE_DIR/$SID.json"
+}
+
+full_reading 345000
+expect "345k of a 400k ceiling (13% left) → block, though 65% of 1M remains" block
+out="$(gate)"
+if [[ "$(jq -r .reason <<<"$out")" == *"400k autocompact ceiling"* ]]; then
+	pass "block reason names the autocompact ceiling"
+else
+	fail "ceiling reason: $out"
+fi
+full_reading 300000
+expect "300k of a 400k ceiling (25% left) → no block" silent
+full_reading 345000 'claude-opus-5-5[1m]'
+expect "model_id with [1m] falls back to the base settings key" block
+full_reading 260000
+expect "CLAUDE_CODE_AUTO_COMPACT_WINDOW overrides settings (260k of 300k)" block CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000
+full_reading 345000 claude-other-model
+expect "no autocompact setting for the model → model-window figure (65%)" silent
+printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 2000000}}}' >"$CLAUDE_SETTINGS_FILE"
+full_reading 345000
+expect "autocompact window above the model window is ignored (min)" silent
+printf 'not json' >"$CLAUDE_SETTINGS_FILE"
+full_reading 345000
+expect "malformed settings → model-window figure, exit 0" silent
+full_reading 900000
+expect "malformed settings still blocks on the model-window figure (10%)" block
+printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": "lots"}}}' >"$CLAUDE_SETTINGS_FILE"
+full_reading 345000
+expect "non-numeric autocompact window → model-window figure" silent
+full_reading 345000
+expect "junk CLAUDE_CODE_AUTO_COMPACT_WINDOW is ignored" silent CLAUDE_CODE_AUTO_COMPACT_WINDOW=junk
+printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 400000}}}' >"$CLAUDE_SETTINGS_FILE"
+full_reading 450000
+expect "used beyond the ceiling floors at 0% → block" block
+reading 50
+expect "legacy reading (no token fields) ignores the settings ceiling" silent
+rm -f "$CLAUDE_CONTEXT_STATE_DIR"/*
+
 # --- loop guards ------------------------------------------------------------------
 reading 5
 out="$(gate true)"
