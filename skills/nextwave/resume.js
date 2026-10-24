@@ -28,8 +28,9 @@ import { blobPath, statusDir } from './wave-status.js'
 // ─────────────────────────────────────────────────────────────────────────────
 // PURE — the rehydrate read-back half (no I/O, no agent; fully unit-testable).
 // These are the exact inverse of wave-status.js toBlob(): blob → REHYDRATE loop seed.
-// The loop (per-wave-workflow.js) seeds pending/merged/reworkCount/idleRounds/groupsRun
-// from this; reworkCount numeric keys are JSON-stringified in the blob and the loop
+// The loop (per-wave-workflow.js) seeds pending/merged/reworkCount/groupsRun from this.
+// idleRounds is parsed and persisted for observability but NOT seeded: it counts within one
+// run (#1204). reworkCount numeric keys are JSON-stringified in the blob and the loop
 // Number-casts them — parseRehydrate returns them faithfully (string-keyed object).
 // ─────────────────────────────────────────────────────────────────────────────
 

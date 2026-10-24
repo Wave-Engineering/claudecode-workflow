@@ -263,8 +263,9 @@ function persistTerminalPrompt({ waveId, targetRepo, targetRepoDir, kahunaBranch
 // ─────────────────────────────────────────────────────────────────────────────
 // PURE — the rehydrate read-back half (no I/O, no agent; fully unit-testable).
 // These are the exact inverse of wave-status.js toBlob(): blob → REHYDRATE loop seed.
-// The loop (per-wave-workflow.js) seeds pending/merged/reworkCount/idleRounds/groupsRun
-// from this; reworkCount numeric keys are JSON-stringified in the blob and the loop
+// The loop (per-wave-workflow.js) seeds pending/merged/reworkCount/groupsRun from this.
+// idleRounds is parsed and persisted for observability but NOT seeded: it counts within one
+// run (#1204). reworkCount numeric keys are JSON-stringified in the blob and the loop
 // Number-casts them — parseRehydrate returns them faithfully (string-keyed object).
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2316,8 +2317,9 @@ if (!halt && pending.size === 0) {
 } else {
   gate = {
     verdict: 'SKIPPED',
+    // The resumed count only means something on a resume (it is what explains a runaway retry).
     reason: exitedBeforeDispatch
-      ? `${halt} — exited before dispatching any group this run (resumed groupsRun=${groupsRunBase}, maxGroups=${MAX_GROUPS})`
+      ? `${halt} — exited before dispatching any group this run${groupsRunBase > 0 ? ` (resumed groupsRun=${groupsRunBase}, maxGroups=${MAX_GROUPS})` : ''}`
       : halt || 'loop did not reach clean success',
   }
 }

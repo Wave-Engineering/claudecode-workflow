@@ -186,10 +186,37 @@ await check('a reconcile failure in round 1 is NOT "before dispatch" — its fli
   assert.ok(!run.result.reason.includes('exited before dispatching'), run.result.reason)
 })
 
-await check('a plan failure in round 1 IS "before dispatch"', async () => {
+await check('a plan failure in round 1 IS "before dispatch"; on a cold start the reason claims no resume', async () => {
   const run = await runPerWave({ responder: only({ 'plan:*': null }) })
   assertHalted(run, 'plan agent failed')
   assert.equal(run.result.exitedBeforeDispatch, true)
+  assert.ok(run.result.reason.endsWith('exited before dispatching any group this run'), run.result.reason)
+})
+
+// The bound the per-run counter relies on: within a run, MAX_IDLE empty rounds still trip thrash,
+// and every empty round still spends the lifetime groupsRun, so a stuck wave reaches runaway.
+await check('a stuck retry still trips thrash in-run, and spends the lifetime groupsRun bound', async () => {
+  const run = await runPerWave({
+    args: RETRY_ARGS,
+    responder: only({ rehydrate: rehydrated({ idleRounds: 2, groupsRun: 20 }), 'merge:*': { merged: [], needs_rework: [] } }),
+  })
+  assertHalted(run, 'thrash')
+  assert.equal(run.result.haltReason, 'thrash')
+  assert.equal(run.result.exitedBeforeDispatch, false)
+  assert.equal(run.calls.filter((c) => c.label.startsWith('plan:')).length, 2, 'MAX_IDLE (2) empty rounds, counted from 0')
+  const blob = JSON.parse(terminalPrompt(run.calls)[0].match(/\n(\{\n[\s\S]*?\n\})\n/)[1])
+  assert.equal(blob.groupsRun, 22, 'both empty rounds are spent from the lifetime bound')
+})
+
+// runaway is checked before thrash, so the retry after that one runs out of lifetime first.
+await check('the next stuck retry (resumed at groupsRun:22) halts runaway, not thrash', async () => {
+  const run = await runPerWave({
+    args: RETRY_ARGS,
+    responder: only({ rehydrate: rehydrated({ groupsRun: 22 }), 'merge:*': { merged: [], needs_rework: [] } }),
+  })
+  assertHalted(run, 'runaway')
+  assert.equal(run.result.haltReason, 'runaway')
+  assert.equal(run.calls.filter((c) => c.label.startsWith('plan:')).length, 2, 'two rounds reach MAX_GROUPS (24)')
 })
 
 // ── the null sweep: every other dereferenced agent result ─────────────────────────────────────

@@ -1008,8 +1008,9 @@ if (!halt && pending.size === 0) {
 } else {
   gate = {
     verdict: 'SKIPPED',
+    // The resumed count only means something on a resume (it is what explains a runaway retry).
     reason: exitedBeforeDispatch
-      ? `${halt} — exited before dispatching any group this run (resumed groupsRun=${groupsRunBase}, maxGroups=${MAX_GROUPS})`
+      ? `${halt} — exited before dispatching any group this run${groupsRunBase > 0 ? ` (resumed groupsRun=${groupsRunBase}, maxGroups=${MAX_GROUPS})` : ''}`
       : halt || 'loop did not reach clean success',
   }
 }
