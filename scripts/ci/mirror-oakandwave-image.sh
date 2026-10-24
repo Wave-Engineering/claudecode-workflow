@@ -13,16 +13,16 @@
 # Only a release is mirrored: a :stable whose label isn't X.Y.Z (a branch build promoted by
 # hand reads like 8.14.0-3-g9334c4b) exits 1, and Docker Hub keeps its previous :stable.
 #
-# A version tag is never re-pushed. Read it first:
-#   absent ("<tag>: not found") -> push it with :stable, in the same imagetools create
-#   already on this digest  -> skip it (an idempotent rerun); :stable is still pushed
-#   on any other digest     -> exit 1 and push nothing
-#   unreadable (any other inspect error) -> exit 1: absent and present can't be told apart
+# The copy itself is the shared oaw-mirror-image action's core (#1326), which the fleet's
+# other images use too: a version tag is pushed only when absent, skipped when it already
+# names this digest, and refused (nothing pushed) when it names another or can't be read.
 #
 # Inputs (env):
 #   SRC_DIGEST       the GHCR digest ref to mirror (registry/image@sha256:...)
 #   DOCKERHUB_IMAGE  docker.io/oakandwave/oakandwave-workflow
 #   STABLE_TAG       stable
+#   PUBLISH_RELEASE  "true" writes the Images block into GitHub release v<version>
+#                    (gh reads GH_TOKEN and GH_REPO); anything else skips it
 # Outputs (GITHUB_OUTPUT):
 #   version          the X.Y.Z read off the image
 #   version_ref      DOCKERHUB_IMAGE:X.Y.Z@sha256:... (also written to GITHUB_STEP_SUMMARY)
@@ -55,37 +55,22 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 	exit 1
 fi
 
-version_tag="${DOCKERHUB_IMAGE}:${version}"
-tags=(--tag "${DOCKERHUB_IMAGE}:${STABLE_TAG}")
-if inspect_out="$(docker buildx imagetools inspect "$version_tag" --format '{{json .Manifest}}' 2>&1)"; then
-	existing="$(jq -er '.digest' <<<"$inspect_out")" || {
-		echo "  [!] could not read the digest of $version_tag: $inspect_out" >&2
-		exit 1
-	}
-	if [[ "$existing" != "$digest" ]]; then
-		echo "  [!] $version_tag already names $existing, not $digest: a version tag is never re-pushed" >&2
-		exit 1
-	fi
-	echo "==> $version_tag already names $digest; not re-pushing it"
-elif [[ "$inspect_out" == *"${version_tag}: not found"* ]]; then # the tag itself, not a blob
-	tags+=(--tag "$version_tag")
-else
-	echo "  [!] could not read $version_tag, so can't tell whether it exists: $inspect_out" >&2
-	exit 1
-fi
+release_tag=""
+[[ "${PUBLISH_RELEASE:-}" == "true" ]] && release_tag="v${version}"
 
-docker buildx imagetools create "${tags[@]}" "$SRC_DIGEST"
+core="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.github/actions/oaw-mirror-image/oaw-mirror-image.sh"
+SOURCE_DIGEST_REF="$SRC_DIGEST" \
+	TAGS="$(printf '%s\n%s\n' "$STABLE_TAG" "$version")" \
+	DEST_IMAGE="$DOCKERHUB_IMAGE" \
+	IMMUTABLE_TAG_REGEX='^[0-9]+\.[0-9]+\.[0-9]+$' \
+	RELEASE_TAG="$release_tag" \
+	bash "$core"
 
-version_ref="${version_tag}@${digest}"
+version_ref="${DOCKERHUB_IMAGE}:${version}@${digest}"
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
 	{
 		echo "version=${version}"
 		echo "version_ref=${version_ref}"
 	} >>"$GITHUB_OUTPUT"
 fi
-if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-	# shellcheck disable=SC2016 # the backticks are markdown for the summary, not a substitution
-	printf 'Docker Hub release image: `%s`\n' "$version_ref" >>"$GITHUB_STEP_SUMMARY"
-fi
-echo "==> mirrored ${SRC_DIGEST} -> ${DOCKERHUB_IMAGE}:${STABLE_TAG}"
 echo "==> release image: ${version_ref}"

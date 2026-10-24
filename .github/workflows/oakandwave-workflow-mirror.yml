@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write # write the Images block into the v<version> GitHub release (#1326)
   packages: read # pull the :stable image + resolve its digest from ghcr
   id-token: write # keyless cosign (Fulcio/Rekor) via OIDC — re-sign the Docker Hub digest
 
@@ -72,6 +72,9 @@ jobs:
         # version tag comes from the image's own label and is never re-pushed (#1324).
         env:
           SRC_DIGEST: ${{ steps.resolve.outputs.digest_ref }}
+          PUBLISH_RELEASE: "true"
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: ./scripts/ci/mirror-oakandwave-image.sh
 
       - name: Re-sign the Docker Hub digest (cosign keyless + syft SBOM)
