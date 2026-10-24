@@ -366,6 +366,39 @@ next wave but the turn ended without it. Writing `awaiting-verdict` in the same 
 as the launch is therefore **load-bearing** — omit it and the guard false-fires on the await
 (cc-workflow#736).
 
+**Two fields, two owners (#1205).** `current_action` is shared: while a wave runs, the
+Workflow's agents call the sdlc `wave_*` tools, which overwrite it with fine-grained states
+(`planning`, `in-flight`, `waiting-ci`, `merging`...). It stays the dashboard's field. The four
+coarse writes above (`launching`, `awaiting-verdict`, `promoting`, `hold`) also write
+**`driver_action`** (`{action, wave_id, detail, at}`), which nothing else touches, and the guard
+decides from it:
+
+- `hold` → silent.
+- `awaiting-verdict` while the awaited wave is not yet `completed` or `held` → silent; it is
+  still running, whatever `current_action` says.
+- `awaiting-verdict` once that wave is `completed` or `held` → **block once**. If the verdict
+  has reached you, act on it (promote and launch the next wave, or `wave-status hold
+  "<reason>"`). If it has not, launch nothing and end the turn again: the Workflow marks the
+  wave **before** it cleans up and returns, so a driver woken in that tail (by the doorbell,
+  say) sees a finished wave with no verdict yet.
+- `promoting` once its wave is `completed` → **block**: the wave is promoted, so launch the
+  next one or take the success exit. `driver_action` is sticky, so without this a driver that
+  promoted and then stopped would never be blocked.
+- `promoting` once its wave is `held` → **block** toward `wave-status hold "<reason>"`, never
+  toward a launch: after a PASS, `held` means the wave did not integrate, or awaits a human
+  promotion.
+- `promoting` with its wave in any other state → silent.
+- `launching` or anything else → block, the stall.
+
+"Block once" honours the Stop hook's `stop_hook_active`, so the second stop goes through. Only
+`awaiting-verdict` gets it: the status alone cannot tell "verdict not yet delivered" from
+"verdict delivered, driver stopped", so the guard nudges once, worded for both, rather than
+loop or stay silent. `promoting` and `launching` block on every stop, because the driver writes
+them itself, and each has a write that clears it.
+
+State written before #1205 has no `driver_action` and keeps the rule on `current_action`.
+`wave-status wavemachine-stop` clears `driver_action` with the `wavemachine_*` keys.
+
 **Stale state never blocks (#1109).** If `last_updated` is older than 24 h (the guard's
 `STALE_SECONDS`, equal to `WAVEMACHINE_STALE_SECONDS` from #1110) or unreadable, the guard
 does not block; it shows a `systemMessage` with the flag's age and owner. That flag most

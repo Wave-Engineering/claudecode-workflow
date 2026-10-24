@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from wave_status.state import (
     CURRENT_SCHEMA_VERSION,
+    awaiting_verdict,
     close_issue,
     complete,
     ensure_status_dir,
@@ -32,14 +33,17 @@ from wave_status.state import (
     flight_done,
     future_issue_key,
     get_project_root,
+    hold,
     hold_wave,
     html_path,
     init_state,
+    launching,
     load_json,
     load_state,
     migrate_state,
     planning,
     preflight,
+    promoting,
     record_mr,
     resolve_campaign_head_detail,
     resolve_issue_key,
@@ -697,6 +701,62 @@ class TestWavemachineLease:
         assert lease["session_id"] == "sess-1"
         assert lease["started_at"] == "2026-10-24T10:00:00Z"
         assert lease["last_updated"] == state["last_updated"]
+
+
+class TestDriverAction:
+    """#1205: the driver's coarse states go to ``driver_action``, which only
+    they write; the Workflow's fine-grained writers leave it alone."""
+
+    @pytest.mark.parametrize(
+        "writer,action",
+        [
+            (launching, "launching"),
+            (awaiting_verdict, "awaiting-verdict"),
+            (promoting, "promoting"),
+        ],
+    )
+    def test_wave_states_write_both_fields(self, project_root: Path, writer, action) -> None:
+        result = writer(project_root, "wave-2")
+        assert result["driver_action"]["action"] == action
+        assert result["driver_action"]["wave_id"] == "wave-2"
+        assert result["driver_action"]["at"]
+        # current_action is what it was before #1205, so the dashboard is unchanged.
+        assert result["current_action"] == {"action": action, "label": action, "detail": "wave-2"}
+        persisted = load_json(status_dir(project_root) / "state.json")
+        assert persisted["driver_action"] == result["driver_action"]
+
+    def test_hold_records_current_wave_and_reason(self, project_root: Path) -> None:
+        result = hold(project_root, "trust gate HOLD")
+        assert result["driver_action"]["action"] == "hold"
+        assert result["driver_action"]["wave_id"] == "wave-1"
+        assert result["driver_action"]["detail"] == "trust gate HOLD"
+        assert result["current_action"]["detail"] == "trust gate HOLD"
+
+    def test_fine_grained_writers_leave_driver_action_alone(self, project_root: Path) -> None:
+        """The incident: in-wave writes overwrote the driver's await."""
+        awaiting_verdict(project_root, "wave-1")
+        state_path = status_dir(project_root) / "state.json"
+        before = state_path.read_text(encoding="utf-8")
+        driver = json.loads(before)["driver_action"]
+
+        store_flight_plan(SAMPLE_FLIGHTS, project_root)
+        planning(project_root)
+        flight(1, project_root)
+        waiting_ci(project_root, detail="PR #1 attempt 1")
+        flight_done(1, project_root)
+        review(project_root)
+        complete(project_root)
+
+        after = load_json(state_path)
+        assert after["driver_action"] == driver
+        assert after["current_action"]["action"] != "awaiting-verdict"
+
+    def test_stop_clears_driver_action(self, project_root: Path) -> None:
+        wavemachine_start(project_root, launcher="main")
+        awaiting_verdict(project_root, "wave-1")
+        result = wavemachine_stop(project_root)
+        assert "driver_action" not in result
+        assert "driver_action" not in load_json(status_dir(project_root) / "state.json")
 
 
 # ---------------------------------------------------------------------------
