@@ -19,6 +19,20 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Fixed
+
+- **The reseed gate now honors `/autocompact` (#1297).** Claude Code computes the statusline's
+  `remaining_percentage` against the *model's* window, and `/autocompact` doesn't change it. With a
+  400k autocompact window on a 1M model, autocompact fired near 367k while the 15% gate waited for
+  850k, so every session got a lossy `/compact` instead of a reseed. The statusline now also saves
+  `used_tokens`, `window_tokens` and `model_id`. `context-reseed-gate.sh` recomputes the percentage
+  against what is usable before autocompact fires: `min(model window, autocompact window)` less a 33k
+  buffer (`RESEED_AUTOCOMPACT_BUFFER_TOKENS`). The autocompact window comes from
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (`400000`, `400k` or `1M`, raised to 100k as Claude Code does),
+  else `modelSettings.<model>.autoCompactWindow`, else the top-level `autoCompactWindow`. A 400k window
+  now reseeds from ~312k and a 200k one from ~142k, both ahead of autocompact; a plain 1M window moves
+  from 850k to ~822k. A reading without the token fields behaves as before.
+
 ## [8.12.0] - 2026-10-23
 
 ### Fixed

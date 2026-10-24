@@ -522,6 +522,27 @@ class TestStatuslinePersistsContext:
         # Atomic write: no temp file left beside it.
         assert sorted(p.name for p in state.iterdir()) == ["abc-123.json"]
 
+    def test_raw_token_fields_persisted(self, tmp_path: Path):
+        """#1297: the gate recomputes against the autocompact window, so the
+        reading carries the raw numbers Claude Code's percentage was made from."""
+        state = tmp_path / "state"
+        payload = self._payload(tmp_path, "tok-1", 80)
+        payload["model"] = {"id": "claude-opus-5-5", "display_name": "Opus 5.5"}
+        payload["context_window"].update(
+            {"total_input_tokens": 202373, "total_output_tokens": 379, "context_window_size": 1000000})
+        _run_statusline(payload, cwd=tmp_path, env_override={"CLAUDE_CONTEXT_STATE_DIR": str(state)})
+        data = json.loads((state / "tok-1.json").read_text())
+        assert data["used_tokens"] == 202373
+        assert data["window_tokens"] == 1000000
+        assert data["model_id"] == "claude-opus-5-5"
+
+    def test_missing_raw_fields_are_omitted_not_null(self, tmp_path: Path):
+        state = tmp_path / "state"
+        _run_statusline(self._payload(tmp_path, "tok-2", 50), cwd=tmp_path,
+                        env_override={"CLAUDE_CONTEXT_STATE_DIR": str(state)})
+        data = json.loads((state / "tok-2.json").read_text())
+        assert set(data) == {"session_id", "remaining_percentage", "ts"}
+
     def test_second_render_overwrites_not_appends(self, tmp_path: Path):
         state = tmp_path / "state"
         env = {"CLAUDE_CONTEXT_STATE_DIR": str(state)}

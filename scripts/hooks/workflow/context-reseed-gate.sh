@@ -8,7 +8,22 @@
 # persists it per session to ${CLAUDE_CONTEXT_STATE_DIR:-~/.claude/state/context}/
 # <session_id>.json as {session_id, remaining_percentage, ts}. This hook reads it.
 # A percentage, not a token count, so one threshold is right on a 200k window and
-# a 1M one alike.
+# a 1M one alike — once it is measured against the usable window (THE CEILING).
+#
+# THE CEILING (#1297). Claude Code computes remaining_percentage against the
+# MODEL's window, and /autocompact does not change it. With a 400k autocompact
+# window on a 1M model, autocompact fires near 367k while the 15% gate waits for
+# 850k: autocompact always wins. So when the reading also carries used_tokens,
+# window_tokens and model_id, the percentage is recomputed against
+# min(window_tokens, autocompact window), less the buffer autocompact fires below
+# it. The autocompact window ("400000", "400k" or "1M"; raised to 100k) comes from
+# CLAUDE_CODE_AUTO_COMPACT_WINDOW, else .modelSettings[model_id].autoCompactWindow
+# in the settings file (trying model_id with any "[1m]" suffix stripped too), else
+# its top-level autoCompactWindow (the pre-2.1.288 form). A missing or malformed
+# autocompact window means the model window; a reading without the token fields
+# uses remaining_percentage as-is. Known gaps, both falling
+# back safely: only the user settings file is read (not project, local or managed
+# settings), and model aliases or dated IDs are not mapped to their canonical key.
 #
 # NEVER SILENTLY INERT. A gate that cannot read its input and says nothing is
 # indistinguishable from a gate that is happy — that is exactly how nerf measured
@@ -43,6 +58,11 @@
 # Env: RESEED_CONTEXT_THRESHOLD_PCT (default 15) — block at <= this many percent
 #      RESEED_CONTEXT_GATE_DISABLED=1 — kill-switch
 #      CLAUDE_CONTEXT_STATE_DIR — where the statusline persists readings
+#      CLAUDE_CODE_AUTO_COMPACT_WINDOW — autocompact window override (tokens)
+#      CLAUDE_SETTINGS_FILE (default ~/.claude/settings.json) — where
+#        modelSettings.<model>.autoCompactWindow is read
+#      RESEED_AUTOCOMPACT_BUFFER_TOKENS (default 33000) — how far below its
+#        window autocompact fires
 
 [[ "${RESEED_CONTEXT_GATE_DISABLED:-0}" == "1" ]] && exit 0
 
@@ -94,8 +114,57 @@ PCT="$(jq -r '.remaining_percentage // empty' "$READING" 2>/dev/null || true)"
 [[ "$PCT" =~ ^[0-9]+([.][0-9]+)?$ ]] || unavailable "the reading is malformed"
 rm -f "$STATE_DIR/${SESSION_ID}.misses" # a good reading resets the run of misses
 
+# Recompute against what is usable before autocompact fires.
+is_tokens() { [[ "$1" =~ ^[1-9][0-9]*$ ]]; }
+# An autocompact window as Claude Code reads it: "400000", "400k", "1M" or "0.4m";
+# a value under 100k is raised to 100k. Prints the token count, or fails.
+acw_tokens() {
+	local v="${1,,}" n
+	if [[ "$v" =~ ^[0-9]+$ ]]; then
+		n=$((10#$v))
+	elif [[ "$v" =~ ^([0-9]+([.][0-9]+)?)([km])$ ]]; then
+		n=$(awk -v x="${BASH_REMATCH[1]}" -v u="${BASH_REMATCH[3]}" \
+			'BEGIN { printf "%d", x * (u == "k" ? 1000 : 1000000) }')
+	else
+		return 1
+	fi
+	((n > 0)) || return 1
+	((n < 100000)) && n=100000
+	echo "$n"
+}
+USED="$(jq -r '.used_tokens // empty' "$READING" 2>/dev/null || true)"
+WINDOW="$(jq -r '.window_tokens // empty' "$READING" 2>/dev/null || true)"
+MODEL="$(jq -r '.model_id // empty' "$READING" 2>/dev/null || true)"
+if ! ACW="$(acw_tokens "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}")"; then
+	ACW=""
+	if [[ -n "$MODEL" ]]; then
+		ACW="$(acw_tokens "$(jq -r --arg m "$MODEL" --arg b "${MODEL%\[1m\]}" \
+			'(.modelSettings // {} | .[$m].autoCompactWindow // .[$b].autoCompactWindow) // .autoCompactWindow // empty' \
+			"${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.json}" 2>/dev/null)")" || ACW=""
+	fi
+fi
+# Autocompact fires a fixed buffer BELOW its window (~33k: ~367k of 400k, ~967k
+# of 1M), on a configured window and the model's own alike. So the percentage is
+# of what is usable before it fires: measured against the raw window, a 200k
+# window's gate (170k) would lose to autocompact (~167k).
+BUFFER="${RESEED_AUTOCOMPACT_BUFFER_TOKENS:-33000}"
+[[ "$BUFFER" =~ ^[0-9]+$ ]] || BUFFER=33000
+OF=""
+if [[ "$USED" =~ ^[0-9]+$ ]] && is_tokens "$WINDOW"; then
+	CEIL="$WINDOW" BY="autocompact"
+	if [[ -n "$ACW" ]] && ((ACW < WINDOW)); then
+		CEIL="$ACW" BY="the $((ACW / 1000))k autocompact"
+	fi
+	if ((CEIL > BUFFER)); then
+		USABLE=$((CEIL - BUFFER))
+		PCT=$(((USABLE - USED) * 100 / USABLE))
+		((PCT < 0)) && PCT=0
+		OF=" of the $((USABLE / 1000))k usable before $BY"
+	fi
+fi
+
 if awk -v p="$PCT" -v t="$THRESHOLD" 'BEGIN { exit !(p <= t) }'; then
-	jq -cn --arg r "Context at ${PCT%.*}% remaining (threshold ${THRESHOLD}%) — run /reseed now, before anything else." \
+	jq -cn --arg r "Context at ${PCT%.*}% remaining${OF} (threshold ${THRESHOLD}%) — run /reseed now, before anything else." \
 		'{decision: "block", reason: $r}'
 fi
 exit 0
