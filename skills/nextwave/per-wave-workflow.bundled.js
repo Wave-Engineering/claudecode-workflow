@@ -2109,13 +2109,21 @@ while (true) {
   if (budget.total && budgetRemaining() < COST_FLOOR) { halt = 'cost'; break } // stop before the ceiling
 
   // ── PLAN next group from CURRENT state (Prime; judgment) ──
+  // #1210: agent() returns null when the subagent dies (an account limit, a refusal) and throws past
+  // the budget ceiling. Either one is a legal exit, not a TypeError that kills the run with no
+  // verdict and no terminal disposition: halt → the gate is SKIPPED → persistTerminal('held').
+  let planErr = null
   const plan = await teeAgent(primePlanPrompt(merged, pending, lastRework), {
     label: `plan:${groupsRunBase + groupsRun.length + 1}`,
     phase: 'Flight loop',
     schema: NEXTGROUP,
     agentType: 'general-purpose',
-  })
-  if (plan.done || !plan.group || plan.group.length === 0) { halt = 'impasse'; break } // planner can't schedule remaining → human
+  }).catch((e) => { planErr = e?.message || String(e); return null })
+  if (!plan || typeof plan.done !== 'boolean' || !Array.isArray(plan.group)) {
+    halt = `plan agent failed: ${planErr || (plan ? 'schema-invalid result' : 'agent returned no result')}`
+    break
+  }
+  if (plan.done || plan.group.length === 0) { halt = 'impasse'; break } // planner can't schedule remaining → human
 
   const planned = plan.group.filter((n) => pending.has(n)) // defensive: only schedule still-pending issues
   if (planned.length === 0) { halt = 'impasse'; break }
@@ -2150,12 +2158,20 @@ while (true) {
   const implemented = built.filter((w) => w.status === 'implemented' || w.status === 'already-present')
 
   // ── MERGE + RECONCILE (Prime(post-flight) — the ONLY cross-flight view) ──
+  // #1210: same guard as the plan node. A failed reconcile tells us nothing about what landed, so
+  // this round is not pushed to groupsRun and nothing is merged; the durable blob keeps the last
+  // persisted state, which a fresh run rehydrates from (merged is authoritative, §3.3).
+  let recErr = null
   const rec = await teeAgent(primeReconcilePrompt(implemented, merged), {
     label: `merge:${groupsRunBase + groupsRun.length + 1}`,
     phase: 'Flight loop',
     schema: RECONCILE,
     agentType: 'general-purpose',
-  })
+  }).catch((e) => { recErr = e?.message || String(e); return null })
+  if (!rec || !Array.isArray(rec.merged) || !Array.isArray(rec.needs_rework)) {
+    halt = `reconcile agent failed: ${recErr || (rec ? 'schema-invalid result' : 'agent returned no result')}`
+    break
+  }
   for (const c of rec.concerns || []) allConcerns.push({ issue: 'reconcile', concern: c })
 
   // #724: a push rejected by the pre-push gate / permissions / protected-ref guard HOLDs the wave

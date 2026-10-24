@@ -247,6 +247,8 @@ closed**: the only ways the per-wave Workflow stops are the script's coded exits
 | thrash | `idleRounds ≥ MAX_IDLE` | groups with zero net merges → not converging |
 | cost | `budget` floor | stop before the ceiling |
 | impasse | planner `done` with pending left | planner can't schedule remaining → human |
+| plan-failed | the plan agent returned null, threw, or returned a result without `done`/`group` | `haltReason` `plan agent failed: <reason>` → gate SKIPPED, wave held (#1210) |
+| reconcile-failed | the reconcile agent returned null, threw, or returned a result without `merged`/`needs_rework` | `haltReason` `reconcile agent failed: <reason>` → gate SKIPPED, wave held; that round is not recorded, so the durable blob keeps the last persisted state for a fresh run (#1210) |
 | per-issue breaker | issue reworked > `MAX_REWORK` | one issue keeps breaking → human |
 | reconcile-blocked | reconcile returns `blocked` | a push to origin was rejected (pre-push gate / permissions / protected ref) → HOLD with the reason; reconcile never substitutes local merges (#724) |
 | gate HOLD | a trust signal failed | post-success gate fired → human review |
