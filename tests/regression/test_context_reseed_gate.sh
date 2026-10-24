@@ -116,6 +116,50 @@ full_reading 335000
 expect "RESEED_AUTOCOMPACT_BUFFER_TOKENS=0 measures the raw window (335k of 400k, 16%)" silent RESEED_AUTOCOMPACT_BUFFER_TOKENS=0
 full_reading 345000 'claude-opus-5-5[1m]'
 expect "model_id with [1m] falls back to the base settings key" block
+
+# Provider-qualified ids resolve to the canonical key (#1318: Bedrock's statusline
+# says "us.anthropic.claude-opus-5-5"; the gate fell back to 1M and never fired).
+for m in us.anthropic.claude-opus-5-5 global.anthropic.claude-opus-5-5 apac.anthropic.claude-opus-5-5 \
+	anthropic.claude-opus-5-5-v1:0 'eu.anthropic.claude-opus-5-5-v2:0[1m]' \
+	claude-opus-5-5@20261001 claude-opus-5-5-20261001; do
+	full_reading 345000 "$m"
+	expect "$m resolves to claude-opus-5-5 (400k) → block" block
+done
+printf '{"modelSettings": {"us.anthropic.claude-opus-5-5": {"autoCompactWindow": 200000}, "claude-opus-5-5": {"autoCompactWindow": 400000}}}' >"$CLAUDE_SETTINGS_FILE"
+full_reading 180000 us.anthropic.claude-opus-5-5
+expect "an exact key outranks the canonical one (180k of 167k usable → block; 400k would not)" block
+printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 400000}}}' >"$CLAUDE_SETTINGS_FILE"
+
+# A window configured for other models but matching none of this one's keys is
+# reported once per session, not blocked on: it reads exactly like no window.
+rm -f "$CLAUDE_CONTEXT_STATE_DIR"/*.acw-unmatched-noted
+full_reading 345000 claude-other-model
+out="$(gate)"
+msg="$(jq -r '.systemMessage // empty' <<<"$out")"
+if [[ "$(jq -r '.decision // empty' <<<"$out")" != block && "$msg" == *'"claude-other-model"'* && "$msg" == *"settings have one for: claude-opus-5-5"* ]]; then
+	pass "unmatched window → reported with the model and the keys, not blocked"
+else
+	fail "unmatched window: '$out'"
+fi
+expect "…and only once per session" silent
+rm -f "$CLAUDE_CONTEXT_STATE_DIR"/*.acw-unmatched-noted
+printf '{"modelSettings": {"claude-opus-5-5": {"effortLevel": "medium"}}}' >"$CLAUDE_SETTINGS_FILE"
+full_reading 345000
+expect "no window configured anywhere → silent (unset, not unmatched)" silent
+printf '{"autoCompactWindow": 400000, "modelSettings": {"claude-x": {"autoCompactWindow": 200000}}}' >"$CLAUDE_SETTINGS_FILE"
+full_reading 345000 claude-other-model
+expect "a top-level window applies → block, no unmatched report" block
+out="$(gate)"
+if [[ -z "$(jq -r '.systemMessage // empty' <<<"$out")" ]]; then pass "…with no systemMessage"; else fail "top-level window reported: '$out'"; fi
+full_reading 900000 claude-other-model
+printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 400000}}}' >"$CLAUDE_SETTINGS_FILE"
+rm -f "$CLAUDE_CONTEXT_STATE_DIR"/*.acw-unmatched-noted
+out="$(gate)"
+if [[ "$(jq -r '.decision // empty' <<<"$out")" == block && -n "$(jq -r '.systemMessage // empty' <<<"$out")" ]]; then
+	pass "unmatched window on a blocking reading → block carries the report"
+else
+	fail "block + report: '$out'"
+fi
 full_reading 260000
 expect "CLAUDE_CODE_AUTO_COMPACT_WINDOW overrides settings (260k of 267k usable)" block CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000
 printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 200000}}}' >"$CLAUDE_SETTINGS_FILE"
@@ -129,7 +173,7 @@ full_reading 300000
 expect "per-model autoCompactWindow outranks the top-level one" silent
 printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 400000}}}' >"$CLAUDE_SETTINGS_FILE"
 full_reading 345000 claude-other-model
-expect "no autocompact setting for the model → 1M window less the buffer (64%)" silent
+expect "no autocompact setting for the model → 1M window less the buffer (64%), already reported" silent
 printf '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": 2000000}}}' >"$CLAUDE_SETTINGS_FILE"
 full_reading 345000
 expect "autocompact window above the model window is ignored (min)" silent

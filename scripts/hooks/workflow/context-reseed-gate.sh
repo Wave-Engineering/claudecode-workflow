@@ -17,13 +17,16 @@
 # window_tokens and model_id, the percentage is recomputed against
 # min(window_tokens, autocompact window), less the buffer autocompact fires below
 # it. The autocompact window ("400000", "400k" or "1M"; raised to 100k) comes from
-# CLAUDE_CODE_AUTO_COMPACT_WINDOW, else .modelSettings[model_id].autoCompactWindow
-# in the settings file (trying model_id with any "[1m]" suffix stripped too), else
-# its top-level autoCompactWindow (the pre-2.1.288 form). A missing or malformed
-# autocompact window means the model window; a reading without the token fields
-# uses remaining_percentage as-is. Known gaps, both falling
-# back safely: only the user settings file is read (not project, local or managed
-# settings), and model aliases or dated IDs are not mapped to their canonical key.
+# CLAUDE_CODE_AUTO_COMPACT_WINDOW, else .modelSettings[<key>].autoCompactWindow
+# in the settings file, for the first key that has one of: model_id as given, then
+# with "[1m]" stripped, then canonical (provider prefix, "-vN:M", "@version" and
+# "-YYYYMMDD" stripped: "us.anthropic.claude-opus-5-5" → "claude-opus-5-5", #1318),
+# else its top-level autoCompactWindow (the pre-2.1.288 form). A missing or malformed
+# autocompact window means the model window; one configured for other models but
+# matching none of these keys is reported once per session, since it would read
+# exactly like no window. A reading without the token fields uses
+# remaining_percentage as-is. Known gaps: only the user settings file is read (not
+# project, local or managed settings), and model aliases ("opus") are not mapped.
 #
 # NEVER SILENTLY INERT. A gate that cannot read its input and says nothing is
 # indistinguishable from a gate that is happy — that is exactly how nerf measured
@@ -135,12 +138,38 @@ acw_tokens() {
 USED="$(jq -r '.used_tokens // empty' "$READING" 2>/dev/null || true)"
 WINDOW="$(jq -r '.window_tokens // empty' "$READING" 2>/dev/null || true)"
 MODEL="$(jq -r '.model_id // empty' "$READING" 2>/dev/null || true)"
+# The settings keys a model_id may be filed under, most specific first: as given,
+# without "[1m]", then canonical. Canonical strips a provider prefix (Bedrock's
+# "us." / "eu." / "apac." / "global." inference profiles, or a bare "anthropic."),
+# a Bedrock "-vN:M", a Vertex "@version" and a "-YYYYMMDD" date (#1318: the
+# statusline says "us.anthropic.claude-opus-5-5" where settings say "claude-opus-5-5").
+model_keys() {
+	local m="$1" c
+	c="$(sed -E 's/\[1m\]$//; s/^([a-z]{2,8}\.)?anthropic\.//; s/-v[0-9]+(:[0-9]+)?$//; s/@.*$//; s/-[0-9]{8}$//' <<<"$m")"
+	printf '%s\n' "$m" "${m%\[1m\]}" "$c"
+}
+SETTINGS="${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.json}"
+NOTE=""
 if ! ACW="$(acw_tokens "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}")"; then
 	ACW=""
 	if [[ -n "$MODEL" ]]; then
-		ACW="$(acw_tokens "$(jq -r --arg m "$MODEL" --arg b "${MODEL%\[1m\]}" \
-			'(.modelSettings // {} | .[$m].autoCompactWindow // .[$b].autoCompactWindow) // .autoCompactWindow // empty' \
-			"${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.json}" 2>/dev/null)")" || ACW=""
+		KEYS="$(model_keys "$MODEL" | jq -Rsc 'split("\n") | map(select(length > 0))')"
+		RAW="$(jq -r --argjson ks "$KEYS" \
+			'(.modelSettings // {}) as $ms | first($ks[] | ($ms[.]?.autoCompactWindow? // empty)) // .autoCompactWindow // empty' \
+			"$SETTINGS" 2>/dev/null)"
+		ACW="$(acw_tokens "$RAW")" || ACW=""
+		# A window is configured for some model but none of this model's keys: say
+		# so once, or a key mismatch reads exactly like no window at all.
+		if [[ -z "$RAW" ]]; then
+			FILED="$(jq -r '[.modelSettings // {} | to_entries[]? | select(.value.autoCompactWindow? != null) | .key] | join(", ")' \
+				"$SETTINGS" 2>/dev/null)"
+			MARK="$STATE_DIR/${SESSION_ID}.acw-unmatched-noted"
+			if [[ -n "$FILED" && ! -e "$MARK" ]]; then
+				mkdir -p "$STATE_DIR" 2>/dev/null
+				: >"$MARK" 2>/dev/null
+				NOTE="Context reseed gate: no autoCompactWindow for model \"$MODEL\" (tried $(jq -r 'join(", ")' <<<"$KEYS"); settings have one for: $FILED) — measuring against the model's own window, which autocompact may beat."
+			fi
+		fi
 	fi
 fi
 # Autocompact fires a fixed buffer BELOW its window (~33k: ~367k of 400k, ~967k
@@ -165,6 +194,8 @@ fi
 
 if awk -v p="$PCT" -v t="$THRESHOLD" 'BEGIN { exit !(p <= t) }'; then
 	jq -cn --arg r "Context at ${PCT%.*}% remaining${OF} (threshold ${THRESHOLD}%) — run /reseed now, before anything else." \
-		'{decision: "block", reason: $r}'
+		--arg n "$NOTE" '{decision: "block", reason: $r} + (if $n == "" then {} else {systemMessage: $n} end)'
+elif [[ -n "$NOTE" ]]; then
+	jq -cn --arg n "$NOTE" '{systemMessage: $n}'
 fi
 exit 0
