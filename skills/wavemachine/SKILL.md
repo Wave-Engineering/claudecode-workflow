@@ -221,6 +221,15 @@ vs. the post-STOP wave-status read) differs.
    Any missing → refuse and name each; re-run `./install`.
 2. **Plan exists** (`wave_show()`); **no other wave active**; **base branch clean**;
    **previous wave merged**; **at least one pending wave**; **no concurrent campaign**.
+3. **The concurrent-campaign check is `wave-status wavemachine-lease`** (#1110). It prints
+   `{status, age_seconds, session_id, started_at, last_updated}`:
+   - `inactive` → proceed.
+   - `live` → refuse: another run holds the plan.
+   - `lapsed` → refuse, and put the decision to the human. Show the lease's age, its owner
+     session, and the pending waves from `wave_show()`. A lapsed flag means its run died
+     without `wavemachine-stop`, and its plan may no longer be right. Run
+     `wave-status wavemachine-start --launcher main --reclaim` **only on the human's
+     say-so**; never reclaim on your own.
 
 On any refusal: explain, suggest remediation, do NOT enter the loop. (Same gates as the
 legacy `/wavemachine` pre-flight; see that skill for the detailed rationale.)
@@ -424,7 +433,9 @@ absence of those is presumption of healthy operation.
 
 - **One Plan at a time.** Pre-flight refuses if another campaign is active.
 - **`wavemachine_active` must always reflect reality** — set on entry, unset on every
-  exit path. No `Edit` to `state.json`; go through the CLI.
+  exit path. No `Edit` to `state.json`; go through the CLI. A `finally` does not survive
+  the process dying, so the lease is the backstop: a flag whose state has not been written
+  for `WAVEMACHINE_STALE_SECONDS` (24 h) reads `lapsed`, and only a human reclaims it.
 - **NEVER run the loop in a background sub-agent.** The loop is top-level. (CC sub-agents
   lack the `Agent`/`Task` tool — `lesson_cc_subagent_tools.md` — so only the top-level
   session can launch a Workflow.)
