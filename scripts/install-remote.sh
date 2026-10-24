@@ -289,62 +289,19 @@ reap_stale_cellar_symlinks() {
 # Settings smart-merge (ported from install — see #556 for hook union-merge)
 # ---------------------------------------------------------------------------
 
-# #1109 (ported from install): the wavemachine stall guard used to ship as ONE
-# INLINE shell command under hooks.Stop. The merge keys template hooks on their
-# exact command text, so once the guard moved to a script an upgraded host would
-# keep the old inline copy beside the new one and both would fire. Remove every
-# inline (not path-based: the command does not start with ~, / or $) Stop command
-# that reads wavemachine_active from .claude/status/state.json, and any matcher
-# group left empty. Modifies $1 in place; prints the number of commands removed.
-remove_legacy_inline_stall_guard() {
-	local target="$1"
-	if [[ ! -f "$target" ]] || ! command -v jq &>/dev/null; then
-		echo 0
-		return 0
-	fi
-	# shellcheck disable=SC2016 # $c is a jq variable, not a shell one
-	local legacy='def legacy: (.command // "") as $c
-		| ($c | test("^[~/$]") | not)
-		and ($c | contains("wavemachine_active"))
-		and ($c | contains(".claude/status/state.json"));'
-	local count rewritten
-	count=$(jq "$legacy"' [.hooks.Stop[]?.hooks[]? | select(legacy)] | length' "$target" 2>/dev/null) || count=0
-	if [[ "$count" -gt 0 ]]; then
-		rewritten=$(jq "$legacy"'
-			.hooks.Stop |= (map(.hooks |= ((. // []) | map(select(legacy | not))))
-				| map(select((.hooks | length) > 0)))' "$target") || {
-			echo 0
-			return 0
-		}
-		echo "$rewritten" >"$target"
-	fi
-	echo "$count"
-}
-
 merge_settings() {
 	local template="$1" target="$2"
 
 	cp "$target" "${target}.bak"
-
-	# Drop the pre-#1109 inline stall guard, so the script version that the
-	# union below adds is the only one left.
-	local legacy_guards
-	legacy_guards=$(remove_legacy_inline_stall_guard "$target")
-	if [[ "$legacy_guards" -gt 0 ]]; then
-		info "hooks.Stop -- removed $legacy_guards inline wavemachine stall guard(s), replaced by wavemachine-stall-guard.sh (#1109)"
-	fi
 
 	# Deep merge: template into local, preserving user customizations
 	# Rules:
 	#   1. Top-level keys (scalars AND objects): added only if ABSENT locally
 	#   2. hooks:
 	#      - Event keys missing locally: added from template
-	#      - Event keys present in both: matcher arrays unioned (ported from
-	#        install, #734): a template entry is appended when its command
-	#        signature is not already present locally AND either its .matcher
-	#        is new or it is KIT-OWNED (a command referencing ~/.local/bin/ or
-	#        .claude/). Existing local entries are left untouched; a user hook
-	#        under a shared matcher still overrides a non-kit template entry.
+	#      - Event keys present in both: matcher arrays unioned by .matcher
+	#        value (template matcher entries whose .matcher is not in the
+	#        local array are appended; existing local entries left untouched)
 	#   3. permissions.allow: union of both arrays (deduplicated)
 	#   4. enabledPlugins: add missing keys from template; leave existing alone
 	#   5. _comment keys: stripped from result (template-only documentation)
@@ -371,26 +328,14 @@ merge_settings() {
 		((.[1].hooks // {}) | keys) as $local_hook_keys |
 		# New event keys (template only) — add wholesale
 		($tpl_hooks | map(select(.key | IN($local_hook_keys[]) | not))) as $new_hooks |
-		# Shared event keys — union hook arrays (#734, same as install). The kit
-		# ships several distinct "*" Stop hooks; a plain matcher-keyed union kept
-		# only the first, so a host whose Stop array already had a "*" group never
-		# received a new kit Stop hook. Signature = sorted list of .hooks[].command.
-		# (No apostrophes in these comments — they live inside a single-quoted jq
-		# program and an apostrophe would terminate the shell string.)
+		# Shared event keys — union their matcher arrays by .matcher value
 		($tpl_hooks | map(select(.key | IN($local_hook_keys[]))) | map({
 			key: .key,
 			value: (
 				(.value // []) as $tpl_arr |
 				(($local_hooks | from_entries)[.key] // []) as $local_arr |
-				($local_arr | map([.hooks[]?.command // empty] | sort)) as $local_sigs |
 				($local_arr | map(.matcher)) as $local_matchers |
-				$local_arr + ($tpl_arr | map(select(
-					(([.hooks[]?.command // empty] | sort) as $sig | ($local_sigs | map(. == $sig) | any) | not)
-					and (
-						(.matcher as $m | $local_matchers | index($m) | not)
-						or ([.hooks[]?.command // empty] | map(test("\\.local/bin/|\\.claude/")) | any)
-					)
-				)))
+				$local_arr + ($tpl_arr | map(select(.matcher as $m | $local_matchers | index($m) | not)))
 			)
 		}) | from_entries) as $merged_shared_hooks |
 

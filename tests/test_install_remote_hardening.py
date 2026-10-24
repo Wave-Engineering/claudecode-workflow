@@ -15,7 +15,6 @@ implementation.
 
 from __future__ import annotations
 
-import json
 import re
 import subprocess
 from pathlib import Path
@@ -101,13 +100,9 @@ def test_merge_settings_union_block_present() -> None:
     assert "$merged_shared_hooks" in src, (
         "merge_settings missing $merged_shared_hooks union-merge block (#556)"
     )
-    # And the matcher-union expression itself, with #734's kit-ownership clause.
-    assert "$local_arr + ($tpl_arr | map(select(" in src, (
+    # And the matcher-union expression itself.
+    assert "$local_arr + ($tpl_arr | map(select(.matcher as $m" in src, (
         "merge_settings missing matcher-array union expression (#556)"
-    )
-    assert "(.matcher as $m | $local_matchers | index($m) | not)" in src
-    assert 'test("\\\\.local/bin/|\\\\.claude/")' in src, (
-        "merge_settings missing the #734 kit-ownership clause"
     )
 
 
@@ -224,64 +219,3 @@ def test_relocate_skill_baks_moves_every_bak_out(tmp_path: Path) -> None:
     assert (skills / "a" / "SKILL.md").read_text() == "live\n"
     for f in planted:
         assert (tmp_path / ".claude" / "backups" / "skills" / f.relative_to(skills)).read_text() == f"old {f.name}\n"
-
-
-# ---------------------------------------------------------------------------
-# #1109 / #734: release upgrades replace the inline stall guard and deploy new
-# kit "*" Stop hooks
-# ---------------------------------------------------------------------------
-
-_LEGACY_INLINE_GUARD = (
-    'state="${CLAUDE_PROJECT_DIR:-.}/.claude/status/state.json"; [ -f "$state" ] || exit 0; '
-    "active=$(jq -r '.wavemachine_active // false' \"$state\" 2>/dev/null); "
-    '[ "$active" = "true" ] || exit 0; '
-    "printf '{\"decision\":\"block\",\"reason\":\"/wavemachine is active.\"}'"
-)
-
-
-def _run_remote_merge(tmp_path: Path, local: dict) -> tuple[subprocess.CompletedProcess[str], dict]:
-    """Extract merge_settings() and its helper from install-remote.sh and run
-    them against the REAL settings template and *local*."""
-    src = _read()
-    funcs = [
-        re.search(rf"^{name}\(\) \{{.*?^\}}$", src, re.MULTILINE | re.DOTALL)
-        for name in ("remove_legacy_inline_stall_guard", "merge_settings")
-    ]
-    assert all(funcs), "remove_legacy_inline_stall_guard() / merge_settings() not found"
-    target = tmp_path / "settings.json"
-    target.write_text(json.dumps(local))
-    template = _REPO_DIR / "config" / "settings.template.json"
-    script = (
-        'info() { echo "$*"; }\nskip() { :; }\n'
-        + "\n".join(f.group(0) for f in funcs)
-        + f'\nmerge_settings "{template}" "{target}"\n'
-    )
-    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60)
-    return result, json.loads(target.read_text())
-
-
-def test_remote_merge_replaces_inline_stall_guard(tmp_path: Path) -> None:
-    local = {
-        "hooks": {
-            "Stop": [
-                {"matcher": "*", "hooks": [{"type": "command", "command": "~/.local/bin/precheck-asking-detector.sh"}]},
-                {"matcher": "*", "hooks": [{"type": "command", "command": _LEGACY_INLINE_GUARD}]},
-                {"matcher": "*", "hooks": [{"type": "command", "command": "my-custom-stop-hook.sh"}]},
-            ]
-        }
-    }
-    result, merged = _run_remote_merge(tmp_path, local)
-    assert result.returncode == 0, result.stderr
-    assert "removed 1 inline wavemachine stall guard" in result.stdout
-    commands = [h["command"] for g in merged["hooks"]["Stop"] for h in g["hooks"]]
-    assert not [c for c in commands if "wavemachine_active" in c], "inline guard survived"
-    # #734: the kit's "*" Stop hook is added although a "*" group already exists.
-    assert sum("wavemachine-stall-guard.sh" in c for c in commands) == 1
-    assert sum(c == "~/.local/bin/precheck-asking-detector.sh" for c in commands) == 1
-    assert "my-custom-stop-hook.sh" in commands
-    assert all(g["hooks"] for g in merged["hooks"]["Stop"])
-
-    # A second run changes nothing.
-    again, remerged = _run_remote_merge(tmp_path, merged)
-    assert again.returncode == 0, again.stderr
-    assert remerged["hooks"]["Stop"] == merged["hooks"]["Stop"]
