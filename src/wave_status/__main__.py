@@ -55,6 +55,7 @@ from wave_status.state import (
     store_flight_plan,
     waiting,
     waiting_ci,
+    wavemachine_lease,
     wavemachine_start,
     wavemachine_stop,
 )
@@ -345,10 +346,20 @@ def _cmd_set_kahuna_branch(args: argparse.Namespace) -> None:
 
 
 def _cmd_wavemachine_start(args: argparse.Namespace) -> None:
-    """Handle ``wavemachine-start [--launcher <tag>]``."""
+    """Handle ``wavemachine-start [--launcher <tag>] [--reclaim]``."""
     root = get_project_root()
-    wavemachine_start(root, launcher=args.launcher or "")
+    wavemachine_start(root, launcher=args.launcher or "", reclaim=args.reclaim)
     _safe_regenerate_dashboard(root)
+
+
+def _cmd_wavemachine_lease(args: argparse.Namespace) -> None:
+    """Handle ``wavemachine-lease`` — print the lease as JSON; always exit 0."""
+    root = get_project_root()
+    try:
+        state_data = load_state(status_dir(root) / "state.json", write_back=False)
+    except FileNotFoundError:
+        state_data = {}  # no plan initialized: nothing holds the flag
+    print(json.dumps(wavemachine_lease(state_data)))
 
 
 def _cmd_wavemachine_stop(args: argparse.Namespace) -> None:
@@ -811,7 +822,19 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional label identifying who started the run (e.g. agent task ID)",
     )
+    p_ws.add_argument(
+        "--reclaim",
+        action="store_true",
+        help="Take over a LAPSED flag (a human's call; a live flag is never reclaimed)",
+    )
     p_ws.set_defaults(func=_cmd_wavemachine_start)
+
+    # wavemachine-lease
+    p_wl = sub.add_parser(
+        "wavemachine-lease",
+        help="Print the wavemachine lease (inactive|live|lapsed) as JSON",
+    )
+    p_wl.set_defaults(func=_cmd_wavemachine_lease)
 
     # wavemachine-stop
     p_wst = sub.add_parser(

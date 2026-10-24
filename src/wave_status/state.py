@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
+import sys
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1088,28 +1090,132 @@ def set_kahuna_branch(branch: str | None, root: Path) -> dict:
     return state_data
 
 
-def wavemachine_start(root: Path, launcher: str = "") -> dict:
+# A wavemachine flag whose state has not been written for this long is lapsed:
+# its owner most likely died without running wavemachine-stop (#1110). Writes
+# happen about once per issue merged, so a slow wave goes hours between them.
+WAVEMACHINE_STALE_SECONDS = 86400
+
+_WAVEMACHINE_KEYS = (
+    "wavemachine_active",
+    "wavemachine_started_at",
+    "wavemachine_launcher",
+    "wavemachine_session_id",
+    "wavemachine_host",
+    "wavemachine_reclaimed",
+)
+
+
+def _parse_iso(value: object) -> datetime | None:
+    """Parse an ISO-8601 timestamp to an aware UTC datetime, or ``None``."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def wavemachine_lease(state_data: dict, now: datetime | None = None) -> dict:
+    """Report whether the wavemachine flag is held by a live run [#1110].
+
+    Liveness is the age of ``last_updated``, which every state write refreshes.
+    An active flag older than :data:`WAVEMACHINE_STALE_SECONDS`, or one whose
+    ``last_updated`` is missing or unparseable, is ``lapsed``.
+    """
+    last_updated = state_data.get("last_updated")
+    lease = {
+        "status": "inactive",
+        "age_seconds": None,
+        "session_id": state_data.get("wavemachine_session_id"),
+        "started_at": state_data.get("wavemachine_started_at"),
+        "last_updated": last_updated,
+    }
+    if not state_data.get("wavemachine_active"):
+        return lease
+    updated = _parse_iso(last_updated)
+    if updated is None:
+        lease["status"] = "lapsed"
+        return lease
+    age = int(((now or datetime.now(UTC)) - updated).total_seconds())
+    lease["age_seconds"] = age
+    lease["status"] = "lapsed" if age > WAVEMACHINE_STALE_SECONDS else "live"
+    return lease
+
+
+def _describe_lease(lease: dict) -> str:
+    """One-line owner/age description of a held lease, for error messages."""
+    age = lease["age_seconds"]
+    if age is None:
+        age_text = "of unknown age (no readable last_updated)"
+    elif age >= 86400:
+        age_text = f"{age / 86400:.1f} days stale"
+    else:
+        age_text = f"last updated {age // 60} min ago"
+    return f"{age_text}, owner session {lease['session_id'] or 'unknown'}"
+
+
+def wavemachine_start(root: Path, launcher: str = "", reclaim: bool = False) -> dict:
     """Mark the plan as actively driven by wavemachine.
 
     Sets ``wavemachine_active: true`` in ``state.json`` along with
-    ``wavemachine_started_at`` and ``wavemachine_launcher`` metadata.
-    Raises ``ValueError`` if a wavemachine run is already active (one plan
-    at a time — matches the SKILL.md non-negotiable).
+    ``wavemachine_started_at``, ``wavemachine_launcher``,
+    ``wavemachine_session_id`` (from ``CLAUDE_CODE_SESSION_ID``, when set) and
+    ``wavemachine_host``. Raises ``ValueError`` if the flag is already held
+    (one plan at a time — matches the SKILL.md non-negotiable).
+
+    A *lapsed* flag (see :func:`wavemachine_lease`) is taken over only with
+    ``reclaim=True``, which a human must ask for: a lapsed campaign is exactly
+    the case where the old plan may be wrong. A live flag is never reclaimed.
     """
     d = status_dir(root)
     state_data = load_state(d / "state.json")
-    if state_data.get("wavemachine_active"):
+    lease = wavemachine_lease(state_data)
+    if lease["status"] == "live":
         raise ValueError(
-            "Error: wavemachine is already active for this plan. "
-            "Run 'wavemachine-stop' first, or wait for the current run to exit."
+            "Error: wavemachine is already active for this plan "
+            f"({_describe_lease(lease)}). Run 'wavemachine-stop' first, or "
+            "wait for the current run to exit; a live run cannot be reclaimed."
         )
+    if lease["status"] == "lapsed":
+        if not reclaim:
+            raise ValueError(
+                "Error: wavemachine flag is stale "
+                f"({_describe_lease(lease)}). If its run is dead, re-run with "
+                "'--reclaim', or clear it with 'wavemachine-stop'."
+            )
+        print(
+            f"wave-status: RECLAIMING a lapsed wavemachine flag ({_describe_lease(lease)}).",
+            file=sys.stderr,
+        )
+        state_data["wavemachine_reclaimed"] = {
+            "from_session_id": lease["session_id"],
+            "from_started_at": lease["started_at"],
+            "from_last_updated": lease["last_updated"],
+            "at": _now_iso(),
+        }
 
     state_data["wavemachine_active"] = True
     state_data["wavemachine_started_at"] = _now_iso()
+    state_data.pop("wavemachine_launcher", None)
     if launcher:
         state_data["wavemachine_launcher"] = launcher
+    state_data.pop("wavemachine_session_id", None)
+    session_id = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if session_id:
+        state_data["wavemachine_session_id"] = session_id
+    state_data["wavemachine_host"] = socket.gethostname()
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)
+    if lease["status"] == "lapsed":
+        _emit_event(
+            root,
+            "step",
+            wave=state_data.get("current_wave"),
+            action="wavemachine-reclaim",
+            label="wavemachine-reclaim",
+            detail=f"from session {lease['session_id'] or 'unknown'}",
+        )
     _emit_event(
         root,
         "step",
@@ -1123,9 +1229,10 @@ def wavemachine_start(root: Path, launcher: str = "") -> dict:
 def wavemachine_stop(root: Path) -> dict:
     """Clear wavemachine ownership from ``state.json``.
 
-    Deletes ``wavemachine_active``, ``wavemachine_started_at``, and
-    ``wavemachine_launcher``.  Idempotent — succeeds even if no wavemachine
-    run is active (worker abort paths need this to be safe on re-entry).
+    Deletes every ``wavemachine_*`` key (active, started_at, launcher,
+    session_id, host, reclaimed).  Idempotent — succeeds even if no
+    wavemachine run is active (worker abort paths need this to be safe on
+    re-entry).
 
     Also resets ``current_action`` to ``idle`` (cc-workflow#636). This is the
     campaign-exit "finally" run on EVERY exit path, so resetting the action here
@@ -1135,9 +1242,8 @@ def wavemachine_stop(root: Path) -> dict:
     """
     d = status_dir(root)
     state_data = load_state(d / "state.json")
-    state_data.pop("wavemachine_active", None)
-    state_data.pop("wavemachine_started_at", None)
-    state_data.pop("wavemachine_launcher", None)
+    for key in _WAVEMACHINE_KEYS:
+        state_data.pop(key, None)
     state_data["current_action"] = {"action": "idle", "label": "idle", "detail": ""}
     state_data["last_updated"] = _now_iso()
     save_json(d / "state.json", state_data)

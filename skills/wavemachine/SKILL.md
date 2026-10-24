@@ -221,6 +221,17 @@ vs. the post-STOP wave-status read) differs.
    Any missing → refuse and name each; re-run `./install`.
 2. **Plan exists** (`wave_show()`); **no other wave active**; **base branch clean**;
    **previous wave merged**; **at least one pending wave**; **no concurrent campaign**.
+3. **The concurrent-campaign check is `wave-status wavemachine-lease`** (#1110). It prints
+   `{status, age_seconds, session_id, started_at, last_updated}`:
+   - `inactive` → proceed.
+   - `live` → refuse: another run holds the plan.
+   - `lapsed` → stop and put the decision to the human. Show the lease's age, its owner
+     session, and the pending waves from `wave_show()`. A lapsed flag means its run died
+     without `wavemachine-stop`, and its plan may no longer be right. **Only on the human's
+     say-so**, continue with the reclaim approved: launch step 1 then adds `--reclaim`.
+     Don't run `wavemachine-start` here: it would emit before the FlightDeck card is pinned,
+     and launch step 1's own start would then refuse the lease it just took. Never reclaim on
+     your own.
 
 On any refusal: explain, suggest remediation, do NOT enter the loop. (Same gates as the
 legacy `/wavemachine` pre-flight; see that skill for the detailed rationale.)
@@ -267,7 +278,8 @@ the CLOSED ISSUE'S OWN wave (`_issue_wave_id`), not wherever `current_wave` happ
 since those two can legitimately drift (a straggler close after the campaign has advanced, a
 human recovery via `set_current_wave`, `extend_state`'s auto-advance).
 
-1. Set the `wavemachine_active` flag (`wave-status wavemachine-start --launcher main`).
+1. Set the `wavemachine_active` flag (`wave-status wavemachine-start --launcher main`, plus
+   `--reclaim` only when the human approved reclaiming a lapsed lease at pre-flight).
    Unset it on EVERY exit path (`wave-status wavemachine-stop`) — treat as a `finally`.
 2. Regenerate + open the status panel (`generate-status-panel` then `xdg-open`).
 3. **Campaign-branch bootstrap (#1052)** — once per Plan: ensure `campaign/<plan_id>-<slug>` exists
@@ -424,7 +436,9 @@ absence of those is presumption of healthy operation.
 
 - **One Plan at a time.** Pre-flight refuses if another campaign is active.
 - **`wavemachine_active` must always reflect reality** — set on entry, unset on every
-  exit path. No `Edit` to `state.json`; go through the CLI.
+  exit path. No `Edit` to `state.json`; go through the CLI. A `finally` does not survive
+  the process dying, so the lease is the backstop: a flag whose state has not been written
+  for `WAVEMACHINE_STALE_SECONDS` (24 h) reads `lapsed`, and only a human reclaims it.
 - **NEVER run the loop in a background sub-agent.** The loop is top-level. (CC sub-agents
   lack the `Agent`/`Task` tool — `lesson_cc_subagent_tools.md` — so only the top-level
   session can launch a Workflow.)

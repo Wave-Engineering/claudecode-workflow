@@ -697,6 +697,105 @@ class TestWavemachineFlag:
         assert after["waves"] == before["waves"]
         assert after["issues"] == before["issues"]
 
+    # --- #1110: the lease (session, age, --reclaim) ----------------------
+
+    @staticmethod
+    def _backdate(repo: Path, stamp: str = "2020-01-01T00:00:00Z") -> None:
+        """Age the state's ``last_updated``, so a held flag reads lapsed."""
+        p = repo / ".claude" / "status" / "state.json"
+        st = json.loads(p.read_text(encoding="utf-8"))
+        st["last_updated"] = stamp
+        p.write_text(json.dumps(st), encoding="utf-8")
+
+    def _started(self, repo: Path, run_cli) -> None:
+        _write_plan(repo)
+        run_cli(["init", "plan.json"], repo)
+        rc, _, err = run_cli(["wavemachine-start"], repo)
+        assert rc == 0, err
+
+    def test_start_records_session_and_host(
+        self, temp_git_repo: Path, run_cli, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-abc")
+        self._started(temp_git_repo, run_cli)
+        st = _state(temp_git_repo)
+        assert st["wavemachine_session_id"] == "sess-abc"
+        assert st["wavemachine_host"]
+
+    def test_start_omits_session_when_unset(
+        self, temp_git_repo: Path, run_cli, monkeypatch
+    ) -> None:
+        monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+        self._started(temp_git_repo, run_cli)
+        assert "wavemachine_session_id" not in _state(temp_git_repo)
+
+    def test_lapsed_without_reclaim_refuses(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        self._started(temp_git_repo, run_cli)
+        self._backdate(temp_git_repo)
+        rc, _, err = run_cli(["wavemachine-start"], temp_git_repo)
+        assert rc == 1
+        assert "stale" in err
+        assert "--reclaim" in err
+
+    def test_lapsed_with_reclaim_takes_over(
+        self, temp_git_repo: Path, run_cli, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "old-sess")
+        self._started(temp_git_repo, run_cli)
+        before = _state(temp_git_repo)
+        self._backdate(temp_git_repo)
+        time.sleep(1.1)  # started_at has 1 s resolution
+
+        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "new-sess")
+        rc, _, err = run_cli(["wavemachine-start", "--reclaim"], temp_git_repo)
+        assert rc == 0, err
+        assert "RECLAIMING" in err
+        st = _state(temp_git_repo)
+        assert st["wavemachine_session_id"] == "new-sess"
+        assert st["wavemachine_started_at"] > before["wavemachine_started_at"]
+        rec = st["wavemachine_reclaimed"]
+        assert rec["from_session_id"] == "old-sess"
+        assert rec["from_started_at"] == before["wavemachine_started_at"]
+        assert rec["from_last_updated"] == "2020-01-01T00:00:00Z"
+        assert rec["at"]
+
+    def test_reclaim_refused_on_live_lease(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        self._started(temp_git_repo, run_cli)
+        rc, _, err = run_cli(["wavemachine-start", "--reclaim"], temp_git_repo)
+        assert rc == 1
+        assert "already active" in err
+        assert "wavemachine_reclaimed" not in _state(temp_git_repo)
+
+    def test_lease_json_shape(self, temp_git_repo: Path, run_cli) -> None:
+        _write_plan(temp_git_repo)
+        run_cli(["init", "plan.json"], temp_git_repo)
+        keys = {"status", "age_seconds", "session_id", "started_at", "last_updated"}
+
+        rc, out, err = run_cli(["wavemachine-lease"], temp_git_repo)
+        assert rc == 0, err
+        lease = json.loads(out)
+        assert set(lease) == keys and lease["status"] == "inactive"
+
+        run_cli(["wavemachine-start"], temp_git_repo)
+        lease = json.loads(run_cli(["wavemachine-lease"], temp_git_repo)[1])
+        assert lease["status"] == "live" and isinstance(lease["age_seconds"], int)
+
+        self._backdate(temp_git_repo)
+        rc, out, _ = run_cli(["wavemachine-lease"], temp_git_repo)
+        assert rc == 0 and json.loads(out)["status"] == "lapsed"
+
+    def test_lease_without_plan_is_inactive(
+        self, temp_git_repo: Path, run_cli
+    ) -> None:
+        """No ``state.json`` yet: still exit 0, and nothing holds the flag."""
+        rc, out, err = run_cli(["wavemachine-lease"], temp_git_repo)
+        assert rc == 0, err
+        assert json.loads(out)["status"] == "inactive"
+
 
 # ---------------------------------------------------------------------------
 # init --extend auto-advance current_wave (issue #382)

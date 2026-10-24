@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -50,6 +51,8 @@ from wave_status.state import (
     store_flight_plan,
     waiting,
     waiting_ci,
+    WAVEMACHINE_STALE_SECONDS,
+    wavemachine_lease,
     wavemachine_start,
     wavemachine_stop,
 )
@@ -609,6 +612,20 @@ class TestWavemachineStop:
         assert "wavemachine_started_at" not in result
         assert "wavemachine_launcher" not in result
 
+    def test_clears_lease_keys(self, project_root: Path) -> None:
+        """#1110: stop removes the session, host and reclaim records too."""
+        state_path = status_dir(project_root) / "state.json"
+        state = load_json(state_path)
+        state.update(
+            wavemachine_active=True,
+            wavemachine_session_id="old",
+            wavemachine_host="h",
+            wavemachine_reclaimed={"from_session_id": "older"},
+        )
+        save_json(state_path, state)
+        result = wavemachine_stop(project_root)
+        assert not [k for k in result if k.startswith("wavemachine_")]
+
     def test_resets_stale_waiting_ci_to_idle(self, project_root: Path) -> None:
         """#636: a waiting-ci heartbeat left by post-merge CI polling must NOT
         survive campaign exit and trip the next campaign's pre-flight."""
@@ -629,6 +646,57 @@ class TestWavemachineStop:
         result = wavemachine_stop(project_root)
         assert result["current_action"]["action"] == "idle"
         assert "wavemachine_active" not in result
+
+
+class TestWavemachineLease:
+    """#1110: liveness of the wavemachine flag is the age of ``last_updated``."""
+
+    NOW = datetime(2026, 10, 24, 12, 0, 0, tzinfo=UTC)
+
+    def _state(self, age_seconds: int | None, **extra: object) -> dict:
+        state: dict = {"wavemachine_active": True, **extra}
+        if age_seconds is not None:
+            stamp = self.NOW - timedelta(seconds=age_seconds)
+            state["last_updated"] = stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return state
+
+    def test_inactive(self) -> None:
+        lease = wavemachine_lease({"last_updated": "2026-10-24T11:00:00Z"}, now=self.NOW)
+        assert lease["status"] == "inactive"
+        assert lease["age_seconds"] is None
+
+    def test_live(self) -> None:
+        lease = wavemachine_lease(self._state(3600), now=self.NOW)
+        assert lease["status"] == "live"
+        assert lease["age_seconds"] == 3600
+
+    def test_lapsed_past_threshold(self) -> None:
+        lease = wavemachine_lease(
+            self._state(WAVEMACHINE_STALE_SECONDS + 1), now=self.NOW
+        )
+        assert lease["status"] == "lapsed"
+
+    def test_at_threshold_still_live(self) -> None:
+        lease = wavemachine_lease(self._state(WAVEMACHINE_STALE_SECONDS), now=self.NOW)
+        assert lease["status"] == "live"
+
+    @pytest.mark.parametrize("bad", [None, "", "not-a-date", 12345])
+    def test_missing_or_unparseable_last_updated_is_lapsed(self, bad) -> None:
+        state = {"wavemachine_active": True}
+        if bad is not None:
+            state["last_updated"] = bad
+        lease = wavemachine_lease(state, now=self.NOW)
+        assert lease["status"] == "lapsed"
+        assert lease["age_seconds"] is None
+
+    def test_passes_owner_fields_through(self) -> None:
+        state = self._state(
+            60, wavemachine_session_id="sess-1", wavemachine_started_at="2026-10-24T10:00:00Z"
+        )
+        lease = wavemachine_lease(state, now=self.NOW)
+        assert lease["session_id"] == "sess-1"
+        assert lease["started_at"] == "2026-10-24T10:00:00Z"
+        assert lease["last_updated"] == state["last_updated"]
 
 
 # ---------------------------------------------------------------------------
