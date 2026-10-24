@@ -112,6 +112,8 @@ while (true) {
 | cost | `budget` floor | stop before the ceiling |
 | impasse | planner `done` w/ pending left | planner can't schedule remaining → human |
 | per-issue breaker | issue reworked > `MAX_REWORK` | one issue keeps breaking → human |
+| plan-failed | plan agent null, thrown, or schema-invalid | `plan agent failed: <reason>` → wave held, never a TypeError (#1210) |
+| reconcile-failed | reconcile agent null, thrown, or schema-invalid | `reconcile agent failed: <reason>` → wave held; the round is not recorded (#1210) |
 
 **The dynamic-flight insight:** the loop is deterministic and cannot stall; **Prime** exercises the dependency judgment each iteration; a dependency that surfaces mid-wave (reported by reconcile as `needs_rework`) just re-opens the issue and becomes the next group — no human halt. That is the flight mechanism's whole purpose ("fix dependency issues that surface after plan approval"), expressed as a bounded loop.
 
