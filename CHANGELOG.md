@@ -19,9 +19,73 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.13.0] - 2026-10-24
+
+Most of this release is the wave-engine defect chain (#1303): ten fixes to the per-wave Workflow, the
+trust gate, wave-status and the `/wavemachine` stall guard. They landed one at a time through
+`/autochain` rather than as a wave campaign, because a campaign would have run on the engine being
+fixed. Image unchanged from 8.11.0.
+
 ### Fixed
 
-- **The reseed gate now honors `/autocompact` (#1297).** Claude Code computes the statusline's
+- **The stall guard no longer false-fires mid-wave (#1205, PR #1309).** The per-wave Workflow's
+  agents overwrite `current_action` with fine-grained states (`waiting-ci`, `in-flight`, `merging`),
+  so the guard blocked a driver legitimately awaiting a running wave and told it to launch a
+  duplicate. The driver's coarse states now also write `driver_action`, which only the driver
+  touches, and the guard decides from it. It stays silent on `hold`, and on `awaiting-verdict` or
+  `promoting` while the named wave is unfinished. It blocks on `launching`. State with no
+  `driver_action` keeps the #736 rule.
+- **The stall guard is a script, and stale state never blocks (#1109, PR #1308).** The inline
+  Stop-hook guard blocked on any non-await action however old the campaign state was. A flag left by
+  a dead run told every later turn to advance a campaign nobody had verified.
+  `wavemachine-stall-guard.sh` now gives state older than 24 h, or unreadable state, a
+  `systemMessage` with its age, owner and the verify/stop/hold options instead of a block. The
+  installer removes the old inline guard first, because the hook merge keys on command text and
+  would otherwise keep both.
+- **A failed plan or reconcile agent holds the wave instead of crashing it (#1210, PR #1310).**
+  `agent()` resolves to null when a subagent dies, and throws past the budget ceiling. The Workflow
+  read `plan.done` and `rec.concerns` unguarded, so either failure killed the run with a
+  `TypeError`: no verdict and no hold recorded. Both now end the loop with `haltReason` `plan agent
+  failed: …` or `reconcile agent failed: …`, gate `SKIPPED`, and a held terminal record.
+  `tests/regression/per_wave_harness.mjs` runs the committed bundle under node with stubs that fail
+  the way the runtime does. It is the first test that executes the loop.
+- **A retried wave starts its thrash counter at zero (#1204, PR #1311).** Rehydrate reloaded the
+  durable `idleRounds`, so a wave retried after a thrash exit halted again before planning anything,
+  and every campaign retry was spent on a run that could not move. `idleRounds` now counts within one
+  run. `reworkCount` and the lifetime `groupsRun` bound still carry across retries. A halt before
+  any flight launched says so (`exitedBeforeDispatch`).
+- **A rework flight is told why, and a no-op rework holds (#1213, PR #1312).** Reconcile's rework
+  reason never reached the flight, which was told to check for already-present work first while its
+  rejected commit was still on the branch. Every rework came back already-present and counted as a
+  cycle until the cap held the wave with the defect unfixed. A rework dispatch now carries the reason
+  and the rejected head. A rework that returns already-present, `rework_not_applied` or the
+  rejected head halts the wave as `rework-noop:#N`, and the rework context survives a resume.
+- **Flights are told not to run `/precheck` (#1209, PR #1313).** A Workflow flight has no Agent
+  tool and is told not to push, yet the kit told it to precheck and auto-merge itself into kahuna,
+  so every flight reported that it couldn't. Reconcile lands flights on `kahuna/*` and the trust
+  gate's review signal reviews the wave. `workerPrompt` now says so. `CLAUDE.md`'s MR Gate exempts
+  Workflow flight workers, and its Kahuna exception names the PR/MR into `kahuna/*`, not a Flight
+  Agent.
+- **The trust gate's trivy signal scans the kahuna tip, bound by SHA (#1206, PR #1314).** It scanned
+  whatever the operator's checkout held, so a green verdict could be for a tree that was never the
+  wave. It now scans a detached worktree of `origin/<kahuna>` and never touches the checkout. The
+  agent returns `scanned_sha` and `kahuna_sha`, and `trivyTreeBound()` holds unless both are full
+  SHAs and equal.
+- **The trust gate's CI wait is a per-repo budget (#1302, PR #1315).** A hard-coded 420 s meant a
+  repo whose cold build takes longer held every wave, and under `/wavemachine` a hold stops the
+  campaign. `CI wait budget` in `.claude-project.md`, declared by hand and carried over by `/ccfold`,
+  reaches the gate as `ciWaitSec`: an integer in [60, 3600], per phase, default 420. A rejected
+  value falls back loudly, with a `[#1302] ignoring ciWaitSec` log line. Waits over 1800 s are
+  unproven, and the campaign release gate keeps its own 1800 s wait.
+- **`hold_detail` is cleared when a wave leaves held (#1208, PR #1306).** `complete()` and
+  `planning()` kept the previous hold's text, so a completed wave still showed why it had once been
+  held. A hold without `--detail` likewise now drops the old text. The hold stays on record in its
+  `hold_wave` concern event.
+- **The push gate exempts `campaign/*` integration refs (#1299, PR #1300).** It exempted
+  `kahuna/*` and `wave-*/*` but not the `campaign/<plan_id>-<slug>` branch `/wavemachine` cuts per
+  campaign, so a plain push of it was blocked. `pr-ready-gate.sh` already treated `campaign/*` as
+  an integration branch.
+- **The reseed gate now honors `/autocompact` (#1297, PR #1298).** Claude Code computes the statusline's
   `remaining_percentage` against the *model's* window, and `/autocompact` doesn't change it. With a
   400k autocompact window on a 1M model, autocompact fired near 367k while the 15% gate waited for
   850k, so every session got a lossy `/compact` instead of a reseed. The statusline now also saves
@@ -32,6 +96,23 @@ are worth keeping apart:
   else `modelSettings.<model>.autoCompactWindow`, else the top-level `autoCompactWindow`. A 400k window
   now reseeds from ~312k and a 200k one from ~142k, both ahead of autocompact; a plain 1M window moves
   from 850k to ~822k. A reading without the token fields behaves as before.
+
+### Added
+
+- **`wavemachine_active` has a lease with an age and an owner (#1110, PR #1307).** A `/wavemachine`
+  run that died without `wavemachine-stop` left the flag set forever, and every later
+  `wavemachine-start` refused. The flag now records the owning session and host, and its liveness is
+  the age of `last_updated`: past 24 h (`WAVEMACHINE_STALE_SECONDS`) it reads lapsed. A lapsed lease
+  is taken over only with an explicit `--reclaim`, which is logged loudly and recorded. A live one is
+  never reclaimed. `wave-status wavemachine-lease` reports the lease as JSON, and the `/wavemachine`
+  pre-flight hands a lapsed lease to the human instead of reclaiming it.
+
+### Changed
+
+- **Partner names are removed from the current tree (#1294, PR #1295).** Comments, docs, this
+  changelog, and test and example slugs now use neutral wording. `/ccfold` Step 10 no longer ships a
+  hard-coded org-to-identity baseline, which had drifted from the user's real mapping:
+  `~/.claude/identity-map.json` is the only source. Git history is untouched.
 
 ## [8.12.0] - 2026-10-23
 
