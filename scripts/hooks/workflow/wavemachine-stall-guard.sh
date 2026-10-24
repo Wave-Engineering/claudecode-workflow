@@ -16,14 +16,23 @@
 # else writes, and the guard decides from it:
 #   hold                                               → silent
 #   awaiting-verdict, awaited wave not completed/held  → silent (still running)
-#   awaiting-verdict, awaited wave completed or held   → block: act on its verdict
-#   promoting, its wave not completed/held             → silent (promotion running)
-#   promoting, its wave completed or held              → block: launch the next wave
+#   awaiting-verdict, awaited wave completed or held   → block once: act on the
+#                                                        verdict if you have it
+#   promoting, its wave completed                      → block once: launch next
+#   promoting, its wave held                           → block once: hold, never
+#                                                        launch (not integrated)
+#   promoting, its wave in any other state             → silent
 #   launching, or any other driver action              → block (the stall)
-# A driver wait is legitimate only while the wave it waits on is unfinished.
 # promoting is sticky (nothing overwrites driver_action after the promotion), so
 # without the wave check a driver that promoted and then stopped would never be
 # blocked, which is the #600 stall itself.
+#
+# "Block once" honours the hook input's stop_hook_active. The Workflow marks the
+# wave completed or held BEFORE it cleans up and returns its verdict, so for that
+# tail a driver woken mid-wave (by the Discord doorbell, say) sees a finished
+# wave it has no verdict for. The status alone cannot tell that apart from a
+# driver that got its verdict and stopped, so the guard nudges once, worded for
+# both, and lets the second stop through.
 # State with no driver_action (written before #1205) keeps the old rule on
 # current_action.
 #
@@ -56,19 +65,28 @@ program='
 	def stall_reason:
 		"/wavemachine is active and the campaign has not reached a terminal exit. The turn ended without launching the next per-wave Workflow and without entering a legitimate async-await (awaiting-verdict), human-pause (hold), or promotion (promoting) state. If a wave is pending, advance the campaign loop now: write the coarse status (wave-status awaiting-verdict <waveId>) in the SAME tool-use block as the per-wave Workflow launch, then end the turn to await the async verdict. If all waves are promoted, take the success exit and run wave-status wavemachine-stop. Do NOT stall — emit the next tool call now.";
 	def finished_reason($wave; $status):
-		"/wavemachine is active and wave \($wave) has finished (\($status)) — act on its verdict: promote and launch the next wave, or wave-status hold \"<reason>\". Do NOT stall — emit the next tool call now.";
-	def promoted_reason($wave; $status):
-		"/wavemachine is active and wave \($wave) has been promoted (\($status)), but the turn ended without launching the next wave. Launch it now (wave-status awaiting-verdict <waveId> in the SAME tool-use block as the per-wave Workflow launch), or, if every wave is promoted, take the success exit and run wave-status wavemachine-stop. Do NOT stall — emit the next tool call now.";
-	# The block reason, or null when this turn end is legitimate.
+		"/wavemachine is active and wave \($wave) is marked \($status). If its per-wave Workflow verdict has reached you, act on it now: promote and launch the next wave, or wave-status hold \"<reason>\". If it has NOT reached you, the Workflow is still finishing (it marks the wave before it cleans up and returns): launch nothing, and end the turn again to wait for it. This reminder fires once per stop.";
+	def promoted_reason($wave):
+		"/wavemachine is active and wave \($wave) is promoted (completed), but the turn ended without launching the next wave. Launch it now (wave-status awaiting-verdict <waveId> in the SAME tool-use block as the per-wave Workflow launch), or, if every wave is promoted, take the success exit and run wave-status wavemachine-stop. Do NOT stall — emit the next tool call now.";
+	def not_integrated_reason($wave):
+		"/wavemachine is active and wave \($wave) is held: it did not integrate, or it awaits a human promotion. Do NOT launch the next wave. Record the pause with wave-status hold \"<reason>\" and surface it.";
+	# The block reason, or null when this turn end is legitimate. $nudged is the
+	# hook input stop_hook_active: the finished-wave reasons are a one-time
+	# nudge, because during the Workflow tail the wave is marked but its verdict
+	# is not yet delivered, and repeating the block there would loop.
 	def block_reason:
 		if (.driver_action | type) == "object" then
 			(.driver_action.action // "") as $a
 			| (.driver_action.wave_id // "") as $w
 			| ((.waves // {})[$w].status // "") as $st
-			| ($st == "completed" or $st == "held") as $done
 			| if $a == "hold" then null
-			elif $a == "awaiting-verdict" then (if $done then finished_reason($w; $st) else null end)
-			elif $a == "promoting" then (if $done then promoted_reason($w; $st) else null end)
+			elif $a == "awaiting-verdict" then
+				(if ($st == "completed" or $st == "held") and ($nudged | not) then finished_reason($w; $st) else null end)
+			elif $a == "promoting" then
+				(if $nudged then null
+				 elif $st == "completed" then promoted_reason($w)
+				 elif $st == "held" then not_integrated_reason($w)
+				 else null end)
 			else stall_reason end
 		elif ((.current_action.action // "") | IN("awaiting-verdict", "hold", "promoting")) then null
 		else stall_reason end;
@@ -92,6 +110,10 @@ program='
 	end
 '
 
-out=$(jq -c --argjson stale "$STALE_SECONDS" --argjson now "$(date +%s)" "$program" "$state" 2>/dev/null) || exit 0
+INPUT=$(cat 2>/dev/null || true)
+nudged=false
+[[ "$(printf '%s' "$INPUT" | jq -r '.stop_hook_active // false' 2>/dev/null)" == "true" ]] && nudged=true
+
+out=$(jq -c --argjson stale "$STALE_SECONDS" --argjson now "$(date +%s)" --argjson nudged "$nudged" "$program" "$state" 2>/dev/null) || exit 0
 [[ -n "$out" ]] && printf '%s\n' "$out"
 exit 0

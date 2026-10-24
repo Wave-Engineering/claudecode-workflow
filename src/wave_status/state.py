@@ -963,10 +963,11 @@ def waiting_ci(root: Path, detail: str = "") -> dict:
 # write it (each also writes ``current_action``, so the dashboard is unchanged),
 # and no fine-grained writer touches it. The stall-guard Stop hook (#736) reads
 # ``driver_action``, so an in-wave write can no longer make it false-fire: it is
-# silent on ``hold`` and ``promoting``, and on ``awaiting-verdict`` while the
-# awaited wave is still running; an ``awaiting-verdict`` whose wave has finished
-# is a real stall. State with no ``driver_action`` (written before #1205) falls
-# back to the old rule on ``current_action``.
+# silent on ``hold``, and on ``awaiting-verdict`` or ``promoting`` while the
+# wave named in ``driver_action.wave_id`` is unfinished; once that wave is
+# completed or held it nudges once (scripts/hooks/workflow/
+# wavemachine-stall-guard.sh has the table). State with no ``driver_action``
+# (written before #1205) falls back to the old rule on ``current_action``.
 # ---------------------------------------------------------------------------
 
 def _set_driver_action(root: Path, action: str, wave_id: str = "", detail: str = "") -> dict:

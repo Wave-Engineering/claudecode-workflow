@@ -86,6 +86,11 @@ STATE="$WORK/.claude/status/state.json"
 run_hook() {
 	CLAUDE_PROJECT_DIR="$WORK" "$GUARD" </dev/null 2>/dev/null
 }
+# The same, as Claude Code re-fires the hook after a block it already obeyed.
+run_hook_nudged() {
+	printf '%s' '{"hook_event_name": "Stop", "stop_hook_active": true}' |
+		CLAUDE_PROJECT_DIR="$WORK" "$GUARD" 2>/dev/null
+}
 
 FRESH=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 MINUTE_AGO=$(date -u -d '1 minute ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-1M +%Y-%m-%dT%H:%M:%SZ)
@@ -226,10 +231,18 @@ done
 for st in completed held; do
 	write_state "{\"wavemachine_active\": true, \"driver_action\": {\"action\": \"awaiting-verdict\", \"wave_id\": \"P1W1\"}, \"current_action\": {\"action\": \"idle\"}, \"waves\": {\"P1W1\": {\"status\": \"$st\"}}}"
 	out=$(run_hook)
-	if echo "$out" | jq -e --arg st "$st" '.decision == "block" and (.reason | test("P1W1") and test($st) and test("act on its verdict"))' >/dev/null 2>&1; then
-		pass "driver awaiting P1W1, wave $st → blocks, naming the wave and 'act on its verdict'"
+	if echo "$out" | jq -e --arg st "$st" '.decision == "block" and (.reason | test("P1W1") and test($st) and test("act on it now") and test("launch nothing"))' >/dev/null 2>&1; then
+		pass "driver awaiting P1W1, wave $st → blocks once, naming the wave, worded for verdict-or-not"
 	else
 		fail "driver awaiting P1W1, wave $st → expected a block naming the finished wave: '$out'"
+	fi
+	# The Workflow marks the wave before it returns its verdict, so the nudge
+	# must not repeat: on the re-fire (stop_hook_active) the stop goes through.
+	out=$(run_hook_nudged)
+	if [[ -z "$out" ]]; then
+		pass "driver awaiting P1W1, wave $st, stop_hook_active → silent (no loop in the Workflow tail)"
+	else
+		fail "driver awaiting P1W1, wave $st, stop_hook_active → expected silence: '$out'"
 	fi
 done
 
@@ -275,6 +288,36 @@ if echo "$out" | jq -e '.decision == "block" and (.reason | test("P1W1") and tes
 	pass "driver promoting P1W1, wave completed → blocks: launch the next wave"
 else
 	fail "driver promoting P1W1, wave completed → expected a block (the #600 stall): '$out'"
+fi
+out=$(run_hook_nudged)
+if [[ -z "$out" ]]; then
+	pass "driver promoting P1W1, wave completed, stop_hook_active → silent (nudges once)"
+else
+	fail "driver promoting P1W1, wave completed, stop_hook_active → expected silence: '$out'"
+fi
+
+# held after a PASS is a promote soft-fail (not integrated) or an interactive
+# promotion: never "launch the next wave".
+write_state '{"wavemachine_active": true, "driver_action": {"action": "promoting", "wave_id": "P1W1"}, "current_action": {"action": "idle"}, "waves": {"P1W1": {"status": "held"}}}'
+out=$(run_hook)
+if echo "$out" | jq -e '.decision == "block" and (.reason | test("P1W1") and test("Do NOT launch") and test("wave-status hold"))' >/dev/null 2>&1; then
+	pass "driver promoting P1W1, wave held → blocks toward hold, never launch"
+else
+	fail "driver promoting P1W1, wave held → expected a hold-shaped block: '$out'"
+fi
+if echo "$out" | jq -e '.reason | test("Launch it now")' >/dev/null 2>&1; then
+	fail "driver promoting P1W1, wave held → reason tells the driver to launch a non-integrated wave"
+else
+	pass "driver promoting P1W1, wave held → reason does not say launch"
+fi
+
+# The #600 launch stall is NOT a one-time nudge: it blocks on the re-fire too.
+write_state '{"wavemachine_active": true, "driver_action": {"action": "launching", "wave_id": "P1W2"}}'
+out=$(run_hook_nudged)
+if echo "$out" | jq -e '.decision == "block"' >/dev/null 2>&1; then
+	pass "driver_action=launching, stop_hook_active → still blocks"
+else
+	fail "driver_action=launching, stop_hook_active → did NOT block: '$out'"
 fi
 
 write_state "{\"wavemachine_active\": true, \"driver_action\": {\"action\": \"awaiting-verdict\", \"wave_id\": \"P1W1\"}, \"waves\": {\"P1W1\": {\"status\": \"completed\"}}, \"last_updated\": \"$STALE\"}"

@@ -376,15 +376,23 @@ decides from it:
 - `hold` → silent.
 - `awaiting-verdict` while the awaited wave is not yet `completed` or `held` → silent; it is
   still running, whatever `current_action` says.
-- `awaiting-verdict` once that wave is `completed` or `held` → **block**: the verdict is in, so
-  act on it (promote and launch the next wave, or `wave-status hold "<reason>"`).
-- `promoting` while its wave is not yet `completed` or `held` → silent.
-- `promoting` once that wave is `completed` or `held` → **block**: the wave is promoted, so
-  launch the next one or take the success exit. `driver_action` is sticky, so without this a
-  driver that promoted and then stopped would never be blocked.
-- `launching` or anything else → block, the stall.
+- `awaiting-verdict` once that wave is `completed` or `held` → **block once**. If the verdict
+  has reached you, act on it (promote and launch the next wave, or `wave-status hold
+  "<reason>"`). If it has not, launch nothing and end the turn again: the Workflow marks the
+  wave **before** it cleans up and returns, so a driver woken in that tail (by the doorbell,
+  say) sees a finished wave with no verdict yet.
+- `promoting` once its wave is `completed` → **block once**: the wave is promoted, so launch the
+  next one or take the success exit. `driver_action` is sticky, so without this a driver that
+  promoted and then stopped would never be blocked.
+- `promoting` once its wave is `held` → **block once** toward `wave-status hold "<reason>"`,
+  never toward a launch: after a PASS, `held` means the wave did not integrate, or awaits a
+  human promotion.
+- `promoting` with its wave in any other state → silent.
+- `launching` or anything else → block, the stall, on every stop.
 
-A driver wait is legitimate only while the wave it waits on is unfinished.
+"Block once" honours the Stop hook's `stop_hook_active`, so the second stop goes through. The
+status alone cannot tell "verdict not yet delivered" from "verdict delivered, driver stopped",
+so the guard nudges once, worded for both, rather than loop or stay silent.
 
 State written before #1205 has no `driver_action` and keeps the rule on `current_action`.
 `wave-status wavemachine-stop` clears `driver_action` with the `wavemachine_*` keys.
