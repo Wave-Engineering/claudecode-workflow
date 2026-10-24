@@ -24,7 +24,24 @@ are worth keeping apart:
 Most of this release is the wave-engine defect chain (#1303): ten fixes to the per-wave Workflow, the
 trust gate, wave-status and the `/wavemachine` stall guard. They landed one at a time through
 `/autochain` rather than as a wave campaign, because a campaign would have run on the engine being
-fixed. Image unchanged from 8.11.0.
+fixed.
+
+### Added
+
+- **`wavemachine_active` has a lease with an age and an owner (#1110, PR #1307).** A `/wavemachine`
+  run that died without `wavemachine-stop` left the flag set forever, and every later
+  `wavemachine-start` refused. The flag now records the owning session and host, and its liveness is
+  the age of `last_updated`: past 24 h (`WAVEMACHINE_STALE_SECONDS`) it reads lapsed. A lapsed lease
+  is taken over only with an explicit `--reclaim`, which is logged loudly and recorded. A live one is
+  never reclaimed. `wave-status wavemachine-lease` reports the lease as JSON, and the `/wavemachine`
+  pre-flight hands a lapsed lease to the human instead of reclaiming it.
+
+### Changed
+
+- **Partner names are removed from the current tree (#1294, PR #1295).** Comments, docs, this
+  changelog, and test and example slugs now use neutral wording. `/ccfold` Step 10 no longer ships a
+  hard-coded org-to-identity baseline, which had drifted from the user's real mapping:
+  `~/.claude/identity-map.json` is the only source. Git history is untouched.
 
 ### Fixed
 
@@ -38,7 +55,8 @@ fixed. Image unchanged from 8.11.0.
 - **The stall guard is a script, and stale state never blocks (#1109, PR #1308).** The inline
   Stop-hook guard blocked on any non-await action however old the campaign state was. A flag left by
   a dead run told every later turn to advance a campaign nobody had verified.
-  `wavemachine-stall-guard.sh` now gives state older than 24 h, or unreadable state, a
+  `wavemachine-stall-guard.sh` now gives state older than 24 h, or state with no readable
+  `last_updated`, a
   `systemMessage` with its age, owner and the verify/stop/hold options instead of a block. The
   installer removes the old inline guard first, because the hook merge keys on command text and
   would otherwise keep both.
@@ -97,22 +115,12 @@ fixed. Image unchanged from 8.11.0.
   now reseeds from ~312k and a 200k one from ~142k, both ahead of autocompact; a plain 1M window moves
   from 850k to ~822k. A reading without the token fields behaves as before.
 
-### Added
+### Image
 
-- **`wavemachine_active` has a lease with an age and an owner (#1110, PR #1307).** A `/wavemachine`
-  run that died without `wavemachine-stop` left the flag set forever, and every later
-  `wavemachine-start` refused. The flag now records the owning session and host, and its liveness is
-  the age of `last_updated`: past 24 h (`WAVEMACHINE_STALE_SECONDS`) it reads lapsed. A lapsed lease
-  is taken over only with an explicit `--reclaim`, which is logged loudly and recorded. A live one is
-  never reclaimed. `wave-status wavemachine-lease` reports the lease as JSON, and the `/wavemachine`
-  pre-flight hands a lapsed lease to the human instead of reclaiming it.
-
-### Changed
-
-- **Partner names are removed from the current tree (#1294, PR #1295).** Comments, docs, this
-  changelog, and test and example slugs now use neutral wording. `/ccfold` Step 10 no longer ships a
-  hard-coded org-to-identity baseline, which had drifted from the user's real mapping:
-  `~/.claude/identity-map.json` is the only source. Git history is untouched.
+- **MCP servers:** mcp-server-sdlc **v5.0.3**, mcp-server-wtf v1.5.2, mcp-server-discord v1.4.3,
+  mcp-server-discord-watcher v1.7.0 and mcp-server-nerf v2.0.0. sdlc moved from v5.0.2. v5.0.3
+  is the `ci_wait_run` platform fix (mcp-server-sdlc#603), which 8.12.0 listed as merged but
+  unreleased. The other four are unchanged from 8.12.0.
 
 ## [8.12.0] - 2026-10-23
 
