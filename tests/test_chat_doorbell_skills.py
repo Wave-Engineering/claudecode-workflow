@@ -82,6 +82,7 @@ def test_disc_kiosk_review_is_data() -> None:
     assert "outsider content" in body
     assert "sqtk add needs '<what>, kiosk review <event_id>'" in body
     assert "Never paste an outsider's text into the command" in body
+    assert "with no quote marks" in body, "an apostrophe ends the single-quoted item"
     assert "Re-arm." in body
     assert "`## Kiosk` section" in body, "point an over-sharing kiosk back at /reseed"
 
