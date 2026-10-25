@@ -51,7 +51,7 @@ Quick reference for all skills and the MCP tools they route to.
 | `/wtf now` | Record manual journal entry | `wtf_now` |
 | `/wtf happened` | Get incident timeline | `wtf_happened` |
 | `/wtf imout` | Suspend recording | `wtf_imout` |
-| `/disc` | Discord (send, read, list, create) | `disc_send`, `disc_read`, `disc_list` |
+| `/disc` | Discord (send, read, list, create) | `disc_send`, `disc_read`, `disc_list`; `chat_*` on crewchat hosts |
 | `/sqtk` | Squawk lists: `bj:needs`, `<project>:triage`, any named list | — |
 
 ## Session & UI

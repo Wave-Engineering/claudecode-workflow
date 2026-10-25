@@ -34,7 +34,7 @@ Precheck is **the gate into a release branch** (#1233, #1235). Commits and pushe
 - `mcp__sdlc-server__ci_wait_run` — CI's verdict for the pushed HEAD (`expected_sha`)
 - the Bash tool — Job B-local's lanes and Job C's `dependency-scan.sh`, each run as `<cmd> > <log> 2>&1; echo "exit=$?"`, so the exit code read is the instrument's own
 - `precheck-status.sh` — post and read the `precheck` commit status
-- `mcp__disc-server__disc_send` — post the merge-call request to `#precheck` (channel `1491195025198157834`)
+- `mcp__disc-server__disc_send`, or `chat_send` with `backend: "discord"` on a crewchat host (the dual-mode rule in `/disc`) — post the merge-call request to `#precheck` (channel `1491195025198157834`)
 
 ## Procedure
 
@@ -493,7 +493,7 @@ Collect results from all four jobs and assemble the checklist (see below). Then:
    3. Mark the PR/MR ready: `"$STATUS" mark-ready <repo_root> <PR_NUMBER>` → `ready <N> <sha>`. It refuses (exit 4) unless the PR/MR's head carries the pass, then reads the PR/MR back. On GitHub it uses the GraphQL `markPullRequestReadyForReview` mutation; on GitLab it rewrites the title without the draft prefix. **Never use `gh pr ready` or `glab mr update` for this.** glab rewrites the title on most update flags, and on GitLab the draft state *is* the title, which is why the kit stopped relying on glab's porcelain here. From the mcp-server-sdlc release that carries #592, its `pr_ready` is the MCP equivalent. Any non-zero exit → STOP, and the PR/MR stays a draft.
 2. **Short of a pass:** post nothing and leave the PR/MR a draft. Present the checklist with what failed; the STOP below is then for rework. If BJ looks at the exceptions and says to go anyway, that go is what posts the status, with `exceptions approved by BJ: <which>` in the description, and then marks it ready.
 
-Then **notify BJ**: `disc_send` to `#precheck`, **then `vox`**. **ALWAYS do both.** If `disc_send` fails (MCP unavailable, network), still do `vox`.
+Then **notify BJ**: post to `#precheck` (`disc_send`, or `chat_send` by the dual-mode rule in `/disc`), **then `vox`**. **ALWAYS do both.** If the post fails (MCP unavailable, network), still do `vox`.
 
 ### Step 5 — Sandbox detection + the merge gate
 Precheck has already done everything up to the merge. What remains is the merge call, and that is all an exception skips.
@@ -557,7 +557,7 @@ Resolve identity from `<project_root>/.claude/agent-identity.json`; fall back to
 
 **Important:** Do NOT prefix the Discord post with `@all`, `@<Dev-Team>`, or any `@`-mention. This post is for BJ only (human-facing). The discord-watcher filters by `@`-addressing, so an `@`-prefix would fan the precheck gate notice out to every listening agent in the fleet. Unaddressed is intentional.
 
-**`disc_send` to `#precheck` (`1491195025198157834`) — exact body shape:**
+**Post to `#precheck` (`1491195025198157834`) — `disc_send(channel_id, message)`, or on a crewchat host `chat_send(to, text, backend: "discord")` (dual-mode rule in `/disc`) — exact body shape:**
 ```
 ⚠️ **Precheck passed — PR/MR ready for your merge call**   (or: ⚠️ **Precheck failed — rework**)
 

@@ -56,16 +56,29 @@ Report the current session identity, or pick one if not yet established.
 5. **Announce** — Always respond with:
    > I'm **\<Dev-Name\>** \<Dev-Avatar\> from team `<Dev-Team>`.
 
-6. **Check in via Discord** — Call `mcp__disc-server__disc_send` to announce yourself in `#roll-call`:
+6. **Check in via Discord** — announce yourself in `#roll-call`, by the dual-mode rule in `/disc` ("Transport: `chat_*` or `disc_*`"):
 
    ```
+   # chat_send in your tool list (crewchat daemon on this host):
+   chat_send({ to: "roll-call", text: "<formatted message — see below>", backend: "discord" })
+
+   # otherwise:
    mcp__disc-server__disc_send({
      channel_id: "roll-call",
      message: "<formatted message — see below>"
    })
    ```
 
-   The MCP accepts the channel name directly (`"roll-call"`), so no jq lookup against `~/.claude/discord.json` is needed.
+   Both accept the channel name directly (`"roll-call"`), so no jq lookup against `~/.claude/discord.json` is needed.
+
+   **Report the chat mode.** The crewchat shim reads `.claude/agent-identity.json` **once, when the session starts**, and registers from it. It does not see what you just wrote. With no identity file at start, it doesn't come up at all.
+   - **`chat_send` is in your tool list:** call `chat_health()` and report the backends it lists, for example `chat: mattermost:dev, discord`.
+     - If you changed the identity just now (a new name, team or avatar), add `chat: restart the session to register the new identity`.
+     - A `chat_health` error is reported as such.
+   - **No `chat_send`, but the daemon socket is usable** (`test -S /run/crewchat/crewchat.sock && test -w /run/crewchat/crewchat.sock`, the same test `install-crewchat.sh` gates on). The cause depends on where the identity came from:
+     - **This run created the identity file** (step 4): report `chat: crewchat not started (no identity at session start); restart the session`. The shim had nothing to register.
+     - **The identity file already existed:** a restart won't help. Report `chat: crewchat not registered or not running; run scripts/install-crewchat.sh check`. Usually `./install` hasn't run since the daemon was deployed.
+   - **No `chat_send` and no socket:** report `chat: Discord only (no crewchat daemon on this host)`.
 
    Message format:
    ```

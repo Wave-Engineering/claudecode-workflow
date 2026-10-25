@@ -483,7 +483,7 @@ Unified Discord integration for the Oak and Wave server. Handles sending message
 
 To reach a forwarded agent from Discord itself, a user sends `//dm @<dev-name|dev-team> <message>` — both the target and a non-empty body are required.
 
-All messages are signed with the agent's Dev-Name, Dev-Avatar, and Dev-Team. Channel names are resolved via `mcp__disc-server__disc_resolve`. Configuration is read from `~/.claude/discord.json` (see [Discord Configuration](discord-config.md)).
+All messages are signed with the agent's Dev-Name, Dev-Avatar, and Dev-Team. On a host running the crewchat daemon, send and read go through the `chat_*` tools instead (the dual-mode rule in `/disc`; reference: [chat-tools.md](chat-tools.md)). Channel names are resolved via `mcp__disc-server__disc_resolve`. Configuration is read from `~/.claude/discord.json` (see [Discord Configuration](discord-config.md)).
 
 ---
 
