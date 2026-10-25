@@ -33,7 +33,8 @@ state="$STUB_DIR/uv-state"; env="$STUB_DIR/tools/crewchat-clients"
 echo "uv $*" >>"$STUB_DIR/calls"
 case "$1 $2" in
 "tool list") [[ -f "$state" ]] && cat "$state" ;;
-"tool install") echo "crewchat-clients v0.1.0" >"$state"; echo "- crewchat-mcp" >>"$state"
+"tool install") [[ -n "${STUB_INSTALL_FAIL:-}" ]] && exit 1
+	echo "crewchat-clients v0.1.0" >"$state"; echo "- crewchat-mcp" >>"$state"
 	mkdir -p "$STUB_DIR/bin-tools" "$env/bin"; printf '#!/bin/sh\n' >"$STUB_DIR/bin-tools/crewchat-mcp"
 	chmod +x "$STUB_DIR/bin-tools/crewchat-mcp"
 	printf 'mcp==%s\npydantic_core==2.50.1\n' "${STUB_INSTALLED_MCP:-1.30.0}" >"$env/freeze" ;;
@@ -163,6 +164,27 @@ def test_install_refuses_to_register_off_lock_environment(stubs: Path, live_sock
     assert r.returncode == 1
     assert "mcp is 2.3.0, the lock pins 1.30.0; not registering" in r.stdout
     assert "claude mcp add" not in _calls(stubs)
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ({"STUB_INSTALLED_MCP": "2.3.0"}, "mcp is 2.3.0, the lock pins 1.30.0"),
+        ({"STUB_EXPORT_FAIL": "1"}, "couldn't export v0.1.0's lock"),
+        ({"STUB_INSTALL_FAIL": "1"}, "installing crewchat-clients v0.1.0 failed"),
+    ],
+)
+def test_failed_repair_removes_existing_registration(
+    stubs: Path, live_socket: Path, failure: dict[str, str], message: str
+) -> None:
+    # A host registered by the first K-1 script: the reinstall that should repair it fails.
+    _run(stubs, live_socket, "install")
+    (stubs / "tools" / "crewchat-clients" / "kit-constraints.txt").unlink()
+    r = _run(stubs, live_socket, "install", **failure)
+    assert r.returncode == 1
+    assert message in r.stdout
+    assert not (stubs / "registered").exists(), "a broken shim must not stay registered"
+    assert "removed the crewchat registration" in r.stdout
 
 
 def test_check_reports_off_lock_environment(stubs: Path, live_socket: Path) -> None:

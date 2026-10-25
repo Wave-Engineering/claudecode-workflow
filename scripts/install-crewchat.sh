@@ -120,6 +120,16 @@ constraints_drift() {
 		<(normalize_pins <"$rec") <(printf '%s\n' "$have" | normalize_pins)
 }
 
+# A failed install leaves no registration behind. One from an earlier install points at the
+# environment this run replaced or couldn't repair, so it fails OPEN like a stale one.
+install_failed() {
+	warn "crewchat: $1"
+	if registered; then
+		claude mcp remove -s user "$SERVER_NAME" >/dev/null
+		warn "crewchat: removed the $SERVER_NAME registration; chat stays on disc-server."
+	fi
+}
+
 do_install() {
 	local dry_run="$1" why
 	why="$(daemon_unusable)"
@@ -163,16 +173,20 @@ do_install() {
 		work="$(mktemp -d)"
 		if ! export_constraints "$work/constraints.txt"; then
 			rm -rf "$work"
-			warn "crewchat: couldn't export $CREWCHAT_TAG's lock from $CREWCHAT_REPO; not installing."
+			install_failed "couldn't export $CREWCHAT_TAG's lock from $CREWCHAT_REPO; not installing."
 			return 1
 		fi
-		uv tool install -q --force --constraints "$work/constraints.txt" "$source_spec" >/dev/null
-		cp "$work/constraints.txt" "$(tool_env)/$CONSTRAINTS_NAME"
+		if ! uv tool install -q --force --constraints "$work/constraints.txt" "$source_spec" >/dev/null ||
+			! cp "$work/constraints.txt" "$(tool_env)/$CONSTRAINTS_NAME"; then
+			rm -rf "$work"
+			install_failed "installing $PACKAGE $CREWCHAT_TAG failed."
+			return 1
+		fi
 		rm -rf "$work"
 		# Verify the post-state: registering a shim that can't import is the failure we're here for.
 		drift_why="$(constraints_drift)"
 		if [[ -n "$drift_why" ]]; then
-			warn "crewchat: after install, $drift_why; not registering."
+			install_failed "after install, $drift_why; not registering."
 			return 1
 		fi
 	fi
