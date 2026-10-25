@@ -476,7 +476,7 @@ Unified Discord integration for the Oak and Wave server. Handles sending message
 /disc forward off                        # Clear the rule
 /disc dm treebeard "PR #12 is red"       # Direct message, bypasses forwarding
 
-/disc doorbell                           # Arm the channels-free doorbell (no --channels)
+/disc doorbell                           # Arm the doorbell: crewchat-doorbell on a crewchat host, else the channels-free one-shot
 ```
 
 **`<agent>` is an agent, never a channel** — a Dev-Name or Dev-Team token. Passing a channel silently "succeeds" and then fails at every delivery. `--exclude` names channels/authors whose doorbells **stay local**, not recipients to omit.
@@ -536,7 +536,7 @@ Drives `sqtk`, the CLI for squawkie-talkie, the fleet's shared lists. A squawk i
 
 **How you hear back:**
 - **Busy:** the `sqtk-drain.sh` `UserPromptSubmit` hook puts each state change to your squawks into your next turn, once.
-- **Idle:** `~/.claude/scripts/sqtk-doorbell.sh`, run in the background, exits when one of your squawks is answered.
+- **Idle:** `~/.claude/scripts/sqtk-doorbell.sh`, run in the background, exits when one of your squawks is answered. On a crewchat host (`chat_send` in your tool list), `crewchat-doorbell` carries squawk answers instead. Arm only that one (see `/disc`).
 - **BJ's banner:** `sqtk-banner.sh` is an opt-in `Stop` hook that prints the open `bj:needs` items. Wire it only into the sessions he picks, in that project's `.claude/settings.local.json`.
 
 **Examples:**

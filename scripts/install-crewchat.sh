@@ -10,9 +10,15 @@
 # disc_*") would pick the broken path. So no daemon, no registration, and disc-server stays
 # the transport exactly as before.
 #
-# WHY disc-server IS LEFT ALONE. Inbound (the doorbell) stays on discord-watcher until K-2
-# (Phase 3), and the Discord-only ops (list, resolve, create) keep their disc-server tools.
-# This script never touches another server's registration.
+# WHY disc-server IS LEFT ALONE. The Discord-only ops (list, resolve, create) keep their
+# disc-server tools until the cut-over (mattermost-crew D-060). This script never touches
+# another server's registration.
+#
+# THE DOORBELL (K-2, #1336). The same package ships `crewchat-doorbell`, which is the
+# doorbell wherever `chat_send` exists (/disc, "Doorbell: crewchat-doorbell or the
+# one-shots"). So registration also requires the doorbell to run. A registered shim with no
+# doorbell would have every skill arm a command that isn't there, and the agent would be
+# deaf. Unregistered, the skills keep the old one-shots.
 #
 # WHY THE LOCK, AND NOT A PLAIN `uv tool install`. A git-URL install re-resolves every
 # dependency from PyPI and ignores mattermost-crew's uv.lock. crewchat-clients declares only
@@ -34,7 +40,7 @@
 set -euo pipefail
 
 # The one pinned release. Bump it with each mattermost-crew release the kit adopts.
-CREWCHAT_TAG="v0.1.0"
+CREWCHAT_TAG="v0.2.1"
 # SSH, never HTTPS: the repo is private, and git to github.com goes over SSH, not a token.
 CREWCHAT_REPO="ssh://git@github.com/Wave-Engineering/mattermost-crew.git"
 CREWCHAT_SOCKET="${CREWCHAT_SOCKET:-/run/crewchat/crewchat.sock}"
@@ -70,6 +76,18 @@ installed_version() {
 	# make this return non-zero, and `have="$(installed_version)"` would exit the script.
 	{ uv tool list 2>/dev/null || true; } |
 		awk -v p="$PACKAGE" '$1 == p { sub(/^v/, "", $2); print $2; exit }'
+}
+
+# Why the installed `crewchat-doorbell` can't run, or "" when it can. `--help` is argparse's,
+# so it exits without touching the socket; `timeout` keeps a broken binary from hanging us.
+doorbell_unusable() {
+	local bin
+	bin="$(uv tool dir --bin 2>/dev/null)/crewchat-doorbell"
+	if [[ ! -x "$bin" ]]; then
+		echo "$bin missing"
+	elif ! timeout 5 "$bin" --help >/dev/null 2>&1; then
+		echo "$bin --help failed"
+	fi
 }
 
 registered() {
@@ -166,7 +184,11 @@ do_install() {
 		return 0
 	fi
 	local drift_why=""
-	[[ "$(installed_version)" == "$want_version" ]] && drift_why="$(constraints_drift)"
+	if [[ "$(installed_version)" == "$want_version" ]]; then
+		drift_why="$(constraints_drift)"
+		# At the right version, a doorbell that doesn't run is a broken environment: reinstall.
+		[[ -n "$drift_why" ]] || drift_why="$(doorbell_unusable)"
+	fi
 	if [[ "$(installed_version)" != "$want_version" || -n "$drift_why" ]]; then
 		info "crewchat: installing $PACKAGE $CREWCHAT_TAG${drift_why:+ ($drift_why)}"
 		local work
@@ -193,14 +215,19 @@ do_install() {
 	local bin
 	bin="$(uv tool dir --bin 2>/dev/null)/crewchat-mcp"
 	if [[ ! -x "$bin" ]]; then
-		warn "crewchat: $bin missing after install; not registering."
+		install_failed "$bin missing after install; not registering."
+		return 1
+	fi
+	why="$(doorbell_unusable)"
+	if [[ -n "$why" ]]; then
+		install_failed "$why after install; not registering, so the skills keep the old doorbell."
 		return 1
 	fi
 	if registered; then
 		claude mcp remove -s user "$SERVER_NAME" >/dev/null 2>&1 || true
 	fi
 	claude mcp add -s user "$SERVER_NAME" -- "$bin" >/dev/null
-	ok "crewchat: $PACKAGE $CREWCHAT_TAG registered as $SERVER_NAME"
+	ok "crewchat: $PACKAGE $CREWCHAT_TAG registered as $SERVER_NAME (crewchat-mcp, crewchat-doorbell)"
 }
 
 do_check() {
@@ -224,11 +251,16 @@ do_check() {
 		drift "crewchat: $PACKAGE $have $why"
 		return 1
 	fi
+	why="$(doorbell_unusable)"
+	if [[ -n "$why" ]]; then
+		drift "crewchat: $PACKAGE $have installed but $why"
+		return 1
+	fi
 	if ! registered; then
 		drift "crewchat: $PACKAGE $have installed but $SERVER_NAME NOT REGISTERED"
 		return 1
 	fi
-	info "crewchat: $PACKAGE $have (registered)"
+	info "crewchat: $PACKAGE $have (registered; crewchat-doorbell runs)"
 }
 
 do_uninstall() {

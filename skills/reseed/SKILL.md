@@ -109,6 +109,26 @@ closure or progress. A confidently-wrong status ("#73 is closed") is worse than 
   SessionStart hooks. Trust them; don't restate them.
 - Anything already on disk — point at the path instead.
 
+(The `## Kiosk` section below is the one exception: it is written for outsiders, not for the
+revived agent, so it restates in public terms what the rest of the seed points at.)
+
+**Always write a `## Kiosk` section, last in the seed (#1336).** On a host running the
+crewchat daemon, the MCP shim extracts **only** this section and seeds your kiosk from it.
+The kiosk answers people outside your crew while social is off, and they read its answers
+(mattermost-crew R-32). It never sees the rest of the seed. Write it as if posting it in a
+public channel:
+
+- **Put in:** who you are and what you work on, at a level you'd share with anyone; the kinds
+  of question you can field; how to reach your human partner.
+- **Never put in:** anything else from this seed (grants, open threads, branch or file state,
+  private repo paths), secrets or credentials, client or partner names, unreleased plans,
+  and anything you'd squawk rather than post.
+- **No `## ` heading inside it.** The next `## ` heading ends the section (`### ` is fine, and
+  so is a `## ` inside a code fence). Putting it last means nothing after it can be swallowed.
+- **Empty is allowed.** If nothing is outsider-safe, write the heading with no body, and the
+  kiosk answers "I have nothing to share yet." A missing heading gets the same answer, but
+  write it anyway, so the choice is visible.
+
 Open the seed with a one-line revival instruction and an ordered "read these
 first" list so the revived agent rehydrates deterministically.
 
@@ -144,6 +164,18 @@ first lines record where it was cut, so `/reseed revive` can show drift:
 ```
 Branch: <git branch --show-current>   HEAD: <git rev-parse --short HEAD>   Written: <UTC timestamp>
 ```
+
+Then print what the kiosk will see, and re-read it as an outsider would:
+
+```bash
+crewchat-kiosk-brief.sh
+```
+
+It runs crewchat's own extractor, so what it prints is exactly what the kiosk gets. On a host
+without crewchat it says there is nothing to check. If it shows anything from the rest of the
+seed, or anything private, fix the section and run it again before you go on. The check is a
+backstop, not a gate: the shim pushes the section whenever the seed file changes, so a bad
+one may already be live until your fix is written. Get it right in the draft.
 
 Then arm the hook so the next `/clear` auto-revives without any user action:
 
@@ -189,6 +221,8 @@ headless runs never reach, so there it is usually silent.
 ## Important
 
 - **Point at disk; carry only volatile state** — the whole skill in one line.
+- **End every seed with `## Kiosk`**, written for outsiders: the only part of the seed a
+  crewchat kiosk sees. Check it with `crewchat-kiosk-brief.sh`.
 - **Carry the conversation-only decisions** — grants, priorities, and rulings that
   change how you operate and have no durable home; they're the thing a state-focused
   seed silently drops (see Step 1).
