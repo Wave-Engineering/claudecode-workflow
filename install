@@ -1394,6 +1394,11 @@ if [[ "$CHECK_MODE" == true ]]; then
 				drifted=$((drifted + 1))
 			fi
 		done
+		# crewchat is not in mcps.json: it applies only where the daemon runs (#1330).
+		total=$((total + 1))
+		if ! "$REPO_DIR/scripts/install-crewchat.sh" check; then
+			drifted=$((drifted + 1))
+		fi
 	fi
 
 	if [[ -d "$REPO_DIR/src" ]]; then
@@ -1671,6 +1676,12 @@ if [[ "$INSTALL_MCPS" == true && -f "$REPO_DIR/mcps.json" ]]; then
 				echo ""
 			fi
 		done
+	fi
+	# The crewchat thin MCP, only where the crewchat daemon runs (#1330).
+	crewchat_args=(install)
+	[[ "$DRY_RUN" == true ]] && crewchat_args+=(--dry-run)
+	if ! "$REPO_DIR/scripts/install-crewchat.sh" "${crewchat_args[@]}"; then
+		warn "crewchat install failed — rerun: $REPO_DIR/scripts/install-crewchat.sh install"
 	fi
 fi
 

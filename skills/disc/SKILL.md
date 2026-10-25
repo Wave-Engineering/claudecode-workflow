@@ -27,7 +27,26 @@ Route each /disc intent to **its owning surface**. Most are `disc-server` MCP to
 
 Last-resort fallbacks only if `discord.json` is missing the key: default `1487288523638837268`, roll-call `1487382005036617851`.
 
-**Route intent — disc-server MCP tools:**
+## Transport: `chat_*` or `disc_*` (the dual-mode rule)
+
+Every kit skill that sends or reads chat follows this one rule (#1330). Other skills point here instead of restating it.
+
+- **If `chat_send` is in your tool list** (the `crewchat` MCP server: the host runs the crewchat daemon), send and read with the `chat_*` tools.
+  - For our guild's channel IDs, pass `backend: "discord"`.
+  - `disc_send(channel_id, msg)` becomes `chat_send(to: channel_id, text: msg, backend: "discord")`. `disc_read(channel_id, limit)` becomes `chat_read(channel: channel_id, limit, backend: "discord")`. A thread is `chat_send(..., thread: <thread channel id>)`.
+- **Otherwise** use `mcp__disc-server__disc_*` exactly as below. That is every host where the daemon isn't deployed, and it is the default.
+- **Discord-only ops** (list, resolve, create channel/thread) stay on `mcp__disc-server__disc_*` on both kinds of host. disc-server stays registered until K-2.
+- **Sign the same way on both paths.** On Discord the daemon replaces your own trailing `— **<dev-name>** …` signature instead of doubling it.
+- **Emitted addressing is `@agents`**, not `@all`. Discord still accepts `@all` during the transition (mattermost-crew D-038).
+- **Ask-once (R-11).** A `chat_*` call with no `backend` may return `needs_human: true` with a `question`.
+  - Ask your human partner that question verbatim.
+  - Record the answer with `chat_set_default(key, backend)`, then retry.
+  - Headless sessions get a loud failure plus a squawk instead, and there is no silent fallback.
+- **A `chat_*` error is not a cue to switch transports mid-call.** Report it. The rule picks the transport once, from the tool list.
+
+Tool reference: `docs/chat-tools.md` in the cc-workflow repo.
+
+**Route intent — disc-server MCP tools** (send and read follow the dual-mode rule above):
 - send / check-in / no args → `disc_send(channel_id, "**<name>** <avatar> (<team>): <msg>")` — check-in sends to #roll-call
 - read → `disc_read(channel_id, limit=20)` — summarize digest, highlight agent-addressed messages
 - list → `disc_list(guild_id, type="text")` — format as clean list

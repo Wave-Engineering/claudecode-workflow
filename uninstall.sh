@@ -220,6 +220,10 @@ if [[ "$REMOVE_MCPS" == true ]]; then
 	else
 		echo "  [!] mcps.json not found — cannot determine MCP servers to remove"
 	fi
+	# The crewchat thin MCP is not in mcps.json (#1330).
+	crewchat_args=(uninstall)
+	[[ "$DRY_RUN" == true ]] && crewchat_args+=(--dry-run)
+	"$REPO_DIR/scripts/install-crewchat.sh" "${crewchat_args[@]}" || echo "  [!] crewchat uninstall failed"
 fi
 
 # --- Summary ------------------------------------------------------------------

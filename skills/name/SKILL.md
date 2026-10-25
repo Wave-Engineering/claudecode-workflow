@@ -56,16 +56,26 @@ Report the current session identity, or pick one if not yet established.
 5. **Announce** — Always respond with:
    > I'm **\<Dev-Name\>** \<Dev-Avatar\> from team `<Dev-Team>`.
 
-6. **Check in via Discord** — Call `mcp__disc-server__disc_send` to announce yourself in `#roll-call`:
+6. **Check in via Discord** — announce yourself in `#roll-call`, by the dual-mode rule in `/disc` ("Transport: `chat_*` or `disc_*`"):
 
    ```
+   # chat_send in your tool list (crewchat daemon on this host):
+   chat_send({ to: "roll-call", text: "<formatted message — see below>", backend: "discord" })
+
+   # otherwise:
    mcp__disc-server__disc_send({
      channel_id: "roll-call",
      message: "<formatted message — see below>"
    })
    ```
 
-   The MCP accepts the channel name directly (`"roll-call"`), so no jq lookup against `~/.claude/discord.json` is needed.
+   Both accept the channel name directly (`"roll-call"`), so no jq lookup against `~/.claude/discord.json` is needed.
+
+   **On a crewchat host, also report the chat registration.**
+   - Call `chat_health()`. The shim registers this identity on the first call: `dev_name`, `dev_team` and `dev_avatar` from the file you just wrote, plus `crew` and `session_id`.
+   - Report the backends it lists, for example `chat: mattermost:dev, discord`.
+   - With no `chat_send` in your tool list, report `chat: Discord only (no crewchat daemon on this host)`.
+   - A `chat_health` error is reported as such, never as "Discord only".
 
    Message format:
    ```

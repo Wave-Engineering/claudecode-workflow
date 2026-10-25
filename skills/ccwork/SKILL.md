@@ -454,7 +454,7 @@ If the user says they don't have a Discord server yet:
 
 Ask: *"What's your Discord server (guild) ID? You can find it by right-clicking the server name in Discord and selecting 'Copy Server ID'. (Requires Developer Mode enabled in Discord settings.)"*
 
-After receiving the guild ID, verify bot access AND auto-discover channels in one step:
+After receiving the guild ID, verify bot access AND auto-discover channels in one step. This setup verifies **disc-server itself**, so it calls `mcp__disc-server__*` directly even on a crewchat host. That's the one exception to the dual-mode rule in `/disc`.
 
 ```
 mcp__disc-server__disc_list({ guild_id: "<guild_id>", type: "text" })

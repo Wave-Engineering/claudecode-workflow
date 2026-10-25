@@ -97,7 +97,7 @@ What each skill calls under the hood.
 | `/ccwork` | `spec_get`, `work_item` |
 | `/ddd` | `ddd_locate_domain_model`, `ddd_locate_sketchbook`, `ddd_summary`, `ddd_verify_committed` |
 | `/devspec` | `devspec_locate`, `devspec_summary`, `devspec_approve`, `devspec_finalize`, `devspec_parse_section_8`, `devspec_verify_approved` |
-| `/disc` | `disc_send`, `disc_read`, `disc_list`, `disc_resolve`, `disc_create_channel`, `disc_create_thread` |
+| `/disc` | `disc_send`, `disc_read`, `disc_list`, `disc_resolve`, `disc_create_channel`, `disc_create_thread`; on crewchat hosts `chat_send`, `chat_read` ([chat-tools.md](chat-tools.md)) |
 | `/dod` | `dod_load_manifest`, `dod_verify_deliverable`, `dod_run_test_suite`, `dod_check_coverage` |
 | `/ibm` | `ibm` |
 | `/issue` | `work_item` |
@@ -106,7 +106,7 @@ What each skill calls under the hood.
 | `/muse` | `ddd_locate_sketchbook` |
 | `/nerf` | `nerf_status`, `nerf_mode`, `nerf_darts`, `nerf_budget`, `nerf_scope` |
 | `/nextwave` | `spec_validate_structure`, `wave_preflight`, `wave_planning`, `wave_flight`, `wave_flight_plan`, `wave_flight_done`, `wave_close_issue`, `wave_record_mr`, `wave_review`, `wave_reconcile_mrs`, `wave_complete`, `wave_waiting`, `wave_defer`, `wave_next_pending`, `wave_previous_merged`, `wave_show`, `flight_overlap`, `flight_partition`, `commutativity_verify`, `pr_merge`, `pr_wait_ci`, `drift_files_changed`, `drift_check_path_exists`, `drift_check_symbol_exists` |
-| `/precheck` | `ibm`, `branch_guard`, `spec_validate_structure`, `pr_list`, `pr_create`, `ci_wait_run`, `disc_send` |
+| `/precheck` | `ibm`, `branch_guard`, `spec_validate_structure`, `pr_list`, `pr_create`, `ci_wait_run`, `disc_send` (or `chat_send` on crewchat hosts) |
 | `/prepwaves` | `epic_sub_issues`, `spec_validate_structure`, `spec_dependencies`, `wave_compute`, `wave_topology`, `wave_init` |
 | `/review` | `pr_diff`, `pr_files` |
 | `/scp` | `ibm` |
