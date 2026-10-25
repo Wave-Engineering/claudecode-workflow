@@ -13,6 +13,7 @@ must:
 from __future__ import annotations
 
 import os
+import re
 import socket
 import stat
 import subprocess
@@ -23,16 +24,34 @@ import pytest
 _REPO = Path(__file__).resolve().parent.parent
 _SCRIPT = _REPO / "scripts" / "install-crewchat.sh"
 
+# The lock pins mcp 1.30.0 (behind a marker, as uv writes some) and pydantic-core. An install
+# leaves `freeze`, what `uv pip list --format freeze` answers; STUB_INSTALLED_MCP stands in for
+# a resolver that ignored the constraints. Freeze spells pydantic_core with an underscore, so the
+# comparison has to normalise names.
 _UV_STUB = r"""#!/usr/bin/env bash
-state="$STUB_DIR/uv-state"; echo "uv $*" >>"$STUB_DIR/calls"
+state="$STUB_DIR/uv-state"; env="$STUB_DIR/tools/crewchat-clients"
+echo "uv $*" >>"$STUB_DIR/calls"
 case "$1 $2" in
 "tool list") [[ -f "$state" ]] && cat "$state" ;;
-"tool install") echo "crewchat-clients v0.1.0" >"$state"; echo "- crewchat-mcp" >>"$state"
-	mkdir -p "$STUB_DIR/bin-tools"; printf '#!/bin/sh\n' >"$STUB_DIR/bin-tools/crewchat-mcp"
-	chmod +x "$STUB_DIR/bin-tools/crewchat-mcp" ;;
-"tool dir") echo "$STUB_DIR/bin-tools" ;;
-"tool uninstall") rm -f "$state" ;;
+"tool install") [[ -n "${STUB_INSTALL_FAIL:-}" ]] && exit 1
+	echo "crewchat-clients v0.1.0" >"$state"; echo "- crewchat-mcp" >>"$state"
+	mkdir -p "$STUB_DIR/bin-tools" "$env/bin"; printf '#!/bin/sh\n' >"$STUB_DIR/bin-tools/crewchat-mcp"
+	chmod +x "$STUB_DIR/bin-tools/crewchat-mcp"
+	printf 'mcp==%s\npydantic_core==2.50.1\n' "${STUB_INSTALLED_MCP:-1.30.0}" >"$env/freeze" ;;
+"tool dir") if [[ "${3:-}" == --bin ]]; then echo "$STUB_DIR/bin-tools"; else echo "$STUB_DIR/tools"; fi ;;
+"tool uninstall") rm -f "$state"; rm -rf "$env" ;;
+"pip list") [[ -f "$env/freeze" ]] && cat "$env/freeze" ;;
+export*) [[ -n "${STUB_EXPORT_FAIL:-}" ]] && exit 2
+	while [[ $# -gt 0 ]]; do [[ "$1" == -o ]] && out="$2"; shift; done
+	printf 'mcp==1.30.0 ; python_full_version >= "3.12"\npydantic-core==2.50.1\n' >"$out" ;;
 esac
+"""
+
+_GIT_STUB = r"""#!/usr/bin/env bash
+echo "git $*" >>"$STUB_DIR/calls"
+[[ -n "${STUB_GIT_FAIL:-}" ]] && exit 128
+[[ " $* " == *" clone "* ]] && mkdir -p "${@: -1}"
+exit 0
 """
 
 _CLAUDE_STUB = r"""#!/usr/bin/env bash
@@ -49,7 +68,7 @@ esac
 def stubs(tmp_path: Path) -> Path:
     d = tmp_path / "stubs"
     (d / "path").mkdir(parents=True)
-    for name, body in (("uv", _UV_STUB), ("claude", _CLAUDE_STUB)):
+    for name, body in (("uv", _UV_STUB), ("claude", _CLAUDE_STUB), ("git", _GIT_STUB)):
         p = d / "path" / name
         p.write_text(body)
         p.chmod(0o755)
@@ -65,8 +84,11 @@ def live_socket(tmp_path: Path):
     s.close()
 
 
-def _run(stubs: Path, sock: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def _run(
+    stubs: Path, sock: Path, *args: str, **extra_env: str
+) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
+    env.update(extra_env)
     env["STUB_DIR"] = str(stubs)
     env["CREWCHAT_SOCKET"] = str(sock)
     # The stubs, then the system essentials only, so no real uv or claude is found.
@@ -111,13 +133,81 @@ def test_socket_present_installs_pinned_tag_and_registers(stubs: Path, live_sock
     calls = _calls(stubs)
     # SSH, never HTTPS: the repo is private and git to github.com never uses a token.
     assert (
-        "uv tool install --force "
-        "git+ssh://git@github.com/Wave-Engineering/mattermost-crew.git@v0.1.0"
-        "#subdirectory=packages/clients" in calls
+        "git -c advice.detachedHead=false clone -q --depth 1 --branch v0.1.0 "
+        "ssh://git@github.com/Wave-Engineering/mattermost-crew.git" in calls
     )
+    assert "uv export -q --directory" in calls and "--frozen --package crewchat-clients" in calls
+    # Constrained by the lock (#1332): a bare git-URL install re-resolves and took mcp 2.x.
+    assert re.search(
+        r"uv tool install -q --force --constraints \S+/constraints\.txt "
+        r"git\+ssh://git@github\.com/Wave-Engineering/mattermost-crew\.git@v0\.1\.0"
+        r"#subdirectory=packages/clients",
+        calls,
+    ), calls
     assert "https://" not in calls
+    kept = stubs / "tools" / "crewchat-clients" / "kit-constraints.txt"
+    assert "mcp==1.30.0" in kept.read_text(), "the lock's pins are kept for `check`"
     assert f"claude mcp add -s user crewchat -- {stubs}/bin-tools/crewchat-mcp" in calls
     assert "registered as crewchat" in r.stdout
+
+
+@pytest.mark.parametrize("failure", ["STUB_GIT_FAIL", "STUB_EXPORT_FAIL"])
+def test_no_lock_installs_nothing(stubs: Path, live_socket: Path, failure: str) -> None:
+    r = _run(stubs, live_socket, "install", **{failure: "1"})
+    assert r.returncode == 1
+    assert "couldn't export v0.1.0's lock" in r.stdout
+    assert _mutations(stubs) == [], "an unconstrained install is never the fallback"
+
+
+def test_install_refuses_to_register_off_lock_environment(stubs: Path, live_socket: Path) -> None:
+    r = _run(stubs, live_socket, "install", STUB_INSTALLED_MCP="2.3.0")
+    assert r.returncode == 1
+    assert "mcp is 2.3.0, the lock pins 1.30.0; not registering" in r.stdout
+    assert "claude mcp add" not in _calls(stubs)
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        ({"STUB_INSTALLED_MCP": "2.3.0"}, "mcp is 2.3.0, the lock pins 1.30.0"),
+        ({"STUB_EXPORT_FAIL": "1"}, "couldn't export v0.1.0's lock"),
+        ({"STUB_INSTALL_FAIL": "1"}, "installing crewchat-clients v0.1.0 failed"),
+    ],
+)
+def test_failed_repair_removes_existing_registration(
+    stubs: Path, live_socket: Path, failure: dict[str, str], message: str
+) -> None:
+    # A host registered by the first K-1 script: the reinstall that should repair it fails.
+    _run(stubs, live_socket, "install")
+    (stubs / "tools" / "crewchat-clients" / "kit-constraints.txt").unlink()
+    r = _run(stubs, live_socket, "install", **failure)
+    assert r.returncode == 1
+    assert message in r.stdout
+    assert not (stubs / "registered").exists(), "a broken shim must not stay registered"
+    assert "removed the crewchat registration" in r.stdout
+
+
+def test_check_reports_off_lock_environment(stubs: Path, live_socket: Path) -> None:
+    _run(stubs, live_socket, "install")
+    freeze = stubs / "tools" / "crewchat-clients" / "freeze"
+    freeze.write_text(freeze.read_text().replace("mcp==1.30.0", "mcp==2.3.0"))
+    r = _run(stubs, live_socket, "check")
+    assert r.returncode == 1 and "mcp is 2.3.0, the lock pins 1.30.0" in r.stdout
+
+
+def test_install_without_recorded_constraints_is_drift_and_repaired(
+    stubs: Path, live_socket: Path
+) -> None:
+    # The state the first K-1 script left: right version, no lock record.
+    _run(stubs, live_socket, "install")
+    (stubs / "tools" / "crewchat-clients" / "kit-constraints.txt").unlink()
+    r = _run(stubs, live_socket, "check")
+    assert r.returncode == 1 and "installed without the lock's constraints" in r.stdout
+    (stubs / "calls").unlink()
+    r = _run(stubs, live_socket, "install")
+    assert r.returncode == 0, r.stdout
+    assert "uv tool install -q --force --constraints" in _calls(stubs)
+    assert _run(stubs, live_socket, "check").returncode == 0
 
 
 def test_install_removes_stale_registration_when_daemon_gone(
