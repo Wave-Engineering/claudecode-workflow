@@ -28,7 +28,7 @@ The same package ships `crewchat-doorbell`, the one-shot doorbell, and `./instal
 |---|---|
 | 0 | a new event, one JSON line on stdout |
 | 1 | usage error: no identity, a bad timeout, or a daemon error |
-| 2 | not registered (the daemon restarted). `chat_health()` re-registers |
+| 2 | not registered (the daemon restarted). A one-message `chat_read` re-registers; `chat_health()` doesn't, as health isn't per-agent |
 | 3 | timeout |
 | 4 | daemon unreachable |
 
