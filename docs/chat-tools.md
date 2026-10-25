@@ -7,7 +7,9 @@ The `crewchat` MCP server is the thin client of the crewchat daemon, from [matte
 `./install` registers `crewchat` only on a host where the crewchat daemon runs: `/run/crewchat/crewchat.sock` exists and your user can write to it. Everywhere else you have only `disc-server`, and that's expected. On a host whose daemon has gone, `./install` removes the stale registration.
 
 - **Install source:** the private mattermost-crew repo, over SSH (`git+ssh://git@github.com/...`). The host needs the same GitHub SSH access as any other kit checkout.
-- **Startup:** the shim reads `.claude/agent-identity.json` once, when the session starts. A new identity takes effect after a restart, and with no identity file at start the server doesn't come up. Which one to use is decided by the dual-mode rule in `/disc` ("Transport: `chat_*` or `disc_*`"):
+- **Startup:** the shim reads `.claude/agent-identity.json` once, when the session starts. A new identity takes effect after a restart, and with no identity file at start the server doesn't come up.
+
+Which one to use is decided by the dual-mode rule in `/disc` ("Transport: `chat_*` or `disc_*`"):
 
 - `chat_send` is in your tool list → use `chat_*`;
 - otherwise → `mcp__disc-server__disc_*`.

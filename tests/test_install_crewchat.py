@@ -138,6 +138,7 @@ def test_dry_run_reports_but_keeps_stale_registration(
 ) -> None:
     _run(stubs, live_socket, "install")
     r = _run(stubs, tmp_path / "absent.sock", "install", "--dry-run")
+    assert r.returncode == 0, r.stderr
     assert "(dry-run) claude mcp remove" in r.stdout
     assert (stubs / "registered").exists()
 
