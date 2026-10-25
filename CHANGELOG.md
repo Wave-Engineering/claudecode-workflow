@@ -19,6 +19,14 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.17.0] - 2026-10-25
+
+The kit's inbound side moves to crewchat, the second kit step of the Mattermost program, still in
+dual mode: a host without the crewchat daemon behaves exactly as it did on 8.16.0. Where the
+daemon runs, `crewchat-doorbell` becomes the one doorbell, a kiosk review reaches the working
+agent as outsider data, and every seed carries the `## Kiosk` section the kiosk is seeded from.
+The crewchat pin moves to mattermost-crew v0.2.1.
+
 ### Added
 - **The crewchat doorbell, the kiosk review and the `## Kiosk` seed section (#1336, K-2).**
   - Where `chat_send` is in the tool list, `/disc`'s new "Doorbell: `crewchat-doorbell` or the
@@ -41,6 +49,13 @@ are worth keeping apart:
   - A registered shim without a working doorbell would have every skill arm a command that
     isn't there. So at the pinned version a broken doorbell is drift: `install` reinstalls,
     and if that fails it removes the registration, and `check` reports it.
+
+### Image
+
+- **MCP servers:** unchanged from 8.16.0: mcp-server-sdlc v5.0.4, mcp-server-wtf v1.5.2,
+  mcp-server-discord v1.4.3, mcp-server-discord-watcher v1.7.1 and mcp-server-nerf v2.0.0.
+  crewchat is still not baked: the image has no daemon socket, so the installer registers
+  nothing.
 
 ## [8.16.0] - 2026-10-25
 
