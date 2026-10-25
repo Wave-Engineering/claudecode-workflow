@@ -22,10 +22,10 @@ are worth keeping apart:
 ## [8.17.0] - 2026-10-25
 
 The kit's inbound side moves to crewchat, the second kit step of the Mattermost program, still in
-dual mode: a host without the crewchat daemon behaves exactly as it did on 8.16.0. Where the
-daemon runs, `crewchat-doorbell` becomes the one doorbell, a kiosk review reaches the working
-agent as outsider data, and every seed carries the `## Kiosk` section the kiosk is seeded from.
-The crewchat pin moves to mattermost-crew v0.2.1.
+dual mode: a host without the crewchat daemon keeps 8.16.0's transport and one-shot doorbells.
+Where the daemon runs, `crewchat-doorbell` becomes the one doorbell, and a kiosk review reaches
+the working agent as outsider data. On every host, `/reseed` now ends each seed with the
+`## Kiosk` section the kiosk is seeded from. The crewchat pin moves to mattermost-crew v0.2.1.
 
 ### Added
 - **The crewchat doorbell, the kiosk review and the `## Kiosk` seed section (#1336, K-2).**
