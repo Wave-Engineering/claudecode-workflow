@@ -23,6 +23,10 @@ import pytest
 
 _REPO = Path(__file__).resolve().parent.parent
 _SCRIPT = _REPO / "scripts" / "install-crewchat.sh"
+# The pinned tag, read from the script, so a pin bump touches one test (`test_pin`), not all.
+_PIN = re.search(r'^CREWCHAT_TAG="(v[^"]+)"$', _SCRIPT.read_text(), re.MULTILINE)
+assert _PIN, "install-crewchat.sh must set CREWCHAT_TAG"
+_TAG = _PIN.group(1)
 
 # The lock pins mcp 1.30.0 (behind a marker, as uv writes some) and pydantic-core. An install
 # leaves `freeze`, what `uv pip list --format freeze` answers; STUB_INSTALLED_MCP stands in for
@@ -34,9 +38,16 @@ echo "uv $*" >>"$STUB_DIR/calls"
 case "$1 $2" in
 "tool list") [[ -f "$state" ]] && cat "$state" ;;
 "tool install") [[ -n "${STUB_INSTALL_FAIL:-}" ]] && exit 1
-	echo "crewchat-clients v0.1.0" >"$state"; echo "- crewchat-mcp" >>"$state"
+	for a in "$@"; do [[ "$a" == git+*@v* ]] && ver="${a##*@v}" && ver="${ver%%#*}"; done
+	echo "crewchat-clients v${ver:?no pinned tag in the install spec}" >"$state"
+	echo "- crewchat-mcp" >>"$state"; echo "- crewchat-doorbell" >>"$state"
 	mkdir -p "$STUB_DIR/bin-tools" "$env/bin"; printf '#!/bin/sh\n' >"$STUB_DIR/bin-tools/crewchat-mcp"
 	chmod +x "$STUB_DIR/bin-tools/crewchat-mcp"
+	if [[ -z "${STUB_NO_DOORBELL:-}" ]]; then
+		printf '#!/bin/sh\n[ "$1" = --help ] && exit "${STUB_DOORBELL_HELP_RC:-0}"\nexit 1\n' \
+			>"$STUB_DIR/bin-tools/crewchat-doorbell"
+		chmod +x "$STUB_DIR/bin-tools/crewchat-doorbell"
+	fi
 	printf 'mcp==%s\npydantic_core==2.50.1\n' "${STUB_INSTALLED_MCP:-1.30.0}" >"$env/freeze" ;;
 "tool dir") if [[ "${3:-}" == --bin ]]; then echo "$STUB_DIR/bin-tools"; else echo "$STUB_DIR/tools"; fi ;;
 "tool uninstall") rm -f "$state"; rm -rf "$env" ;;
@@ -133,15 +144,16 @@ def test_socket_present_installs_pinned_tag_and_registers(stubs: Path, live_sock
     calls = _calls(stubs)
     # SSH, never HTTPS: the repo is private and git to github.com never uses a token.
     assert (
-        "git -c advice.detachedHead=false clone -q --depth 1 --branch v0.1.0 "
+        f"git -c advice.detachedHead=false clone -q --depth 1 --branch {_TAG} "
         "ssh://git@github.com/Wave-Engineering/mattermost-crew.git" in calls
     )
     assert "uv export -q --directory" in calls and "--frozen --package crewchat-clients" in calls
     # Constrained by the lock (#1332): a bare git-URL install re-resolves and took mcp 2.x.
     assert re.search(
         r"uv tool install -q --force --constraints \S+/constraints\.txt "
-        r"git\+ssh://git@github\.com/Wave-Engineering/mattermost-crew\.git@v0\.1\.0"
-        r"#subdirectory=packages/clients",
+        r"git\+ssh://git@github\.com/Wave-Engineering/mattermost-crew\.git@"
+        + re.escape(_TAG)
+        + r"#subdirectory=packages/clients",
         calls,
     ), calls
     assert "https://" not in calls
@@ -155,7 +167,7 @@ def test_socket_present_installs_pinned_tag_and_registers(stubs: Path, live_sock
 def test_no_lock_installs_nothing(stubs: Path, live_socket: Path, failure: str) -> None:
     r = _run(stubs, live_socket, "install", **{failure: "1"})
     assert r.returncode == 1
-    assert "couldn't export v0.1.0's lock" in r.stdout
+    assert f"couldn't export {_TAG}'s lock" in r.stdout
     assert _mutations(stubs) == [], "an unconstrained install is never the fallback"
 
 
@@ -170,8 +182,8 @@ def test_install_refuses_to_register_off_lock_environment(stubs: Path, live_sock
     ("failure", "message"),
     [
         ({"STUB_INSTALLED_MCP": "2.3.0"}, "mcp is 2.3.0, the lock pins 1.30.0"),
-        ({"STUB_EXPORT_FAIL": "1"}, "couldn't export v0.1.0's lock"),
-        ({"STUB_INSTALL_FAIL": "1"}, "installing crewchat-clients v0.1.0 failed"),
+        ({"STUB_EXPORT_FAIL": "1"}, f"couldn't export {_TAG}'s lock"),
+        ({"STUB_INSTALL_FAIL": "1"}, f"installing crewchat-clients {_TAG} failed"),
     ],
 )
 def test_failed_repair_removes_existing_registration(
@@ -260,10 +272,61 @@ def test_check_states(stubs: Path, live_socket: Path, tmp_path: Path) -> None:
     # Installed and registered: clean.
     _run(stubs, live_socket, "install")
     r = _run(stubs, live_socket, "check")
-    assert r.returncode == 0 and "(registered)" in r.stdout, r.stdout
+    assert r.returncode == 0 and "(registered; crewchat-doorbell runs)" in r.stdout, r.stdout
     # Registered but the daemon has gone: drift, because the skills would pick a dead path.
     r = _run(stubs, tmp_path / "absent.sock", "check")
     assert r.returncode == 1 and "registered, but no crewchat daemon" in r.stdout
+
+
+def test_pin() -> None:
+    # K-2 (#1336) needs v0.2.1: crewchat-doorbell drops a repeated event_id, so exit 0 is
+    # always a new event, and the kiosk review's event_id carries the transcript's generation.
+    assert _TAG == "v0.2.1"
+
+
+def test_install_without_doorbell_does_not_register(stubs: Path, live_socket: Path) -> None:
+    r = _run(stubs, live_socket, "install", STUB_NO_DOORBELL="1")
+    assert r.returncode == 1
+    assert "crewchat-doorbell missing after install; not registering" in r.stdout
+    assert not (stubs / "registered").exists(), "chat_send without a doorbell is a deaf agent"
+
+
+def test_install_with_broken_doorbell_removes_registration(
+    stubs: Path, live_socket: Path
+) -> None:
+    _run(stubs, live_socket, "install")
+    assert (stubs / "registered").exists()
+    (stubs / "calls").unlink()
+    r = _run(stubs, live_socket, "install", STUB_DOORBELL_HELP_RC="1")
+    assert r.returncode == 1
+    # At the pinned version, a doorbell that won't run is a broken environment: a reinstall
+    # is tried, and when that doesn't fix it the registration goes.
+    assert "uv tool install -q --force" in _calls(stubs)
+    assert "crewchat-doorbell --help failed" in r.stdout
+    assert not (stubs / "registered").exists()
+
+
+def test_reinstall_repairs_missing_doorbell(stubs: Path, live_socket: Path) -> None:
+    _run(stubs, live_socket, "install")
+    (stubs / "bin-tools" / "crewchat-doorbell").unlink()
+    (stubs / "calls").unlink()
+    r = _run(stubs, live_socket, "install")
+    assert r.returncode == 0, r.stdout
+    assert "uv tool install -q --force" in _calls(stubs)
+    assert "registered as crewchat (crewchat-mcp, crewchat-doorbell)" in r.stdout
+
+
+@pytest.mark.parametrize("breakage", ["missing", "broken"])
+def test_check_flags_unusable_doorbell(stubs: Path, live_socket: Path, breakage: str) -> None:
+    _run(stubs, live_socket, "install")
+    env: dict[str, str] = {}
+    if breakage == "missing":
+        (stubs / "bin-tools" / "crewchat-doorbell").unlink()
+    else:
+        env["STUB_DOORBELL_HELP_RC"] = "1"
+    r = _run(stubs, live_socket, "check", **env)
+    assert r.returncode == 1
+    assert ("crewchat-doorbell missing" if breakage == "missing" else "--help failed") in r.stdout
 
 
 def test_uninstall_removes_registration_and_tool(stubs: Path, live_socket: Path) -> None:
