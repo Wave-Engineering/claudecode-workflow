@@ -4,7 +4,10 @@ The `crewchat` MCP server is the thin client of the crewchat daemon, from [matte
 
 ## When you have these tools
 
-`./install` registers `crewchat` only on a host where the crewchat daemon runs: `/run/crewchat/crewchat.sock` exists and your user can write to it. Everywhere else you have only `disc-server`, and that's expected. Which one to use is decided by the dual-mode rule in `/disc` ("Transport: `chat_*` or `disc_*`"):
+`./install` registers `crewchat` only on a host where the crewchat daemon runs: `/run/crewchat/crewchat.sock` exists and your user can write to it. Everywhere else you have only `disc-server`, and that's expected. On a host whose daemon has gone, `./install` removes the stale registration.
+
+- **Install source:** the private mattermost-crew repo, over SSH (`git+ssh://git@github.com/...`). The host needs the same GitHub SSH access as any other kit checkout.
+- **Startup:** the shim reads `.claude/agent-identity.json` once, when the session starts. A new identity takes effect after a restart, and with no identity file at start the server doesn't come up. Which one to use is decided by the dual-mode rule in `/disc` ("Transport: `chat_*` or `disc_*`"):
 
 - `chat_send` is in your tool list → use `chat_*`;
 - otherwise → `mcp__disc-server__disc_*`.
@@ -22,7 +25,7 @@ A backend name has exactly one form, on every tool and in every file:
 
 **Default backend** (R-11), used when a call names no backend. The shim resolves it in order:
 1. `home_backend` in `.claude/agent-identity.json`;
-2. the project's entry in `~/.claude/chat-defaults.json`;
+2. the entry in `~/.claude/chat-defaults.json` for the repo's forge org (`<forge-host>/<org>`, shared by every repo in that org), or for the repo's absolute path when it has no remote;
 3. otherwise it **asks once**. The call returns `{"needs_human": true, "key", "question", "options"}`. Ask your human partner the question verbatim, record the answer with `chat_set_default(key, backend)`, and retry.
 
 Headless sessions don't ask: the call fails loudly and squawks the question to the human. There is never a silent fallback to Discord. Kit skills posting to our guild's channel IDs pass `backend: "discord"` explicitly, so they never need a default.
@@ -32,7 +35,7 @@ Headless sessions don't ask: the call fails loudly and squawks the question to t
 | tool | arguments | notes |
 |---|---|---|
 | `chat_send` | `to, text, thread?, backend?, attach_path?, embed?` | `to` is a channel ID or name. With `thread`, it replies in that thread. |
-| `chat_read` | `channel, since?, limit?, backend?` | `since` is epoch seconds. With neither `since` nor `limit` you get the recent 20. |
+| `chat_read` | `channel, since?, limit?, backend?` | `since` is epoch seconds. With neither, you get the daemon's default, the recent 60 (the `disc_read` alias defaults to 20). |
 | `chat_thread` | `post_id, backend?` | Every message in the thread, oldest first. |
 | `chat_dm` | `to, text, backend?, attach_path?, embed?` | Discord: a user ID (`123…`, `@123…` or `<@123…>`). Mattermost: a username. |
 | `chat_react` | `post_id, emoji, backend?` | `emoji` is a unicode emoji, or `name:id` for a custom one. |

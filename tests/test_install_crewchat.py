@@ -81,12 +81,18 @@ def _calls(stubs: Path) -> str:
     return f.read_text() if f.exists() else ""
 
 
+def _mutations(stubs: Path) -> list[str]:
+    """Calls that change state. Read-only probes (`mcp get`, `tool list`) are allowed."""
+    changing = ("uv tool install", "uv tool uninstall", "claude mcp add", "claude mcp remove")
+    return [line for line in _calls(stubs).splitlines() if line.startswith(changing)]
+
+
 def test_no_socket_skips_and_touches_nothing(stubs: Path, tmp_path: Path) -> None:
     r = _run(stubs, tmp_path / "absent.sock", "install")
     assert r.returncode == 0, r.stderr
     assert "skipped, no crewchat daemon" in r.stdout
     assert "Chat stays on disc-server" in r.stdout
-    assert _calls(stubs) == "", "no uv or claude call may happen without a daemon"
+    assert _mutations(stubs) == [], "nothing may be installed or registered without a daemon"
 
 
 def test_unwritable_socket_skips(stubs: Path, live_socket: Path) -> None:
@@ -96,20 +102,44 @@ def test_unwritable_socket_skips(stubs: Path, live_socket: Path) -> None:
     r = _run(stubs, live_socket, "install")
     assert r.returncode == 0, r.stderr
     assert "not writable" in r.stdout
-    assert _calls(stubs) == ""
+    assert _mutations(stubs) == []
 
 
 def test_socket_present_installs_pinned_tag_and_registers(stubs: Path, live_socket: Path) -> None:
     r = _run(stubs, live_socket, "install")
     assert r.returncode == 0, r.stdout + r.stderr
     calls = _calls(stubs)
+    # SSH, never HTTPS: the repo is private and git to github.com never uses a token.
     assert (
         "uv tool install --force "
-        "git+https://github.com/Wave-Engineering/mattermost-crew@v0.1.0"
+        "git+ssh://git@github.com/Wave-Engineering/mattermost-crew.git@v0.1.0"
         "#subdirectory=packages/clients" in calls
     )
+    assert "https://" not in calls
     assert f"claude mcp add -s user crewchat -- {stubs}/bin-tools/crewchat-mcp" in calls
     assert "registered as crewchat" in r.stdout
+
+
+def test_install_removes_stale_registration_when_daemon_gone(
+    stubs: Path, live_socket: Path, tmp_path: Path
+) -> None:
+    _run(stubs, live_socket, "install")
+    assert (stubs / "registered").exists()
+    r = _run(stubs, tmp_path / "absent.sock", "install")
+    assert r.returncode == 0
+    assert not (stubs / "registered").exists(), "a stale registration must not survive"
+    assert "removed the stale crewchat registration" in r.stdout
+    # And --check is clean again: the drift install pointed at is gone.
+    assert _run(stubs, tmp_path / "absent.sock", "check").returncode == 0
+
+
+def test_dry_run_reports_but_keeps_stale_registration(
+    stubs: Path, live_socket: Path, tmp_path: Path
+) -> None:
+    _run(stubs, live_socket, "install")
+    r = _run(stubs, tmp_path / "absent.sock", "install", "--dry-run")
+    assert "(dry-run) claude mcp remove" in r.stdout
+    assert (stubs / "registered").exists()
 
 
 def test_reinstall_at_same_version_skips_uv_install(stubs: Path, live_socket: Path) -> None:

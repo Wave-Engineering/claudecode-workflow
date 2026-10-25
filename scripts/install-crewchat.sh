@@ -28,7 +28,8 @@ set -euo pipefail
 
 # The one pinned release. Bump it with each mattermost-crew release the kit adopts.
 CREWCHAT_TAG="v0.1.0"
-CREWCHAT_REPO="https://github.com/Wave-Engineering/mattermost-crew"
+# SSH, never HTTPS: the repo is private, and git to github.com goes over SSH, not a token.
+CREWCHAT_REPO="ssh://git@github.com/Wave-Engineering/mattermost-crew.git"
 CREWCHAT_SOCKET="${CREWCHAT_SOCKET:-/run/crewchat/crewchat.sock}"
 SERVER_NAME="crewchat"
 PACKAGE="crewchat-clients"
@@ -70,6 +71,16 @@ do_install() {
 	local dry_run="$1" why
 	why="$(daemon_unusable)"
 	if [[ -n "$why" ]]; then
+		# A registration left from when the daemon was usable fails OPEN: the skills see
+		# chat_send and pick a path whose every call fails. Remove it.
+		if registered; then
+			if [[ "$dry_run" == true ]]; then
+				info "(dry-run) claude mcp remove -s user $SERVER_NAME (stale: $why)"
+			else
+				claude mcp remove -s user "$SERVER_NAME" >/dev/null
+				warn "crewchat: removed the stale $SERVER_NAME registration ($why)"
+			fi
+		fi
 		skip "crewchat: skipped, $why. Chat stays on disc-server."
 		return 0
 	fi

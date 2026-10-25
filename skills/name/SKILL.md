@@ -71,11 +71,12 @@ Report the current session identity, or pick one if not yet established.
 
    Both accept the channel name directly (`"roll-call"`), so no jq lookup against `~/.claude/discord.json` is needed.
 
-   **On a crewchat host, also report the chat registration.**
-   - Call `chat_health()`. The shim registers this identity on the first call: `dev_name`, `dev_team` and `dev_avatar` from the file you just wrote, plus `crew` and `session_id`.
-   - Report the backends it lists, for example `chat: mattermost:dev, discord`.
-   - With no `chat_send` in your tool list, report `chat: Discord only (no crewchat daemon on this host)`.
-   - A `chat_health` error is reported as such, never as "Discord only".
+   **Report the chat mode.** The crewchat shim reads `.claude/agent-identity.json` **once, when the session starts**, and registers from it. It does not see what you just wrote. With no identity file at start, it doesn't come up at all.
+   - **`chat_send` is in your tool list:** call `chat_health()` and report the backends it lists, for example `chat: mattermost:dev, discord`.
+     - If you changed the identity just now (a new name, team or avatar), add `chat: restart the session to register the new identity`.
+     - A `chat_health` error is reported as such.
+   - **No `chat_send`, but `/run/crewchat/crewchat.sock` exists** (`test -S`): report `chat: crewchat not started (no identity at session start); restart the session`. The daemon is there; the shim had nothing to register.
+   - **No `chat_send` and no socket:** report `chat: Discord only (no crewchat daemon on this host)`.
 
    Message format:
    ```
