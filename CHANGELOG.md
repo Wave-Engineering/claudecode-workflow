@@ -19,6 +19,49 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.16.0] - 2026-10-25
+
+The kit adopts crewchat's `chat_*` tools, the first kit step of the Mattermost program, and it
+does so in dual mode: a host without the crewchat daemon behaves exactly as it did on 8.15.0. The
+crewchat shim now installs from mattermost-crew's own lock, so a dependency's major release can't
+break it at import. The image picks up mcp-server-sdlc v5.0.4.
+
+### Added
+- **crewchat `chat_*` in the kit, dual-mode (#1330).** `chat_*` works only where the crewchat
+  daemon runs, and deploying the daemon is a fleet install, so nothing changes on a host
+  without it.
+  - `scripts/install-crewchat.sh` installs `crewchat-clients` at the pinned `CREWCHAT_TAG`
+    (`v0.1.0`) and registers it as MCP server `crewchat` through `claude mcp`, but only when
+    `/run/crewchat/crewchat.sock` exists and is writable. Where the daemon has gone, it removes
+    the stale registration. It never edits `~/.claude.json` directly, and it never touches
+    disc-server. `./install`, `./install --check` and `uninstall.sh` call it.
+  - `/disc` has one transport rule: with `chat_send` in the tool list, use `chat_*` (backend
+    `discord` for our channel IDs); otherwise use `mcp__disc-server__disc_*`. `/name`,
+    `/precheck` and `/ccwork` follow it or declare their exception.
+  - `/name` reports the chat mode: the backends `chat_health` lists, a restart hint when this
+    run created the identity the shim reads at start, or Discord only.
+  - `docs/chat-tools.md` is the agent-facing `chat_*` reference.
+
+### Fixed
+- **The crewchat shim installs from the lock (#1332).** A git-URL `uv tool install` re-resolves
+  every dependency and ignores the repo's `uv.lock`. `crewchat-clients` declares only
+  `mcp>=1.20`, so the resolver took mcp 2.x, which no longer has `mcp.server.fastmcp`. The shim
+  died at import, Claude Code showed "Failed to connect", and `check` still reported clean.
+  Found by the K-1 end-to-end run.
+  - Install shallow-clones the tag over SSH, exports its lock as constraints, and installs with
+    `--constraints`. A failed clone, export or install registers nothing, and removes any
+    registration an earlier install left pointing at a broken shim.
+  - The pins are kept beside the tool. Install checks the environment against them before it
+    registers, and `check` reports drift: a pinned package at another version, or a tool with
+    no record.
+
+### Image
+
+- **MCP servers:** mcp-server-sdlc v5.0.4 (from v5.0.3: `ibm` accepts `campaign/<plan>-*`
+  integration branches), mcp-server-wtf v1.5.2, mcp-server-discord v1.4.3,
+  mcp-server-discord-watcher v1.7.1 and mcp-server-nerf v2.0.0. crewchat is not baked: the
+  image has no daemon socket, so the installer registers nothing.
+
 ## [8.15.0] - 2026-10-24
 
 Docker Hub images now keep a name after `:stable` moves on: each release gets an immutable
