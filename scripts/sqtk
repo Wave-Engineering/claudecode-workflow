@@ -61,6 +61,10 @@ set -euo pipefail
 JSON_OUT=0
 
 die() { printf 'sqtk: %s\n' "$*" >&2; exit 1; }
+# one_arg CMD WHAT N -> die for a command handed N words where its one <WHAT> goes (#157): an
+# unquoted name with a space splits in the shell, and acting on one word of it would be silent
+# and wrong. Commands check this before any request, so a refusal changes nothing.
+one_arg() { die "$1: $3 arguments where one <$2> goes; quote the $2 as ONE argument"; }
 # Keep set -e on inside $(...) too, so a die() in a helper nested in a command substitution
 # stops the command rather than only its own subshell (one error, never a cascade).
 shopt -s inherit_errexit 2>/dev/null || die "bash 4.4 or newer is required"
@@ -282,12 +286,14 @@ record_mine() {
 }
 
 cmd_lists() {
+  (( $# == 0 )) || die "usage: sqtk lists (it takes no arguments)"
   local data; data="$(api GET /api/lists)"
   emit "$data" 'if length==0 then "(no lists)" else (.[] | "#\(.id)  \(.name)") end'
 }
 
 cmd_show() {
   [[ $# -ge 1 && -n "${1:-}" ]] || die "usage: sqtk show <list>"
+  (( $# == 1 )) || one_arg show list $#
   local data; data="$(get_list "$(list_arg "$1" 0)")"
   emit "$data" '
     "List #\(.id)  \(.name)",
@@ -306,6 +312,9 @@ cmd_add() {
     shift
   done
   [[ ${#pos[@]} -ge 2 && -n "${pos[0]}" ]] || die "usage: sqtk add <list> \"<text>\" [--no-prefix] [--force]"
+  # More than one word of text is a quoting slip that split it (#157); posting only the first
+  # word would land a truncated squawk with exit 0.
+  (( ${#pos[@]} == 2 )) || die "add: $(( ${#pos[@]} - 1 )) arguments after the list; quote the text as ONE argument (an apostrophe inside single quotes splits it)"
   local list text="${pos[1]}"
   list="$(list_arg "${pos[0]}" 1)"
   if (( prefix )); then text="$(prefix_text "$text")"; fi
@@ -415,6 +424,7 @@ cmd_attach() {
 # mine: the record of mine joined to each squawk's current state + text on the server (one
 # fetch per list). A squawk whose list or record is gone shows as gone.
 cmd_mine() {
+  (( $# == 0 )) || die "usage: sqtk mine (it takes no arguments)"
   local f; f="$(mine_file)"
   local mine='[]'
   if [[ -s "$f" ]]; then
@@ -437,6 +447,7 @@ cmd_mine() {
 # walk: the list's open squawks, oldest first, one "#seq  <text>" per line, for batch decisions.
 cmd_walk() {
   [[ $# -ge 1 && -n "${1:-}" ]] || die "usage: sqtk walk <list>"
+  (( $# == 1 )) || one_arg walk list $#
   local data; data="$(get_list "$(list_arg "$1" 0)")"
   local open; open="$(jq -c '[.squawks[] | select(.state == "open")] | sort_by(.seq)' <<<"$data")"
   emit "$open" 'if length == 0 then "(no open squawks)" else .[] | "#\(.seq)  \(.text)" end'
@@ -444,17 +455,21 @@ cmd_walk() {
 
 cmd_new() {
   [[ $# -ge 1 && -n "${1:-}" ]] || die "usage: sqtk new <name>"
+  (( $# == 1 )) || one_arg new name $#
   local body; body="$(jq -n --arg n "$1" '{name:$n}')"
   local data; data="$(api POST /api/lists "$body")"
   emit "$data" '"created list #\(.id)  \(.name)"'
 }
 
 cmd_rmlist() {
-  local name="" yes=0
+  local names=() yes=0
   while [[ $# -gt 0 ]]; do
-    case "$1" in --yes|-y) yes=1; shift ;; *) name="$1"; shift ;; esac
+    case "$1" in --yes|-y) yes=1; shift ;; *) names+=("$1"); shift ;; esac
   done
-  [[ -n "$name" ]] || die "usage: sqtk rmlist <name> --yes"
+  [[ ${#names[@]} -ge 1 && -n "${names[0]}" ]] || die "usage: sqtk rmlist <name> --yes"
+  # Keeping any one word of a split name could delete a different list (#157).
+  (( ${#names[@]} == 1 )) || one_arg rmlist name ${#names[@]}
+  local name="${names[0]}"
   (( yes )) || die "rmlist DELETES the list and ALL its squawks (cascade). Re-run with --yes to confirm."
   local id; id="$(get_list "$name" | jq -r '.id')"
   api DELETE "/api/lists/$id" >/dev/null

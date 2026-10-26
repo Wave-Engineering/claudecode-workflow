@@ -19,6 +19,42 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.18.0] - 2026-10-26
+
+The last kit step before the crewchat daemon's first deploy. The crewchat pin moves to
+mattermost-crew v0.2.2, which gives the doorbell's daemon-restart path a working
+re-register and puts final names on the first deploy's tools. The vendored `sqtk` moves to
+squawkie-talkie v0.12.0, whose `add` no longer truncates a squawk without a word.
+
+### Changed
+- **`install-crewchat.sh` pins mattermost-crew v0.2.2 (#1340).**
+  - `chat_health()` now re-registers after a daemon restart: the daemon's `health` takes the
+    agent's name and answers `not_registered` when it has lost the registration, and the shim
+    re-registers on that (mattermost-crew #112). `/disc`'s doorbell exit 2 says to call it, in
+    place of 8.17.0's one-message `chat_read`.
+  - The nine deprecated `disc_*` alias tools are gone (mattermost-crew #113, D-108). No host had
+    run the daemon yet, so the deprecation window covered no one, and the first deploy carries
+    no deprecated surface. The four guild ops they carried are `chat_list_channels`,
+    `chat_resolve`, `chat_create_channel` and `chat_create_thread`, Discord-only.
+    `docs/chat-tools.md` documents them in place of the alias table. Kit skills keep using
+    disc-server for guild ops until the cut-over (D-060).
+  - `chat_read` takes `post_id`, for a one-message read.
+
+### Fixed
+- **`sqtk` refuses a split argument instead of dropping words (#1340).** `add` kept the first
+  word after the list and dropped the rest without a word. So a quoting slip, such as an
+  apostrophe inside a single-quoted squawk, landed a truncated item and exited 0. `show`,
+  `walk`, `new` and `rmlist` given two names, and `lists` and `mine` given any argument, now
+  refuse too. `rmlist` kept the LAST name, so `rmlist keep gone --yes` deleted `gone`. Each
+  refusal exits non-zero and changes nothing. No kit script calls these with more than one
+  argument. The vendored `scripts/sqtk` is squawkie-talkie v0.12.0's (squawkie-talkie #157).
+
+### Image
+
+- **MCP servers:** unchanged from 8.17.0: mcp-server-sdlc v5.0.4, mcp-server-wtf v1.5.2,
+  mcp-server-discord v1.4.3, mcp-server-discord-watcher v1.7.1 and mcp-server-nerf v2.0.0.
+  crewchat is still not baked: the image has no daemon socket.
+
 ## [8.17.0] - 2026-10-25
 
 The kit's inbound side moves to crewchat, the second kit step of the Mattermost program, still in
@@ -39,7 +75,7 @@ the working agent as outsider data. On every host, `/reseed` now ends each seed 
   - `/reseed` now always ends a seed with a `## Kiosk` section, written for outsiders, because
     it is the only part of a seed the kiosk sees. The new `crewchat-kiosk-brief.sh` prints what
     the kiosk will get, using crewchat's own extractor rather than a copy that could drift.
-  - Hosts without the crewchat daemon are unchanged: the one-shots stay, as before.
+  - Hosts without the crewchat daemon keep the one-shot doorbells, as before.
 
 ### Changed
 - **`install-crewchat.sh` pins mattermost-crew v0.2.1, and registers `crewchat` only where

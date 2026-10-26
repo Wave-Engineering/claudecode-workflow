@@ -100,7 +100,7 @@ Its exit is the wake-up, as with the one-shots. It **never exits 0 without print
 |---|---|---|
 | 0 | a new event, one JSON line on stdout | handle it (table below), then re-arm |
 | 1 | usage error: no identity, a bad timeout, a daemon error | read stderr. If it names the identity, run `/name`. Do not re-arm in a loop |
-| 2 | not registered: the daemon restarted and lost the session's registration | call `chat_read` with `limit: 1` and an explicit `backend`, on a channel you already read. The daemon answers it `not_registered`, and the shim re-registers and retries. (`chat_health()` does not: health isn't per-agent, so the daemon never checks the registration.) Then re-arm once. If it exits 2 again, report `chat: not registered; restart the session` |
+| 2 | not registered: the daemon restarted and lost the session's registration | call `chat_health()`: the daemon answers it `not_registered`, and the shim re-registers. Then re-arm once. If it exits 2 again, report `chat: not registered; restart the session` |
 | 3 | `CREWCHAT_DOORBELL_TIMEOUT` elapsed | re-arm |
 | 4 | daemon unreachable: no socket, refused, or a cut-short reply | arm the one-shots for this cycle, and squawk it on `claudecode-workflow:triage` with the stderr |
 
