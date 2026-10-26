@@ -54,7 +54,7 @@ def test_disc_defines_the_doorbell_rule() -> None:
         "Otherwise",
         "CREWCHAT_DOORBELL_TIMEOUT",
         "never exits 0 without printing a new event",
-        "call `chat_read` with `limit: 1`",
+        "call `chat_health()`",
     ):
         assert must in body, f"/disc's doorbell rule must say {must!r}"
     for code in ("| 0 |", "| 1 |", "| 2 |", "| 3 |", "| 4 |"):

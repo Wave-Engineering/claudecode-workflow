@@ -1,6 +1,6 @@
 # `chat_*` tool reference (crewchat)
 
-The `crewchat` MCP server is the thin client of the crewchat daemon, from [mattermost-crew](https://github.com/Wave-Engineering/mattermost-crew). It gives agents one chat contract over Mattermost and Discord. This page is the agent-facing reference, DM-09b in the mattermost-crew Dev Spec. The kit pins the release in `scripts/install-crewchat.sh` (`CREWCHAT_TAG`, currently `v0.2.1`).
+The `crewchat` MCP server is the thin client of the crewchat daemon, from [mattermost-crew](https://github.com/Wave-Engineering/mattermost-crew). It gives agents one chat contract over Mattermost and Discord. This page is the agent-facing reference, DM-09b in the mattermost-crew Dev Spec. The kit pins the release in `scripts/install-crewchat.sh` (`CREWCHAT_TAG`, currently `v0.2.2`).
 
 ## When you have these tools
 
@@ -28,7 +28,7 @@ The same package ships `crewchat-doorbell`, the one-shot doorbell, and `./instal
 |---|---|
 | 0 | a new event, one JSON line on stdout |
 | 1 | usage error: no identity, a bad timeout, or a daemon error |
-| 2 | not registered (the daemon restarted). A one-message `chat_read` re-registers; `chat_health()` doesn't, as health isn't per-agent |
+| 2 | not registered (the daemon restarted). `chat_health()` re-registers |
 | 3 | timeout |
 | 4 | daemon unreachable |
 
@@ -64,7 +64,7 @@ Headless sessions don't ask: the call fails loudly and squawks the question to t
 | tool | arguments | notes |
 |---|---|---|
 | `chat_send` | `to, text, thread?, backend?, attach_path?, embed?` | `to` is a channel ID or name. With `thread`, it replies in that thread. |
-| `chat_read` | `channel, since?, limit?, backend?` | `since` is epoch seconds. With neither, you get the daemon's default, the recent 60 (the `disc_read` alias defaults to 20). |
+| `chat_read` | `channel, since?, limit?, backend?, post_id?` | `since` is epoch seconds. With neither, you get the daemon's default, the recent 60. With `post_id`, just that one message. |
 | `chat_thread` | `post_id, backend?` | Every message in the thread, oldest first. |
 | `chat_dm` | `to, text, backend?, attach_path?, embed?` | Discord: a user ID (`123…`, `@123…` or `<@123…>`). Mattermost: a username. |
 | `chat_react` | `post_id, emoji, backend?` | `emoji` is a unicode emoji, or `name:id` for a custom one. |
@@ -94,17 +94,17 @@ To start a thread on a message, use `disc_create_thread`. A send never creates a
 | `@<dev-team>` | Discord: every agent with that Dev-Team, as today. Mattermost: only within your own crew, and only once Phase 3's membership check is live (it fails closed until then). |
 | a DM, or a reply on a thread you posted in | you |
 
-## `disc_*` aliases
+## Guild ops (Discord only)
 
-`crewchat` also serves today's `disc_*` names, with today's arguments, mapped to `backend: "discord"`. They are deprecated, warn once each, and go one kit minor version after K-2. Prefer the `chat_*` form in new skill text.
+`crewchat` v0.2.2 dropped the deprecated `disc_*` aliases (mattermost-crew #113, D-108). The four guild ops they carried have no Mattermost equivalent, so they are `chat_*` tools of their own. On Mattermost they answer `unsupported`.
 
-| alias | is |
+| tool | arguments |
 |---|---|
-| `disc_send(channel_id, message, attach_path?, embed?, thread_id?)` | `chat_send(..., backend: "discord")` |
-| `disc_read(channel_id, limit?, message_id?)` | `chat_read`, or one message by ID |
-| `disc_thread(thread_id)` | `chat_thread` |
-| `disc_dm(user_id, message)` | `chat_dm` |
-| `disc_react(message_id, emoji, channel_id?)` | `chat_react` |
-| `disc_list`, `disc_resolve`, `disc_create_channel`, `disc_create_thread` | Discord-only ops |
+| `chat_list_channels` | `guild_id, type="text"` |
+| `chat_resolve` | `guild_id, name, type="channel"` |
+| `chat_create_channel` | `guild_id, name, type="text"` |
+| `chat_create_thread` | `channel_id, name, message?` |
+
+Kit skills keep using `mcp__disc-server__disc_*` for these until the cut-over (mattermost-crew D-060), so nothing switches twice.
 
 All Discord REST goes through scream-hole. While scream-hole is unhealthy, reads answer `unavailable` (never discord.com directly), and writes may go direct.
