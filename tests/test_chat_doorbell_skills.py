@@ -57,6 +57,8 @@ def test_disc_defines_the_doorbell_rule() -> None:
         "call `chat_health()`",
     ):
         assert must in body, f"/disc's doorbell rule must say {must!r}"
+    # 8.17.0's workaround, from before health re-registered (mattermost-crew #112): gone in 8.18.0.
+    assert "call `chat_read` with `limit: 1`" not in body
     for code in ("| 0 |", "| 1 |", "| 2 |", "| 3 |", "| 4 |"):
         assert code in body, f"/disc's doorbell rule must cover exit {code}"
     for event in (

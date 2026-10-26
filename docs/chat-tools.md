@@ -82,7 +82,7 @@ On Discord, a thread **is** a channel. So `thread` and `post_id` take the thread
 - for `chat_send` and `chat_thread`, it means the channel part: the post lands in channel `<channel>`, as `disc_send(thread_id=<channel>)` does today;
 - for `chat_react`, it names the message to react to.
 
-To start a thread on a message, use `disc_create_thread`. A send never creates a thread as a side effect. Both parts must be plain snowflakes. Anything else is refused before a request is made.
+To start a thread on a message, use `chat_create_thread` (Discord only; see [Guild ops](#guild-ops-discord-only)). Kit skills use disc-server's `mcp__disc-server__disc_create_thread` until the cut-over. A send never creates a thread as a side effect. Both parts must be plain snowflakes. Anything else is refused before a request is made.
 
 ## Addressing
 
