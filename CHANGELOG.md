@@ -41,10 +41,13 @@ squawkie-talkie v0.12.0, whose `add` no longer truncates a squawk without a word
   - `chat_read` takes `post_id`, for a one-message read.
 
 ### Fixed
-- **`sqtk add` refuses more than one text argument (#1340).** It kept the first word after the
-  list and dropped the rest without a word. So a quoting slip, such as an apostrophe inside a
-  single-quoted squawk, landed a truncated item and exited 0. The vendored `scripts/sqtk` is
-  squawkie-talkie v0.12.0's.
+- **`sqtk` refuses a split argument instead of dropping words (#1340).** `add` kept the first
+  word after the list and dropped the rest without a word. So a quoting slip, such as an
+  apostrophe inside a single-quoted squawk, landed a truncated item and exited 0. `show`,
+  `walk`, `new` and `rmlist` given two names, and `lists` and `mine` given any argument, now
+  refuse too. `rmlist` kept the LAST name, so `rmlist keep gone --yes` deleted `gone`. Each
+  refusal exits non-zero and changes nothing. No kit script calls these with more than one
+  argument. The vendored `scripts/sqtk` is squawkie-talkie v0.12.0's (squawkie-talkie #157).
 
 ### Image
 
