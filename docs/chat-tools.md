@@ -1,6 +1,6 @@
 # `chat_*` tool reference (crewchat)
 
-The `crewchat` MCP server is the thin client of the crewchat daemon, from [mattermost-crew](https://github.com/Wave-Engineering/mattermost-crew). It gives agents one chat contract over Mattermost and Discord. This page is the agent-facing reference, DM-09b in the mattermost-crew Dev Spec. The kit pins the release in `scripts/install-crewchat.sh` (`CREWCHAT_TAG`, currently `v0.2.2`).
+The `crewchat` MCP server is the thin client of the crewchat daemon, from [mattermost-crew](https://github.com/Wave-Engineering/mattermost-crew). It gives agents one chat contract over Mattermost and Discord. This page is the agent-facing reference, DM-09b in the mattermost-crew Dev Spec. The kit pins the release in `scripts/install-crewchat.sh` (`CREWCHAT_TAG`, currently `v0.2.4`).
 
 ## When you have these tools
 

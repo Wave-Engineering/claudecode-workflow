@@ -100,9 +100,9 @@ Its exit is the wake-up, as with the one-shots. It **never exits 0 without print
 |---|---|---|
 | 0 | a new event, one JSON line on stdout | handle it (table below), then re-arm |
 | 1 | usage error: no identity, a bad timeout, a daemon error | read stderr. If it names the identity, run `/name`. Do not re-arm in a loop |
-| 2 | not registered: the daemon restarted and lost the session's registration | call `chat_health()`: the daemon answers it `not_registered`, and the shim re-registers. Then re-arm once. If it exits 2 again, report `chat: not registered; restart the session` |
+| 2 | still not registered 60 s after the daemon lost the session's registration (a restart). The shim normally registers again by itself within 15 s, so this is the fallback | call `chat_health()`: the daemon answers it `not_registered`, and the shim re-registers. Then re-arm once. If it exits 2 again, report `chat: not registered; restart the session` |
 | 3 | `CREWCHAT_DOORBELL_TIMEOUT` elapsed | re-arm |
-| 4 | daemon unreachable: no socket, refused, or a cut-short reply | arm the one-shots for this cycle, and squawk it on `claudecode-workflow:triage` with the stderr |
+| 4 | daemon unreachable for more than 60 s: no socket, refused, or a cut-short reply. A daemon restart alone no longer exits 4: the doorbell waits it out | arm the one-shots for this cycle, and squawk it on `claudecode-workflow:triage` with the stderr |
 
 Every event carries `type` and `event_id`:
 

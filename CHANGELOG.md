@@ -19,6 +19,16 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Changed
+- **`install-crewchat.sh` pins mattermost-crew v0.2.4 (#1342).** A v0.2.2 client sends no
+  project key, so the daemon can't apply a server's per-project allowlist, and agents in partner
+  repos get no account there. Its doorbell also exited 4 on every daemon restart, sending each
+  agent back to the one-shots. v0.2.4's doorbell waits 60 s through a restart, and its shim pings
+  the daemon every 15 s and registers again by itself, so an idle session's doorbell re-arms
+  with no tool call. `/disc`'s exit table now says exits 2 and 4 mean an outage longer than that
+  grace. A v0.2.4 client works against an older daemon: its `ping` gets `unsupported`, and the
+  shim falls back to registering on the next tool call. Agents pick it up at their next restart.
+
 ## [8.18.0] - 2026-10-26
 
 The last kit step before the crewchat daemon's first deploy. The crewchat pin moves to
