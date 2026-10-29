@@ -23,6 +23,8 @@ from typing import Tuple
 
 import pytest
 
+from tests.sandbox_env import sandbox_env
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -73,10 +75,11 @@ def sandbox_home(tmp_path: Path) -> Path:
 
 
 def _make_env(home: Path) -> dict[str, str]:
-    """Build a subprocess environment with HOME overridden."""
-    env = os.environ.copy()
-    env["HOME"] = str(home)
-    return env
+    """Build a subprocess environment with HOME, the XDG dirs and uv's tool dirs
+    all under the sandbox. HOME alone let uninstall.sh reach the real uv tool dir
+    through the inherited XDG_DATA_HOME and wipe crewchat-clients on 2026-10-29
+    (see tests/sandbox_env.py)."""
+    return sandbox_env(home)
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +471,67 @@ class TestDiscordWatcherRetirement:
         assert "discord-watcher uninstalled" not in out
 
 
+@_SKIP_NO_BASH
+class TestUninstallStaysInSandbox:
+    """uninstall.sh's `uv tool uninstall` must act on the sandbox's uv tool dir.
+
+    Regression for 2026-10-29 06:06Z: `_make_env` set only HOME, uv found its tool
+    dir through the inherited XDG_DATA_HOME, and this file's uninstall test removed
+    the real crewchat-clients. The `uv` stub reports crewchat-clients as installed,
+    so `install-crewchat.sh uninstall` reaches `uv tool uninstall`, and logs the dirs
+    each call saw. `claude` and `curl` are stubs too, so nothing leaves the sandbox.
+    """
+
+    def test_uv_tool_uninstall_sees_sandbox_dirs(self, tmp_path: Path, sandbox_home: Path) -> None:
+        stubs = tmp_path / "stubs"
+        stubs.mkdir()
+        uv_log = tmp_path / "uv.log"
+        uv = stubs / "uv"
+        uv.write_text(
+            "#!/usr/bin/env bash\n"
+            'printf "UV_TOOL_DIR=%s XDG_DATA_HOME=%s args=%s\\n" '
+            '"$UV_TOOL_DIR" "$XDG_DATA_HOME" "$*" >>"$STUB_UV_LOG"\n'
+            'case "$1 $2" in\n'
+            '"tool list") echo "crewchat-clients v0.2.4" ;;\n'
+            '"tool dir") echo "$UV_TOOL_DIR" ;;\n'
+            "esac\n"
+            "exit 0\n"
+        )
+        claude = stubs / "claude"
+        claude.write_text(
+            "#!/usr/bin/env bash\n"
+            '[[ "$1 $2" == "mcp get" ]] && exit 1\n'
+            "exit 0\n"
+        )
+        curl = stubs / "curl"
+        curl.write_text("#!/usr/bin/env bash\necho 'exit 0'\n")
+        for stub in (uv, claude, curl):
+            stub.chmod(0o755)
+
+        env = _make_env(sandbox_home)
+        env["PATH"] = f"{stubs}:{env['PATH']}"
+        env["STUB_UV_LOG"] = str(uv_log)
+        result = subprocess.run(
+            ["bash", _UNINSTALL_SCRIPT],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+        )
+        out = result.stdout + result.stderr
+        assert _install_ok(result.returncode, out, ""), f"uninstall.sh failed:\n{out}"
+
+        calls = uv_log.read_text().splitlines() if uv_log.exists() else []
+        uninstalls = [c for c in calls if "args=tool uninstall" in c]
+        assert uninstalls, f"the stub must see `uv tool uninstall`, or this proves nothing: {calls}"
+        home = str(sandbox_home)
+        for call in uninstalls:
+            fields = dict(f.split("=", 1) for f in call.split(" args=")[0].split(" "))
+            for var in ("UV_TOOL_DIR", "XDG_DATA_HOME"):
+                assert fields[var].startswith(home + os.sep), (
+                    f"`uv tool uninstall` ran with {var} outside the sandbox: {call}"
+                )
+
 
 @_SKIP_NO_BASH
 @_SKIP_NO_PYTHON3
@@ -735,8 +799,7 @@ class TestInstallSyntheticTree:
         (home / ".local" / "bin").mkdir(parents=True)
         (home / ".claude" / "skills").mkdir(parents=True)
 
-        env = os.environ.copy()
-        env["HOME"] = str(home)
+        env = _make_env(home)
         # --scripts skips skills/config/mcps/crystallizer; depcheck still
         # runs but is harmless on an empty repo.
         result = subprocess.run(
@@ -806,8 +869,7 @@ class TestInstallSyntheticTree:
         (home / ".local" / "bin").mkdir(parents=True)
         (home / ".claude" / "skills").mkdir(parents=True)
 
-        env = os.environ.copy()
-        env["HOME"] = str(home)
+        env = _make_env(home)
 
         # Install once.
         _proc = subprocess.run(
@@ -868,8 +930,7 @@ class TestInstallSyntheticTree:
         (home / ".local" / "bin").mkdir(parents=True)
         (home / ".claude" / "skills").mkdir(parents=True)
 
-        env = os.environ.copy()
-        env["HOME"] = str(home)
+        env = _make_env(home)
 
         _proc = subprocess.run(
             ["bash", str(repo / "install"), "--scripts"],

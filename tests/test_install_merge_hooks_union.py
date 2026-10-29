@@ -25,12 +25,13 @@ Acceptance criteria from #556:
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from tests.sandbox_env import sandbox_env
 
 
 # ---------------------------------------------------------------------------
@@ -58,9 +59,8 @@ _SKIP_NO_JQ = pytest.mark.skipif(not _HAS_JQ, reason="jq not available")
 # ---------------------------------------------------------------------------
 
 def _make_env(home: Path) -> dict[str, str]:
-    env = os.environ.copy()
-    env["HOME"] = str(home)
-    return env
+    # HOME alone is not a sandbox: see tests/sandbox_env.py (the 2026-10-29 uv wipe).
+    return sandbox_env(home)
 
 
 def _run_install(args: list[str], home: Path) -> tuple[int, str, str]:

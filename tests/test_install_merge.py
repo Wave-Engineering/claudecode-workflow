@@ -19,12 +19,13 @@ Acceptance criteria from issue #112:
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from tests.sandbox_env import sandbox_env
 
 
 # ---------------------------------------------------------------------------
@@ -60,10 +61,11 @@ def sandbox_home(tmp_path: Path) -> Path:
 
 
 def _make_env(home: Path) -> dict[str, str]:
-    """Build a subprocess environment with HOME overridden."""
-    env = os.environ.copy()
-    env["HOME"] = str(home)
-    return env
+    """Build a subprocess environment with HOME, XDG and uv's tool dirs sandboxed.
+
+    HOME alone is not a sandbox: see tests/sandbox_env.py (the 2026-10-29 uv wipe).
+    """
+    return sandbox_env(home)
 
 
 def _run_install(
