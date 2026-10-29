@@ -72,7 +72,7 @@ The identity system has two layers that mirror the distinction between project-l
 
 **Why it exists:** Dev-Name provides session-level addressing. When two agents are both working on `cc-workflow`, you need a way to talk to a specific one -- `@beacon` reaches only the agent that picked that name this session. The ephemeral nature is intentional: it prevents stale identity references and makes the channel feel alive rather than static.
 
-**Why kebab-case:** Dev-Names must be kebab-case (lowercase, hyphens between words) because they double as routing keys for `@` addressing in Discord. The watcher tokenizes messages and matches against `@<dev-name>` -- spaces or mixed case would break the matching.
+**Why kebab-case:** Dev-Names must be kebab-case (lowercase, hyphens between words) because they double as routing keys for `@` addressing in chat. Addressing tokenizes messages and matches against `@<dev-name>` -- spaces or mixed case would break the matching.
 
 ### How Identity Flows
 
@@ -265,6 +265,6 @@ If you do not want the first-run intros, ask the agent to remove them: "get rid 
 
 - **[Getting Started](getting-started.md)** -- if you have not yet done the hands-on walkthrough
 - **[Skill Reference](skill-reference.md)** -- detailed documentation for every skill with examples and common options
-- **[Troubleshooting](troubleshooting.md)** -- common failure modes and fixes for vox, watcher, install, identity, and more
+- **[Troubleshooting](troubleshooting.md)** -- common failure modes and fixes for vox, the doorbell, install, identity, and more
 - **[README](../README.md)** -- full component reference (skills table, scripts table, installation options)
 - **[Skill files](../skills/)** -- raw agent prompts for each skill (`skills/<name>/SKILL.md`)

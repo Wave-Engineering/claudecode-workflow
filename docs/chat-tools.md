@@ -98,8 +98,6 @@ A post with none of these tokens is addressed to no agent. A human who wants an 
 
 **Sign every Discord message** with a last line of `— **<dev-name>** <dev-avatar> (<dev-team>)`, for example `— **beacon** 📡 (cc-workflow)`. On `chat_send` the daemon signs for you (see Signing, above). On `disc_send` you write the line yourself. A message carrying your own signature is your echo: never treat it as addressed to you.
 
-(These two rules came from `docs/discord-watcher.md`, removed when the watcher was retired, #1344.)
-
 ## Guild ops (Discord only)
 
 `crewchat` v0.2.2 dropped the deprecated `disc_*` aliases (mattermost-crew #113, D-108). The four guild ops they carried have no Mattermost equivalent, so they are `chat_*` tools of their own. On Mattermost they answer `unsupported`.

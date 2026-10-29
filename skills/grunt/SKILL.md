@@ -53,7 +53,7 @@ shared fragments — under isolation, yours is the only backstop there.
 
 1. **Scope.** Mint a `<uuid>`. Derive a short `<slug>` and `<domain>` from the mission. Name her
    `<lead>`: you, by the session name `ListAgents` shows for you, which is the address her
-   `SendMessage` uses. Fill `<lead-dev-name>` with your Dev-Name, the name the Discord watcher
+   `SendMessage` uses. Fill `<lead-dev-name>` with your Dev-Name, the name `@`-addressing
    routes on, and pick her fallback `<side-channel>` for when `SendMessage` fails (default: her
    roll-call Discord channel, addressed `@<lead-dev-name>`).
    Identify her `<render-roots>` (where shared fragments render to — e.g. `sites/`) for the

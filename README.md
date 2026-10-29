@@ -13,7 +13,7 @@ This repo packages the custom skills, utility scripts, and project instructions 
 | [Skill Reference](docs/skill-reference.md) | Detailed docs for every skill |
 | [Cheat Sheet](docs/cheatsheet.md) | One-page skill + MCP tool quick reference |
 | [KAHUNA Guide](docs/kahuna-guide.md) | Run `/wavemachine` autonomously on multi-issue epics |
-| [Discord Setup](docs/discord-config.md) | Bot token, watcher, inter-agent messaging |
+| [Discord Setup](docs/discord-config.md) | Bot token, inter-agent messaging |
 | [Statusline Indicators](docs/statusline-indicators.md) | Per-session indicator interface for skills and scripts |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and fixes |
 | [New Agent Orientation](docs/seed-ai-dev.md) | Day-1 context for AI agents joining the fleet |

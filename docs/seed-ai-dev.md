@@ -225,7 +225,7 @@ These are indexed here so when you hit the failure mode, you know where to look:
 - `memory/lesson_mcp_binary_swap_requires_cc_restart.md` — swapping the MCP binary ≠ refreshing the tool registry
 - `memory/lesson_mcp_install_path_skew.md` — `dist/` rebuild vs `~/.local/bin/` subprocess
 - `docs/mcp-scoping.md` — scope rules; project vs user vs system
-- `docs/mcp-logging-standard.md` — structured logging across all 5 MCP servers
+- `docs/mcp-logging-standard.md` — structured logging across the kit's MCP servers
 
 ### Git / PR / merge
 
