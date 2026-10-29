@@ -63,9 +63,10 @@ The inbound side of the dual-mode rule (#1336, K-2). It is decided by the same t
 - **Otherwise** the kit has no Discord doorbell on this host. `discord-watcher` was that doorbell, and it was retired (#1344). You still send and read with `disc_*`, but you hear Discord only when you read it. While you wait on squawks, arm `sqtk-doorbell.sh` (`/sqtk`).
 
 ```bash
-crewchat-doorbell                                # blocks until an event, prints it as one JSON line, exits
-CREWCHAT_DOORBELL_TIMEOUT=1800 crewchat-doorbell # bounded wait; exit 3 if nothing arrives
+crewchat-doorbell   # blocks until an event, prints it as one JSON line, exits
 ```
+
+Arm it with no timeout (#1346). A timeout only wakes you for a turn with nothing in it, every time it elapses. It buys no liveness either: the doorbell's failures exit by themselves, 2 when the session isn't registered and 4 when the daemon is down.
 
 Its exit is the wake-up, as with `sqtk-doorbell.sh`. It **never exits 0 without printing a new event**: delivery is at least once, and `crewchat-doorbell` drops a repeat by its `event_id` and waits again. So exit 0 is always something to handle. Re-arm after every exit except 1:
 
@@ -74,7 +75,7 @@ Its exit is the wake-up, as with `sqtk-doorbell.sh`. It **never exits 0 without 
 | 0 | a new event, one JSON line on stdout | handle it (table below), then re-arm |
 | 1 | usage error: no identity, a bad timeout, a daemon error | read stderr. If it names the identity, run `/name`. Do not re-arm in a loop |
 | 2 | not registered: the daemon restarted and lost the session's registration, and the doorbell's 60 s grace (from the first failure) ran out. Against a daemon that has `ping` (v0.2.4 or later) the shim registers again by itself within about 20 s, so there this is the fallback; against an older daemon it is the usual path | call `chat_health()`: the daemon answers it `not_registered`, and the shim re-registers. Then re-arm once. If it exits 2 again, report `chat: not registered; restart the session` |
-| 3 | `CREWCHAT_DOORBELL_TIMEOUT` elapsed | re-arm |
+| 3 | `CREWCHAT_DOORBELL_TIMEOUT` elapsed. This happens only when someone set one by hand: the kit arms with none | re-arm, with no timeout |
 | 4 | daemon unreachable: down for more than 60 s (no socket, refused, or closed before its reply), or at once for no permission on the socket, a connect timeout, or a bad reply. A restart shorter than 60 s doesn't exit 4 | arm `sqtk-doorbell.sh` for this cycle if you are waiting on squawks (Discord has no doorbell until the daemon is back), and squawk it on `claudecode-workflow:triage` with the stderr |
 
 Every event carries `type` and `event_id`:

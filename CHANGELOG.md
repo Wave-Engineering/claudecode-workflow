@@ -37,6 +37,11 @@ are worth keeping apart:
   has no Discord doorbell from the kit. `disc-server` still sends and reads there.
 
 ### Changed
+- **`/disc` arms `crewchat-doorbell` with no timeout (#1346).** The arm line was
+  `CREWCHAT_DOORBELL_TIMEOUT=1800`. Every exit 3 woke the agent for a turn with nothing in it,
+  about 48 a day per agent. Since mattermost-crew v0.2.4 the doorbell's failures exit by
+  themselves, 2 when the session isn't registered and 4 when the daemon is down, so the timeout
+  bought no liveness. Running agents keep the old line until they pick up this release.
 - **`install-crewchat.sh` pins mattermost-crew v0.2.4 (#1342).** A v0.2.2 client sends no
   project key, so the daemon can't apply a server's per-project allowlist, and agents in partner
   repos get no account there. Its doorbell also exited 4 on every daemon restart, sending each

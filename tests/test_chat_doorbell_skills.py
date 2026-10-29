@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -60,6 +61,9 @@ def test_disc_defines_the_doorbell_rule() -> None:
         assert must in body, f"/disc's doorbell rule must say {must!r}"
     # 8.17.0's workaround, from before health re-registered (mattermost-crew #112): gone in 8.18.0.
     assert "call `chat_read` with `limit: 1`" not in body
+    # #1346: every exit 3 is an empty turn, so the kit arms with no timeout.
+    assert "Arm it with no timeout" in body
+    assert not re.search(r"CREWCHAT_DOORBELL_TIMEOUT=\d", body), "/disc must not arm the doorbell with a timeout"
     for code in ("| 0 |", "| 1 |", "| 2 |", "| 3 |", "| 4 |"):
         assert code in body, f"/disc's doorbell rule must cover exit {code}"
     for event in (
@@ -72,6 +76,14 @@ def test_disc_defines_the_doorbell_rule() -> None:
     ):
         assert event in body, f"/disc's doorbell rule must handle {event}"
     assert "`root_id`" in body and "`post_id`" in body, "say how to answer in the thread"
+
+
+def test_no_skill_arms_the_doorbell_with_a_timeout() -> None:
+    """#1346: no skill copies a timed arm line, which would wake its agent for nothing."""
+    for skill_md in sorted(_SKILLS.glob("*/SKILL.md")):
+        assert not re.search(r"CREWCHAT_DOORBELL_TIMEOUT=\d", skill_md.read_text()), (
+            f"{skill_md.relative_to(_REPO)} arms crewchat-doorbell with a timeout (#1346)"
+        )
 
 
 def test_disc_outsider_content_is_data() -> None:
