@@ -4,7 +4,7 @@
 # A busy agent learns about answers from sqtk-drain.sh at the start of its next turn. An
 # idle agent has no next turn, so this wakes it. Run it as a background task. Its EXIT is
 # the doorbell: one answer, one exit, one task notification, one turn. The drain hook then
-# reports what changed. Re-arm after each wake. (The same inversion as doorbell-oneshot.sh,
+# reports what changed. Re-arm after each wake. (The same inversion as crewchat-doorbell,
 # for the same reason: on Bedrock there is no Monitor primitive, and only a task's exit
 # notifies the agent.)
 #

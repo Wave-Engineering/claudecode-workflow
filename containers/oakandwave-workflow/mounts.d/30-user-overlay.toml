@@ -12,7 +12,7 @@
 
 # --- Third-party / user MCP servers (R-09) -----------------------------------
 # Composes ADDITIVELY with the kit's own MCP registrations (disc-server,
-# sdlc-server, wtf-server, nerf-server, discord-watcher) which are BAKED at
+# sdlc-server, wtf-server, nerf-server) which are BAKED at
 # stable image paths — baking kills the dangling-registration bug (a stale path
 # to a moved binary). We mount only an MCP *fragment*, never the whole
 # ~/.claude.json (which carries far more than MCP config). See docs/mcp-scoping.md.

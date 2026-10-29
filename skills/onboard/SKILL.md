@@ -36,7 +36,7 @@ Note whether `CLAUDE.md` and `.claude-project.md` existed at startup; step 7 nee
 
 ## 2. `/name`
 
-Run `/name`, second. The watcher, the doorbell, `sqtk` prefixes and the statusline all depend on
+Run `/name`, second. The doorbell, `@`-addressing, `sqtk` prefixes and the statusline all depend on
 identity, so nothing that talks to other agents works until it exists.
 
 ## 3. Seed check

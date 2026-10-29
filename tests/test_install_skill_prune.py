@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.sandbox_env import sandbox_env
+
 _REPO_DIR = Path(__file__).resolve().parent.parent
 _INSTALL_SCRIPT = str(_REPO_DIR / "install")
 
@@ -39,9 +41,8 @@ _SKIP = pytest.mark.skipif(
 
 
 def _make_env(home: Path) -> dict[str, str]:
-    env = os.environ.copy()
-    env["HOME"] = str(home)
-    return env
+    # HOME alone is not a sandbox: see tests/sandbox_env.py (the 2026-10-29 uv wipe).
+    return sandbox_env(home)
 
 
 def _build_synthetic_repo(tmp_path: Path) -> Path:

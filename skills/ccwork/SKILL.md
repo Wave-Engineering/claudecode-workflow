@@ -556,18 +556,18 @@ mcp__disc-server__disc_send({
 })
 ```
 
-### Step 8: Verify Discord Watcher
+### Step 8: Check the Doorbell
 
-Check that the discord-watcher MCP server is registered so agents receive channel notifications:
+Check whether this host can hear Discord. Agents hear it through `crewchat-doorbell`, which `./install` sets up only where the crewchat daemon runs:
 
 ```bash
-claude mcp list 2>/dev/null | grep -q discord-watcher
+claude mcp list 2>/dev/null | grep -qw crewchat
 ```
 
-- **If registered:** *"discord-watcher MCP server is registered. You'll receive channel notifications in your Claude Code sessions."*
-- **If not registered:** *"discord-watcher is not registered. To set it up, run the install script or manually add it: `claude mcp add --scope user --transport stdio discord-watcher -- bun <path>/index.ts`"*
+- **If registered:** *"crewchat is registered. Agents here hear Discord through `crewchat-doorbell` (`/disc doorbell`)."*
+- **If not registered:** *"This host has no crewchat daemon, so the kit gives it no Discord doorbell. Outbound `/disc` works; agents see messages only when they read a channel."*
 
-This is informational — the setup is complete regardless. The watcher is needed for agents to receive Discord messages during sessions but isn't required for outbound `/disc` calls.
+This is informational — the setup is complete regardless. (The old `discord-watcher` channel server was retired in #1344.)
 
 - **If it works:** Confirm: *"Discord configuration complete. Test message sent to the default channel. You can now use `/disc` to interact with your server."*
 - **If it fails:** Help troubleshoot (permissions, channel ID mismatch, token issues). The config file has been written — the user can fix the issue and retry with `/ccwork setup discord`.

@@ -1066,7 +1066,7 @@ ensure_gitlab_auth() {
 
 # --- Kit registrations into the CLI's own config (#1085) ----------------------
 #
-# `./install` registers the kit's five MCP servers at BUILD time, into the image's
+# `./install` registers the kit's four MCP servers at BUILD time, into the image's
 # $HOME/.claude.json. Under aoe the CLI reads $CLAUDE_CONFIG_DIR/.claude.json
 # instead, which is aoe's mounted host config — so a production container had
 # `mcpServers: []` and not one kit MCP available, while the image's own copy sat

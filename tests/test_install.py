@@ -23,6 +23,8 @@ from typing import Tuple
 
 import pytest
 
+from tests.sandbox_env import sandbox_env
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -73,10 +75,11 @@ def sandbox_home(tmp_path: Path) -> Path:
 
 
 def _make_env(home: Path) -> dict[str, str]:
-    """Build a subprocess environment with HOME overridden."""
-    env = os.environ.copy()
-    env["HOME"] = str(home)
-    return env
+    """Build a subprocess environment with HOME, the XDG dirs and uv's tool dirs
+    all under the sandbox. HOME alone let uninstall.sh reach the real uv tool dir
+    through the inherited XDG_DATA_HOME and wipe crewchat-clients on 2026-10-29
+    (see tests/sandbox_env.py)."""
+    return sandbox_env(home)
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +102,7 @@ def _with_no_mcps(args: list[str]) -> list[str]:
 
     **Nothing tested today stops being tested.** The coverage this skips is held
     somewhere strictly better: the image build runs a real, complete ``./install``
-    and fails unless every one of the five servers is registered in
+    and fails unless every server in ``mcps.json`` is registered in
     ``~/.claude.json`` **and** its binary is executable. That is the artifact that
     actually ships, so the division is: the image proves a full install works,
     this file proves the BEHAVIOURS around install — prune, drift, uninstall,
@@ -294,7 +297,7 @@ class TestInstallCreatesArtifacts:
         for rel in (
             "WAVE_AXIOMS.md",
             "docs/mcp-scoping.md",
-            "docs/discord-watcher.md",
+            "docs/chat-tools.md",
             "docs/operations/log-rotation.md",
             "docs/operations/branch-protection-checklist.md",
         ):
@@ -365,6 +368,184 @@ class TestInstallCreatesArtifacts:
                 "(/ping and /pong were removed in #1062; add the path to DEPRECATED_PATHS)"
             )
 
+    def test_retired_discord_watcher_artifacts_are_pruned(self, sandbox_home: Path) -> None:
+        """#1344: the watcher's kit doc and one-shot wrapper leave an installed host.
+
+        A repo that resolves kit docs from ~/.claude would otherwise keep reading
+        instructions for a retired server, and the wrapper would keep arming a
+        watcher that is no longer installed. Plant them first, as above.
+        """
+        planted = []
+        for rel, body in [
+            (".claude/docs/discord-watcher.md", "# Discord Watcher (Channels)\n"),
+            (".claude/scripts/doorbell-oneshot.sh", "#!/usr/bin/env bash\n"),
+            (".local/bin/doorbell-oneshot.sh", "#!/usr/bin/env bash\n"),
+        ]:
+            f = sandbox_home / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(body)
+            planted.append(f)
+
+        rc, out, err = run_install([], sandbox_home)
+        assert _install_ok(rc, out, err), f"install.sh failed (rc={rc}):\nstdout: {out}\nstderr: {err}"
+
+        for f in planted:
+            assert not f.exists(), (
+                f"retired discord-watcher artifact survived install: {f.relative_to(sandbox_home)} "
+                "(#1344; add the path to DEPRECATED_PATHS)"
+            )
+        assert (sandbox_home / ".claude" / "docs" / "chat-tools.md").exists()
+
+
+_DW_URL = (
+    "https://raw.githubusercontent.com/Wave-Engineering/mcp-server-discord-watcher"
+    "/main/scripts/install-remote.sh"
+)
+
+
+@_SKIP_NO_BASH
+class TestDiscordWatcherRetirement:
+    """#1344: `./install --mcps` uninstalls a registered discord-watcher, and only then.
+
+    `claude` and `curl` are stubs on PATH, so nothing reaches the network or the real
+    ~/.claude.json. The `curl` stub logs each URL and serves a script that echoes its
+    arguments, so the test can see both what was fetched and how it was run. The
+    crewchat step is pointed at a socket that doesn't exist, so it stays a no-op.
+    """
+
+    def _run_mcps(self, tmp_path: Path, home: Path, mcp_list: str) -> Tuple[int, str, Path]:
+        stubs = tmp_path / "stubs"
+        stubs.mkdir()
+        curl_log = tmp_path / "curl.log"
+        claude = stubs / "claude"
+        claude.write_text(
+            "#!/usr/bin/env bash\n"
+            '[[ "$1 $2" == "mcp list" ]] && cat "$STUB_MCP_LIST"\n'
+            "exit 0\n"
+        )
+        curl = stubs / "curl"
+        curl.write_text(
+            "#!/usr/bin/env bash\n"
+            'printf "%s\\n" "${@: -1}" >>"$STUB_CURL_LOG"\n'
+            "echo 'echo \"stub-remote $*\"'\n"
+        )
+        for stub in (claude, curl):
+            stub.chmod(0o755)
+        listing = tmp_path / "mcp-list.txt"
+        listing.write_text(mcp_list)
+
+        env = _make_env(home)
+        env["PATH"] = f"{stubs}:{env['PATH']}"
+        env["STUB_MCP_LIST"] = str(listing)
+        env["STUB_CURL_LOG"] = str(curl_log)
+        env["CREWCHAT_SOCKET"] = str(tmp_path / "no-daemon.sock")
+        result = subprocess.run(
+            ["bash", _INSTALL_SCRIPT, "--mcps"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+        )
+        return result.returncode, result.stdout + result.stderr, curl_log
+
+    def test_registered_watcher_is_uninstalled(self, tmp_path: Path, sandbox_home: Path) -> None:
+        rc, out, curl_log = self._run_mcps(
+            tmp_path, sandbox_home, "discord-watcher: bun run index.ts - ✓ Connected\n"
+        )
+        assert _install_ok(rc, out, ""), f"install --mcps failed (rc={rc}):\n{out}"
+        fetched = curl_log.read_text().splitlines()
+        assert fetched.count(_DW_URL) == 1, f"the watcher's uninstaller must run once: {fetched}"
+        assert "Retiring discord-watcher (#1344)" in out
+        assert "stub-remote --uninstall" in out, "it must run as `bash -s -- --uninstall`"
+        assert "discord-watcher uninstalled" in out
+
+    def test_absent_watcher_is_left_alone(self, tmp_path: Path, sandbox_home: Path) -> None:
+        rc, out, curl_log = self._run_mcps(
+            tmp_path, sandbox_home, "sdlc-server: sdlc-server - ✓ Connected\n"
+        )
+        assert _install_ok(rc, out, ""), f"install --mcps failed (rc={rc}):\n{out}"
+        fetched = curl_log.read_text().splitlines() if curl_log.exists() else []
+        assert fetched, "the mcps.json servers should still be fetched"
+        assert _DW_URL not in fetched, "mcps.json must not install discord-watcher any more"
+        assert "Retiring discord-watcher" not in out
+        assert "discord-watcher uninstalled" not in out
+
+
+@_SKIP_NO_BASH
+class TestUninstallStaysInSandbox:
+    """uninstall.sh's `uv tool uninstall` must act on the sandbox's uv tool dir.
+
+    Regression for 2026-10-29 06:06Z: `_make_env` set only HOME, uv found its tool
+    dir through the inherited XDG_DATA_HOME, and this file's uninstall test removed
+    the real crewchat-clients. The `uv` stub reports crewchat-clients as installed,
+    so `install-crewchat.sh uninstall` reaches `uv tool uninstall`, and logs the dirs
+    each call saw. `claude` and `curl` are stubs too, so nothing leaves the sandbox.
+    """
+
+    def test_uninstall_tools_see_sandbox_dirs(
+        self, tmp_path: Path, sandbox_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stubs = tmp_path / "stubs"
+        stubs.mkdir()
+        uv_log = tmp_path / "uv.log"
+        uv = stubs / "uv"
+        uv.write_text(
+            "#!/usr/bin/env bash\n"
+            'printf "UV_TOOL_DIR=%s XDG_DATA_HOME=%s args=%s\\n" '
+            '"$UV_TOOL_DIR" "$XDG_DATA_HOME" "$*" >>"$STUB_UV_LOG"\n'
+            'case "$1 $2" in\n'
+            '"tool list") echo "crewchat-clients v0.2.4" ;;\n'
+            '"tool dir") echo "$UV_TOOL_DIR" ;;\n'
+            "esac\n"
+            "exit 0\n"
+        )
+        claude_log = tmp_path / "claude.log"
+        claude = stubs / "claude"
+        claude.write_text(
+            "#!/usr/bin/env bash\n"
+            'printf "CLAUDE_CONFIG_DIR=%s args=%s\\n" '
+            '"${CLAUDE_CONFIG_DIR-<unset>}" "$*" >>"$STUB_CLAUDE_LOG"\n'
+            '[[ "$1 $2" == "mcp get" ]] && exit 1\n'
+            "exit 0\n"
+        )
+        curl = stubs / "curl"
+        curl.write_text("#!/usr/bin/env bash\necho 'exit 0'\n")
+        for stub in (uv, claude, curl):
+            stub.chmod(0o755)
+
+        # A real CLAUDE_CONFIG_DIR, as an aoe session inherits, must not reach `claude`.
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "real-claude-config"))
+        env = _make_env(sandbox_home)
+        env["PATH"] = f"{stubs}:{env['PATH']}"
+        env["STUB_UV_LOG"] = str(uv_log)
+        env["STUB_CLAUDE_LOG"] = str(claude_log)
+        result = subprocess.run(
+            ["bash", _UNINSTALL_SCRIPT],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+        )
+        out = result.stdout + result.stderr
+        assert _install_ok(result.returncode, out, ""), f"uninstall.sh failed:\n{out}"
+
+        calls = uv_log.read_text().splitlines() if uv_log.exists() else []
+        uninstalls = [c for c in calls if "args=tool uninstall" in c]
+        assert uninstalls, f"the stub must see `uv tool uninstall`, or this proves nothing: {calls}"
+        home = str(sandbox_home)
+        for call in uninstalls:
+            fields = dict(f.split("=", 1) for f in call.split(" args=")[0].split(" "))
+            for var in ("UV_TOOL_DIR", "XDG_DATA_HOME"):
+                assert fields[var].startswith(home + os.sep), (
+                    f"`uv tool uninstall` ran with {var} outside the sandbox: {call}"
+                )
+
+        claude_calls = claude_log.read_text().splitlines() if claude_log.exists() else []
+        assert claude_calls, "uninstall.sh must reach `claude`, or this proves nothing"
+        for call in claude_calls:
+            assert call.startswith("CLAUDE_CONFIG_DIR=<unset> "), (
+                f"`claude` ran with an inherited CLAUDE_CONFIG_DIR: {call}"
+            )
 
 
 @_SKIP_NO_BASH
@@ -633,8 +814,7 @@ class TestInstallSyntheticTree:
         (home / ".local" / "bin").mkdir(parents=True)
         (home / ".claude" / "skills").mkdir(parents=True)
 
-        env = os.environ.copy()
-        env["HOME"] = str(home)
+        env = _make_env(home)
         # --scripts skips skills/config/mcps/crystallizer; depcheck still
         # runs but is harmless on an empty repo.
         result = subprocess.run(
@@ -704,8 +884,7 @@ class TestInstallSyntheticTree:
         (home / ".local" / "bin").mkdir(parents=True)
         (home / ".claude" / "skills").mkdir(parents=True)
 
-        env = os.environ.copy()
-        env["HOME"] = str(home)
+        env = _make_env(home)
 
         # Install once.
         _proc = subprocess.run(
@@ -766,8 +945,7 @@ class TestInstallSyntheticTree:
         (home / ".local" / "bin").mkdir(parents=True)
         (home / ".claude" / "skills").mkdir(parents=True)
 
-        env = os.environ.copy()
-        env["HOME"] = str(home)
+        env = _make_env(home)
 
         _proc = subprocess.run(
             ["bash", str(repo / "install"), "--scripts"],

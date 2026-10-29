@@ -69,7 +69,7 @@
     },
     {
       "path": "~/.secrets/discord-bot-token",
-      "required_by": "disc-server and discord-watcher MCPs"
+      "required_by": "disc-server MCP"
     }
   ]
 }

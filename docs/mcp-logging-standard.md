@@ -278,7 +278,6 @@ Add `LOG_FILE=~/.claude/logs/<server>.jsonl` to agent launch config or
 | Server | Priority | Rationale |
 |--------|----------|-----------|
 | **disc-server** | P0 | Zero API logging today. Rate limit diagnosis impossible. |
-| **discord-watcher** | P0 | Polling is the main rate budget consumer. Scream-hole routing verification needed. |
 | **mcp-server-sdlc** | P1 | 67 handlers, subprocess calls to gh/glab. Failure diagnosis requires re-running. |
 | **mcp-server-wtf** | P2 | Has some logging already. Lower urgency. |
 | **mcp-server-nerf** | P2 | Internal state management only. No external API calls. |

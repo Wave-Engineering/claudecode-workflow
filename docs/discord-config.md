@@ -31,7 +31,7 @@ their agents at their own Discord server without modifying source.
 |-------|------|----------|-------------|
 | `guild_id` | string | Yes | Discord server (guild) ID |
 | `token_path` | string | No | Path to bot token file (default: `~/.secrets/discord-bot-token`) |
-| `scream_hole_url` | string | No | Base URL of a [scream-hole](https://github.com/Wave-Engineering/scream-hole) proxy (e.g., `http://scream-hole:3000`). When set, `disc-server` MCP and `discord-watcher` route Discord REST API calls through the proxy instead of hitting Discord directly. Omit to use direct Discord API. |
+| `scream_hole_url` | string | No | Base URL of a [scream-hole](https://github.com/Wave-Engineering/scream-hole) proxy (e.g., `http://scream-hole:3000`). When set, the `disc-server` MCP routes Discord REST API calls through the proxy instead of hitting Discord directly. Omit to use direct Discord API. |
 | `default_channel_id` | string | Yes | Snowflake ID of the channel playing the **default** role |
 | `roll_call_channel_id` | string | Yes | Snowflake ID of the channel playing the **roll-call** role |
 | `channels` | object | Yes | **Flat** map of channel name → snowflake ID *string* (e.g. `{"agent-ops":"148…","roll-call":"148…"}`). Keyed by real Discord channel names, NOT roles; values are bare id strings, NOT nested objects. |
@@ -72,10 +72,10 @@ rate-limiting issues when multiple agents share the same bot token.
 
 When `scream_hole_url` is set:
 
-- **disc-server** MCP and **discord-watcher** route Discord REST API calls
+- the **disc-server** MCP routes Discord REST API calls
   through the proxy (reads from cache, writes forwarded to Discord)
-- On startup, both hit `${scream_hole_url}/health` to verify reachability
-- If unreachable, they fall back to direct Discord API with a logged warning
+- On startup, it hits `${scream_hole_url}/health` to verify reachability
+- If unreachable, it falls back to direct Discord API with a logged warning
 - No behavior change when the field is omitted (backwards compatible)
 
 ## Per-User Scoping Strategy
@@ -92,9 +92,9 @@ their team's channels. Clean separation but more channels to manage.
 ### Option B: Shared Channels with Identity-Based Routing
 
 Use the existing `@<dev-team>` and `@<dev-name>` addressing convention.
-All agents share the same channels, and the watcher's pre-filtering
-ensures each agent only sees messages addressed to it. Already implemented
-in `discord-watcher`.
+All agents share the same channels, and the doorbell delivers each agent
+only the messages addressed to it (`crewchat-doorbell`; see
+[`chat-tools.md`](chat-tools.md), "Addressing").
 
 ### Option C: Both (Recommended for Larger Teams)
 

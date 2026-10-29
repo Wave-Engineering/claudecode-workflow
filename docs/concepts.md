@@ -38,13 +38,13 @@ For richer integrations that need bidirectional data (Discord, GitLab/GitHub ori
 
 **Why they are markdown, not code:** Skills are instructions for an LLM, not programs for a computer. They describe intent, decision trees, and workflows in natural language. This makes them easy to read, modify, and extend without programming knowledge. A skill file reads like a runbook because that is exactly what it is -- a runbook that Claude Code can execute.
 
-### The Fourth Layer: Channels
+### The Fourth Layer: The Doorbell
 
-**What:** MCP (Model Context Protocol) channel servers that push real-time notifications into Claude Code sessions. Currently the kit ships one: `discord-watcher`.
+**What:** a background task that wakes the agent when something arrives for it. On a host that runs the crewchat daemon it is `crewchat-doorbell`, one stream for Mattermost, Discord and squawk answers. (The kit's earlier Discord channel server, `discord-watcher`, was retired in #1344.)
 
-**What it does:** The discord-watcher polls Discord channels and delivers messages to the Claude Code session as `<channel>` notifications. This enables real-time inter-agent communication -- multiple Claude Code agents running on different machines (or different projects on the same machine) can talk to each other through Discord.
+**What it does:** the doorbell blocks until an event addressed to this agent arrives, prints it, and exits. The exit is what wakes the agent. This enables real-time inter-agent communication -- multiple Claude Code agents running on different machines (or different projects on the same machine) can talk to each other.
 
-**Why it is a separate layer:** The first three layers are pull-based -- Claude decides when to use a script or skill. Channels are push-based -- external events (a Discord message) arrive without Claude asking for them. This is a fundamentally different interaction pattern that requires the MCP channel server infrastructure. Not every deployment needs channels -- they add complexity and require a running Discord server with a bot token -- but for teams running multiple agents, they enable coordination that would otherwise require human relay.
+**Why it is a separate layer:** The first three layers are pull-based -- Claude decides when to use a script or skill. The doorbell is push-based -- external events (a chat message) arrive without Claude asking for them. Not every deployment needs it -- it needs the crewchat daemon on the host -- but for teams running multiple agents, it enables coordination that would otherwise require human relay.
 
 ---
 
@@ -72,7 +72,7 @@ The identity system has two layers that mirror the distinction between project-l
 
 **Why it exists:** Dev-Name provides session-level addressing. When two agents are both working on `cc-workflow`, you need a way to talk to a specific one -- `@beacon` reaches only the agent that picked that name this session. The ephemeral nature is intentional: it prevents stale identity references and makes the channel feel alive rather than static.
 
-**Why kebab-case:** Dev-Names must be kebab-case (lowercase, hyphens between words) because they double as routing keys for `@` addressing in Discord. The watcher tokenizes messages and matches against `@<dev-name>` -- spaces or mixed case would break the matching.
+**Why kebab-case:** Dev-Names must be kebab-case (lowercase, hyphens between words) because they double as routing keys for `@` addressing in chat. Addressing tokenizes messages and matches against `@<dev-name>` -- spaces or mixed case would break the matching.
 
 ### How Identity Flows
 
@@ -92,7 +92,7 @@ Session start: Claude picks Dev-Name + Dev-Avatar
         |
         v
 Used by: /disc, /name, statusline,
-         discord-watcher echo filtering, message signatures
+         chat addressing, message signatures
 ```
 
 Every skill and script that needs identity reads from the same file, resolved the same way. This is why the identity file is keyed by project root hash rather than PID -- it provides a stable rendezvous point for all components.
@@ -265,6 +265,6 @@ If you do not want the first-run intros, ask the agent to remove them: "get rid 
 
 - **[Getting Started](getting-started.md)** -- if you have not yet done the hands-on walkthrough
 - **[Skill Reference](skill-reference.md)** -- detailed documentation for every skill with examples and common options
-- **[Troubleshooting](troubleshooting.md)** -- common failure modes and fixes for vox, watcher, install, identity, and more
+- **[Troubleshooting](troubleshooting.md)** -- common failure modes and fixes for vox, the doorbell, install, identity, and more
 - **[README](../README.md)** -- full component reference (skills table, scripts table, installation options)
 - **[Skill files](../skills/)** -- raw agent prompts for each skill (`skills/<name>/SKILL.md`)

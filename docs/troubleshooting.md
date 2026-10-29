@@ -25,27 +25,23 @@ Common failure modes and their fixes. Each entry describes the symptom you see, 
 
 ---
 
-## 2. Watcher dropping messages
+## 2. Agent not hearing Discord messages
 
-**Symptom:** You send a message on Discord with `@cc-workflow` or `@beacon` addressing, but the agent does not receive the notification. Other messages get through fine.
+**Symptom:** You send a message on Discord with `@cc-workflow` or `@beacon` addressing, but the agent never reacts.
 
-**Cause:** The discord-watcher tokenizes message content and matches against `@<dev-team>`, `@<dev-name>`, and `@all`. Punctuation attached to the addressing token can prevent a match.
+**Cause:** Agents hear Discord only through `crewchat-doorbell`, on a host that runs the crewchat daemon. The `discord-watcher` channel server that used to do this was retired (#1344). Usual causes:
 
-For example, `@beacon,` (with a trailing comma) or `@cc-workflow:` (with a trailing colon) would not match because the token includes the punctuation. This was fixed in [#108](https://github.com/Wave-Engineering/claudecode-workflow/pull/108) by stripping punctuation from addressing tokens before matching.
-
-Other causes:
-
-- **Identity not set.** If the agent has not picked a Dev-Name yet (no identity file exists), the watcher has nothing to match against for `@<dev-name>` addressing. `@<dev-team>` and `@all` would still work.
-- **Echo filtering.** Messages that contain the agent's own signature (e.g., `-- **beacon** 📡 (cc-workflow)`) are suppressed to prevent loops. If you are testing by manually posting a message that includes the agent's signature, it will be filtered.
-- **Watcher not running.** The session must be started with `--dangerously-load-development-channels server:discord-watcher` (or the `--channels` alias) for the watcher to be active.
+- **No crewchat on this host.** If `chat_send` is not in the agent's tool list, the kit has no Discord doorbell there. The agent can still send and read with `disc-server`, but it only sees a message when it reads the channel.
+- **Doorbell not armed.** The agent must run `crewchat-doorbell` as a background task and re-arm it after every exit (`/disc`, "Doorbell").
+- **Identity not set.** With no identity file, there is no Dev-Name to address. Run `/name`.
+- **Addressing.** A message with no `@` token reaches no agent (`docs/chat-tools.md`, "Addressing").
 
 **Fix:**
 
-1. Update to the latest version (post-#108) which strips punctuation from addressing tokens.
-2. Ensure the agent has picked an identity: run `/name` to check.
-3. Avoid including the agent's signature in test messages.
-4. Verify the watcher is running: check that the session was started with channels enabled.
-5. For debugging, run with `DISCORD_WATCHER_VERBOSE=1` to bypass filtering and receive all messages.
+1. Check that `chat_send` is in the agent's tool list. If not, the host has no crewchat daemon.
+2. Check that a `crewchat-doorbell` is running from the agent's project root, and read its last exit code against the table in `/disc`.
+3. Run `/name` to confirm the identity.
+4. Address the message with an `@` token.
 
 ---
 

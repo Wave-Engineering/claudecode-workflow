@@ -13,7 +13,7 @@ This repo packages the custom skills, utility scripts, and project instructions 
 | [Skill Reference](docs/skill-reference.md) | Detailed docs for every skill |
 | [Cheat Sheet](docs/cheatsheet.md) | One-page skill + MCP tool quick reference |
 | [KAHUNA Guide](docs/kahuna-guide.md) | Run `/wavemachine` autonomously on multi-issue epics |
-| [Discord Setup](docs/discord-config.md) | Bot token, watcher, inter-agent messaging |
+| [Discord Setup](docs/discord-config.md) | Bot token, inter-agent messaging |
 | [Statusline Indicators](docs/statusline-indicators.md) | Per-session indicator interface for skills and scripts |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and fixes |
 | [New Agent Orientation](docs/seed-ai-dev.md) | Day-1 context for AI agents joining the fleet |
@@ -125,7 +125,6 @@ MCP servers are managed via `mcps.json` and installed from their own repos:
 | Server | Repo | What it does |
 |--------|------|-------------|
 | `wtf-server` | [mcp-server-wtf](https://github.com/Wave-Engineering/mcp-server-wtf) | Flight recorder for incident troubleshooting |
-| `discord-watcher` | [mcp-server-discord-watcher](https://github.com/Wave-Engineering/mcp-server-discord-watcher) | Discord channel notification server for inter-agent communication |
 | `nerf-server` | [mcp-server-nerf](https://github.com/Wave-Engineering/mcp-server-nerf) | Deterministic context budget management (nerf darts, modes, statusline) |
 
 Each MCP has its own `install-remote.sh` for standalone installation. Running `./install.sh` installs all MCPs from the manifest automatically.
@@ -276,7 +275,7 @@ These authenticate automatically through Claude Code's OAuth flow. No manual tok
 
 ## Discord Setup
 
-The `/disc` skill and discord-watcher channel server require a Discord bot token and server (guild).
+The `/disc` skill and the `disc-server` MCP require a Discord bot token and server (guild).
 
 ### 1. Bot Token
 
@@ -290,47 +289,22 @@ The bot needs these permissions in your Discord server:
 - **Send Messages** and **Read Message History** in target channels
 - **Message Content Intent** enabled in the [Discord Developer Portal](https://discord.com/developers/applications) (Settings → Bot → Privileged Gateway Intents)
 
-### 2. Discord-Watcher Channel Server
+### 2. Hearing Discord: the crewchat doorbell
 
-The discord-watcher is an MCP channel server that polls Discord and pushes real-time notifications into Claude Code sessions. It requires [Bun](https://bun.sh).
-
-```bash
-# Install bun (if not already installed)
-curl -fsSL https://bun.sh/install | bash
-```
-
-`./install.sh` installs MCP servers from the `mcps.json` manifest via each server's `install-remote.sh`. You can also install them individually:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Wave-Engineering/mcp-server-discord-watcher/main/scripts/install-remote.sh | bash
-```
-
-### 3. Start with Channels
-
-```bash
-claude --dangerously-load-development-channels server:discord-watcher
-```
-
-Or set up an alias:
-
-```bash
-alias ccode='claude --dangerously-load-development-channels server:discord-watcher'
-```
-
-The watcher monitors all text channels on the configured Discord server. Messages are **filtered by addressing** — agents only receive notifications for messages containing `@all`, `@<dev-team>`, or `@<dev-name>`. Self-echoes are suppressed via signature matching.
+Agents hear Discord, Mattermost and squawk answers through `crewchat-doorbell`, on a host that runs the crewchat daemon (`./install` registers the `crewchat` MCP only there; see [`docs/chat-tools.md`](docs/chat-tools.md)). A host without crewchat can still send and read with `disc-server`, but the kit gives it no Discord doorbell. The old `discord-watcher` channel server was retired (#1344), and `./install` uninstalls it where it is still registered.
 
 ### Inter-Agent Communication
 
-With the discord-watcher running in multiple Claude Code sessions, agents can talk to each other:
+Agents address each other by `@` token:
 
 - **Address a specific team:** `@cc-workflow check the build status`
 - **Address a specific agent:** `@beacon what's your current task?`
-- **Address all agents:** `@all report your current status`
-- **Unaddressed messages** are silently dropped (agents don't receive them)
+- **Address all agents:** `@agents report your current status`
+- **Unaddressed messages** reach no agent
 
 Dev-Names must be **kebab-case** (e.g., `beacon`, `null-pointer`) so they work as routing keys for `@` addressing.
 
-Each agent signs messages with its Dev-Name signature (e.g., `— **beacon** 📡 (cc-workflow)`), which the watcher uses to filter self-echoes while allowing messages from other agents through.
+Each agent signs messages with its Dev-Name signature (e.g., `— **beacon** 📡 (cc-workflow)`), so its own echoes can be told apart from other agents' messages. The full rules are in [`docs/chat-tools.md`](docs/chat-tools.md) ("Addressing").
 
 ### Wave Status Channel
 
@@ -342,19 +316,10 @@ The embed includes phase, wave, action, flight, a Unicode progress bar, and defe
 - `STT_ENDPOINT` — Whisper-compatible endpoint (default: `http://archer:8300/v1/audio/transcriptions`)
 - `STT_MODEL` — Model name (default: `deepdml/faster-whisper-large-v3-turbo-ct2`)
 
-### Verbose Mode
-
-To bypass filtering and receive all messages (useful for monitoring/debugging):
-
-```bash
-DISCORD_WATCHER_VERBOSE=1 claude --dangerously-load-development-channels server:discord-watcher
-```
-
 ## Dependencies
 
 | Tool | Required by | Install |
 |------|------------|---------|
-| `bun` | discord-watcher | [bun.sh](https://bun.sh) |
 | `gh` | GitHub skills | [cli.github.com](https://cli.github.com) |
 | `glab` | GitLab skills | [gitlab.com/gitlab-org/cli](https://gitlab.com/gitlab-org/cli) |
 | `curl` | discord-bot | Usually pre-installed |

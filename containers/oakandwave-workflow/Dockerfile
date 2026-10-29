@@ -244,10 +244,10 @@ RUN set -eux; \
 # Reuse the base's uid-1000 `ubuntu` user (TC-2). The kit installs $HOME-rooted,
 # so it must run AS that user for the runtime user to resolve it. The kit's own
 # MCP servers ARE baked here (R-09 baking half): every kit MCP repo is PUBLIC
-# (Wave-Engineering/mcp-server-{sdlc,discord,discord-watcher,wtf,nerf}), each
+# (Wave-Engineering/mcp-server-{sdlc,discord,wtf,nerf}), each
 # shipping a prebuilt linux-x64 release binary — no build secret and no operator
 # step, so the install is hermetic over the public network. `./install` (no
-# --no-mcps) walks mcps.json and runs each server's install-remote.sh: three
+# --no-mcps) walks mcps.json and runs each server's install-remote.sh: two
 # register via `claude mcp add`, two via a jq edit of ~/.claude.json (pre-created
 # below so the first — disc-server — lands too). sdlc-server additionally bundles
 # a Python `commutativity-probe` CLI — NOT a prebuilt binary and NOT in mcps.json;
@@ -299,12 +299,12 @@ WORKDIR ${KIT_SRC}
 # real guarantees: a genuine install error aborts under set -euo pipefail BEFORE
 # check-deps (sentinel absent → build fails), the whitelist gate rejects any
 # unexpected missing dep, and the positive assertions below cover the kit AND all
-# five MCP servers.
+# four MCP servers (discord-watcher was retired, #1344).
 #
 # Pre-create ~/.claude.json ({} is augmented in place): the two jq-registering
 # MCPs (disc-server, sdlc-server) skip registration if it is absent, and
 # disc-server sorts first — so without this seed the first MCP would silently not
-# register. `claude mcp add` (the other three) merges into the same file.
+# register. `claude mcp add` (the other two) merges into the same file.
 RUN set +e; \
 	mkdir -p "$HOME/.claude"; \
 	[ -f "$HOME/.claude.json" ] || printf '{}\n' > "$HOME/.claude.json"; \
@@ -319,7 +319,7 @@ RUN set +e; \
 	test -d "$HOME/.claude/skills"; \
 	test -n "$(find "$HOME/.claude/skills" -name SKILL.md -print -quit)"; \
 	test -f "$HOME/.claude/settings.json"; \
-	for m in disc-server discord-watcher nerf-server sdlc-server wtf-server; do \
+	for m in disc-server nerf-server sdlc-server wtf-server; do \
 		jq -e --arg m "$m" '.mcpServers[$m]' "$HOME/.claude.json" >/dev/null \
 			|| { echo "MCP baking FAILED: $m not registered in ~/.claude.json"; exit 1; }; \
 		test -x "$HOME/.local/bin/$m" \
@@ -368,7 +368,7 @@ RUN set -eux; \
 # sdlc-server shells out to a `commutativity-probe` CLI to service its
 # `commutativity_verify` tool; with the CLI absent the handler degrades to a
 # PROBE_UNAVAILABLE verdict (conservative-fail). The probe is a Python package at
-# a pinned tag, NOT a prebuilt release binary like the five servers above.
+# a pinned tag, NOT a prebuilt release binary like the four servers above.
 # sdlc-server's install-remote.sh (run by `./install`) tries pipx / venv+pip /
 # pip --user to install it — every path needs pip, which the base's python3 lacks
 # (no ensurepip) — so all three no-op with a warning during the install above.

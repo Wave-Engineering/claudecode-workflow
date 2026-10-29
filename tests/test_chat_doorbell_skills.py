@@ -1,7 +1,8 @@
 """K-2 (#1336): the kit's doorbell follows the dual-mode rule, and /reseed feeds the kiosk.
 
 - /disc defines the inbound half of the rule: `crewchat-doorbell` where `chat_send` exists,
-  never alongside the old one-shots (that would deliver twice), else the one-shots unchanged.
+  never alongside `sqtk-doorbell.sh` (that would deliver twice); elsewhere the kit has no
+  Discord doorbell, since discord-watcher was retired (#1344).
   It carries the exit codes, the event types and the outsider rule.
 - /disc's kiosk review treats every entry as outsider data and names the raise path.
 - /sqtk points at /disc on a crewchat host instead of restating the rule.
@@ -48,8 +49,8 @@ def test_disc_defines_the_doorbell_rule() -> None:
         "arm `crewchat-doorbell`",
         "run_in_background: true",
         "Do NOT also arm",
-        "`doorbell-oneshot.sh`",
         "`sqtk-doorbell.sh`",
+        "the kit has no Discord doorbell on this host",
         "--channels",
         "Otherwise",
         "CREWCHAT_DOORBELL_TIMEOUT",
@@ -89,11 +90,13 @@ def test_disc_kiosk_review_is_data() -> None:
     assert "`## Kiosk` section" in body, "point an over-sharing kiosk back at /reseed"
 
 
-def test_disc_doorbell_section_precedes_the_one_shot() -> None:
+def test_disc_has_no_watcher_routes() -> None:
+    # #1344: discord-watcher is retired, so /disc must not route to it or arm its wrapper.
     disc = _text("disc")
-    assert disc.index(f"## {_DOORBELL_ANCHOR}") < disc.index(
-        "## Arming the channels-free doorbell"
-    ), "the dual-mode choice must come before the one-shot's arming instructions"
+    assert "doorbell-oneshot.sh" not in disc
+    assert "## Arming the channels-free doorbell" not in disc
+    for cli in ("discord-watcher forward", "discord-watcher directmsg", "discord-watcher doorbell"):
+        assert cli not in disc, f"/disc still routes to {cli!r}"
 
 
 def test_sqtk_points_at_disc_doorbell() -> None:

@@ -1,6 +1,6 @@
 # Discord Mic Convention (Turn-Taking)
 
-> The **sending** counterpart to [`discord-watcher.md`](discord-watcher.md) (which
+> The **sending** counterpart to [`chat-tools.md`](chat-tools.md) (which
 > covers *receiving* — addressing, signatures, echo-filtering). This doc covers
 > what happens when several agents are addressed by the same team question and
 > would all answer at once.

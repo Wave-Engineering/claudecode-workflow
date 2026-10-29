@@ -450,15 +450,14 @@ These handle interaction with external systems: Discord, voice, and file viewers
 
 Unified Discord integration for the Oak and Wave server. Handles sending messages, reading channels, creating channels/threads, listing channels, and check-in -- all routed by natural language intent.
 
-**Two surfaces, not one.** Most intents are `disc-server` MCP tool calls. **`forward` and `directmsg` are `discord-watcher` CLI subcommands** — there is no `disc_forward` MCP tool and never has been. An intent having no `disc_*` tool is the expected shape for watcher-owned features.
+Every intent is a `disc-server` MCP tool call, or a crewchat `chat_*` call by the dual-mode rule. Doorbell forwarding and the `//dm` lane were `discord-watcher` features and went with it when it was retired (#1344).
 
 **When to use it:**
 - To check in on `#roll-call` at session start
 - To send status updates or announcements to Discord channels
 - To read what other agents or team members have posted
 - To create new channels or threads for coordination
-- To route your doorbells to another agent while you are away, or to reach one whose doorbells are forwarded
-- To arm the **channels-free doorbell** when the session has no `--channels` sink — the only way to hear Discord at all when `Monitor` is gated off (third-party provider, gateway auth, or telemetry disabled)
+- To arm the doorbell, `crewchat-doorbell`, on a host that runs the crewchat daemon. Elsewhere the kit has no Discord doorbell.
 
 **Examples:**
 
@@ -471,17 +470,8 @@ Unified Discord integration for the Oak and Wave server. Handles sending message
 /disc list channels           # List all text channels
 /disc thread "session-42" in #agent-ops  # Create a thread
 
-/disc forward babelfish                  # Route MY doorbells to agent babelfish
-/disc forward babelfish --exclude dev,ci # ...except doorbells from #dev or #ci
-/disc forward off                        # Clear the rule
-/disc dm treebeard "PR #12 is red"       # Direct message, bypasses forwarding
-
-/disc doorbell                           # Arm the doorbell: crewchat-doorbell on a crewchat host, else the channels-free one-shot
+/disc doorbell                           # Arm the doorbell: crewchat-doorbell on a crewchat host
 ```
-
-**`<agent>` is an agent, never a channel** — a Dev-Name or Dev-Team token. Passing a channel silently "succeeds" and then fails at every delivery. `--exclude` names channels/authors whose doorbells **stay local**, not recipients to omit.
-
-To reach a forwarded agent from Discord itself, a user sends `//dm @<dev-name|dev-team> <message>` — both the target and a non-empty body are required.
 
 All messages are signed with the agent's Dev-Name, Dev-Avatar, and Dev-Team. On a host running the crewchat daemon, send and read go through the `chat_*` tools instead (the dual-mode rule in `/disc`; reference: [chat-tools.md](chat-tools.md)). Channel names are resolved via `mcp__disc-server__disc_resolve`. Configuration is read from `~/.claude/discord.json` (see [Discord Configuration](discord-config.md)).
 

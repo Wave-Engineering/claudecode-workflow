@@ -41,6 +41,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.sandbox_env import sandbox_env
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -70,9 +72,8 @@ _SKIP_NO_PYTHON3 = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 def _make_env(home: Path) -> dict[str, str]:
-    env = os.environ.copy()
-    env["HOME"] = str(home)
-    return env
+    # HOME alone is not a sandbox: see tests/sandbox_env.py (the 2026-10-29 uv wipe).
+    return sandbox_env(home)
 
 
 def _read_json(path: Path) -> dict:
