@@ -102,7 +102,7 @@ def _with_no_mcps(args: list[str]) -> list[str]:
 
     **Nothing tested today stops being tested.** The coverage this skips is held
     somewhere strictly better: the image build runs a real, complete ``./install``
-    and fails unless every one of the five servers is registered in
+    and fails unless every server in ``mcps.json`` is registered in
     ``~/.claude.json`` **and** its binary is executable. That is the artifact that
     actually ships, so the division is: the image proves a full install works,
     this file proves the BEHAVIOURS around install — prune, drift, uninstall,
@@ -482,7 +482,9 @@ class TestUninstallStaysInSandbox:
     each call saw. `claude` and `curl` are stubs too, so nothing leaves the sandbox.
     """
 
-    def test_uv_tool_uninstall_sees_sandbox_dirs(self, tmp_path: Path, sandbox_home: Path) -> None:
+    def test_uninstall_tools_see_sandbox_dirs(
+        self, tmp_path: Path, sandbox_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         stubs = tmp_path / "stubs"
         stubs.mkdir()
         uv_log = tmp_path / "uv.log"
@@ -497,9 +499,12 @@ class TestUninstallStaysInSandbox:
             "esac\n"
             "exit 0\n"
         )
+        claude_log = tmp_path / "claude.log"
         claude = stubs / "claude"
         claude.write_text(
             "#!/usr/bin/env bash\n"
+            'printf "CLAUDE_CONFIG_DIR=%s args=%s\\n" '
+            '"${CLAUDE_CONFIG_DIR-<unset>}" "$*" >>"$STUB_CLAUDE_LOG"\n'
             '[[ "$1 $2" == "mcp get" ]] && exit 1\n'
             "exit 0\n"
         )
@@ -508,9 +513,12 @@ class TestUninstallStaysInSandbox:
         for stub in (uv, claude, curl):
             stub.chmod(0o755)
 
+        # A real CLAUDE_CONFIG_DIR, as an aoe session inherits, must not reach `claude`.
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "real-claude-config"))
         env = _make_env(sandbox_home)
         env["PATH"] = f"{stubs}:{env['PATH']}"
         env["STUB_UV_LOG"] = str(uv_log)
+        env["STUB_CLAUDE_LOG"] = str(claude_log)
         result = subprocess.run(
             ["bash", _UNINSTALL_SCRIPT],
             capture_output=True,
@@ -531,6 +539,13 @@ class TestUninstallStaysInSandbox:
                 assert fields[var].startswith(home + os.sep), (
                     f"`uv tool uninstall` ran with {var} outside the sandbox: {call}"
                 )
+
+        claude_calls = claude_log.read_text().splitlines() if claude_log.exists() else []
+        assert claude_calls, "uninstall.sh must reach `claude`, or this proves nothing"
+        for call in claude_calls:
+            assert call.startswith("CLAUDE_CONFIG_DIR=<unset> "), (
+                f"`claude` ran with an inherited CLAUDE_CONFIG_DIR: {call}"
+            )
 
 
 @_SKIP_NO_BASH
