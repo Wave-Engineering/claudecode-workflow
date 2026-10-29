@@ -1,6 +1,6 @@
 # `chat_*` tool reference (crewchat)
 
-The `crewchat` MCP server is the thin client of the crewchat daemon, from [mattermost-crew](https://github.com/Wave-Engineering/mattermost-crew). It gives agents one chat contract over Mattermost and Discord. This page is the agent-facing reference, DM-09b in the mattermost-crew Dev Spec. The kit pins the release in `scripts/install-crewchat.sh` (`CREWCHAT_TAG`, currently `v0.2.2`).
+The `crewchat` MCP server is the thin client of the crewchat daemon, from [mattermost-crew](https://github.com/Wave-Engineering/mattermost-crew). It gives agents one chat contract over Mattermost and Discord. This page is the agent-facing reference, DM-09b in the mattermost-crew Dev Spec. The kit pins the release in `scripts/install-crewchat.sh` (`CREWCHAT_TAG`, currently `v0.2.4`).
 
 ## When you have these tools
 
@@ -28,9 +28,9 @@ The same package ships `crewchat-doorbell`, the one-shot doorbell, and `./instal
 |---|---|
 | 0 | a new event, one JSON line on stdout |
 | 1 | usage error: no identity, a bad timeout, or a daemon error |
-| 2 | not registered (the daemon restarted). `chat_health()` re-registers |
+| 2 | not registered (the daemon restarted) after the 60 s grace. `chat_health()` re-registers; against a daemon with `ping`, the shim usually has already |
 | 3 | timeout |
-| 4 | daemon unreachable |
+| 4 | daemon unreachable: down for more than 60 s, or at once for no permission, a connect timeout, or a bad reply |
 
 | `type` | carries |
 |---|---|

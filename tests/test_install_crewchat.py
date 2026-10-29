@@ -281,8 +281,9 @@ def test_check_states(stubs: Path, live_socket: Path, tmp_path: Path) -> None:
 def test_pin() -> None:
     # K-2 (#1336) needs v0.2.1 or later: crewchat-doorbell drops a repeated event_id, and the
     # kiosk review's event_id carries the transcript's generation. #1340 needs v0.2.2: health
-    # takes dev_name, so `chat_health()` re-registers after a daemon restart.
-    assert _TAG == "v0.2.2"
+    # takes dev_name, so `chat_health()` re-registers after a daemon restart. #1342 needs v0.2.4:
+    # the doorbell waits 60 s through a daemon restart, and the shim's `ping` re-registers.
+    assert _TAG == "v0.2.4"
 
 
 def test_install_without_doorbell_does_not_register(stubs: Path, live_socket: Path) -> None:
