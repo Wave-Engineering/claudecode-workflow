@@ -18,7 +18,8 @@
 # doorbell wherever `chat_send` exists (/disc, "Doorbell: crewchat-doorbell or the
 # one-shots"). So registration also requires the doorbell to run. A registered shim with no
 # doorbell would have every skill arm a command that isn't there, and the agent would be
-# deaf. Unregistered, the skills keep the old one-shots.
+# deaf. Unregistered, the skills fall back to sqtk-doorbell.sh for squawks, and the kit has
+# no Discord doorbell (discord-watcher was retired, #1344).
 #
 # WHY THE LOCK, AND NOT A PLAIN `uv tool install`. A git-URL install re-resolves every
 # dependency from PyPI and ignores mattermost-crew's uv.lock. crewchat-clients declares only

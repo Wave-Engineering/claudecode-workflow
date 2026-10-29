@@ -928,14 +928,13 @@ do_check() {
 		if command -v claude &>/dev/null; then
 			local mcp_list
 			mcp_list=$(claude mcp list 2>/dev/null || true)
-			for mcp_name in wtf-server discord-watcher; do
-				if echo "$mcp_list" | grep -qw "$mcp_name"; then
-					ok "MCP server $mcp_name registered"
-				else
-					fail "MCP server $mcp_name not registered"
-					issues=$((issues + 1))
-				fi
-			done
+			# discord-watcher was retired (#1344), so wtf-server is the only one checked here.
+			if echo "$mcp_list" | grep -qw wtf-server; then
+				ok "MCP server wtf-server registered"
+			else
+				fail "MCP server wtf-server not registered"
+				issues=$((issues + 1))
+			fi
 		else
 			warn "claude not found -- cannot check MCP registrations"
 		fi
@@ -1036,6 +1035,8 @@ do_uninstall() {
 	if [[ "$NO_MCPS" == false ]]; then
 		echo "MCPs"
 		echo "--------------------------------------------"
+		# discord-watcher is retired (#1344) and no longer installed; it stays here as legacy
+		# cleanup, so uninstalling the kit from a host that still has it removes it too.
 		for mcp_name in wtf-server discord-watcher; do
 			# Try calling each MCP's own uninstaller
 			local install_url

@@ -555,7 +555,7 @@ Job C in the parallel batch: the orchestrator runs `dependency-scan.sh` (or the 
 ## The Notification (Discord + vox)
 Resolve identity from `<project_root>/.claude/agent-identity.json`; fall back to `/tmp/claude-agent-<md5>.json` if absent (transition window). Use it for both the Discord post and the vox announcement.
 
-**Important:** Do NOT prefix the Discord post with `@all`, `@<Dev-Team>`, or any `@`-mention. This post is for BJ only (human-facing). The discord-watcher filters by `@`-addressing, so an `@`-prefix would fan the precheck gate notice out to every listening agent in the fleet. Unaddressed is intentional.
+**Important:** Do NOT prefix the Discord post with `@all`, `@<Dev-Team>`, or any `@`-mention. This post is for BJ only (human-facing). The doorbell delivers by `@`-addressing, so an `@`-prefix would fan the precheck gate notice out to every listening agent in the fleet. Unaddressed is intentional.
 
 **Post to `#precheck` (`1491195025198157834`) — `disc_send(channel_id, message)`, or on a crewchat host `chat_send(to, text, backend: "discord")` (dual-mode rule in `/disc`) — exact body shape:**
 ```

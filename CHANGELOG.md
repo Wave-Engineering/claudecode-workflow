@@ -19,6 +19,23 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Removed
+- **discord-watcher is retired from the kit (#1344).** `crewchat-doorbell` has been the doorbell
+  since kit 8.17.0, carrying Discord, Mattermost and squawk answers in one stream on any host that
+  runs the crewchat daemon, so the watcher only duplicated it. `mcps.json` no longer lists it, and
+  `./install` runs its own uninstaller once wherever `claude mcp list` still shows it. Gone with it:
+  - `doorbell-oneshot.sh` and its regression test;
+  - `docs/discord-watcher.md`;
+  - `/disc`'s `forward`, `directmsg` and `//dm` routes;
+  - the container image's baked copy, so the image now carries four kit MCP servers.
+
+  `./install` prunes the installed doc and wrapper from `~/.claude` and `~/.local/bin`. The doc's
+  rules that still hold, addressing and signatures, are now in `docs/chat-tools.md`, which the
+  install copies to `~/.claude/docs` in its place.
+
+  **Consequence:** a host without the crewchat daemon, including the contained-workflow image,
+  has no Discord doorbell from the kit. `disc-server` still sends and reads there.
+
 ### Changed
 - **`install-crewchat.sh` pins mattermost-crew v0.2.4 (#1342).** A v0.2.2 client sends no
   project key, so the daemon can't apply a server's per-project allowlist, and agents in partner

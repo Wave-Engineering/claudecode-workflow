@@ -123,9 +123,9 @@ Delivered since the first cut of this image:
 
 - **Kit MCP servers are now baked (R-09 baking half — #1013).** `./install` runs
   *without* `--no-mcps`: the kit MCP repos are all PUBLIC
-  (`Wave-Engineering/mcp-server-{discord,discord-watcher,wtf,nerf,sdlc}`), each
+  (`Wave-Engineering/mcp-server-{discord,wtf,nerf,sdlc}`), each
   shipping a prebuilt linux-x64 release binary, so the install is hermetic over
-  the public network — no build credentials, no operator step. All five servers
+  the public network — no build credentials, no operator step. All four servers
   land registered in the uid-1000 user's `~/.claude.json` `.mcpServers` with
   their binaries in `~/.local/bin`; the Dockerfile asserts this in-build and the
   image oracle re-asserts it (`test_image_kit_mcps_baked`). The *scoping* half —

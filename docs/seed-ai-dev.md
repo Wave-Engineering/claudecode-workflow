@@ -71,7 +71,6 @@ You are in `claudecode-workflow` (cc-workflow). There are sibling repos; you wil
 ### Supporting MCP servers
 
 - **`Wave-Engineering/mcp-server-discord`** — `disc_send`, `disc_read` (Discord API proxy for inter-agent announcements)
-- **`Wave-Engineering/mcp-server-discord-watcher`** — push-to-agent Discord events
 - **`Wave-Engineering/mcp-server-wtf`** — WTF flight recorder (journal, replay)
 - **`Wave-Engineering/mcp-server-nerf`** — context budget enforcement
 

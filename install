@@ -104,6 +104,13 @@ DEPRECATED_PATHS=(
 	"$HOME/.claude/skills/pong"
 	"$HOME/.claude/scripts/skills/ping"
 	"$HOME/.local/bin/slackbot-send"
+	# discord-watcher was retired (#1344): crewchat-doorbell is the doorbell. Its one-shot
+	# wrapper goes from both the symlink farm and the Cellar (the wavebus precedent above),
+	# and its kit doc goes from ~/.claude for the merge-queue doc's reason: a repo that
+	# resolves kit docs from ~/.claude would keep reading instructions for a retired server.
+	"$HOME/.local/bin/doorbell-oneshot.sh"
+	"$HOME/.claude/scripts/doorbell-oneshot.sh"
+	"$HOME/.claude/docs/discord-watcher.md"
 )
 # Logrotate is a tri-state: "prompt" by default, forced on/off by flag.
 LOGROTATE_MODE=prompt
@@ -1561,7 +1568,7 @@ if [[ "$INSTALL_CONFIG" == true ]]; then
 	# files the canonical CLAUDE.md references, so a /ccfold-merged CLAUDE.md in
 	# ANY repo resolves them from $CLAUDE_DIR — single source, no per-repo vendor,
 	# no drift. Source of truth stays the repo; this copies repo→global each run.
-	for kdoc in WAVE_AXIOMS.md docs/mcp-scoping.md docs/discord-watcher.md \
+	for kdoc in WAVE_AXIOMS.md docs/mcp-scoping.md docs/chat-tools.md \
 		docs/operations/log-rotation.md docs/operations/branch-protection-checklist.md; do
 		if [[ -f "$REPO_DIR/$kdoc" ]]; then
 			if [[ "$DRY_RUN" != true ]]; then
@@ -1676,6 +1683,28 @@ if [[ "$INSTALL_MCPS" == true && -f "$REPO_DIR/mcps.json" ]]; then
 				echo ""
 			fi
 		done
+	fi
+	# discord-watcher was retired (#1344). Dropping it from mcps.json stops new installs, but a
+	# host that already has it keeps its registration, so run its own uninstaller once,
+	# wherever `claude mcp list` still shows it. Silent everywhere else.
+	if command -v claude &>/dev/null && claude mcp list 2>/dev/null | grep -qw discord-watcher; then
+		dw_url="https://raw.githubusercontent.com/Wave-Engineering/mcp-server-discord-watcher/main/scripts/install-remote.sh"
+		if [[ "$DRY_RUN" == true ]]; then
+			info "(dry-run) Would retire discord-watcher (#1344)"
+			info "(dry-run) curl -fsSL $dw_url | bash -s -- --uninstall"
+		elif ! command -v curl &>/dev/null; then
+			warn "discord-watcher is retired (#1344) but curl is missing — uninstall it manually:"
+			warn "  curl -fsSL $dw_url | bash -s -- --uninstall"
+		else
+			info "Retiring discord-watcher (#1344) — crewchat-doorbell is the doorbell"
+			if curl -fsSL "$dw_url" | bash -s -- --uninstall; then
+				ok "discord-watcher uninstalled"
+			else
+				warn "Failed to uninstall discord-watcher — run manually:"
+				warn "  curl -fsSL $dw_url | bash -s -- --uninstall"
+			fi
+			echo ""
+		fi
 	fi
 	# The crewchat thin MCP, only where the crewchat daemon runs (#1330).
 	crewchat_args=(install)

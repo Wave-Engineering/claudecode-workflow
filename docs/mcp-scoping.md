@@ -43,7 +43,7 @@ jq '.projects["/abs/path/to/project"].disabledMcpServers' ~/.claude.json
 #    new session no longer contains tools from the disabled servers.
 ```
 
-**Project policy for this repo:** Only servers directly used in this repo's work are kept active. `discord-watcher` (session messaging via `--channels`), `wtf-server` (flight recorder hook), and `plugin:context7:context7` (library docs) are kept. Everything else is disabled for context hygiene. See `~/.claude.json` for the authoritative current list.
+**Project policy for this repo:** Only servers directly used in this repo's work are kept active. `crewchat` (chat and the doorbell, on a crewchat host), `wtf-server` (flight recorder hook), and `plugin:context7:context7` (library docs) are kept. Everything else is disabled for context hygiene. See `~/.claude.json` for the authoritative current list.
 
 ## What this does NOT solve
 

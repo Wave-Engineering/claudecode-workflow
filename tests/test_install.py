@@ -294,7 +294,7 @@ class TestInstallCreatesArtifacts:
         for rel in (
             "WAVE_AXIOMS.md",
             "docs/mcp-scoping.md",
-            "docs/discord-watcher.md",
+            "docs/chat-tools.md",
             "docs/operations/log-rotation.md",
             "docs/operations/branch-protection-checklist.md",
         ):
@@ -364,6 +364,108 @@ class TestInstallCreatesArtifacts:
                 f"deprecated Slack artifact survived install: {f.relative_to(sandbox_home)} "
                 "(/ping and /pong were removed in #1062; add the path to DEPRECATED_PATHS)"
             )
+
+    def test_retired_discord_watcher_artifacts_are_pruned(self, sandbox_home: Path) -> None:
+        """#1344: the watcher's kit doc and one-shot wrapper leave an installed host.
+
+        A repo that resolves kit docs from ~/.claude would otherwise keep reading
+        instructions for a retired server, and the wrapper would keep arming a
+        watcher that is no longer installed. Plant them first, as above.
+        """
+        planted = []
+        for rel, body in [
+            (".claude/docs/discord-watcher.md", "# Discord Watcher (Channels)\n"),
+            (".claude/scripts/doorbell-oneshot.sh", "#!/usr/bin/env bash\n"),
+            (".local/bin/doorbell-oneshot.sh", "#!/usr/bin/env bash\n"),
+        ]:
+            f = sandbox_home / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(body)
+            planted.append(f)
+
+        rc, out, err = run_install([], sandbox_home)
+        assert _install_ok(rc, out, err), f"install.sh failed (rc={rc}):\nstdout: {out}\nstderr: {err}"
+
+        for f in planted:
+            assert not f.exists(), (
+                f"retired discord-watcher artifact survived install: {f.relative_to(sandbox_home)} "
+                "(#1344; add the path to DEPRECATED_PATHS)"
+            )
+        assert (sandbox_home / ".claude" / "docs" / "chat-tools.md").exists()
+
+
+_DW_URL = (
+    "https://raw.githubusercontent.com/Wave-Engineering/mcp-server-discord-watcher"
+    "/main/scripts/install-remote.sh"
+)
+
+
+@_SKIP_NO_BASH
+class TestDiscordWatcherRetirement:
+    """#1344: `./install --mcps` uninstalls a registered discord-watcher, and only then.
+
+    `claude` and `curl` are stubs on PATH, so nothing reaches the network or the real
+    ~/.claude.json. The `curl` stub logs each URL and serves a script that echoes its
+    arguments, so the test can see both what was fetched and how it was run. The
+    crewchat step is pointed at a socket that doesn't exist, so it stays a no-op.
+    """
+
+    def _run_mcps(self, tmp_path: Path, home: Path, mcp_list: str) -> Tuple[int, str, Path]:
+        stubs = tmp_path / "stubs"
+        stubs.mkdir()
+        curl_log = tmp_path / "curl.log"
+        claude = stubs / "claude"
+        claude.write_text(
+            "#!/usr/bin/env bash\n"
+            '[[ "$1 $2" == "mcp list" ]] && cat "$STUB_MCP_LIST"\n'
+            "exit 0\n"
+        )
+        curl = stubs / "curl"
+        curl.write_text(
+            "#!/usr/bin/env bash\n"
+            'printf "%s\\n" "${@: -1}" >>"$STUB_CURL_LOG"\n'
+            "echo 'echo \"stub-remote $*\"'\n"
+        )
+        for stub in (claude, curl):
+            stub.chmod(0o755)
+        listing = tmp_path / "mcp-list.txt"
+        listing.write_text(mcp_list)
+
+        env = _make_env(home)
+        env["PATH"] = f"{stubs}:{env['PATH']}"
+        env["STUB_MCP_LIST"] = str(listing)
+        env["STUB_CURL_LOG"] = str(curl_log)
+        env["CREWCHAT_SOCKET"] = str(tmp_path / "no-daemon.sock")
+        result = subprocess.run(
+            ["bash", _INSTALL_SCRIPT, "--mcps"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+        )
+        return result.returncode, result.stdout + result.stderr, curl_log
+
+    def test_registered_watcher_is_uninstalled(self, tmp_path: Path, sandbox_home: Path) -> None:
+        rc, out, curl_log = self._run_mcps(
+            tmp_path, sandbox_home, "discord-watcher: bun run index.ts - ✓ Connected\n"
+        )
+        assert _install_ok(rc, out, ""), f"install --mcps failed (rc={rc}):\n{out}"
+        fetched = curl_log.read_text().splitlines()
+        assert fetched.count(_DW_URL) == 1, f"the watcher's uninstaller must run once: {fetched}"
+        assert "Retiring discord-watcher (#1344)" in out
+        assert "stub-remote --uninstall" in out, "it must run as `bash -s -- --uninstall`"
+        assert "discord-watcher uninstalled" in out
+
+    def test_absent_watcher_is_left_alone(self, tmp_path: Path, sandbox_home: Path) -> None:
+        rc, out, curl_log = self._run_mcps(
+            tmp_path, sandbox_home, "sdlc-server: sdlc-server - ✓ Connected\n"
+        )
+        assert _install_ok(rc, out, ""), f"install --mcps failed (rc={rc}):\n{out}"
+        fetched = curl_log.read_text().splitlines() if curl_log.exists() else []
+        assert fetched, "the mcps.json servers should still be fetched"
+        assert _DW_URL not in fetched, "mcps.json must not install discord-watcher any more"
+        assert "Retiring discord-watcher" not in out
+        assert "discord-watcher uninstalled" not in out
 
 
 

@@ -52,7 +52,6 @@ KIT_DEP_TOOLS: list[tuple[str, list[str]]] = [
 # of its prebuilt binary in ~/.local/bin (executable). Sourced from mcps.json.
 KIT_MCP_SERVERS: list[str] = [
     "disc-server",
-    "discord-watcher",
     "nerf-server",
     "sdlc-server",
     "wtf-server",

@@ -18,7 +18,7 @@ disc-server stays registered on crewchat hosts too, for the Discord-only ops, un
 
 ## Doorbell
 
-The same package ships `crewchat-doorbell`, the one-shot doorbell, and `./install` registers `crewchat` only where it runs. Where `chat_send` is in your tool list, it is your only doorbell. It is one stream for Mattermost, Discord and your squawk answers, so never arm `doorbell-oneshot.sh` or `sqtk-doorbell.sh` beside it. The procedure is in `/disc` ("Doorbell: `crewchat-doorbell` or the one-shots"). This is the reference:
+The same package ships `crewchat-doorbell`, the one-shot doorbell, and `./install` registers `crewchat` only where it runs. Where `chat_send` is in your tool list, it is your only doorbell. It is one stream for Mattermost, Discord and your squawk answers, so never arm `sqtk-doorbell.sh` beside it. Where `chat_send` is not in your tool list, the kit has no Discord doorbell (`discord-watcher` was retired, #1344). The procedure is in `/disc` ("Doorbell: `crewchat-doorbell` or the one-shots"). This is the reference:
 
 - **Run:** `crewchat-doorbell` as a background task from the project root. `CREWCHAT_DOORBELL_TIMEOUT=<s>` bounds the wait; the default, 0, waits forever.
 - **Delivery** is at least once, with a stable `event_id`. `crewchat-doorbell` drops a repeat and waits again, so exit 0 always means a new event.
@@ -93,6 +93,12 @@ To start a thread on a message, use `chat_create_thread` (Discord only; see [Gui
 | `@<crew>` | every agent in that crew |
 | `@<dev-team>` | Discord: every agent with that Dev-Team, as today. Mattermost: only within your own crew, and only once Phase 3's membership check is live (it fails closed until then). |
 | a DM, or a reply on a thread you posted in | you |
+
+A post with none of these tokens is addressed to no agent. A human who wants an agent's attention must address it. A post meant only for humans, such as `/precheck`'s gate notice, carries no token, so it never wakes the fleet.
+
+**Sign every Discord message** with a last line of `— **<dev-name>** <dev-avatar> (<dev-team>)`, for example `— **beacon** 📡 (cc-workflow)`. On `chat_send` the daemon signs for you (see Signing, above). On `disc_send` you write the line yourself. A message carrying your own signature is your echo: never treat it as addressed to you.
+
+(These two rules came from `docs/discord-watcher.md`, removed when the watcher was retired, #1344.)
 
 ## Guild ops (Discord only)
 

@@ -55,7 +55,7 @@ The kit requires these CLI tools. Check which are missing, then install them.
 |------|-------|---------|
 | `jq` | `command -v jq` | Settings merge, MCP install |
 | `curl` | `command -v curl` | MCP install scripts, remote fetch |
-| `bun` | `command -v bun` | MCP server builds (discord-watcher, etc.) |
+| `bun` | `command -v bun` | MCP server builds |
 | `gh` | `command -v gh` | GitHub CLI (issues, PRs, releases) |
 | `python3` | `command -v python3` | Package builds (zipapp) |
 | `shellcheck` | `command -v shellcheck` | Script validation |
@@ -281,7 +281,7 @@ Installed:
   - Skills:  ~/.claude/skills/ (N skills)
   - Scripts: ~/.claude/scripts/ (Cellar) + ~/.local/bin/ (symlinks)
   - Config:  ~/.claude/settings.json (smart-merged)
-  - MCPs:    wtf-server, discord-watcher, nerf-server, disc-server, sdlc-server
+  - MCPs:    wtf-server, nerf-server, disc-server, sdlc-server
 
 Next steps:
   1. Start a new Claude Code session in any project
@@ -337,7 +337,6 @@ If that does not work, install MCPs manually by cloning their repos:
 
 ```bash
 git clone https://github.com/Wave-Engineering/mcp-server-wtf.git /tmp/mcp-wtf && cd /tmp/mcp-wtf && ./scripts/install-local.sh
-git clone https://github.com/Wave-Engineering/mcp-server-discord-watcher.git /tmp/mcp-dw && cd /tmp/mcp-dw && ./scripts/install-local.sh
 git clone https://github.com/Wave-Engineering/mcp-server-nerf.git /tmp/mcp-nerf && cd /tmp/mcp-nerf && ./scripts/install-local.sh
 git clone https://github.com/Wave-Engineering/mcp-server-discord.git /tmp/mcp-disc && cd /tmp/mcp-disc && ./scripts/install-local.sh
 git clone https://github.com/Wave-Engineering/mcp-server-sdlc.git /tmp/mcp-sdlc && cd /tmp/mcp-sdlc && ./scripts/install-local.sh
@@ -480,7 +479,6 @@ claude mcp list
 
 # Manual registration (if install-remote.sh failed)
 claude mcp add wtf-server -- bun run ~/.local/share/mcp-server-wtf/src/index.ts
-claude mcp add discord-watcher -- bun run ~/.local/share/mcp-server-discord-watcher/src/index.ts
 claude mcp add nerf-server -- bun run ~/.local/share/mcp-server-nerf/src/index.ts
 claude mcp add disc-server -- bun run ~/.local/share/mcp-server-discord/src/index.ts
 claude mcp add sdlc-server -- bun run ~/.local/share/mcp-server-sdlc/src/index.ts

@@ -1,10 +1,9 @@
 ---
 name: disc
-description: Discord integration — /disc routes to disc-server MCP tools, plus discord-watcher CLI subcommands for forward/directmsg/doorbell. Includes the channels-free doorbell transport for sessions started WITHOUT --channels, where no MCP notification sink is wired and the agent is otherwise deaf.
+description: Discord integration — /disc routes to disc-server MCP tools, or to crewchat's chat_* tools where they exist, and arms the doorbell — crewchat-doorbell where chat_send exists. A host without crewchat has no Discord doorbell from the kit (discord-watcher was retired, #1344).
 usage: |
   /disc send #ch "msg"  /disc read #ch  /disc list  /disc create #ch  /disc thread "name" in #ch
-  /disc forward <agent> [--exclude a,b]  /disc forward off  /disc dm <agent> "msg"
-  /disc doorbell  — arm the doorbell: crewchat-doorbell where chat_send exists, else the channels-free one-shot
+  /disc doorbell  — arm the doorbell: crewchat-doorbell where chat_send exists
 ---
 
 <!-- introduction-gate: If introduction.md exists in this skill's directory AND
@@ -13,9 +12,9 @@ usage: |
      Do NOT delete introduction.md — it lives in a protected directory.
      Do this BEFORE executing any skill logic below. -->
 
-# Disc — Discord Router (disc-server MCP + discord-watcher CLI)
+# Disc — Discord Router (disc-server MCP, or crewchat's `chat_*`)
 
-Route each /disc intent to **its owning surface**. Most are `disc-server` MCP tool calls — but `forward` and `directmsg` are **not**. They are `discord-watcher` CLI subcommands, and there is **no `disc_forward` MCP tool**. Check the routing table below rather than assuming a `disc_*` tool exists for an intent.
+Route each /disc intent to **its owning surface**: a `disc-server` MCP tool, or crewchat's `chat_*` tool by the dual-mode rule below. There is no `disc_forward` or direct-message intent any more: doorbell forwarding and the `//dm` lane were `discord-watcher` features, and the watcher was retired from the kit (#1344).
 
 **Resolve identity** — read `<project_root>/.claude/agent-identity.json` for `dev_name`, `dev_avatar`, `dev_team` (defaults: Claude, 🤖, unknown). Fall back to `/tmp/claude-agent-<md5(project_root)>.json` if the durable file is absent (transition window).
 
@@ -52,49 +51,23 @@ Tool reference: `docs/chat-tools.md` in the cc-workflow repo.
 - list → `disc_list(guild_id, type="text")` — format as clean list
 - create channel → `disc_create_channel(guild_id, name)` — confirm with created id
 - create thread → `disc_create_thread(channel_id, name)` — confirm with created id
-
-**Route intent — `discord-watcher` CLI (Bash, NOT an MCP tool):**
-- forward → `discord-watcher forward <agent> [--exclude a,b,c]` — routes this agent's doorbells to another **agent**. Confirms with `disc forward: forwarding doorbells to <label>`.
-- forward off / stop → `discord-watcher forward --off` — confirms `rule cleared`, or `no rule to clear` if none was set.
-- directmsg / dm → `discord-watcher directmsg <agent> <content...>` (`dm` is an accepted alias) — bypasses the forward rule and rides the deliver-router.
-- doorbell → first apply "Doorbell: `crewchat-doorbell` or the one-shots" below. Where `chat_send` is in your tool list, the doorbell is `crewchat-doorbell`. Otherwise it is `discord-watcher doorbell`, the **channels-free** transport for sessions started without `--channels`: arm it with `doorbell-oneshot.sh`, never bare (see "Arming the channels-free doorbell").
-
-Exact usage, read from the installed binary:
-```
-usage: discord-watcher forward <target> [--exclude a,b,c] | forward --off
-usage: discord-watcher directmsg <target> <content...>
-usage: discord-watcher doorbell
-```
-
-⚠️ **`<target>` is an AGENT, never a channel.** It becomes the aoe session name (`rule.target = {label, session}`), so it must be a **Dev-Name or Dev-Team token** (`babelfish`, `oaw`) — leading `@`/`#` are stripped. **This fails silently if you get it wrong:** any non-`--` token is accepted, so `forward #agent-ops` exits 0 and prints `forwarding doorbells to #agent-ops`. The rule is written and looks healthy; every doorbell then fails at delivery. Do not pattern-match off `#ch` used elsewhere in this skill.
-
-⚠️ **`--exclude` is about what stays LOCAL, not who is excluded as a recipient.** Comma-separated **channel names, channel ids, or author usernames** — doorbells matching any of them are kept by this agent instead of being forwarded (`isExcludedFromForward`: matches `channel.name`, `channel.id`, or `msg.author.username`, normalized lowercase with `@`/`#` stripped).
-
-**Message-side sigil (no invocation needed).** The watcher parses `//directmsg` / `//dm` at the **start** of a Discord message (`/^\/\/(?:directmsg|dm)\b\s*/i`). Correct form — **both parts are required**:
-
-```
-//dm @<dev-name|dev-team> <message>
-```
-
-`parseDirectMsg` matches `/^(\S+)\s+([\s\S]+)$/`, so a target token **and** a non-empty body are mandatory. `//dm help` returns null; `//dm need you now` silently parses `need` as the target, matches no agent, and the message is **forwarded away** — the exact failure the direct lane exists to prevent. The `@<target>` mention is also what routes the doorbell to that watcher at all.
-
-The override is **scoped**, not global: it fires only when the target matches the *receiving* agent's own dev-name or dev-team (`isDirectMsgForLocal`), overriding **that agent's** forward rule. Relay this form to users verbatim when they ask how to reach an agent whose doorbells are forwarded; it is not something `/disc` invokes.
+- doorbell → "Doorbell: `crewchat-doorbell` or the one-shots" below.
 
 ## Doorbell: `crewchat-doorbell` or the one-shots
 
 The inbound side of the dual-mode rule (#1336, K-2). It is decided by the same test: whether `chat_send` is in your tool list.
 
 - **If `chat_send` is in your tool list**, arm `crewchat-doorbell` as a background task (`run_in_background: true`), from the project root. It is one stream for Mattermost, Discord (through scream-hole) and your squawk answers.
-  - **Do NOT also arm** `doorbell-oneshot.sh` or `sqtk-doorbell.sh`. Arming both delivers every Discord message, and every squawk answer, twice.
-  - If the session was started with `--channels`, the watcher pushes Discord messages as well. A Discord message reaching you both ways is one message (same message ID): handle it once. Start crewchat-host sessions without `--channels`.
-- **Otherwise**, arm `doorbell-oneshot.sh` ("Arming the channels-free doorbell" below) and, while you wait on squawks, `sqtk-doorbell.sh` (`/sqtk`), exactly as before.
+  - **Do NOT also arm** `sqtk-doorbell.sh`. Arming both delivers every squawk answer twice.
+  - Start sessions without `--channels`. The Discord channel server it used to load was `discord-watcher`, retired from the kit (#1344).
+- **Otherwise** the kit has no Discord doorbell on this host. `discord-watcher` was that doorbell, and it was retired (#1344). You still send and read with `disc_*`, but you hear Discord only when you read it. While you wait on squawks, arm `sqtk-doorbell.sh` (`/sqtk`).
 
 ```bash
 crewchat-doorbell                                # blocks until an event, prints it as one JSON line, exits
 CREWCHAT_DOORBELL_TIMEOUT=1800 crewchat-doorbell # bounded wait; exit 3 if nothing arrives
 ```
 
-Its exit is the wake-up, as with the one-shots. It **never exits 0 without printing a new event**: delivery is at least once, and `crewchat-doorbell` drops a repeat by its `event_id` and waits again. So exit 0 is always something to handle. Re-arm after every exit except 1:
+Its exit is the wake-up, as with `sqtk-doorbell.sh`. It **never exits 0 without printing a new event**: delivery is at least once, and `crewchat-doorbell` drops a repeat by its `event_id` and waits again. So exit 0 is always something to handle. Re-arm after every exit except 1:
 
 | exit | meaning | do |
 |---|---|---|
@@ -102,7 +75,7 @@ Its exit is the wake-up, as with the one-shots. It **never exits 0 without print
 | 1 | usage error: no identity, a bad timeout, a daemon error | read stderr. If it names the identity, run `/name`. Do not re-arm in a loop |
 | 2 | not registered: the daemon restarted and lost the session's registration, and the doorbell's 60 s grace (from the first failure) ran out. Against a daemon that has `ping` (v0.2.4 or later) the shim registers again by itself within about 20 s, so there this is the fallback; against an older daemon it is the usual path | call `chat_health()`: the daemon answers it `not_registered`, and the shim re-registers. Then re-arm once. If it exits 2 again, report `chat: not registered; restart the session` |
 | 3 | `CREWCHAT_DOORBELL_TIMEOUT` elapsed | re-arm |
-| 4 | daemon unreachable: down for more than 60 s (no socket, refused, or closed before its reply), or at once for no permission on the socket, a connect timeout, or a bad reply. A restart shorter than 60 s doesn't exit 4 | arm the one-shots for this cycle, and squawk it on `claudecode-workflow:triage` with the stderr |
+| 4 | daemon unreachable: down for more than 60 s (no socket, refused, or closed before its reply), or at once for no permission on the socket, a connect timeout, or a bad reply. A restart shorter than 60 s doesn't exit 4 | arm `sqtk-doorbell.sh` for this cycle if you are waiting on squawks (Discord has no doorbell until the daemon is back), and squawk it on `claudecode-workflow:triage` with the stderr |
 
 Every event carries `type` and `event_id`:
 
@@ -132,64 +105,6 @@ When your human partner engages social, the daemon hands you a `kiosk.review` ev
 
 What the kiosk knows comes only from the `## Kiosk` section of your reseed seed (`/reseed`). An answer it shouldn't have given means that section needs fixing at your next reseed.
 
-## Arming the channels-free doorbell (`doorbell`)
+## Turn-taking on shared channels
 
-For sessions started **without** `--channels`: the MCP notification sink is never wired up, so no doorbell reaches the agent. `discord-watcher doorbell` (watcher **v1.6.0+**) is the alternate transport — same poll loop, same fail-closed delivery gate, but each deliverable message is emitted as one stdout line:
-
-```
-[doorbell] #<channel> channel_id=<id> msg_id=<id> from <author>: <preview>
-```
-
-⚠️ **Do NOT arm it the way the watcher's README and `--help` say to.** Both print:
-
-```
-Monitor({ command: "discord-watcher doorbell", persistent: true })
-```
-
-`Monitor` is **absent under several common conditions** — see the list below; a non-Anthropic provider is only one of them. Where it is missing, the only background-process mechanism available notifies the agent when a task **exits**, and `doorbell` is a persistent loop that never exits. Armed that way the line is written to a file nobody reads and the agent is never woken: *silent* deafness, the exact failure the doorbell exists to prevent.
-
-**When `Monitor` is missing, and why.** `Monitor.isEnabled()` resolves the server-side feature flag `tengu_amber_sentinel`, which **defaults to false**, and both local override paths are compiled out of the shipped bundle — the settings override returns unconditionally, and the `process.env.CLAUDE_INTERNAL_FC_OVERRIDES` read sits *after* an unconditional `return`, so it is unreachable dead code. The flag can therefore arrive only from the feature service — and the lookup **short-circuits to `false` before it ever consults the cache** unless *all* of the following hold:
-
-| condition | `Monitor` absent when… |
-|---|---|
-| provider | the resolved provider is **not first-party** — Bedrock, Vertex / Google Cloud Agent Platform, Microsoft Foundry (overridden by `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST`) |
-| gateway | gateway auth is in use |
-| telemetry | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `DISABLE_TELEMETRY`, or `DO_NOT_TRACK` is set |
-| flag service | `DISABLE_GROWTHBOOK` is set |
-
-So an **Anthropic-authenticated session still loses `Monitor`** if it has telemetry disabled — do not stop at the auth path. Verified by reading the 2.1.220 bundle (2026-07-27); the minified symbol names are regenerated per build, so match on this behavior rather than on identifiers.
-
-**Relationship to `--channels` — correlation, not a shared switch.** On a third-party provider both are unavailable, so a Bedrock-backed session is precisely the case this wrapper exists for: no `Monitor` to fall back to *and* no channels. But they are **separately gated** and do not always fail together — Channels is admin-enabled on claude.ai Team/Enterprise plans and can be off while `Monitor` is fine. Diagnose them independently; do not infer one from the other.
-
-Do not patch the vendor bundle to force the flag — it self-updates and the change reverts silently.
-
-**Use the one-shot wrapper instead** — it makes the exit BE the doorbell, so the task-completion notification wakes the agent. Invoke it by **bare name** (`./install` symlinks every `scripts/*` file onto PATH); a relative `scripts/…` path only resolves inside the cc-workflow source tree, which is never where you want to be — the wrapper must run from the *target project's* root so identity resolves:
-
-```bash
-doorbell-oneshot.sh                 # blocks until a message arrives, prints it, exits
-TIMEOUT=1800 doorbell-oneshot.sh    # bounded wait; exit 3 if nothing arrives
-DRAIN_SECONDS=2 doorbell-oneshot.sh # widen the drain window (see the limit below)
-DEBUG=1 doorbell-oneshot.sh         # also forward the watcher's stderr
-```
-
-Run it as a **background** task, then re-arm after handling the messages it printed (one batch → one turn). Cellar copy, for reference: `~/.claude/scripts/doorbell-oneshot.sh`.
-
-**Read the exit code — it is the whole signal.** exit 0 = one or more `[doorbell]` lines on stdout; exit 2 = precondition failure (bash < 4, watcher missing, **watcher older than v1.6.0**, malformed `TIMEOUT`/`DRAIN_SECONDS`, temp-dir/fifo setup); exit 3 = `TIMEOUT` elapsed with nothing delivered; exit 4 = the `doorbell` subcommand exists but the watcher died without emitting a valid line — bad token, baseline-init failure, crash — with its stderr printed for you. Never treat a bare exit 0 with empty stdout as a message: re-arming on that is a hot loop, and the wrapper is built so it cannot happen.
-
-A **pre-v1.6.0 watcher does not error** — it has no unknown-subcommand handler, so `doorbell` falls through to the MCP server and the process never exits. That would hang the wrapper forever at the default `TIMEOUT=0`, so the wrapper probes `doorbell --help` up front and fails with exit 2 instead. If you see that, the fix is a watcher upgrade, not a retry.
-
-**It prints a batch, not one line** — and the batch is one channel's worth. After the first line the wrapper drains for `DRAIN_SECONDS` (default `0.2`) and prints everything already buffered. Handle **every** line before re-arming: the re-armed instance seeds its cursor past them and marks them delivered (see "Cold start does not replay" below), so a line you ignore is gone for good.
-
-⚠️ **Known gap — the drain does not span channels.** Within one poll cycle the watcher waits 50–150ms of jitter plus an HTTP round trip between channels, and the wrapper kills it once the drain window closes, so channels it had not reached yet are never polled. Messages addressed to you in a *second* channel during the same cycle can therefore be missed, unrecoverably. If you are routinely addressed across several channels, raise `DRAIN_SECONDS` (2 covers the jitter and a round trip) — it narrows the gap without closing it. Closing it properly needs a cycle-boundary signal from the watcher.
-
-**Three ways this goes silently deaf.** Every one of them polls normally and delivers nothing, so "no doorbells" never distinguishes healthy-and-quiet from broken:
-
-1. **Wrong cwd → unresolved identity → fail closed.** Identity comes from `CLAUDE_PROJECT_DIR ?? process.cwd()` and is read from `<root>/.claude/agent-identity.json`; with either field unresolved, `shouldDeliverMessage` returns false for everything (deaf > over-broad). **Launch from the project root, or export `CLAUDE_PROJECT_DIR`.** Confirm via stderr: `state_change ... "what":"identity","from":"null/null","to":"<name>/<team>"` — the wrapper captures the watcher's stderr and replays it under `DEBUG=1` (and always on exit 4). It also warns when the identity file is missing.
-2. **Never pipe to `head -1`** — it leaks an orphaned poller. Bun ignores `SIGPIPE` and swallows the write error, so closing the read end does **not** kill the child; it keeps polling Discord forever, and re-arming that way accumulates one poller per message. The wrapper reads through a fifo and kills the child by PID.
-3. **Your own signature is filtered.** The self-echo gate drops any message containing `— **<dev-name>**`. A test message signed the normal way tests nothing — send it unsigned, from another account, or it will be correctly discarded.
-
-**Cold start does not replay.** The cursor is seeded to the latest message per channel at startup, so pre-existing history is never re-delivered — same as the MCP watcher. A message landing in the exact instant of a `--channels`→`doorbell` cutover is not bridged. Forward-rule routing is intentionally **not** applied in doorbell mode: it always delivers this agent's own doorbells.
-
-**Why the split matters:** these are different binaries. `disc-server` is the MCP server this skill mostly drives; `discord-watcher` is the notification daemon. A `disc_forward` tool does not exist and never has — attempting one fails. If a future intent has no `disc_*` tool, that is the expected shape for watcher-owned features, not a bug to route around.
-
-**Turn-taking on shared channels** — before answering a team-addressed question when many agents are listening, follow the mic convention (claim the talking-stick or defer). Full convention: https://github.com/Wave-Engineering/claudecode-workflow/blob/main/docs/discord-mic-convention.md (in the cc-workflow repo at `docs/discord-mic-convention.md`; not deployed to the Cellar, so the bare relative path won't resolve from a non-repo session).
+Before answering a team-addressed question when many agents are listening, follow the mic convention (claim the talking-stick or defer). Full convention: https://github.com/Wave-Engineering/claudecode-workflow/blob/main/docs/discord-mic-convention.md (in the cc-workflow repo at `docs/discord-mic-convention.md`; not deployed to the Cellar, so the bare relative path won't resolve from a non-repo session).

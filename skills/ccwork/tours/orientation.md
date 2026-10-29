@@ -126,7 +126,7 @@ cat ~/.claude/discord.json 2>/dev/null || echo "(no Discord config — run /ccwo
 | `/disc` | Discord — send, read, check in, create channels |
 | `/vox` | Text-to-speech announcements |
 
-Narration: "If you're running multiple agents, Discord is how they coordinate. The discord-watcher channel server pushes real-time notifications into your session. See [Discord Configuration](../../../docs/discord-config.md) for setup details and per-team scoping strategies."
+Narration: "If you're running multiple agents, Discord is how they coordinate. On a host running the crewchat daemon, `crewchat-doorbell` wakes your session when a message addressed to you arrives. See [Discord Configuration](../../../docs/discord-config.md) for setup details and per-team scoping strategies."
 
 ---
 
