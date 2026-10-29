@@ -28,9 +28,9 @@ The same package ships `crewchat-doorbell`, the one-shot doorbell, and `./instal
 |---|---|
 | 0 | a new event, one JSON line on stdout |
 | 1 | usage error: no identity, a bad timeout, or a daemon error |
-| 2 | not registered (the daemon restarted). `chat_health()` re-registers |
+| 2 | not registered (the daemon restarted) after the 60 s grace. `chat_health()` re-registers; against a daemon with `ping`, the shim usually has already |
 | 3 | timeout |
-| 4 | daemon unreachable |
+| 4 | daemon unreachable: down for more than 60 s, or at once for no permission, a connect timeout, or a bad reply |
 
 | `type` | carries |
 |---|---|
