@@ -477,6 +477,8 @@ await check('reconcile prompt: pr_merge carries expected_head_sha, and reconcile
   assert.ok(p.includes('pr_merge(number=<its PR>, expected_head_sha="<its graded head>")'), p)
   assert.ok(!p.includes('pr_create'), 'reconcile never opens a PR')
   assert.ok(p.includes('Merge ONLY the PRs listed above'), p)
+  assert.ok(/for ANY reason \(ok=false: head_moved on GitLab, gh_pr_merge_failed on GitHub/.test(p), 'any non-ok pinned merge is a refusal, not only head_moved')
+  assert.ok(p.includes('Never retry it without expected_head_sha'), p)
 })
 
 // ── the gate binds promote and the scan to the graded head (#1356, triage #6 and #25) ────────

@@ -275,7 +275,7 @@ async function main() {
   ok(relP.includes('graded-green-reason'), "release prompt: carries the gate's reason")
   ok(relP.includes(`pr merge 77 --match-head-commit ${'f'.repeat(40)}`), 'release prompt: GitHub merge is bound to the graded head')
   ok(relP.includes(`merge_requests/77/merge?sha=${'f'.repeat(40)}`), 'release prompt: GitLab merge is bound to the graded head')
-  ok(/the merge refuses\. Then STOP and return\s+released=false/.test(relP), 'release prompt: a moved head is a HOLD, never a merge of unseen code')
+  ok(/If the merge fails for ANY reason.*STOP and return released=false/s.test(relP), 'release prompt: any failed pinned merge (a moved head is one) is a HOLD, never a merge of unseen code')
   ok(relP.includes('glab mr update 77 --ready -R o/r'), 'release prompt: GitLab marks the MR ready before merging (GitLab refuses to merge a draft)')
   // #1211 review I-2: no graded head, no merge. The old fallback bound to "the head SHA you read now".
   for (const headSha of [undefined, '', 'HEAD', 'F'.repeat(40)]) {

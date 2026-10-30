@@ -448,7 +448,8 @@ const GRADED = '9'.repeat(40) // the head the CI signal graded (#1356)
 try {
   const p = promotePrompt({ ...A, prNumber: PR, headSha: GRADED })
   assert.match(p, new RegExp(`pr_merge\\(number=<the PR number>, expected_head_sha="${GRADED}"\\)`), '#1356: the merge is pinned to the graded head')
-  assert.match(p, /head\s+moved \(head_moved.*STOP and return promoted=false/s, '#1356: a moved head stops the promote')
+  assert.match(p, /anything but a merge.*head_moved on GitLab, gh_pr_merge_failed on GitHub.*STOP and return promoted=false/s, '#1356: any non-ok pinned merge stops the promote, not only head_moved')
+  assert.match(p, /Never retry it\s+without expected_head_sha/, '#1356: a refused pin is never retried unpinned')
   assert.doesNotMatch(p, /wave_finalize/) // #5: promote does NOT open a PR anymore
   assert.match(p, new RegExp(`PR #${PR}`)) // merges the gate-opened draft PR by number
   assert.match(p, /already open/i) // the PR is already open (the gate opened it)
