@@ -33,6 +33,13 @@ import {
   PROMOTE_RESULT,
 } from '../../skills/nextwave/gate.js'
 import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+
+// The lock predicate, read from lock-predicate.sh itself (#1358), so the prompt is checked
+// against the one source and not against a literal copied here.
+const PREDICATE = fileURLToPath(new URL('../../scripts/ci/lock-predicate.sh', import.meta.url))
+const pred = (expr) => execFileSync('bash', ['-c', `source "$1"; ${expr}`, 'pred', PREDICATE], { encoding: 'utf8' }).replace(/\n$/, '')
 
 let failures = 0
 const ok = (name) => console.log(`  [PASS] ${name}`)
@@ -169,7 +176,8 @@ try {
   ok('review prompt: reads staged workspace + origin/<base>...origin/<kahuna> + diff-scoped (ENG-5, §3.4)')
 
   const tv = trivySignalPrompt(A)
-  assert.match(tv, /trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet/) // #1169 round 2: JSON output required — the predicate reasons over it
+  assert.match(tv, /trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --ignorefile \/dev\/null --config \/dev\/null --format json --quiet/) // #1169 round 2: JSON output required — the predicate reasons over it; #1358: no repo .trivyignore or trivy.yaml
+  assert.ok(tv.includes(`trivy fs ${pred('printf %s "$TRIVY_PROSE_FLAGS"')} ${pred('skip_dirs_args')} <w>/tree >`), 'the main scan must carry lock-predicate.sh\'s TRIVY_PROSE_FLAGS and skip-dirs (#1358)')
   assert.match(tv, /THEN enumerate the dependency manifests/i) // #1169 round 2: denominator is a prescribed step, not left to the agent to think of (after #1206's staging)
   // #1169 round 3: the enumeration is a REAL, single-line, runnable find command (round 2's
   // version was split across template-literal array elements with no line-continuation, i.e.
@@ -190,7 +198,7 @@ try {
   // #1247: trivy reads only the exact name requirements.txt, so siblings are scanned alone under it,
   // a partial run fails, and the agent returns the counts the code-side rule below re-checks.
   assert.match(tv, /pip analyzer reads ONLY a file named exactly requirements\.txt/)
-  assert.match(tv, /cp '<that file>' \$d\/requirements\.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet \$d > <w>\/trivy-<n>\.json 2> <w>\/trivy-<n>\.err; echo "exit=\$\?"; rm -rf \$\{d:\?\}/)
+  assert.match(tv, /cp '<that file>' \$d\/requirements\.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --ignorefile \/dev\/null --config \/dev\/null --format json --quiet \$d > <w>\/trivy-<n>\.json 2> <w>\/trivy-<n>\.err; echo "exit=\$\?"; rm -rf \$\{d:\?\}/)
   assert.match(tv, /PARTIAL COVERAGE\s+FAILS/)
   assert.match(tv, /rm -rf \$\{d:\?\}\nIts HIGH\/CRITICAL findings count toward the verdict exactly like the main scan's\./) // as in SKILL.md's fallback
   assert.match(tv, /found \(the denominator: lines the find printed, less the two exclusions above\), ingested\s+\(how many of those are INGESTED\), unscanned/)
@@ -205,15 +213,12 @@ try {
   // An unpinned requirements*.txt (no version, so never ingestible) is left out of the
   // denominator exactly as check-scannable.sh leaves it out. Take the pin test FROM the script
   // so the two cannot drift: a second copied literal here would only pin the prompt to itself.
-  const cs = readFileSync(new URL('../../scripts/ci/check-scannable.sh', import.meta.url), 'utf8')
-  const pinRe = cs.match(/pinned="\$\(grep -cE '([^']+)' "\$req"/)?.[1]
-  assert.ok(pinRe, 'check-scannable.sh pin test not found; update this extraction with it')
-  assert.ok(tv.includes(`grep -cE '${pinRe}' '<that file>'`), 'trivy prompt must test pins with check-scannable.sh\'s own regex, on a quoted path')
-  // The requirements PATTERNS are single-sourced the same way: check-scannable.sh's REQ_FIND,
-  // which also reaches dev-requirements.txt and the pip-tools requirements/<name>.txt layout.
-  const reqFind = cs.match(/^REQ_FIND=\(\\\( (.+) \\\)\)$/m)?.[1]
-  assert.ok(reqFind, 'check-scannable.sh REQ_FIND not found; update this extraction with it')
-  assert.ok(tv.includes(` -o ${reqFind} \\) -print`), 'trivy find must carry check-scannable.sh\'s REQ_FIND')
+  const pinRe = pred('printf %s "$PIN_RE"')
+  assert.ok(pinRe, 'lock-predicate.sh PIN_RE not found')
+  assert.ok(tv.includes(`grep -cE '${pinRe}' '<that file>'`), 'trivy prompt must test pins with lock-predicate.sh\'s PIN_RE, on a quoted path')
+  // The whole find is single-sourced the same way (#1358): lock-predicate.sh's lock_find_expr,
+  // which carries the prune, every lock name and every requirements pattern.
+  assert.ok(tv.includes(`  find <w>/tree ${pred('lock_find_expr')}\n`), 'trivy find must be lock-predicate.sh\'s lock_find_expr')
   assert.match(tv, /where it prints 0, leave that file OUT of the denominator/)
   ok('trivy prompt: pip siblings scanned alone, partial coverage fails, unpinned requirements out of the denominator as in check-scannable.sh, counts returned (#1247)')
   // #1277: trivy's JSON goes to a file, never to the tool output, which is cut at ~30k characters
@@ -228,7 +233,7 @@ try {
     assert.match(run, /\s2>\s*<w>\/trivy-\S+\.err/, `stderr not captured: ${run}`)
     assert.ok(run.includes('; echo "exit=$?"'), `trivy run without its own exit=: ${run}`)
   }
-  assert.match(tv, /--quiet <w>\/tree > <w>\/trivy-0\.json 2> <w>\/trivy-0\.err; echo "exit=\$\?"\n/)
+  assert.match(tv, /--quiet(?: --skip-dirs '\S+')* <w>\/tree > <w>\/trivy-0\.json 2> <w>\/trivy-0\.err; echo "exit=\$\?"\n/)
   // <w> is the literal path mktemp -d printed, never a variable: a variable does not survive
   // between Bash calls, so `> $w/...` in a later call writes to /trivy-0.json and HOLDs every wave.
   assert.match(tv, /mktemp -d, once\. Write the path it prints in place of <w> in every command below/)
@@ -249,7 +254,7 @@ try {
   assert.ok(tv.indexOf('worktree add --detach') < tv.indexOf('find <w>/tree'), 'the tree is staged before the enumeration')
   assert.match(tv, /^ {2}find <w>\/tree \\\(/m, 'the enumeration is rooted at the kahuna worktree')
   for (const run of runs.filter((l) => l.includes('--quiet') && !l.includes('$d'))) {
-    assert.match(run, /--quiet <w>\/tree >/, `a main scan not rooted at the kahuna worktree: ${run}`)
+    assert.match(run, /--quiet(?: --skip-dirs '\S+')* <w>\/tree >/,`a main scan not rooted at the kahuna worktree: ${run}`)
   }
   assert.doesNotMatch(tv, /find \/tmp\/repo/, 'no enumeration over the operator checkout')
   assert.doesNotMatch(tv, /trivy fs [^\n]*\/tmp\/repo/, 'no scan over the operator checkout')

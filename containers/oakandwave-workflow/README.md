@@ -40,7 +40,7 @@ or any tool version:
 ```bash
 make -C containers/oakandwave-workflow build \
   BASE_IMAGE=ghcr.io/agent-of-empires/aoe-dev-sandbox:1.13.0 \
-  GO_VERSION=1.24.5 TRIVY_VERSION=0.72.0
+  GO_VERSION=1.24.5 TRIVY_VERSION=0.74.0
 ```
 
 ## Verify the toolchain

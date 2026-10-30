@@ -45,7 +45,7 @@ jobs:
       # checksums file too. Worth having regardless; not the stronger claim.
       - name: Install trivy
         env:
-          TRIVY_VERSION: "0.72.0"
+          TRIVY_VERSION: "0.74.0"
         run: |
           # Downloaded AS the exact name checksums.txt's line names — sha256sum -c
           # resolves the file to check from the checksum LINE's filename, not from
