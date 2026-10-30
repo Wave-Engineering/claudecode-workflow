@@ -92,23 +92,26 @@ def test_enumerate_farm_targets_uses_portable_pattern() -> None:
 # ---------------------------------------------------------------------------
 
 
+# Since #1360 both installers source one merge, scripts/lib/settings-merge.sh.
+_MERGE_LIB = _REPO_DIR / "scripts" / "lib" / "settings-merge.sh"
+
+
 def test_merge_settings_union_block_present() -> None:
-    """merge_settings() includes the union-merge jq pipeline for shared hook events."""
-    src = _read()
-    # The sentinel: the $merged_shared_hooks binding name from install's
-    # union-merge block. Its presence indicates the union pipeline was ported.
+    """The shared merge_settings() holds the union-merge jq pipeline for shared hook events."""
+    src = _MERGE_LIB.read_text(encoding="utf-8")
+    # The sentinel: the $merged_shared_hooks binding name from the union-merge block.
     assert "$merged_shared_hooks" in src, (
         "merge_settings missing $merged_shared_hooks union-merge block (#556)"
     )
-    # And the matcher-union expression itself.
-    assert "$local_arr + ($tpl_arr | map(select(.matcher as $m" in src, (
-        "merge_settings missing matcher-array union expression (#556)"
+    # And the kit-owned "*"-matcher condition (#734) the old remote fork lacked.
+    assert 'map(test("\\\\.local/bin/|\\\\.claude/")) | any' in src, (
+        "merge_settings missing the kit-owned union condition (#734)"
     )
 
 
 def test_merge_settings_reports_added_matchers() -> None:
-    """--check / install reports 'matcher \"X\" added' for new matchers."""
-    src = _read()
+    """install reports 'matcher \"X\" added' for new matchers."""
+    src = _MERGE_LIB.read_text(encoding="utf-8")
     assert 'matcher \\"$m\\" added' in src, (
         "merge_settings missing per-matcher 'added' reporting (#556)"
     )

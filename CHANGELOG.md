@@ -33,6 +33,17 @@ so bump it with this release.
   merge that landed without a proven pin is reported `landedUnproven` with its merge commit, never
   as not landed. A new legal exit, `pinned-merge-unproven`, holds the wave on any unproven
   reconcile merge.
+- **A release install now gets the same settings merge and files as `./install` (#1360).**
+  `install-remote.sh` carried its own copy of the merge, forked before the kit-owned union, the
+  old-path migration and the duplicate collapse. The release tarball also shipped only top-level
+  `scripts/` files, so every template hook pointed at a missing file. Now the merge lives once in
+  `scripts/lib/settings-merge.sh`, and both installers source it. The tarball ships `scripts/`
+  recursively with its file modes, plus `assets/logrotate`. `install-remote.sh` refuses a tarball
+  older than v8.20.0 (the first with the lib), and `--dry-run` no longer writes settings. Also: a
+  plugin the user set to `false` is no longer re-added, the template no longer pins `model`, and
+  only executable skill helpers get a PATH link. Two skills claiming one helper name now fail the
+  install instead of overwriting silently. **The duplicate-hooks guard moved** from
+  `scripts/ci/` to `scripts/lib/assert-no-duplicate-hooks.sh`.
 
 ### Added
 - **A mechanical AC gate, and no post-merge criteria (#1365).** `/precheck` used to tick

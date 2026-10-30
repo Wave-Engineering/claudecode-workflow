@@ -230,15 +230,16 @@ def _expected_skill_dirs() -> list[str]:
 def _expected_helper_scripts() -> list[str]:
     """Return helper script basenames installed to ~/.local/bin/ from skills.
 
-    Only non-.md files qualify — .md files are installed into the skill
-    directory, not the scripts directory.
+    Only executable non-.md files qualify — .md files are installed into the
+    skill directory, and a non-executable helper (e.g. bundle.mjs) lives only
+    in the Cellar, with no PATH link (#1360).
     """
     helpers = []
     for skill_dir in (_REPO_DIR / "skills").iterdir():
         if not skill_dir.is_dir():
             continue
         for f in skill_dir.iterdir():
-            if f.is_file() and f.name != "SKILL.md" and not f.name.endswith(".md"):
+            if f.is_file() and not f.name.endswith(".md") and os.access(f, os.X_OK):
                 helpers.append(f.name)
     return sorted(helpers)
 
@@ -906,6 +907,9 @@ class TestInstallSyntheticTree:
         ci_dir = scripts / "ci"
         ci_dir.mkdir()
         (ci_dir / "check-deps.sh").write_text("check_deps() { return 0; }\n")
+        # install sources the shared settings merge (#1360).
+        (scripts / "lib").mkdir()
+        shutil.copy(_REPO_DIR / "scripts" / "lib" / "settings-merge.sh", scripts / "lib")
 
         # Drop in a copy of the real install script so we run the actual code.
         shutil.copy(_REPO_DIR / "install", repo / "install")

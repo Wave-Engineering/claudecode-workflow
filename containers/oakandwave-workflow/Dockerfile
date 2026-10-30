@@ -465,7 +465,7 @@ RUN set -eux; \
 # script derives the home to expand `~` against from the FILE it is given rather
 # than from the environment — an assertion whose detection depends on an ambient
 # variable nobody asserts reports "no duplicates" the day that variable changes.
-RUN HOME=/home/ubuntu "${KIT_SRC}/scripts/ci/assert-no-duplicate-hooks.sh" /home/ubuntu/.claude/settings.json
+RUN HOME=/home/ubuntu "${KIT_SRC}/scripts/lib/assert-no-duplicate-hooks.sh" /home/ubuntu/.claude/settings.json
 
 # --- Zombie reaping: tini as PID 1 (fleet-wide network dropouts) --------------
 # aoe never runs its own entrypoint into the agent — it `docker exec`s
