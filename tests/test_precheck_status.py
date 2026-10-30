@@ -56,8 +56,11 @@ def gl_mr(n, pr):
     draft = bool(re.match(r"\s*(\[draft\]|\(draft\)|draft:)", t, re.I))  # GitLab's own rule; WIP: no longer counts
     mr = {"iid": int(n), "sha": pr["sha"], "source_branch": pr["ref"], "target_branch": pr.get("base", "main"), "title": t, "draft": draft}
     hp = os.environ.get("FAKE_HEAD_PIPELINE")
-    if state["s"] and os.environ.get("FAKE_HEAD_PIPELINE_AFTER_POST"):
-        hp = os.environ["FAKE_HEAD_PIPELINE_AFTER_POST"]  # what GitLab shows once a status was posted
+    # What GitLab shows once a status was posted: from the FAKE_HEAD_PIPELINE_MOVE_ON_READ-th
+    # MR read after the post on (default 1), as its async worker moves head_pipeline late.
+    move_on = int(os.environ.get("FAKE_HEAD_PIPELINE_MOVE_ON_READ", "1"))
+    if state["s"] and os.environ.get("FAKE_HEAD_PIPELINE_AFTER_POST") and state.get("post_reads", 0) >= move_on:
+        hp = os.environ["FAKE_HEAD_PIPELINE_AFTER_POST"]
     if hp:
         mr["head_pipeline"] = {"id": int(hp)}
     return mr
@@ -96,6 +99,9 @@ if tool == "glab" and method == "GET":
         pr = prs.get(m.group(2))
         if not pr:
             print(json.dumps({"message": "404 Not found"})); sys.exit(0)
+        if state["s"]:
+            state["post_reads"] = state.get("post_reads", 0) + 1
+            save()
         print(json.dumps(gl_mr(m.group(2), pr))); sys.exit(0)
     m = re.fullmatch(r"projects/([^/]+)/repository/commits/([0-9a-f]{40})/merge_requests", endpoint)
     if m:
@@ -176,6 +182,7 @@ def world(tmp_path: Path):
         "FAKE_LOG": str(tmp_path / "calls.log"),
         "FAKE_STATE": str(tmp_path / "state.json"),
         "FAKE_HOST": "gitlab.example.com",
+        "PRECHECK_HP_STEP_SEC": "0",  # the head_pipeline poll never sleeps in tests
     }
     return repo, env, shas, tmp_path
 
@@ -319,7 +326,7 @@ def test_gitlab_merged_results_post_stays_on_head(world):
     assert r.returncode == 0, r.stderr
     assert json.loads((tmp / "state.json").read_text())["s"][shas[-1]][0]["pipeline_id"] is None
     reads = [c for c in _calls(tmp) if c[-1] == "projects/group%2Fsub%2Fproj/merge_requests/3"]
-    assert len(reads) == 2, "head_pipeline is read before and after the post"
+    assert len(reads) == 1 + 6, "head_pipeline is read once before the post, then polled 6 times"
     assert not any(c[-1].endswith(("merge_requests/2", "merge_requests/4")) for c in _calls(tmp))
     # The readers agree: pr-head names the head, and get reads the pass on it.
     head = _run(env, "pr-head", str(repo), "3", **extra).stdout.split()[0]
@@ -335,6 +342,43 @@ def test_gitlab_post_fails_when_head_pipeline_moves(world):
     assert r.returncode == 3
     assert "MR !3's head_pipeline moved from 2983401888 to 2983506881" in r.stderr
     assert "hides its CI verdict" in r.stderr
+    # The success it posted is replaced, so the head carries no pass.
+    assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "failure"
+
+
+def test_gitlab_post_fails_when_head_pipeline_moves_late(world):
+    """#1371 lead review: GitLab moves head_pipeline in an async worker, so the move shows up
+    on a later poll, not on the first re-read."""
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = {
+        **_merged_results_mr(shas),
+        "FAKE_HEAD_PIPELINE_AFTER_POST": "2983506881",
+        "FAKE_HEAD_PIPELINE_MOVE_ON_READ": "2",
+    }
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
+    assert r.returncode == 3, r.stderr
+    assert "head_pipeline moved from 2983401888 to 2983506881" in r.stderr
+    st = json.loads((tmp / "state.json").read_text())["s"][shas[-1]]
+    assert [s["status"] for s in st] == ["success", "failed"]
+    assert all(s["name"] == "precheck" for s in st)
+    assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "failure"
+    reads = [c for c in _calls(tmp) if c[-1] == "projects/group%2Fsub%2Fproj/merge_requests/3"]
+    assert len(reads) == 1 + 2, "the poll stops at the move"
+
+
+def test_gitlab_post_no_move_across_the_window_is_success(world):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = {
+        **_merged_results_mr(shas),
+        "FAKE_HEAD_PIPELINE_AFTER_POST": "2983506881",
+        "FAKE_HEAD_PIPELINE_MOVE_ON_READ": "7",  # one past the 6-poll window
+    }
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == f"success {shas[-1]}"
+    assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "success"
 
 
 def test_gitlab_post_mr_lookup_failure_posts_nothing(world):

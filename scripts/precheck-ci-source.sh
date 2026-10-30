@@ -138,7 +138,9 @@ run_for_sha() {
 		jq -r '.workflow_runs[0] // empty | "\(.id)|\(.head_branch // "")|\(.head_sha // "")"' <<<"$out" 2>/dev/null || return 1
 	else
 		out="$(glab api --hostname "$HOST" "projects/${SLUG//\//%2F}/pipelines?sha=${sha}&per_page=20")" || return 1
-		jq -r '.[0] // empty | "\(.id)|\(.ref // "")|\(.sha // "")"' <<<"$out" 2>/dev/null || return 1
+		# Never an external pipeline: a bare status post (our own precheck pass) creates one
+		# for the head, and grading off it would wait on our own success (#1371 lead review).
+		jq -r '[.[] | select(.source != "external")][0] // empty | "\(.id)|\(.ref // "")|\(.sha // "")"' <<<"$out" 2>/dev/null || return 1
 	fi
 }
 

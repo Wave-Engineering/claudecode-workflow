@@ -16,8 +16,10 @@
 # On a merged-results MR the head SHA has no pipeline (MR pipelines run on an ephemeral
 # merge commit), so the post is bare by necessity. It stays on the head, because every
 # reader keys on the head (pr-head + get, pr-ready-gate.sh, sdlc's pr_create/pr_ready/
-# pr_merge). Each open MR's head_pipeline is read before and after, and the post exits
-# 3 if one moved: that is the hazard above, measured instead of assumed (#1357).
+# pr_merge). Each open MR's head_pipeline is read before the post, then polled after it
+# (PRECHECK_HP_POLLS reads, PRECHECK_HP_STEP_SEC apart: 6 × 5 s). If one moves in that
+# window, the post replaces its success with `failed` and exits 3: the hazard above,
+# measured instead of assumed (#1357). A move after the window is not seen.
 #
 # Every read fails closed: `get` prints `success` only when the platform said so. An API
 # error is exit 3, never a state.
@@ -175,6 +177,7 @@ post)
 		exit 2
 	}
 	desc="$(printf '%s' "$desc" | tr '\n\r' '  ' | cut -c1-140)"
+	hp_before=()
 	case "$platform" in
 	github)
 		gh api -X POST "repos/$slug/statuses/$sha" -f state=success -f context="$CONTEXT" \
@@ -190,7 +193,6 @@ post)
 		# No pipeline for the head (a merged-results MR runs on its merge commit): the post
 		# is bare by necessity. Record each open MR's head_pipeline at this head first, so
 		# the post fails loudly if GitLab ever promotes the external pipeline (#1357).
-		hp_before=()
 		if [[ -z "$pid" ]]; then
 			mrs="$(gl_api "projects/$enc/repository/commits/$sha/merge_requests")" || api_fail "list MRs of $sha"
 			iids="$(printf '%s' "$mrs" | jq -er --arg s "$sha" \
@@ -214,16 +216,30 @@ post)
 		echo "posted, but $sha reads back '$state', not success" >&2
 		exit 3
 	fi
-	for rec in "${hp_before[@]+"${hp_before[@]}"}"; do
-		iid="${rec%%=*}" before="${rec#*=}"
-		mr="$(gl_api "projects/$enc/merge_requests/$iid")" || api_fail "re-read MR !$iid"
-		after="$(printf '%s' "$mr" | jq -r '.head_pipeline.id // empty' 2>/dev/null)" ||
-			api_fail "re-read MR !$iid (unexpected answer)"
-		if [[ "$after" != "$before" ]]; then
-			echo "posted, but MR !$iid's head_pipeline moved from ${before:-none} to ${after:-none}: the external pipeline the post created now hides its CI verdict" >&2
-			exit 3
-		fi
-	done
+	# GitLab moves head_pipeline in an async worker, so one immediate re-read nearly always
+	# sees the old value. Poll for a bounded window (#1371 lead review). On a move, the
+	# success already on the head would still read as a pass, so replace it with `failed`
+	# on the same context before exiting 3.
+	polls="${PRECHECK_HP_POLLS:-6}" step="${PRECHECK_HP_STEP_SEC:-5}"
+	if ((${#hp_before[@]} > 0)); then
+		for ((i = 1; i <= polls; i++)); do
+			sleep "$step"
+			for rec in "${hp_before[@]}"; do
+				iid="${rec%%=*}" before="${rec#*=}"
+				mr="$(gl_api "projects/$enc/merge_requests/$iid")" || api_fail "re-read MR !$iid"
+				after="$(printf '%s' "$mr" | jq -r '.head_pipeline.id // empty' 2>/dev/null)" ||
+					api_fail "re-read MR !$iid (unexpected answer)"
+				[[ "$after" == "$before" ]] && continue
+				gl_api -X POST "projects/$enc/statuses/$sha" -f state=failed -f name="$CONTEXT" \
+					-f description="no pass: the bare post moved MR !$iid's head_pipeline, hiding its CI verdict" >/dev/null ||
+					api_fail "post the failed status on $sha"
+				state="$(get_state "$sha")"
+				[[ "$state" == failure ]] || echo "and the failed status reads back '$state', not failure" >&2
+				echo "posted, but MR !$iid's head_pipeline moved from ${before:-none} to ${after:-none}: the external pipeline the post created now hides its CI verdict, so the pass was replaced with failed" >&2
+				exit 3
+			done
+		done
+	fi
 	echo "success $sha"
 	;;
 

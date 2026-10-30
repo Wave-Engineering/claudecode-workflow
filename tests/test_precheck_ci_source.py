@@ -251,6 +251,15 @@ def test_gitlab_merged_results_pipeline_is_the_source(tmp_path: Path) -> None:
     assert _triggers(state) == []
 
 
+def test_gitlab_external_pipeline_at_head_is_never_the_source(tmp_path: Path) -> None:
+    """#1371 lead review: our own bare status post leaves an external pipeline on the head. A
+    re-run at the same head must still resolve to the /merge pipeline, not grade off it."""
+    repo = _repo(tmp_path, "gitlab")
+    external = '[{"id":990,"sha":"%s","ref":"%s","status":"success","source":"external"}]' % (SHA, BRANCH)
+    state = _merged_results_state(tmp_path, **{"runs.json": external})
+    assert _resolve(repo, state) == f"ci run=901 ref=refs/merge-requests/3/merge sha={MERGE}"
+
+
 def test_gitlab_merged_results_newest_merge_pipeline_wins(tmp_path: Path) -> None:
     """Of /merge pipelines 900 and 901, 901 wins; the newer /head pipeline 950 is never taken."""
     repo = _repo(tmp_path, "gitlab")

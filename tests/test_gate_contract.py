@@ -260,8 +260,11 @@ class TestCiSignal:
         probe = p.index("PROBE, before ci_wait_run: sdlc-server pr_wait_ci(number=77")
         assert probe < p.index("call sdlc-server ci_wait_run")
         assert "ONLY when CI cannot start for this head" in p
-        assert "a blocker of draft, checks_not_registered or evidence_unavailable" in p, (
-            "the draft exemption and the two not-fail-fast blockers must be stated"
+        assert "a blocker of draft, not_mergeable, checks_not_registered or evidence_unavailable" in p, (
+            "the draft exemption and the three not-fail-fast blockers must be stated"
+        )
+        assert "is one of conflicts, closed, merged, locked, mergeability_unknown." in p, (
+            "not_mergeable is not fail-fast (#1371 lead review)"
         )
 
 

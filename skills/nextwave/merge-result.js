@@ -206,9 +206,12 @@ export function mergeResultVerdict(ev) {
 // checks_not_registered (runs exist for the head, not yet in the rollup: a queued run) and
 // evidence_unavailable (the run query failed, so nothing is known). A draft is never fail-fast, on
 // either status: the gate and release PRs are drafts on purpose, and a server before #609 reports a
-// draft as no_checks_configured. Pure; null when the probe says nothing that holds.
+// draft as no_checks_configured. not_mergeable is not fail-fast either (#1371 lead review): GitLab's
+// adapter maps ci_must_pass, preparing, ci_still_running and not_approved to it, so a fresh MR probed
+// before its pipeline exists reads not_mergeable, and on GitHub "blocked" is mostly required checks
+// still pending. Pure; null when the probe says nothing that holds.
 const NO_RUN_STATUSES = new Set(['no_checks_yet', 'no_checks_configured'])
-const NO_RUN_OBSTRUCTIONS = new Set(['conflicts', 'not_mergeable', 'closed', 'merged', 'locked', 'mergeability_unknown'])
+const NO_RUN_OBSTRUCTIONS = new Set(['conflicts', 'closed', 'merged', 'locked', 'mergeability_unknown'])
 export function noRunHold(probe, head) {
   if (!probe || typeof probe !== 'object' || !NO_RUN_STATUSES.has(probe.status)) return null
   // Runs found for the head beat any blocker: the server reports mergeability_unknown ahead of
@@ -229,7 +232,7 @@ export function noRunProbeLines({ targetRepo, prNumber, next = 'the last head re
     `SKIP ci_wait_run and the direct read, and go straight to ${next}, ONLY when CI cannot start for this head:`,
     `probe.pending_runs is empty or absent, AND probe.status is no_checks_configured with no blocker, or probe.blocker`,
     `is one of ${[...NO_RUN_OBSTRUCTIONS].join(', ')}. Any other answer (a non-empty pending_runs,`,
-    `a blocker of draft, checks_not_registered or evidence_unavailable, or no no-checks status): call ci_wait_run`,
+    `a blocker of draft, not_mergeable, checks_not_registered or evidence_unavailable, or no no-checks status): call ci_wait_run`,
     `as below, because a run may exist or CI may still start.`,
   ]
 }

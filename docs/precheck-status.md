@@ -10,13 +10,13 @@ The contract between the kit, which **produces** the mark, and everything that *
 |---|---|
 | GitHub | a commit status (`POST /repos/{owner}/{repo}/statuses/{sha}`) with `context` = `precheck` |
 | GitLab | a commit status (`POST /projects/:id/statuses/:sha`) with `name` = `precheck`, attached to the SHA's existing pipeline through `pipeline_id` when one exists |
-| state | `success`. Precheck posts nothing else: no pass means no status. |
+| state | `success`. No pass means no status. The one exception is the merged-results guard below, which replaces a `success` it just posted with `failed`. |
 | description | one line, 140 characters or fewer. It names the issue, the review passes and where the lane results came from, for example `#1235 review full+delta clean; lanes ci; trivy 0` |
 | SHA | the HEAD that was reviewed. It must already be pushed. |
 
 **Why GitLab passes `pipeline_id`:** a bare status post makes GitLab create a separate "external" pipeline. That pipeline can become the MR's latest pipeline and hide the real CI verdict from the merge check.
 
-**Merged-results MRs (#1357):** the head SHA has no pipeline there, because MR pipelines run on an ephemeral merge commit. So the post is bare by necessity. It still goes on the head, because every reader keys on the head. Before posting, `precheck-status.sh post` reads each open MR at that head's `head_pipeline`. After the read-back it reads them again, and it exits 3 if one moved. If GitLab ever promotes the external pipeline, the post fails loudly instead of hiding the MR's CI verdict.
+**Merged-results MRs (#1357):** the head SHA has no pipeline there, because MR pipelines run on an ephemeral merge commit. So the post is bare by necessity. It still goes on the head, because every reader keys on the head. Before posting, `precheck-status.sh post` reads `head_pipeline` for each open MR at that head. GitLab moves `head_pipeline` in an async worker, so after the read-back the script polls it again: 6 reads, 5 seconds apart (`PRECHECK_HP_POLLS`, `PRECHECK_HP_STEP_SEC`). If one moves in that window, it replaces the `success` with `failed` on the same context and exits 3, so the head carries no pass. What is guaranteed is only that window: a move later than about 30 seconds after the post is not seen.
 
 ## Reading it
 
