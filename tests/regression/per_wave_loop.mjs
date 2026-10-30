@@ -421,6 +421,32 @@ await check('flight CI: reconcile\'s claim to merge a flight it was not handed i
   assert.ok(run.logs.some((l) => l.includes('ignoring reconcile') && l.includes('#2')), 'the ignored claim is logged')
 })
 
+await check('flight CI: a resumed already-present flight already in the kahuna counts as merged without reconcile', async () => {
+  const run = await runPerWave({
+    args: FAN_ARGS,
+    responder: only({
+      'flight:#2': { issue: 2, status: 'already-present', head_sha: defaultHead(2) },
+      'flight-ci:#2': { issue: 2, already_integrated: true, integrated_head: defaultHead(2), integrated_exit: 0 },
+    }),
+  })
+  assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
+  const merge1 = run.calls.find((c) => c.label === 'merge:1').prompt
+  assert.ok(merge1.includes('issue #1') && !merge1.includes('issue #2'), 'the integrated flight is not sent to reconcile')
+  assert.deepEqual([...run.result.merged].sort(), [1, 2], 'it is counted as merged')
+  assert.equal(run.result.integrated, true, 'and the wave integrates')
+  assert.ok(run.logs.some((l) => l.includes('flight #2 is already in')), 'the resume is logged')
+})
+
+await check('flight CI: an implemented flight whose head is already in the kahuna is blocked, not merged', async () => {
+  const run = await runPerWave({
+    args: FAN_ARGS,
+    responder: only({ 'flight-ci:#2': { issue: 2, already_integrated: true, integrated_head: defaultHead(2), integrated_exit: 0 } }),
+  })
+  assertHalted(run, 'flight-ci-blocked:#2')
+  assert.ok(run.result.haltReason.includes('committed nothing new'), run.result.haltReason)
+  assert.deepEqual(run.result.merged, [1])
+})
+
 await check('flight CI: a group with no green flight skips reconcile', async () => {
   const run = await runPerWave({ responder: only({ 'flight-ci:#1': null }) })
   assertHalted(run, 'flight-ci-blocked:#1 (no CI evidence for #1)')

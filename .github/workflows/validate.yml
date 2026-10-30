@@ -2,7 +2,8 @@ name: Validate
 
 on:
   pull_request:
-    branches: [main]
+    # kahuna/**: the wave engine grades each flight's PR into the kahuna on its own run (#1356).
+    branches: [main, "kahuna/**"]
 
 jobs:
   validate:

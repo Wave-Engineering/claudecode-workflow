@@ -961,13 +961,17 @@ while (true) {
   // moved head) stays out, the rest of the group still merges, and the wave halts after persisting.
   // A thrown or null node is evidence `null`, which grades as blocked: absence of evidence holds.
   const flightCi = await parallel(implemented.map((w) => () =>
-    agent(flightCiPrompt({ waveId: WAVE_ID, issue: Number(w.issue), branch: issueBranch(w.issue), worktree: wtMap[w.issue], kahunaBranch: KAHUNA_BRANCH, targetRepo: TARGET_REPO, ciWaitSec: CI_WAIT_SEC }), {
+    agent(flightCiPrompt({ waveId: WAVE_ID, issue: Number(w.issue), branch: issueBranch(w.issue), worktree: wtMap[w.issue], kahunaBranch: KAHUNA_BRANCH, targetRepo: TARGET_REPO, ciWaitSec: CI_WAIT_SEC, flightHead: w.head_sha }), {
       label: `flight-ci:#${w.issue}`,
       phase: 'Flight loop',
       schema: FLIGHT_CI_EVIDENCE,
       agentType: 'general-purpose',
     }).catch(() => null)))
-  const graded = implemented.map((w, i) => ({ w, ev: flightCi[i] ?? null, v: flightCiVerdict(flightCi[i] ?? null, Number(w.issue), w.head_sha) }))
+  const graded = implemented.map((w, i) => ({ w, ev: flightCi[i] ?? null, v: flightCiVerdict(flightCi[i] ?? null, Number(w.issue), w.head_sha, w.status) }))
+  // §3.3 resume: a flight already in the kahuna merged in a run that died before persisting. It is
+  // counted as merged here, as reconcile's "already in kahuna, SKIP it" rule used to report it.
+  const integrated = graded.filter((g) => g.v.outcome === 'integrated').map(({ v }) => v.issue)
+  for (const n of integrated) log(`[#1356] flight #${n} is already in ${KAHUNA_BRANCH} (resumed): counted as merged`)
   const proceeding = graded.filter((g) => g.v.outcome === 'proceed').map(({ w, ev, v }) => ({ ...w, pr_number: ev.pr_number, head: v.head }))
   const ciRework = graded.filter((g) => g.v.outcome === 'needs_rework').map(({ v }) => ({ issue: v.issue, reason: v.reason }))
   const ciBlocked = graded.filter((g) => g.v.outcome === 'blocked').map(({ v }) => v)
@@ -1010,7 +1014,7 @@ while (true) {
   const handed = new Set(proceeding.map((w) => Number(w.issue)))
   const ignored = [...(rec.merged || []), ...(rec.needs_rework || []).map((r) => r.issue)].filter((n) => !handed.has(Number(n)))
   if (ignored.length) log(`[#1213/#1356] ignoring reconcile's report on flight(s) it was not given: #${[...new Set(ignored)].join(', #')}`)
-  const newlyMerged = (rec.merged || []).filter((n) => !merged.has(n) && handed.has(Number(n)))
+  const newlyMerged = [...new Set([...integrated, ...(rec.merged || []).filter((n) => handed.has(Number(n))).map(Number)])].filter((n) => !merged.has(n))
   const reworked = [...ciRework, ...(rec.needs_rework || []).filter((r) => handed.has(Number(r.issue)))]
   newlyMerged.forEach((n) => { merged.add(n); pending.delete(n); delete reworkCtx[n] })
   idleRounds = newlyMerged.length ? 0 : idleRounds + 1 // thrash detector

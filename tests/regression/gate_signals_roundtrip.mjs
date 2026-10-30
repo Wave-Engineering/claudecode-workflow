@@ -564,10 +564,34 @@ try {
   assert.equal(pushed.outcome, 'blocked')
   assert.match(pushed.reason, /push rejected: pre-push gate refused/)
   for (const r of [red, b, pushed]) assert.equal(r.head, null, 'only proceed carries a head')
+  assert.match(v(ev({ wait: { ok: false, error: 'No CI run found for ref x' } })).reason, /must run on PRs into kahuna\/\*/, 'no run names the CI trigger')
+  assert.doesNotMatch(v(ev({ wait: { ok: false, error: 'rate limited' } })).reason, /kahuna\/\*/, 'other errors carry no trigger hint')
   ok('flightCiVerdict: green proceeds; ran-red reworks; billing/infra/no-verdict, moved or foreign heads, null evidence and a rejected push are blocked (#1356)')
+
+  // §3.3 resume: an already-present flight whose head is already in the kahuna merged in a dead run.
+  const inK = { issue: 7, already_integrated: true, integrated_head: FH, integrated_exit: 0 }
+  assert.deepEqual(flightCiVerdict(inK, 7, FH, 'already-present'), { issue: 7, outcome: 'integrated', head: FH, reason: 'head ffffffff is already in the kahuna (a resumed flight)' })
+  for (const [what, e, head, status] of [
+    ['an implemented flight (it committed nothing new)', inK, FH, 'implemented'],
+    ['no status', inK, FH, undefined],
+    ['another sha checked', { ...inK, integrated_head: 'e'.repeat(40) }, FH, 'already-present'],
+    ['a non-zero exit', { ...inK, integrated_exit: 1 }, FH, 'already-present'],
+    ['no exit', { ...inK, integrated_exit: undefined }, FH, 'already-present'],
+    ['no flight head', inK, null, 'already-present'],
+  ]) {
+    const r = flightCiVerdict(e, 7, head, status)
+    assert.equal(r.outcome, 'blocked', `${what} is blocked`)
+    assert.match(r.reason, /committed nothing new/)
+  }
+  assert.equal(flightCiVerdict({ ...ev(), already_integrated: false }, 7, FH, 'already-present').outcome, 'proceed', 'not integrated: graded as usual')
+  ok('flightCiVerdict: an already-present flight already in the kahuna is integrated; any other claim of it is blocked (#1356)')
 
   const fp = flightCiPrompt({ waveId: 'W-7', issue: 7, branch: 'feature/7-W-7-x', worktree: '/wt/7', kahunaBranch: 'kahuna/692-x', targetRepo: 'org/repo', ciWaitSec: 600 })
   assert.match(fp, /git -C \/wt\/7 push origin feature\/7-W-7-x/)
+  assert.match(fp, /merge-base --is-ancestor \$\(git -C \/wt\/7 rev-parse HEAD\) origin\/kahuna\/692-x; echo "exit=\$\?"/, 'with no flight head it checks the worktree HEAD')
+  assert.ok(fp.indexOf('is-ancestor') < fp.indexOf('push origin'), 'the integrated check runs before the push')
+  const fp2 = flightCiPrompt({ waveId: 'W-7', issue: 7, branch: 'b', worktree: '/wt/7', kahunaBranch: 'kahuna/692-x', targetRepo: 'org/repo', ciWaitSec: 600, flightHead: FH })
+  assert.ok(fp2.includes(`merge-base --is-ancestor ${FH} origin/kahuna/692-x`), 'it checks the head the flight returned')
   assert.match(fp, /pr_create, NOT as a draft/)
   assert.match(fp, /require_merge_result=true, pr_number=<n>, timeout_sec=600, poll_interval_sec=15/)
   assert.match(fp, /ci_failed_jobs\(run_id=<wait\.run_id>/)

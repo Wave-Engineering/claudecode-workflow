@@ -427,8 +427,9 @@ export function releaseCiPrompt({ planId, targetRepo, campaignBranch, protectedB
     ...head('head_sha_final'),
     ...targetReadLines({ targetRepo, branch: protectedBranch, field: 'target_sha' }).map((l) => `   ${l}`),
     ``,
-    `Return: pr_number, pr_ref, head_sha (step 1), wait (step 2), and, ONLY if you ran step 3,`,
-    `merge_pipelines and merge_commit; head_sha_final and target_sha (step 4); notes (1-2 sentences). Report what you`,
+    `Return: pr_number, pr_ref, head_sha (step 1), wait (step 2); merge_commit whenever step 3 had you`,
+    `read one (a GitLab green on a sha that is not the head, or the direct read); merge_pipelines ONLY if`,
+    `you ran the direct read; head_sha_final and target_sha (step 4); notes (1-2 sentences). Report what you`,
     `READ. A missing fact holds the release; it never passes it.`,
   ].join('\n')
 }

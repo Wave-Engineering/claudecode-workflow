@@ -288,8 +288,9 @@ export function ciSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRe
     ...head('head_sha_final'),
     ...targetReadLines({ targetRepo, branch: integrationBase, field: 'target_sha' }).map((l) => `   ${l}`),
     ``,
-    `Do NOT do any other work. Return: pr_number, pr_ref, head_sha (step 1), wait (step 2), and, ONLY if`,
-    `you ran step 3, merge_pipelines and merge_commit; head_sha_final and target_sha (step 4); notes (1-2 sentences).`,
+    `Do NOT do any other work. Return: pr_number, pr_ref, head_sha (step 1), wait (step 2); merge_commit`,
+    `whenever step 3 had you read one (a GitLab green on a sha that is not the head, or the direct read);`,
+    `merge_pipelines ONLY if you ran the direct read; head_sha_final and target_sha (step 4); notes (1-2 sentences).`,
     `Report what you READ. A missing fact holds the wave; it never passes it.`,
   ].join('\n')
 }
@@ -355,18 +356,27 @@ export const FLIGHT_CI_EVIDENCE = {
     },
     blocked: { type: 'boolean' }, // the push of the flight branch was rejected
     block_reason: { type: 'string' },
+    already_integrated: { type: 'boolean' }, // step 0: the flight head is already an ancestor of the kahuna
+    integrated_head: { type: 'string' }, // step 0: the sha that was checked
+    integrated_exit: { type: 'integer' }, // step 0: merge-base --is-ancestor's exit code, as printed
     notes: { type: 'string' },
   },
 }
 
-export function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, targetRepo, ciWaitSec }) {
+export function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, targetRepo, ciWaitSec, flightHead }) {
   const waitSec = ciWaitBudget(ciWaitSec)
   const head = (field) => headReadLines({ targetRepo, field }).map((l) => `   ${l}`)
+  const fh = isMergeSha(flightHead) ? flightHead : `$(git -C ${worktree} rev-parse HEAD)`
   return [
     `You are the FLIGHT CI node for issue #${issue}, wave ${waveId} of ${targetRepo}. You publish the flight's`,
     `branch, open its PR into ${kahunaBranch}, and report what CI says about it. You gather facts only: the`,
     `engine grades them in code.`,
     ``,
+    `0. FIRST, is this flight already in ${kahunaBranch}? (A resumed wave whose flight merged before the run died.)`,
+    `     git -C ${worktree} fetch -q origin ${kahunaBranch}; git -C ${worktree} merge-base --is-ancestor ${fh} origin/${kahunaBranch}; echo "exit=$?"`,
+    `   Report the sha you checked as integrated_head and the printed exit code as integrated_exit. If it`,
+    `   is 0, set already_integrated=true and STOP: push nothing, open nothing. Otherwise set`,
+    `   already_integrated=false and go on.`,
     `1. Push the branch, as a plain push and nothing else: git -C ${worktree} push origin ${branch}`,
     `   If the push is REJECTED (pre-push gate, permissions, a protected-ref guard), STOP: return`,
     `   blocked=true and the rejection text as block_reason. Never push any other ref.`,
@@ -382,8 +392,9 @@ export function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, 
     ...head('head_sha_final'),
     ``,
     `Do NOT merge, do NOT mark anything ready, do NOT judge: the engine grades this in code.`,
-    `Return: issue (${issue}), pr_number, pr_ref, head_sha, wait, failed_jobs (step 4 only), head_sha_final,`,
-    `blocked + block_reason (step 1 only), notes (1-2 sentences). Report what you READ.`,
+    `Return: issue (${issue}), already_integrated + integrated_head + integrated_exit (step 0), pr_number, pr_ref,`,
+    `head_sha, wait, failed_jobs (step 4 only), head_sha_final, blocked + block_reason (step 1 only), notes`,
+    `(1-2 sentences). Report what you READ.`,
   ].join('\n')
 }
 
@@ -399,10 +410,25 @@ export function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, 
 // the jobs downstream of it, and GitHub's ci_failed_jobs lists those too. A failed job that never
 // started, or ended at the instant it started, is the billing/runner-refusal signature (no steps ran):
 // it holds the wave, because re-dispatching the flight cannot fix the account.
+//
+// INTEGRATED (§3.3 resume): a flight whose worker said already-present and whose own head is already
+// an ancestor of the kahuna merged in an earlier run that died before persisting. It counts as merged
+// without a PR (there is none left to grade). A flight that said implemented with a head already in
+// the kahuna committed nothing new, so it is blocked, never counted.
 const FLIGHT_IGNORED_CONCLUSIONS = new Set(['skipped', 'neutral'])
-export function flightCiVerdict(ev, issue, flightHead) {
+// A flight PR into kahuna/* gets no run at all when the repo's CI triggers only on PRs into main.
+const noRunHint = (error) => (/^No CI run found/i.test(String(error))
+  ? '; the repo\'s CI must run on PRs into kahuna/* (docs/operations/branch-protection-checklist.md)'
+  : '')
+export function flightCiVerdict(ev, issue, flightHead, status) {
   const out = (outcome, reason, head = null) => ({ issue, outcome, head, reason })
   if (!ev || typeof ev !== 'object' || ev.issue !== issue) return out('blocked', `no CI evidence for #${issue}`)
+  if (ev.already_integrated === true) {
+    if (status === 'already-present' && isMergeSha(flightHead) && ev.integrated_head === flightHead && ev.integrated_exit === 0) {
+      return out('integrated', `head ${flightHead.slice(0, 8)} is already in the kahuna (a resumed flight)`, flightHead)
+    }
+    return out('blocked', 'the flight head is already in the kahuna, but the flight did not report already-present at that head: it committed nothing new')
+  }
   if (ev.blocked === true) return out('blocked', `push rejected: ${ev.block_reason || 'no reason given'}`)
   if (!isMergeSha(flightHead) || ev.head_sha !== flightHead || ev.head_sha_final !== flightHead) {
     return out('blocked', 'the PR head is not the head the flight returned')
@@ -425,7 +451,7 @@ export function flightCiVerdict(ev, issue, flightHead) {
     ? 'failure with no failed jobs listed'
     : isRed
       ? 'failed jobs never ran (an infra or billing failure, not the flight\'s code)'
-      : fs ? `final_status=${fs}` : w.error ? `no verdict: ${String(w.error).slice(0, 160)}` : 'no verdict'
+      : fs ? `final_status=${fs}` : w.error ? `no verdict: ${String(w.error).slice(0, 160)}${noRunHint(w.error)}` : 'no verdict'
   return out('blocked', `CI could not grade head ${flightHead.slice(0, 8)}: ${why}`)
 }
 

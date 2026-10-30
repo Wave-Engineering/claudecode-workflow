@@ -769,8 +769,9 @@ function directMergeReadSteps({ targetRepo, prNumber, windowSec = 600 }) {
     `      glab api "projects/${enc}/repository/commits/<that sha>" | jq '{sha: .id, parent_ids}'`,
     `DIRECT READ (#1211, GitLab only). Do this ONLY when ci_wait_run gave NO verdict: ok=false with no`,
     `final_status (e.g. "No CI run found", the sdlc#585 signature), or final_status timed_out or`,
-    `not_merge_result (GitLab's head_pipeline lags, or names the detached /head pipeline). Skip it when`,
-    `ci_wait_run returned success, failure or cancelled: a graded result is final. On GitHub, skip it.`,
+    `not_merge_result (GitLab's head_pipeline lags, or names the detached /head pipeline). Skip the`,
+    `direct read (not the merge-commit read above) when ci_wait_run returned success, failure or`,
+    `cancelled: a graded result is final. On GitHub, skip both.`,
     `  • List EVERY pipeline the MR has, unfiltered, and report them as merge_pipelines:`,
     `      glab api "projects/${enc}/merge_requests/${n}/pipelines?per_page=100" | jq '[.[] | {id, ref, status, sha}]'`,
     `  • Take the NEWEST (highest id) whose ref is "refs/merge-requests/${n}/merge". If it is still`,
@@ -1075,8 +1076,9 @@ function ciSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRepo, prN
     ...head('head_sha_final'),
     ...targetReadLines({ targetRepo, branch: integrationBase, field: 'target_sha' }).map((l) => `   ${l}`),
     ``,
-    `Do NOT do any other work. Return: pr_number, pr_ref, head_sha (step 1), wait (step 2), and, ONLY if`,
-    `you ran step 3, merge_pipelines and merge_commit; head_sha_final and target_sha (step 4); notes (1-2 sentences).`,
+    `Do NOT do any other work. Return: pr_number, pr_ref, head_sha (step 1), wait (step 2); merge_commit`,
+    `whenever step 3 had you read one (a GitLab green on a sha that is not the head, or the direct read);`,
+    `merge_pipelines ONLY if you ran the direct read; head_sha_final and target_sha (step 4); notes (1-2 sentences).`,
     `Report what you READ. A missing fact holds the wave; it never passes it.`,
   ].join('\n')
 }
@@ -1142,18 +1144,27 @@ const FLIGHT_CI_EVIDENCE = {
     },
     blocked: { type: 'boolean' }, // the push of the flight branch was rejected
     block_reason: { type: 'string' },
+    already_integrated: { type: 'boolean' }, // step 0: the flight head is already an ancestor of the kahuna
+    integrated_head: { type: 'string' }, // step 0: the sha that was checked
+    integrated_exit: { type: 'integer' }, // step 0: merge-base --is-ancestor's exit code, as printed
     notes: { type: 'string' },
   },
 }
 
-function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, targetRepo, ciWaitSec }) {
+function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, targetRepo, ciWaitSec, flightHead }) {
   const waitSec = ciWaitBudget(ciWaitSec)
   const head = (field) => headReadLines({ targetRepo, field }).map((l) => `   ${l}`)
+  const fh = isMergeSha(flightHead) ? flightHead : `$(git -C ${worktree} rev-parse HEAD)`
   return [
     `You are the FLIGHT CI node for issue #${issue}, wave ${waveId} of ${targetRepo}. You publish the flight's`,
     `branch, open its PR into ${kahunaBranch}, and report what CI says about it. You gather facts only: the`,
     `engine grades them in code.`,
     ``,
+    `0. FIRST, is this flight already in ${kahunaBranch}? (A resumed wave whose flight merged before the run died.)`,
+    `     git -C ${worktree} fetch -q origin ${kahunaBranch}; git -C ${worktree} merge-base --is-ancestor ${fh} origin/${kahunaBranch}; echo "exit=$?"`,
+    `   Report the sha you checked as integrated_head and the printed exit code as integrated_exit. If it`,
+    `   is 0, set already_integrated=true and STOP: push nothing, open nothing. Otherwise set`,
+    `   already_integrated=false and go on.`,
     `1. Push the branch, as a plain push and nothing else: git -C ${worktree} push origin ${branch}`,
     `   If the push is REJECTED (pre-push gate, permissions, a protected-ref guard), STOP: return`,
     `   blocked=true and the rejection text as block_reason. Never push any other ref.`,
@@ -1169,8 +1180,9 @@ function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, targetR
     ...head('head_sha_final'),
     ``,
     `Do NOT merge, do NOT mark anything ready, do NOT judge: the engine grades this in code.`,
-    `Return: issue (${issue}), pr_number, pr_ref, head_sha, wait, failed_jobs (step 4 only), head_sha_final,`,
-    `blocked + block_reason (step 1 only), notes (1-2 sentences). Report what you READ.`,
+    `Return: issue (${issue}), already_integrated + integrated_head + integrated_exit (step 0), pr_number, pr_ref,`,
+    `head_sha, wait, failed_jobs (step 4 only), head_sha_final, blocked + block_reason (step 1 only), notes`,
+    `(1-2 sentences). Report what you READ.`,
   ].join('\n')
 }
 
@@ -1186,10 +1198,25 @@ function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, targetR
 // the jobs downstream of it, and GitHub's ci_failed_jobs lists those too. A failed job that never
 // started, or ended at the instant it started, is the billing/runner-refusal signature (no steps ran):
 // it holds the wave, because re-dispatching the flight cannot fix the account.
+//
+// INTEGRATED (§3.3 resume): a flight whose worker said already-present and whose own head is already
+// an ancestor of the kahuna merged in an earlier run that died before persisting. It counts as merged
+// without a PR (there is none left to grade). A flight that said implemented with a head already in
+// the kahuna committed nothing new, so it is blocked, never counted.
 const FLIGHT_IGNORED_CONCLUSIONS = new Set(['skipped', 'neutral'])
-function flightCiVerdict(ev, issue, flightHead) {
+// A flight PR into kahuna/* gets no run at all when the repo's CI triggers only on PRs into main.
+const noRunHint = (error) => (/^No CI run found/i.test(String(error))
+  ? '; the repo\'s CI must run on PRs into kahuna/* (docs/operations/branch-protection-checklist.md)'
+  : '')
+function flightCiVerdict(ev, issue, flightHead, status) {
   const out = (outcome, reason, head = null) => ({ issue, outcome, head, reason })
   if (!ev || typeof ev !== 'object' || ev.issue !== issue) return out('blocked', `no CI evidence for #${issue}`)
+  if (ev.already_integrated === true) {
+    if (status === 'already-present' && isMergeSha(flightHead) && ev.integrated_head === flightHead && ev.integrated_exit === 0) {
+      return out('integrated', `head ${flightHead.slice(0, 8)} is already in the kahuna (a resumed flight)`, flightHead)
+    }
+    return out('blocked', 'the flight head is already in the kahuna, but the flight did not report already-present at that head: it committed nothing new')
+  }
   if (ev.blocked === true) return out('blocked', `push rejected: ${ev.block_reason || 'no reason given'}`)
   if (!isMergeSha(flightHead) || ev.head_sha !== flightHead || ev.head_sha_final !== flightHead) {
     return out('blocked', 'the PR head is not the head the flight returned')
@@ -1212,7 +1239,7 @@ function flightCiVerdict(ev, issue, flightHead) {
     ? 'failure with no failed jobs listed'
     : isRed
       ? 'failed jobs never ran (an infra or billing failure, not the flight\'s code)'
-      : fs ? `final_status=${fs}` : w.error ? `no verdict: ${String(w.error).slice(0, 160)}` : 'no verdict'
+      : fs ? `final_status=${fs}` : w.error ? `no verdict: ${String(w.error).slice(0, 160)}${noRunHint(w.error)}` : 'no verdict'
   return out('blocked', `CI could not grade head ${flightHead.slice(0, 8)}: ${why}`)
 }
 
@@ -2528,13 +2555,17 @@ while (true) {
   // moved head) stays out, the rest of the group still merges, and the wave halts after persisting.
   // A thrown or null node is evidence `null`, which grades as blocked: absence of evidence holds.
   const flightCi = await parallel(implemented.map((w) => () =>
-    agent(flightCiPrompt({ waveId: WAVE_ID, issue: Number(w.issue), branch: issueBranch(w.issue), worktree: wtMap[w.issue], kahunaBranch: KAHUNA_BRANCH, targetRepo: TARGET_REPO, ciWaitSec: CI_WAIT_SEC }), {
+    agent(flightCiPrompt({ waveId: WAVE_ID, issue: Number(w.issue), branch: issueBranch(w.issue), worktree: wtMap[w.issue], kahunaBranch: KAHUNA_BRANCH, targetRepo: TARGET_REPO, ciWaitSec: CI_WAIT_SEC, flightHead: w.head_sha }), {
       label: `flight-ci:#${w.issue}`,
       phase: 'Flight loop',
       schema: FLIGHT_CI_EVIDENCE,
       agentType: 'general-purpose',
     }).catch(() => null)))
-  const graded = implemented.map((w, i) => ({ w, ev: flightCi[i] ?? null, v: flightCiVerdict(flightCi[i] ?? null, Number(w.issue), w.head_sha) }))
+  const graded = implemented.map((w, i) => ({ w, ev: flightCi[i] ?? null, v: flightCiVerdict(flightCi[i] ?? null, Number(w.issue), w.head_sha, w.status) }))
+  // §3.3 resume: a flight already in the kahuna merged in a run that died before persisting. It is
+  // counted as merged here, as reconcile's "already in kahuna, SKIP it" rule used to report it.
+  const integrated = graded.filter((g) => g.v.outcome === 'integrated').map(({ v }) => v.issue)
+  for (const n of integrated) log(`[#1356] flight #${n} is already in ${KAHUNA_BRANCH} (resumed): counted as merged`)
   const proceeding = graded.filter((g) => g.v.outcome === 'proceed').map(({ w, ev, v }) => ({ ...w, pr_number: ev.pr_number, head: v.head }))
   const ciRework = graded.filter((g) => g.v.outcome === 'needs_rework').map(({ v }) => ({ issue: v.issue, reason: v.reason }))
   const ciBlocked = graded.filter((g) => g.v.outcome === 'blocked').map(({ v }) => v)
@@ -2577,7 +2608,7 @@ while (true) {
   const handed = new Set(proceeding.map((w) => Number(w.issue)))
   const ignored = [...(rec.merged || []), ...(rec.needs_rework || []).map((r) => r.issue)].filter((n) => !handed.has(Number(n)))
   if (ignored.length) log(`[#1213/#1356] ignoring reconcile's report on flight(s) it was not given: #${[...new Set(ignored)].join(', #')}`)
-  const newlyMerged = (rec.merged || []).filter((n) => !merged.has(n) && handed.has(Number(n)))
+  const newlyMerged = [...new Set([...integrated, ...(rec.merged || []).filter((n) => handed.has(Number(n))).map(Number)])].filter((n) => !merged.has(n))
   const reworked = [...ciRework, ...(rec.needs_rework || []).filter((r) => handed.has(Number(r.issue)))]
   newlyMerged.forEach((n) => { merged.add(n); pending.delete(n); delete reworkCtx[n] })
   idleRounds = newlyMerged.length ? 0 : idleRounds + 1 // thrash detector
