@@ -32,7 +32,7 @@
 // spuriously HOLDs an otherwise-clean wave. Lint/typecheck are NOT a fifth signal; they
 // ride INSIDE the CI signal (ci_wait_run runs the project's full gate on the merge result).
 
-import { mergeResultVerdict, directMergeReadSteps, headReadLines, isMergeSha } from './merge-result.js'
+import { mergeResultVerdict, directMergeReadSteps, headReadLines, targetReadLines, isMergeSha, ciWaitRefLines, noRunProbeLines, noRunHold, PR_WAIT_CI_PROBE } from './merge-result.js'
 
 // ── Conservative-fail SIG (replaces the always-pass gateSignalStub) ──────────────────
 // SEAMS invariant 6: when #687 lands, the per-signal `.catch(() => gateSignalStub(...))`
@@ -125,6 +125,28 @@ export function trivyTreeBound(sig) {
   const show = (v) => (typeof v === 'string' && v ? v : 'missing')
   const why = `TREE NOT BOUND (HOLD): scanned_sha=${show(scanned)} kahuna_sha=${show(kahuna)}; the scan is not proven to be of the kahuna tip`
   return sig && typeof sig === 'object' ? trivyHold(sig, why) : conservativeFail('trivy', why)
+}
+
+// THE SCAN MUST BE OF THE HEAD CI GRADED (cc-workflow#1356). trivyTreeBound compares two SHAs that one
+// agent read from one local ref, so a fetch that failed and was carried past scans an older kahuna and
+// still binds. ciVerdict returns the head the merge-result pipeline was graded on, which another agent
+// read from the forge, so the gate compares the two after parallel(): a passing trivy whose kahuna_sha
+// is not the CI-graded head HOLDs, and a passing CI with no graded head HOLDs (it binds nothing). Like
+// the other binds, it returns a new array and never turns a failing signal into a passing one.
+// It finds both signals by label, so a missing label is not a skipped bind: with no `ci` or no `trivy`
+// signal there is nothing to bind, and a conservative-fail for each missing one is appended, so the
+// gate HOLDs. The workflow forces both labels in code; this is the floor if one is ever lost.
+export function bindScanToGradedHead(signals) {
+  const ci = signals.find((s) => s?.signal === 'ci')
+  const missing = ['ci', 'trivy'].filter((n) => !signals.some((s) => s?.signal === n))
+    .map((n) => conservativeFail(n, `no ${n} signal to bind the scan to the graded head`))
+  return [...signals.map((s) => {
+    if (s === ci && s?.passed && !isMergeSha(s.head)) return conservativeFail('ci', 'CI pass carries no graded head')
+    if (s?.signal !== 'trivy' || !s.passed || !ci?.passed || !isMergeSha(ci.head)) return s
+    if (s.kahuna_sha === ci.head) return s
+    const k8 = typeof s.kahuna_sha === 'string' && s.kahuna_sha ? s.kahuna_sha.slice(0, 8) : 'missing'
+    return trivyHold(s, `SCAN NOT OF THE GRADED HEAD (HOLD): CI graded ${ci.head.slice(0, 8)}, trivy scanned ${k8}`)
+  }), ...missing]
 }
 
 // ── 1. commutativity signal ──────────────────────────────────────────────────────────
@@ -248,8 +270,11 @@ export function ciSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRe
     `   The CI you report on is the pipeline produced by MERGING kahuna INTO ${integrationBase} (the merge`,
     `   result), not the branch's own latest push.`,
     ...head('head_sha'),
-    `2. Call sdlc-server ci_wait_run (repo=${targetRepo}) with require_merge_result=true, pr_number=${prNumber != null ? prNumber : '<the PR number>'},`,
-    `   AND explicit timeout_sec=${waitSec} + poll_interval_sec=15 (#1035 — do NOT omit them). All are load-bearing:`,
+    ...noRunProbeLines({ targetRepo, prNumber }).map((l, i) => (i === 0 ? `2. ${l}` : `   ${l}`)),
+    `   Then call sdlc-server ci_wait_run (repo=${targetRepo}) with ref=<below>, require_merge_result=true, pr_number=${prNumber != null ? prNumber : '<the PR number>'},`,
+    `   AND explicit timeout_sec=${waitSec} + poll_interval_sec=15 (#1035 — do NOT omit them). The ref:`,
+    ...ciWaitRefLines({ prNumber, headBranch: kahunaBranch }).map((l) => `   ${l}`),
+    `   All are load-bearing:`,
     `     • require_merge_result makes the tool refuse to grade a BRANCH pipeline, a SKIPPED one, or a`,
     `       GitLab DETACHED (refs/merge-requests/N/head) pipeline — none of which validated the merge.`,
     `     • pr_number (#476) is the FRESHNESS anchor. Filtering to merge-result runs is not enough: a GREEN`,
@@ -260,7 +285,7 @@ export function ciSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRe
     `       finish in 2–5 min, but WITHOUT an explicit timeout the tool rides its ~1800s idle default and`,
     `       burned ~30–57 min/wave (P5W12: 57 min to confirm a 156s pipeline). ${CI_WAIT_DEFAULT_SEC}s is the default; per-project`,
     `       override (\`CI wait budget\` in .claude-project.md).`,
-    `   Report its answer as wait, copied as returned (ok, final_status, reason, error). Do not interpret it.`,
+    `   Report its answer as wait, copied as returned (ok, final_status, reason, error, sha, run_id, url). Do not interpret it.`,
     ...directMergeReadSteps({ targetRepo, prNumber, windowSec: waitSec }).map((l, i) => (i === 0 ? `3. ${l}` : `   ${l}`)),
     `   The direct read is NOT a branch/head fallback: only a merge-result pipeline bound to the current`,
     `   head can pass, and the gate checks both in code.`,
@@ -269,9 +294,11 @@ export function ciSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRe
     `4. LAST, after step 2 and (if you ran it) step 3: the head again. If it moved, what was graded may`,
     `   be the previous head's pipeline, and the gate HOLDs; do not re-run anything to chase it.`,
     ...head('head_sha_final'),
+    ...targetReadLines({ targetRepo, branch: integrationBase, field: 'target_sha' }).map((l) => `   ${l}`),
     ``,
-    `Do NOT do any other work. Return: pr_number, pr_ref, head_sha (step 1), wait (step 2), and, ONLY if`,
-    `you ran step 3, merge_pipelines and merge_commit; head_sha_final (step 4); notes (1-2 sentences).`,
+    `Do NOT do any other work. Return: pr_number, pr_ref, head_sha (step 1), probe and wait (step 2); merge_commit`,
+    `whenever step 3 had you read one (a GitLab green on a sha that is not the head, or the direct read);`,
+    `merge_pipelines ONLY if you ran the direct read; head_sha_final and target_sha (step 4); notes (1-2 sentences).`,
     `Report what you READ. A missing fact holds the wave; it never passes it.`,
   ].join('\n')
 }
@@ -292,7 +319,188 @@ export function ciVerdict(ev, prNumber) {
     }
   }
   const v = mergeResultVerdict(prNumber != null ? { ...ev, pr_number: prNumber } : ev)
-  return { signal: 'ci', passed: v.pass, detail: `${v.pass ? 'PASS' : 'HOLD'} (${v.path}): ${v.reason}${notes}` }
+  const sig = { signal: 'ci', passed: v.pass, detail: `${v.pass ? 'PASS' : 'HOLD'} (${v.path}): ${v.reason}${notes}` }
+  // #1356: a pass keeps the head it graded, so the promote merge and the trivy bind can bind to it.
+  return v.pass ? { ...sig, head: v.head } : sig
+}
+
+// ── Flight CI (#1356, triage #39): a flight lands on the kahuna only green on its own head ─────
+// Prime(reconcile) used to open and merge each flight PR with no CI condition at all, so a flight
+// whose check-runs had all failed (a billing failure) squash-merged into the kahuna, while a sibling
+// pass in the same wave refused: one wave split two ways. This node runs per flight, between the
+// workers and reconcile: it pushes the flight branch, opens its PR into the kahuna, and reports what
+// ci_wait_run and ci_failed_jobs say. flightCiVerdict() grades that in code, and only a `proceed`
+// flight is handed to reconcile, which then merges it pinned to the graded head.
+//
+// WHY THE ENGINE AND NOT A SERVER REFUSAL: the engine is the only place that can route all three
+// outcomes. proceed goes to reconcile; needs_rework goes back to the flight with the reason (#1213);
+// blocked holds the wave. A server refusal of pr_merge into kahuna/* could only say no. The head pin
+// on the merge itself is the server half (expected_head_sha, mcp-server-sdlc#609).
+export const FLIGHT_CI_EVIDENCE = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['issue'],
+  properties: {
+    issue: { type: 'integer' },
+    pr_number: { type: 'integer' },
+    pr_ref: { type: 'string' },
+    head_sha: { type: 'string' }, // the flight PR's head, read BEFORE ci_wait_run
+    head_sha_final: { type: 'string' }, // the flight PR's head, read again after the wait
+    target_sha: { type: 'string' }, // the kahuna's tip, read LAST; a merge commit must be built on it
+    wait: { type: 'object', additionalProperties: true }, // ci_wait_run's answer, copied as returned
+    merge_commit: {
+      // GitLab: the commit of a green run whose sha is not the head (an ephemeral merge commit)
+      type: 'object',
+      additionalProperties: true,
+      properties: { sha: { type: 'string' }, parent_ids: { type: 'array', items: { type: 'string' } } },
+    },
+    failed_jobs: {
+      // ci_failed_jobs(run_id)'s list, copied, only when final_status is failure or cancelled
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          name: { type: 'string' },
+          conclusion: { type: 'string' },
+          started_at: { type: ['string', 'null'] },
+          finished_at: { type: ['string', 'null'] },
+          url: { type: 'string' },
+        },
+      },
+    },
+    blocked: { type: 'boolean' }, // the push of the flight branch was rejected
+    block_reason: { type: 'string' },
+    already_integrated: { type: 'boolean' }, // step 0: merging the flight head into the kahuna changes nothing
+    integrated_head: { type: 'string' }, // step 0: the sha that was checked
+    integrated_exit: { type: 'integer' }, // step 0: the content check's exit code, as printed
+    probe: PR_WAIT_CI_PROBE, // step 3: pr_wait_ci's no-run probe, copied as returned (#1357)
+    notes: { type: 'string' },
+  },
+}
+
+export function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, targetRepo, ciWaitSec, flightHead }) {
+  const waitSec = ciWaitBudget(ciWaitSec)
+  const head = (field) => headReadLines({ targetRepo, field }).map((l) => `   ${l}`)
+  const fh = isMergeSha(flightHead) ? flightHead : `$(git -C ${worktree} rev-parse HEAD)`
+  return [
+    `You are the FLIGHT CI node for issue #${issue}, wave ${waveId} of ${targetRepo}. You publish the flight's`,
+    `branch, open its PR into ${kahunaBranch}, and report what CI says about it. You gather facts only: the`,
+    `engine grades them in code.`,
+    ``,
+    `0. FIRST, is this flight already in ${kahunaBranch}? (A resumed wave whose flight merged before the run died.)`,
+    `   This tests CONTENT, not ancestry, because a squash merge leaves the flight head out of the kahuna's history:`,
+    `     git -C ${worktree} fetch -q origin ${kahunaBranch}; t=$(git -C ${worktree} merge-tree --write-tree origin/${kahunaBranch} ${fh}) && test "$t" = "$(git -C ${worktree} rev-parse origin/${kahunaBranch}^{tree})"; echo "exit=$?"`,
+    `   Report the sha you checked as integrated_head and the printed exit code as integrated_exit. If it`,
+    `   is 0, set already_integrated=true and STOP: push nothing, open nothing. Otherwise set`,
+    `   already_integrated=false and go on.`,
+    `1. Push the branch, as a plain push and nothing else: git -C ${worktree} push origin ${branch}`,
+    `   If the push is REJECTED (pre-push gate, permissions, a protected-ref guard), STOP: return`,
+    `   blocked=true and the rejection text as block_reason. Never push any other ref.`,
+    `2. Open the ${branch}→${kahunaBranch} PR with sdlc-server pr_create, NOT as a draft, or find the open`,
+    `   one for that branch pair (idempotent: never open a second). Report its number as pr_number.`,
+    ...head('head_sha'),
+    ...noRunProbeLines({ targetRepo, next: 'step 5 (the head again), then step 6' }).map((l, i) => (i === 0 ? `3. ${l}` : `   ${l}`)),
+    `   Then call sdlc-server ci_wait_run(repo=${targetRepo}, ref=<below>, require_merge_result=true, pr_number=<n>,`,
+    `   timeout_sec=${waitSec}, poll_interval_sec=15).`,
+    ...ciWaitRefLines({ headBranch: branch }).map((l) => `   ${l}`),
+    `   Report its answer as wait, copied as returned (ok, final_status, reason, error, sha, run_id, url).`,
+    `   GitLab only: when wait is a success whose sha is not head_sha, that sha is the merged-results`,
+    `   pipeline's ephemeral merge commit. Read it and report it as merge_commit, exactly as read:`,
+    `     glab api "projects/<url-encoded ${targetRepo}>/repository/commits/<wait.sha>" | jq '{sha: .id, parent_ids}'`,
+    `4. ONLY if wait.final_status is failure or cancelled: call sdlc-server ci_failed_jobs(run_id=<wait.run_id>,`,
+    `   repo=${targetRepo}) and report its failed_jobs list as failed_jobs, copied unfiltered.`,
+    `5. The head again.`,
+    ...head('head_sha_final'),
+    `6. LAST: the kahuna's tip.`,
+    ...targetReadLines({ targetRepo, branch: kahunaBranch, field: 'target_sha' }).map((l) => `   ${l}`),
+    ``,
+    `Do NOT merge, do NOT mark anything ready, do NOT judge: the engine grades this in code.`,
+    `Return: issue (${issue}), already_integrated + integrated_head + integrated_exit (step 0), pr_number, pr_ref,`,
+    `head_sha, probe and wait (step 3), merge_commit (step 3, GitLab only), failed_jobs (step 4 only), head_sha_final, target_sha,`,
+    `blocked + block_reason (step 1 only), notes (1-2 sentences). Report what you READ.`,
+  ].join('\n')
+}
+
+// Grades one flight's FLIGHT_CI_EVIDENCE. The rules, in order: no evidence, a rejected push, or a PR
+// head that is not the head the flight returned (read before and after the wait) is BLOCKED; green on
+// that head PROCEEDS, where the run's sha is the head itself (GitHub) or a merge commit with parents
+// exactly [kahuna tip, head] (a GitLab merged-results run, bound as mergeResultVerdict binds it); a
+// red whose failed jobs all really ran is NEEDS_REWORK (the flight's own code); after every graded
+// rule, a probe saying CI cannot start is BLOCKED with that reason (#1357); everything else is
+// BLOCKED. The asymmetry is deliberate: a misread code-red becomes a hold, never a merge, so the
+// safety property (never merge red) holds whichever way a job is classified.
+//
+// CODE-RED, exactly: final_status failure (or GitLab's failed), at least one job concluded failure,
+// every such job has started_at and finished_at with finished strictly after started, and no job
+// carries an infra conclusion. skipped and neutral jobs are ignored: a real test failure usually skips
+// the jobs downstream of it, and GitHub's ci_failed_jobs lists those too. A failed job that never
+// started, or ended at the instant it started, is the billing/runner-refusal signature (no steps ran):
+// it holds the wave, because re-dispatching the flight cannot fix the account.
+//
+// INTEGRATED (§3.3 resume): a flight whose head's content is already in the kahuna (merging it changes
+// the kahuna's tree not at all, which holds after a squash merge too) merged in an earlier run that died
+// before persisting. It counts as merged without a PR, because there is none left to grade. That needs
+// a flight that says so: an already-present first flight, or a rework flight, which only reaches here at
+// a new head (isNoopRework holds the rest). As before #1356, an already-present flight that committed
+// nothing at all also reads as merged: §3.3 trusts the worker's resume check. A first flight that said
+// implemented with nothing new for the kahuna committed nothing, so it is blocked, never counted.
+// Known risk, kept: a new head is not new content, so a rework flight whose "fix" reverts its own
+// commit reads as merged too. A net-change guard would refuse the real resume after cleanupMerged has
+// removed the merged flight's branch (its recreated worktree carries no net change), so the trust stays.
+const FLIGHT_IGNORED_CONCLUSIONS = new Set(['skipped', 'neutral'])
+// A flight PR into kahuna/* gets no run at all when the repo's CI triggers only on PRs into main.
+const noRunHint = (error) => (/^No CI run found/i.test(String(error))
+  ? '; the repo\'s CI must run on PRs into kahuna/* (docs/operations/branch-protection-checklist.md)'
+  : '')
+export function flightCiVerdict(ev, issue, flightHead, status, rework = false) {
+  const out = (outcome, reason, head = null) => ({ issue, outcome, head, reason })
+  if (!ev || typeof ev !== 'object' || ev.issue !== issue) return out('blocked', `no CI evidence for #${issue}`)
+  if (ev.already_integrated === true) {
+    const resumed = status === 'already-present' || (rework === true && status === 'implemented')
+    if (resumed && isMergeSha(flightHead) && ev.integrated_head === flightHead && ev.integrated_exit === 0) {
+      return out('integrated', `head ${flightHead.slice(0, 8)} is already in the kahuna (a resumed flight)`, flightHead)
+    }
+    return out('blocked', 'the flight head is already in the kahuna, but the flight did not report a resume at that head: it committed nothing new')
+  }
+  if (ev.blocked === true) return out('blocked', `push rejected: ${ev.block_reason || 'no reason given'}`)
+  if (!isMergeSha(flightHead) || ev.head_sha !== flightHead || ev.head_sha_final !== flightHead) {
+    return out('blocked', 'the PR head is not the head the flight returned')
+  }
+  // Reconcile merges the flight by its PR number, so a verdict with no PR to merge binds to nothing.
+  if (!Number.isInteger(ev.pr_number) || ev.pr_number <= 0) return out('blocked', 'the flight CI evidence carries no PR number')
+  const w = ev.wait ?? {}
+  const fs = w.final_status
+  if (w.ok === true && fs === 'success') {
+    // The run must be bound to the flight head. GitHub reports the head itself. A GitLab merged-results
+    // run is on an ephemeral merge commit, never the head (merge-result.js, THE BINDING FACT), so that
+    // run binds through mergeResultVerdict's rule: parents exactly [kahuna tip, flight head].
+    if (w.sha === flightHead) return out('proceed', `CI green on head ${flightHead.slice(0, 8)}`, flightHead)
+    const bound = mergeResultVerdict({ ...ev, head_sha: flightHead, head_sha_final: flightHead })
+    if (bound.pass) return out('proceed', `CI green on head ${flightHead.slice(0, 8)} (merge commit ${w.sha.slice(0, 8)} onto the kahuna tip)`, flightHead)
+    return out('blocked', `a green run not bound to the flight head ${flightHead.slice(0, 8)}: ${bound.reason}`)
+  }
+  const jobs = (Array.isArray(ev.failed_jobs) ? ev.failed_jobs : []).filter((j) => !FLIGHT_IGNORED_CONCLUSIONS.has(j?.conclusion))
+  const ran = (j) => {
+    const s = Date.parse(j?.started_at ?? '')
+    const f = Date.parse(j?.finished_at ?? '')
+    return Number.isFinite(s) && Number.isFinite(f) && f > s
+  }
+  const isRed = fs === 'failure' || fs === 'failed'
+  if (isRed && jobs.length > 0 && jobs.every((j) => j.conclusion === 'failure' && ran(j))) {
+    const names = jobs.map((j) => j.name || '(unnamed)').join(', ')
+    return out('needs_rework', `CI red on head ${flightHead.slice(0, 8)}: failed jobs ${names}${w.url ? ` (${w.url})` : ''}`)
+  }
+  // #1357: CI cannot start for this head (a criss-cross base, a hard blocker): fail fast, naming why.
+  // After every graded rule, so a run the agent waited on anyway still decides.
+  const nr = noRunHold(ev.probe, flightHead)
+  if (nr) return out('blocked', nr)
+  const why = isRed && jobs.length === 0
+    ? 'failure with no failed jobs listed'
+    : isRed
+      ? 'failed jobs never ran (an infra or billing failure, not the flight\'s code)'
+      : fs ? `final_status=${fs}` : w.error ? `no verdict: ${String(w.error).slice(0, 160)}${noRunHint(w.error)}` : 'no verdict'
+  return out('blocked', `CI could not grade head ${flightHead.slice(0, 8)}: ${why}`)
 }
 
 // ── 3. review signal (#847/ENG-5: 2-step stage→review; specialized reviewer PRESERVED) ─
@@ -410,8 +618,9 @@ export function reviewSignalPrompt({ waveId, kahunaBranch, integrationBase, targ
 // with it is the bar this fix targets, not universal ecosystem coverage. The Python locks were
 // added later, by #1289 below).
 //
-// cc-workflow#1247: the find counts every pip requirements file (check-scannable.sh's REQ_FIND,
-// carried verbatim: *requirements*.txt and requirements/*.txt), but trivy's pip analyzer reads only
+// cc-workflow#1247: the find counts every pip requirements file (lock-predicate.sh's REQ_NAMES and
+// REQ_PATHS since #1358: *requirements*.txt, *requirements*.lock, *constraints*.txt and
+// requirements/*.txt), but trivy's pip analyzer reads only
 // the exact name requirements.txt, so a requirements-dev.txt was in the denominator and never in
 // the scan. A 2-of-4 run then passed on the clean half. Siblings are now scanned alone under the
 // name trivy reads (scripts/ci/dependency-scan.sh does the same), and the agent returns its counts
@@ -435,8 +644,9 @@ export function reviewSignalPrompt({ waveId, kahunaBranch, integrationBase, targ
 // cc-workflow#1289: a repo whose only lock was a uv.lock found nothing here. The find now names the
 // Python locks trivy 0.74.0 was measured to ingest (uv.lock, poetry.lock, Pipfile.lock); pdm.lock is
 // left out because trivy has no pdm analyzer, and a found lock it cannot read would HOLD every wave
-// of a repo that carries one. The names are check-scannable.sh's JS_LOCKS / PAIRED_LOCKS /
-// LONE_LOCKS (the reasons per name live there), and test_lock_lists_agree fails when they differ.
+// of a repo that carries one. The names live in scripts/ci/lock-predicate.sh (the reasons per name
+// too), and cc-workflow#1358 generates the find and main-scan lines from it: gen-lock-find.sh writes
+// them, and test_lock_find_in_sync.sh fails CI when they drift.
 //
 // cc-workflow#1206: every scan ran over targetRepoDir, the operator's checkout, on whatever branch it
 // held; the prompt only asked the agent to "ensure" the kahuna branch was checked out, which it could
@@ -462,11 +672,14 @@ export function trivySignalPrompt({ waveId, kahunaBranch, integrationBase, targe
     `found=0, ingested=0, unscanned=[], declared=false, the error in detail, and the SHAs you have`,
     `("" for one you do not). Every find, scan and file check below runs over <w>/tree, never ${targetRepoDir}.`,
     `THEN enumerate the dependency manifests/lockfiles under <w>/tree — run this exactly (one command, do not split it):`,
-    `  find <w>/tree \\( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \\) -prune -o -type f \\( -name 'bun.lock' -o -name 'bun.lockb' -o -name 'package-lock.json' -o -name 'yarn.lock' -o -name 'pnpm-lock.yaml' -o -name 'go.sum' -o -name 'Cargo.lock' -o -name 'uv.lock' -o -name 'poetry.lock' -o -name 'Pipfile.lock' -o -name '*requirements*.txt' -o -path '*/requirements/*.txt' \\) -print`,
+    // GENERATED by scripts/ci/gen-lock-find.sh from scripts/ci/lock-predicate.sh — edit there, then re-run it
+    `  find <w>/tree \\( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \\) -prune -o -type f \\( -name 'bun.lock' -o -name 'bun.lockb' -o -name 'package-lock.json' -o -name 'yarn.lock' -o -name 'pnpm-lock.yaml' -o -name 'go.sum' -o -name 'Cargo.lock' -o -name 'uv.lock' -o -name 'poetry.lock' -o -name 'Pipfile.lock' -o -name '*requirements*.txt' -o -name '*requirements*.lock' -o -name '*constraints*.txt' -o -path '*/requirements/*.txt' \\) -print`,
     `and report the count of lines it prints — this is the denominator the pass predicate below`,
     `needs, not optional context. Two exclusions, both matching scripts/ci/check-scannable.sh:`,
-    `(1) a pip requirements file (a line the find printed for its *requirements*.txt or`,
-    `requirements/*.txt patterns) with no entry pinned by '==' is a range declaration, not a lock (it`,
+    `(1) a pip requirements file (any line the find printed whose file name is not exactly one of`,
+    `bun.lock, bun.lockb, package-lock.json, yarn.lock, pnpm-lock.yaml, go.sum, Cargo.lock, uv.lock, poetry.lock, Pipfile.lock;`,
+    `every file a * pattern or -path matched is one, requirements.lock included)`,
+    `with no entry pinned by '==' is a range declaration, not a lock (it`,
     `carries no version, so trivy can never ingest it). Test each requirements file the find printed with`,
     `  grep -cE '^[[:space:]]*[A-Za-z0-9._-]+[[:space:]]*===?[[:space:]]*[0-9]' '<that file>'`,
     `and where it prints 0, leave that file OUT of the denominator and name it in detail as unpinned.`,
@@ -484,16 +697,19 @@ export function trivySignalPrompt({ waveId, kahunaBranch, integrationBase, targe
     `in parallel (they share one trivy cache), in the form shown, where <n> numbers the runs (0 for the`,
     `main scan). stderr has its own file, so a warning cannot make good JSON unparseable.`,
     `THEN run:`,
-    `  trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet <w>/tree > <w>/trivy-0.json 2> <w>/trivy-0.err; echo "exit=$?"`,
+    // GENERATED by scripts/ci/gen-lock-find.sh from scripts/ci/lock-predicate.sh — edit there, then re-run it
+    `  trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --ignorefile /dev/null --config /dev/null --format json --quiet --skip-dirs '**/node_modules' --skip-dirs '**/dist' --skip-dirs '**/build' --skip-dirs '**/vendor' --skip-dirs '**/.venv' --skip-dirs '**/venv' --skip-dirs '**/target' <w>/tree > <w>/trivy-0.json 2> <w>/trivy-0.err; echo "exit=$?"`,
     `--include-dev-deps is REQUIRED — trivy suppresses dev/test dependencies by default, and a`,
     `project whose entire tree is dev-only (e.g. a bun-based tools repo) would otherwise scan`,
     `ZERO packages while still exiting clean (cc-workflow#1169). --list-all-pkgs is required on`,
     `trivy <0.67.0, where it is not yet the default.`,
+    `--ignorefile /dev/null and --config /dev/null are REQUIRED: trivy reads a .trivyignore and a trivy.yaml`,
+    `from the current directory, and either can hide a finding or a whole lock.`,
     `trivy's pip analyzer reads ONLY a file named exactly requirements.txt (cc-workflow#1247), so the`,
     `scan above skips every other pinned requirements file. Scan each of those ALONE, under`,
     `the one name trivy reads, with the same flags and the same capture, giving each its own <n>,`,
     `and count its result for that file:`,
-    `  d=$(mktemp -d) && cp '<that file>' $d/requirements.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet $d > <w>/trivy-<n>.json 2> <w>/trivy-<n>.err; echo "exit=$?"; rm -rf \${d:?}`,
+    `  d=$(mktemp -d) && cp '<that file>' $d/requirements.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --ignorefile /dev/null --config /dev/null --format json --quiet $d > <w>/trivy-<n>.json 2> <w>/trivy-<n>.err; echo "exit=$?"; rm -rf \${d:?}`,
     `Its HIGH/CRITICAL findings count toward the verdict exactly like the main scan's.`,
     `Read the packages and findings of every run per target FROM ITS FILE, with jq, never from tool`,
     `output. hc_fixable counts the HIGH/CRITICAL findings that have a fixed version, the ones the pass`,
@@ -548,8 +764,20 @@ export function trivySignalPrompt({ waveId, kahunaBranch, integrationBase, targe
 // SOLELY from the workflow's auto+PASS branch on a live wave that reached the success exit —
 // which is itself gated by the human cutover (#691). Building/validating this module never
 // invokes it.
-export function promotePrompt({ waveId, kahunaBranch, integrationBase, targetRepo, prNumber, preserveKahuna = false }) {
+//
+// THE MERGE BINDS TO THE GRADED HEAD (#1356, triage #6): the head the CI signal graded is passed in as
+// headSha and pinned on pr_merge (expected_head_sha), so a push between grading and merging is refused
+// rather than landed unseen. With no graded head there is nothing to pin, and the prompt is a STOP, the
+// same fail-closed floor as the campaign's releaseMergePrompt.
+export function promotePrompt({ waveId, kahunaBranch, integrationBase, targetRepo, prNumber, headSha, preserveKahuna = false }) {
   const prRef = prNumber != null ? `PR #${prNumber}` : `the open ${kahunaBranch}→${integrationBase} PR`
+  if (!isMergeSha(headSha)) {
+    return [
+      `You are the wave PROMOTION node for wave ${waveId} of ${targetRepo}. No graded head SHA was handed to`,
+      `you for ${prRef}, so there is nothing to bind the merge to. STOP. Do NOT mark the PR ready and do NOT`,
+      `merge. Return promoted=false, with notes saying the gate passed no graded head.`,
+    ].join('\n')
+  }
   // #722: a PER-PLAN kahuna (e.g. kahuna/56-…, shared across a plan's waves 1..N) must PERSIST —
   // deleting it after wave 1 strands waves 2..N off a diverged base. The default (false) keeps the
   // current per-wave disposable behavior: KAHUNA_BRANCH defaults to kahuna/<waveId>, deleted here.
@@ -579,15 +807,74 @@ export function promotePrompt({ waveId, kahunaBranch, integrationBase, targetRep
     `   If no such PR exists, STOP and return promoted=false with the reason in notes (do NOT fabricate a`,
     `   merge — the gate should have opened it; its absence is an error, not a green light).`,
     `2. Mark it ready for review (un-draft): gh -R ${targetRepo} pr ready <number>. (No-op if already ready.)`,
-    `3. Merge it: sdlc-server pr_merge(number=<the PR number>) — commutativity_verify already proved`,
-    `   the composed diff safe. Then CONFIRM it actually landed on ${integrationBase} before reporting`,
+    `3. Merge it: sdlc-server pr_merge(number=<the PR number>, expected_head_sha="${headSha}") — commutativity_verify`,
+    `   already proved the composed diff safe, and CI graded head ${headSha}. If it returns anything but a merge`,
+    `   (ok=false, or any error: head_moved on GitLab, gh_pr_merge_failed on GitHub, where a stale pin is not`,
+    `   classified, or anything else), STOP and return promoted=false with the error in notes. Never retry it`,
+    `   without expected_head_sha, and never merge any other way: code CI never saw must not land on`,
+    `   ${integrationBase}. Copy pr_merge's pinned_head_sha into your return exactly as it came back, or`,
+    `   leave it out if the response has none. sdlc v5.1.x pins but does not echo, and anything before`,
+    `   v5.1.0 drops the pin without a word and merges unpinned, so no echo means no pin: the workflow`,
+    `   checks the echo itself. Then CONFIRM it actually landed on ${integrationBase} before reporting`,
     `   promoted: poll until the PR reads state=MERGED with a merge commit (pr_merge_wait, or`,
     `   gh -R ${targetRepo} pr view <number> --json state,mergeCommit). Never treat a pending merge as done.`,
     ...step4,
     ``,
     `Return: promoted (true ONLY if the merge actually landed on ${integrationBase}), mr_ref (the PR`,
-    `URL/number), notes (1-2 sentences; include any error — and on error, promoted=false).`,
+    `URL/number), merged (pr_merge's merged, as returned), pinned_head_sha (pr_merge's, as returned),`,
+    `merge_commit_sha (the merge commit),`,
+    `notes (1-2 sentences; include any error — and on error, promoted=false).`,
   ].join('\n')
+}
+
+// A PINNED MERGE COUNTS ONLY WHEN THE SERVER SAYS IT PINNED (#1356 review). pr_merge's schema strips
+// unknown keys, so an sdlc server before v5.1.0 drops expected_head_sha without an error and merges
+// whatever the head is; v5.1.x pins but does not echo. v5.2.0 echoes the SHA it pinned as
+// pinned_head_sha, and only when the head it re-reads after the call is that SHA. No echo means no
+// pin, and a different one is not the graded head, so both are refused. The echo alone is not a
+// merge either: v5.2.0 still echoes on a queue enrollment (merged:false), so `merged` must be true.
+export function pinnedMergeVerdict(report, gradedHead) {
+  const g8 = isMergeSha(gradedHead) ? gradedHead.slice(0, 8) : 'missing'
+  if (!isMergeSha(gradedHead)) return { landed: false, reason: 'no graded head to pin the merge to' }
+  if (report?.merged !== true) return { landed: false, reason: `pr_merge did not report merged:true (enrolled or pending is not a merge; graded head ${g8})` }
+  const p = report?.pinned_head_sha
+  if (typeof p !== 'string' || !p) {
+    return { landed: false, reason: `pr_merge returned no pinned_head_sha: sdlc v5.1.x pins but does not echo, and anything before v5.1.0 drops the pin, so no echo means no pin (graded head ${g8}); the host needs sdlc v5.2.0` }
+  }
+  if (p !== gradedHead) return { landed: false, reason: `pr_merge pinned ${p.slice(0, 8)}, not the graded head ${g8}` }
+  return { landed: true, reason: `merge pinned to the graded head ${g8}` }
+}
+
+// Reconcile's merges, graded in code (#1356 review). A handed flight is merged only when it is in BOTH
+// reconcile's `merged` list and its `merges` proof (the merge commit, merged:true, and a pin echo equal
+// to its graded head). A flight in needs_rework is neither merged nor refused, whatever else reconcile
+// lists for it: an undone merge must not be counted, or cleanupMerged deletes the worktree of a flight
+// about to be reworked and the issue can be closed with nothing landed. Anything else reconcile claims
+// merged without that proof is refused, and the wave halts.
+export function reconciledMerges(rec, handed) {
+  const merges = Array.isArray(rec?.merges) ? rec.merges : []
+  const claimed = new Set((rec?.merged || []).map(Number))
+  const reworked = new Set((rec?.needs_rework || []).map((r) => Number(r?.issue)))
+  const merged = []
+  const refused = []
+  for (const w of handed) {
+    const n = Number(w.issue)
+    if (reworked.has(n)) continue
+    const m = merges.find((x) => Number(x?.issue) === n)
+    if (!claimed.has(n)) {
+      if (m) refused.push({ issue: n, reason: 'a merges entry with no merged claim and no needs_rework (its merge may be in the kahuna)' })
+      continue
+    }
+    if (!m) {
+      refused.push({ issue: n, reason: 'reported merged with no merges entry (merge_commit_sha, pinned_head_sha)' })
+      continue
+    }
+    if (!isMergeSha(m.merge_commit_sha)) { refused.push({ issue: n, reason: 'no merge_commit_sha for its merge' }); continue }
+    const v = pinnedMergeVerdict(m, w.head)
+    if (v.landed) merged.push(n)
+    else refused.push({ issue: n, reason: v.reason })
+  }
+  return { merged, refused }
 }
 
 // The promotion agent's structured return (side-effect + outcome, not judgment).
@@ -598,6 +885,9 @@ export const PROMOTE_RESULT = {
   properties: {
     promoted: { type: 'boolean' }, // true ONLY if the merge actually landed on the integration base
     mr_ref: { type: 'string' },
+    pinned_head_sha: { type: 'string' }, // pr_merge's echo of the pin (sdlc >= v5.2.0); absent = no pin
+    merged: { type: 'boolean' }, // pr_merge's merged, as returned (an echo on an enrollment is not a merge)
+    merge_commit_sha: { type: 'string' },
     notes: { type: 'string' },
   },
 }

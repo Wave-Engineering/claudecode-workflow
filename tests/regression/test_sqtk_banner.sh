@@ -55,6 +55,12 @@ m=$(msg "$(run)")
 [[ "$m" == *"#7 v65 → v66 broke the gate"* && "$m" != *"(answered)"* ]] && pass "prose arrow kept, not an answer" ||
 	fail "prose arrow (m='$m')"
 
+# 1c. A pristine squawk is never answered, whatever arrows its text holds (#1363).
+body '{"squawks":[{"seq":8,"state":"open","text":"campaign→main","created_at":"t","updated_at":"t"}]}'
+m=$(msg "$(run)")
+[[ "$m" == *"#8 campaign→main"* && "$m" != *"(answered)"* ]] && pass "pristine prose arrow: not (answered)" ||
+	fail "pristine prose arrow (m='$m')"
+
 # 2. The list's name is URL-encoded on the request.
 [[ "$(tail -1 "$CURL_LOG")" == *"name=bj%3Aneeds"* ]] && pass "list name encoded" ||
 	fail "encoding ($(tail -1 "$CURL_LOG"))"
@@ -78,6 +84,17 @@ out=$(SQUAWK_URL='' run)
 # 5. The output never blocks a turn.
 body '{"squawks":[{"seq":1,"state":"open","text":"x"}]}'
 [[ "$(run | jq -r 'has("decision")')" == false ]] && pass "never emits a decision" || fail "emitted a decision"
+
+# 6. Without sqtk-answer.jq: a one-line warning, still exit 0, still no decision, no fetch.
+mkdir -p "$WORK/nolib"
+cp "$HOOK" "$WORK/nolib/sqtk-banner.sh"
+rm -f "$CURL_LOG"
+out=$(PATH="$WORK/bin:$PATH" bash "$WORK/nolib/sqtk-banner.sh" </dev/null)
+rc=$?
+m=$(msg "$out")
+[[ $rc -eq 0 && "$m" == *"cannot load sqtk-answer.jq"* && "$m" != *$'\n'* && ! -e "$CURL_LOG" &&
+	"$(jq -r 'has("decision")' <<<"$out")" == false ]] && pass "no module: one-line warning, exit 0" ||
+	fail "no module (rc=$rc out='$out')"
 
 echo
 if [[ $FAILS -eq 0 ]]; then

@@ -41,6 +41,8 @@ chmod +x "$WORK/bin/curl"
 cat >"$WORK/bin/drain" <<'EOF'
 #!/usr/bin/env bash
 [[ "$1" == --pending ]] && printf 'called\n' >>"$DRAIN_LOG"
+# As the real one does, the catch-up may take a baseline (it runs in the repo root).
+[[ -z "${FAKE_TAKE_BASELINE:-}" ]] || printf '%s\n' "$FAKE_TAKE_BASELINE" >.claude/sqtk-baseline.json
 [[ "${FAKE_PENDING:-1}" == 0 ]] && printf '%s\n' '[{"id":31,"list":"bj:needs","seq":3,"state":"confirmed","answer":"","text":"tag v9? →"}]'
 exit "${FAKE_PENDING:-1}"
 EOF
@@ -140,6 +142,79 @@ rm -f "$DRAIN_LOG"
 out=$(run)
 [[ $? -eq 0 && "$out" == *'"id":31'* && "$(wc -l <"$DRAIN_LOG")" == 1 ]] &&
 	pass "nothing missed: catch-up runs once, then the stream answers" || fail "catch-up then stream (out='$out')"
+
+# 9. An arrow in the author's own text never rings (#1363). evt adds the timestamps.
+evt() { # <id> <state> <text> <created_at> <updated_at>
+	jq -cn --argjson i "$1" --arg s "$2" --arg x "$3" --arg c "$4" --arg u "$5" -r \
+		'"data:" + ({type: "squawk.updated", squawk: {id: $i, state: $s, text: $x, created_at: $c, updated_at: $u}} | tojson)'
+}
+stream "$(evt 31 open 'campaign→main' t1 t1)"
+run >/dev/null
+rc=$?
+[[ $rc -eq 4 ]] && pass "pristine prose arrow: no ring" || fail "pristine prose arrow rang (rc=$rc)"
+printf '%s\n' '{"31":"campaign→main fix"}' >"$REPO/.claude/sqtk-baseline.json"
+stream "$(evt 31 open 'campaign→main fixes' t1 t2)"
+run >/dev/null
+rc=$?
+[[ $rc -eq 4 ]] && pass "baselined prose edit: no ring" || fail "baselined prose edit rang (rc=$rc)"
+stream "$(evt 31 open 'campaign→main fix → go' t1 t3)"
+out=$(run)
+rc=$?
+[[ $rc -eq 0 && "$out" == *go* ]] && pass "baselined appended answer: rings" || fail "baselined answer (rc=$rc out='$out')"
+# A numeric baseline (an older shape) is unknown, so the last-arrow rule reads "main fixes".
+printf '%s\n' '{"31":1}' >"$REPO/.claude/sqtk-baseline.json"
+stream "$(evt 31 open 'campaign→main fixes' t1 t2)"
+run >/dev/null
+rc=$?
+[[ $rc -eq 0 ]] && pass "numeric baseline: last-arrow rule" || fail "numeric baseline (rc=$rc)"
+rm -f "$REPO/.claude/sqtk-baseline.json"
+
+# 9b. A squawk added this turn has no baseline at arming. The catch-up takes it, and the
+#     doorbell reads it before the stream: a prose edit after that does not ring.
+stream ": connected" "$(evt 31 open 'campaign→main fixes' t1 t2)"
+FAKE_TAKE_BASELINE='{"31":"campaign→main fix"}' run >/dev/null
+rc=$?
+[[ $rc -eq 4 ]] && pass "baseline taken by the catch-up: prose edit, no ring" ||
+	fail "catch-up baseline ignored (rc=$rc)"
+rm -f "$REPO/.claude/sqtk-baseline.json"
+
+# 10. The mine entry's own .text is the baseline at arming.
+printf '%s\n' '[{"list":"bj:needs","seq":3,"id":31,"created_at":"t","text":"campaign→main fix"}]' >"$REPO/.claude/sqtk-mine.json"
+stream "$(evt 31 open 'campaign→main fixes' t1 t2)"
+run >/dev/null
+rc=$?
+[[ $rc -eq 4 ]] && pass "mine .text baseline: prose edit, no ring" || fail "mine .text prose edit rang (rc=$rc)"
+stream "$(evt 31 open 'campaign→main fix → go' t1 t3)"
+run >/dev/null
+rc=$?
+[[ $rc -eq 0 ]] && pass "mine .text baseline: appended answer rings" || fail "mine .text answer (rc=$rc)"
+printf '%s\n' '[{"list":"bj:needs","seq":3,"id":31,"created_at":"t"}]' >"$REPO/.claude/sqtk-mine.json"
+
+# 10b. Baselines past argv's 128 KiB per-string cap still ring: they reach jq through a file.
+#      300 open squawks of 600 characters each, in both the mine file and the baseline file.
+jq -cn '[range(300) | {list: "bj:needs", seq: (. + 100), id: (. + 1000), created_at: "t",
+	text: ("open ask, padded " + ("x" * 600))}] + [{list: "bj:needs", seq: 3, id: 31, created_at: "t",
+	text: "campaign→main fix"}]' >"$REPO/.claude/sqtk-mine.json"
+jq -cn '[range(300) | {key: (. + 2000 | tostring), value: ("old ask, padded " + ("y" * 600))}]
+	| from_entries' >"$REPO/.claude/sqtk-baseline.json"
+stream "$(evt 31 open 'campaign→main fix → go' t1 t3)"
+out=$(run)
+rc=$?
+size=$(($(wc -c <"$REPO/.claude/sqtk-mine.json") + $(wc -c <"$REPO/.claude/sqtk-baseline.json")))
+[[ $size -gt 262144 && $rc -eq 0 && "$out" == *go* ]] && pass "baselines over 128 KiB: still rings" ||
+	fail "big baselines (size=$size rc=$rc out='$out')"
+rm -f "$REPO/.claude/sqtk-baseline.json"
+printf '%s\n' '[{"list":"bj:needs","seq":3,"id":31,"created_at":"t"}]' >"$REPO/.claude/sqtk-mine.json"
+
+# 11. Without sqtk-answer.jq it refuses to arm: exit 4 and a stderr line, before the stream.
+mkdir -p "$WORK/nolib"
+cp "$BELL" "$WORK/nolib/sqtk-doorbell.sh"
+stream ": connected" "$(ev squawk.updated 31 confirmed 'mine → yes')"
+rm -f "$DRAIN_LOG"
+(cd "$REPO" && PATH="$WORK/bin:$PATH" timeout 20 bash "$WORK/nolib/sqtk-doorbell.sh" >"$WORK/nolib.out" 2>"$WORK/nolib.err")
+rc=$?
+[[ $rc -eq 4 && ! -s "$WORK/nolib.out" && ! -e "$DRAIN_LOG" ]] && grep -q 'cannot load sqtk-answer.jq' "$WORK/nolib.err" &&
+	pass "no module: exit 4, says so, never arms" || fail "no module (rc=$rc err=$(cat "$WORK/nolib.err"))"
 
 echo
 if [[ $FAILS -eq 0 ]]; then

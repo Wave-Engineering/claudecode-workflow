@@ -6,7 +6,8 @@
 # That file is sqtk's contract (squawkie-talkie#141); this hook only reads it.
 #
 # When BJ scratches an item off (confirmed ✓, rejected ✗, retired ◌, recorded ↗), or types
-# an answer after a trailing `→`, the author has to find out. A Stop hook's systemMessage
+# an answer after the `→` slot, the author has to find out. What counts as an answer is
+# sqtk-answer.jq's rule (#1363): an arrow in the author's own text never does. A Stop hook's systemMessage
 # goes to the human, not the agent, so the drain happens here: at the start of the agent's
 # next turn, the change is injected into its context as additionalContext, once.
 #
@@ -18,6 +19,14 @@
 # (default 86400) does it become "gone|" and stop costing a fetch. So a passing glitch, a
 # redeploy or a wrong SQUAWK_URL, can't silently drop an answer. A squawk that comes back
 # clears its miss count.
+#
+# <repo>/.claude/sqtk-baseline.json, also this hook's: {"<id>": "<original text>"}, each of
+# the author's squawks as written, taken while the squawk is still pristine (never edited).
+# The answer is read against it. An entry is written once and never overwritten, and an item
+# whose sqtk-mine.json entry carries its own `.text` needs none.
+#
+# If sqtk-answer.jq can't be loaded, the hook says so on stderr and exits 3, in both modes,
+# rather than report "nothing waiting".
 #
 # Cost: this runs on every prompt of every session, so the fast paths matter.
 #   - No sqtk-mine.json, or no SQUAWK_URL: exit before any network call.
@@ -33,7 +42,9 @@
 # Contract (CC UserPromptSubmit hook):
 #   stdin:  JSON with .cwd
 #   stdout: nothing, or one hookSpecificOutput JSON object carrying additionalContext
-#   exit:   always 0. It fails open: any error prints nothing and blocks nothing.
+#   exit:   always 0, except 3 when sqtk-answer.jq can't be loaded (non-blocking in
+#           UserPromptSubmit). Otherwise it fails open: any error prints nothing and blocks
+#           nothing.
 #
 # `sqtk-drain.sh --pending` is the doorbell's catch-up check: the same fetch and comparison.
 # Exit 0 prints the unreported changes as a JSON array; 1 means nothing is waiting. It leaves
@@ -61,6 +72,9 @@ MINE="$ROOT/.claude/sqtk-mine.json"
 SEEN="$ROOT/.claude/sqtk-seen.json"
 FETCHED="$ROOT/.claude/sqtk-fetched.json"
 RUNG="$ROOT/.claude/sqtk-rung.json"
+BASELINE="$ROOT/.claude/sqtk-baseline.json"
+# sqtk-answer.jq sits beside this hook, in the repo and in the install.
+LIB=$(dirname "$(readlink -f "$0")")
 BASE="${SQUAWK_URL:-}"
 TIMEOUT="${SQTK_DRAIN_TIMEOUT:-2}"
 MAX_LISTS="${SQTK_DRAIN_MAX_LISTS:-5}"
@@ -73,6 +87,11 @@ GONE_AFTER="${SQTK_DRAIN_GONE_AFTER:-86400}"
 [[ -s "$MINE" && -n "$BASE" ]] || none
 command -v curl >/dev/null 2>&1 || none
 jq -e 'type == "array" and length > 0' "$MINE" >/dev/null 2>&1 || none
+# Every answer goes through the module, so a missing or broken one is an error, never "none".
+jq -n -L "$LIB" 'include "sqtk-answer"; 1' >/dev/null 2>&1 || {
+	echo "sqtk-drain: cannot load sqtk-answer.jq from $LIB; squawk answers are not being read" >&2
+	exit 3
+}
 
 WORK=$(mktemp -d 2>/dev/null) || none
 trap 'rm -rf "$WORK"' EXIT
@@ -86,6 +105,7 @@ load_obj() {
 }
 load_obj "$SEEN" "$WORK/seen.json"
 load_obj "$FETCHED" "$WORK/fetched.json"
+load_obj "$BASELINE" "$WORK/baseline.json"
 
 # Lists worth fetching: those holding at least one item not yet reported in a terminal
 # state, least recently fetched first.
@@ -132,20 +152,24 @@ done <<<"$lists"
 jq -s 'add // []' "$WORK/sq.jsonl" >"$WORK/sq.json" 2>/dev/null || none
 jq -R . "$WORK/done.txt" | jq -s . >"$WORK/done.json" 2>/dev/null || none
 
-# Items whose state or answer changed since the last report. The answer slot is the text
-# after the LAST arrow on the squawk; an arrow earlier in the prose is not an answer. An item
-# on a fetched list that the server no longer returns counts a miss (never reported), and
-# turns "gone" only once the misses are both many and old. A key of null clears the entry.
+# Items whose state or answer changed since the last report. The answer is sqtk-answer.jq's:
+# nothing while the squawk is pristine; with the original text, what follows the author's
+# own arrows; without it, the text after the last arrow. The original is the mine entry's
+# own `.text` when sqtk recorded it, else sqtk-baseline.json. An item on a fetched list that the
+# server no longer returns counts a miss (never reported), and turns "gone" only once the
+# misses are both many and old. A key of null clears the entry.
 now=$(date +%s)
-jq -c --slurpfile seen "$WORK/seen.json" --slurpfile sq "$WORK/sq.json" \
-	--slurpfile got "$WORK/done.json" --argjson now "$now" \
-	--argjson misses "$GONE_MISSES" --argjson after "$GONE_AFTER" '
-	def answer: (split("→") | if length > 1 then .[-1] | gsub("^\\s+|\\s+$"; "") else "" end);
+jq -c -L "$LIB" --slurpfile seen "$WORK/seen.json" --slurpfile sq "$WORK/sq.json" \
+	--slurpfile got "$WORK/done.json" --slurpfile baseline "$WORK/baseline.json" \
+	--argjson now "$now" --argjson misses "$GONE_MISSES" --argjson after "$GONE_AFTER" '
+	include "sqtk-answer";
 	def terminal: test("^(confirmed|rejected|retired|recorded|gone)\\|");
 	[.[] as $m
 	 | select($got[0] | index($m.list))
 	 | ($seen[0][($m.id | tostring)] // "") as $prev
 	 | ([$sq[0][] | select(.id == $m.id)] | first) as $s
+	 | (if ($m.text | type) == "string" then $m.text
+	    else $baseline[0][($m.id | tostring)] end | strings // null) as $o
 	 | if $s == null then
 	     select($prev | terminal | not)
 	     | ($prev | capture("^missing\\|(?<t>[0-9]+)\\|(?<c>[0-9]+)$") // {t: "\($now)", c: "0"}) as $p
@@ -154,11 +178,11 @@ jq -c --slurpfile seen "$WORK/seen.json" --slurpfile sq "$WORK/sq.json" \
 	        key: (if $c >= $misses and $now - ($p.t | tonumber) >= $after then "gone|"
 	              else "missing|\($p.t)|\($c)" end)}
 	   else
-	     ($s.text | answer) as $a
+	     ($s | sq_answer($o)) as $a
 	     | "\($s.state)|\($a)" as $key
 	     | if ($s.state != "open" or $a != "") and $prev != $key then
 	         {id: $m.id, list: $m.list, seq: $s.seq, state: $s.state, answer: $a, text: $s.text,
-	          key: $key, report: true}
+	          o: $o, key: $key, report: true}
 	       elif ($prev | startswith("missing|")) then {id: $m.id, key: null, report: false}
 	       else empty end
 	   end]
@@ -196,6 +220,22 @@ record() {
 	return 1
 }
 
+# Take a baseline for each of my squawks seen pristine that has none: no `.text` on its mine
+# entry and no entry in sqtk-baseline.json. An existing entry is never overwritten. Both modes
+# do this, before anything is printed.
+jq -c -L "$LIB" --slurpfile sq "$WORK/sq.json" --slurpfile baseline "$WORK/baseline.json" '
+	include "sqtk-answer";
+	[.[] as $m
+	 | select(($m.text | type) != "string" and ($baseline[0] | has($m.id | tostring) | not))
+	 | ([$sq[0][] | select(.id == $m.id)] | first) as $s
+	 | select($s != null and ($s | pristine))
+	 | {id: $m.id, key: ($s.text // "")}]' "$MINE" >"$WORK/newbase.json" 2>/dev/null ||
+	printf '[]\n' >"$WORK/newbase.json"
+if jq -e 'length > 0' "$WORK/newbase.json" >/dev/null 2>&1; then
+	ensure_excluded
+	record "$BASELINE" "$WORK/newbase.json" "$WORK/baseline.json" || true
+fi
+
 if [[ $MODE == pending ]]; then
 	load_obj "$RUNG" "$WORK/rung.json"
 	jq -c --slurpfile rung "$WORK/rung.json" '
@@ -206,7 +246,7 @@ if [[ $MODE == pending ]]; then
 	# If the rung file can't be written, ring anyway: exit 1 would tell the doorbell nothing
 	# is waiting, and an idle agent would miss a real answer. A repeat ring is the lesser fault.
 	record "$RUNG" "$WORK/ring.json" "$WORK/rung.json" || true
-	jq -c 'map(del(.key, .report))' "$WORK/ring.json"
+	jq -c 'map(del(.key, .report, .o))' "$WORK/ring.json"
 	exit 0
 fi
 
@@ -220,15 +260,15 @@ jq -e 'length > 0' "$WORK/changes.json" >/dev/null 2>&1 || exit 0
 
 msg=""
 if jq -e 'any(.[]; .report)' "$WORK/changes.json" >/dev/null 2>&1; then
-	msg=$(jq -r '
+	msg=$(jq -r -L "$LIB" '
+		include "sqtk-answer";
 		def glyph: {open:"○",confirmed:"✓",rejected:"✗",retired:"◌",recorded:"↗"}[.] // "?";
 		def clip: if length > 160 then .[0:157] + "..." else . end;
-		def prose: split("→") | if length > 1 then .[:-1] | join("→") else .[0] end | gsub("\\s+$"; "");
 		map(select(.report))
 		| "sqtk: \(length) of your squawks changed since your last turn. Act on each, then carry on:\n"
 		  + (map("• [\(.list) #\(.seq)] \(.state | glyph) \(.state)"
 			+ (if .answer != "" then ": answered \"\(.answer | clip)\"" else "" end)
-			+ " — \(.text | prose | clip)") | join("\n"))
+			+ " — \(sq_prose(.o) | clip)") | join("\n"))
 		' "$WORK/changes.json" 2>/dev/null) || exit 0
 fi
 

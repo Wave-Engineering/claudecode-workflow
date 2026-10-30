@@ -1394,7 +1394,7 @@ if [[ "$CHECK_MODE" == true ]]; then
 		mcp_list=$(claude mcp list 2>/dev/null || true)
 		for mcp_name in $(jq -r '.mcps | keys[]' "$REPO_DIR/mcps.json"); do
 			total=$((total + 1))
-			if echo "$mcp_list" | grep -qw "$mcp_name"; then
+			if echo "$mcp_list" | grep -q "^${mcp_name}:"; then
 				info "MCP server $mcp_name (registered)"
 			else
 				drift "MCP server $mcp_name — NOT REGISTERED"

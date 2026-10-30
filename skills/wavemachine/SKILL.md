@@ -281,7 +281,7 @@ human recovery via `set_current_wave`, `extend_state`'s auto-advance).
 1. Set the `wavemachine_active` flag (`wave-status wavemachine-start --launcher main`, plus
    `--reclaim` only when the human approved reclaiming a lapsed lease at pre-flight).
    Unset it on EVERY exit path (`wave-status wavemachine-stop`) — treat as a `finally`.
-2. Regenerate + open the status panel (`generate-status-panel` then `xdg-open`).
+2. Regenerate + open the status panel (`generate-status-panel` then `xdg-open .claude/status/dashboard.html`).
 3. **Campaign-branch bootstrap (#1052)** — once per Plan: ensure `campaign/<plan_id>-<slug>` exists
    on origin, cut from the **current tip of the protected branch**, and push it. Then thread it into
    every per-wave launch as `integrationBase`.
@@ -326,6 +326,10 @@ campaign driver supplies, per wave, from the approved phase/wave plan + project 
 | `mode` | the campaign's `MODE` (`auto` \| `interactive`) — passed through unchanged |
 | `planId` | the wave Plan id (the promote node assembles the MR body from it) |
 | `budget` | the campaign cost guard, if any |
+
+When a HOLD fix is filed as a new issue and re-driven with its wave, run
+`wave-status add-issue <waveId> <N>` first, so the wave's issue list, its work-item count and the
+release PR's closing refs all include it.
 
 **`preserveKahuna` is deliberately NOT threaded (#1052).** The branch that must survive across waves
 is the campaign branch, and it does; each wave's kahuna is disposable again. A campaign wave ignores

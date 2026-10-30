@@ -15,6 +15,7 @@ Acceptance criteria from issue #41:
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -80,6 +81,48 @@ def _make_env(home: Path) -> dict[str, str]:
     through the inherited XDG_DATA_HOME and wipe crewchat-clients on 2026-10-29
     (see tests/sandbox_env.py)."""
     return sandbox_env(home)
+
+
+def _stubbed_env(home: Path, mcp_list: str = "") -> dict[str, str]:
+    """``_make_env(home)`` with stub ``curl`` and ``claude`` first on PATH (#1361).
+
+    uninstall.sh used to run every mcps.json server's real remote uninstaller from inside
+    this suite: real network, and a real ``claude`` (#1152's hang on a dev box). The
+    ``curl`` stub logs each URL to ``$STUB_CURL_LOG`` and serves a script that echoes its
+    arguments. The ``claude`` stub logs its arguments to ``$STUB_CLAUDE_LOG``, prints
+    ``mcp_list`` for ``mcp list``, exits 1 for ``mcp get`` and 0 for anything else. The
+    crewchat uninstall never checks its socket. The stubs and the sandboxed uv keep it a
+    no-op: the ``claude`` stub's ``mcp get`` reports nothing registered, and uv looks only
+    in the sandbox's tool dir.
+    """
+    stubs = home.parent / "stubs"
+    stubs.mkdir(exist_ok=True)
+    claude = stubs / "claude"
+    claude.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "%s\\n" "$*" >>"$STUB_CLAUDE_LOG"\n'
+        '[[ "$1 $2" == "mcp list" ]] && { cat "$STUB_MCP_LIST"; exit 0; }\n'
+        '[[ "$1 $2" == "mcp get" ]] && exit 1\n'
+        "exit 0\n"
+    )
+    curl = stubs / "curl"
+    curl.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "%s\\n" "${@: -1}" >>"$STUB_CURL_LOG"\n'
+        "echo 'echo \"stub-remote $*\"'\n"
+    )
+    for stub in (claude, curl):
+        stub.chmod(0o755)
+    listing = home.parent / "mcp-list.txt"
+    listing.write_text(mcp_list)
+
+    env = _make_env(home)
+    env["PATH"] = f"{stubs}:{env['PATH']}"
+    env["STUB_MCP_LIST"] = str(listing)
+    env["STUB_CURL_LOG"] = str(home.parent / "curl.log")
+    env["STUB_CLAUDE_LOG"] = str(home.parent / "claude.log")
+    env["CREWCHAT_SOCKET"] = str(home.parent / "no-daemon.sock")
+    return env
 
 
 # ---------------------------------------------------------------------------
@@ -154,8 +197,10 @@ def _install_ok(rc: int, out: str, err: str) -> bool:
 def run_uninstall(
     args: list[str],
     home: Path,
+    *,
+    mcp_list: str = "",
 ) -> Tuple[int, str, str]:
-    """Run ``uninstall.sh <args>`` with HOME overridden.
+    """Run ``uninstall.sh <args>`` with HOME overridden and ``curl``/``claude`` stubbed.
 
     Returns ``(returncode, stdout, stderr)``.
     """
@@ -163,7 +208,7 @@ def run_uninstall(
         ["bash", _UNINSTALL_SCRIPT] + args,
         capture_output=True,
         text=True,
-        env=_make_env(home),
+        env=_stubbed_env(home, mcp_list),
         timeout=120,
     )
     return result.returncode, result.stdout, result.stderr
@@ -714,6 +759,58 @@ class TestUninstallRemovesArtifacts:
         statusline = sandbox_home / ".claude" / "statusline-command.sh"
         assert not statusline.exists(), "statusline-command.sh not removed"
 
+        # --- Nothing left the sandbox (#1361) ---
+        stub_root = sandbox_home.parent
+        assert not (stub_root / "curl.log").exists(), (
+            f"uninstall fetched a remote script: {(stub_root / 'curl.log').read_text()}"
+        )
+        claude_calls = (stub_root / "claude.log").read_text().splitlines()
+        assert "mcp list" in claude_calls, "uninstall must read registrations through the stub"
+
+
+@_SKIP_NO_BASH
+class TestUninstallMcpRegistration:
+    """uninstall.sh fetches a server's remote uninstaller only when it is registered (#1361)."""
+
+    def test_only_registered_servers_are_uninstalled(self, sandbox_home: Path) -> None:
+        rc, out, err = run_uninstall(
+            ["--mcps"], sandbox_home, mcp_list="sdlc-server: sdlc-server - ✓ Connected\n"
+        )
+        assert _install_ok(rc, out, err), f"uninstall --mcps failed (rc={rc}):\n{out}\n{err}"
+        mcps = json.loads((_REPO_DIR / "mcps.json").read_text())["mcps"]
+        fetched = (sandbox_home.parent / "curl.log").read_text().splitlines()
+        assert fetched == [mcps["sdlc-server"]["install_url"]]
+        assert out.count("stub-remote --uninstall") == 1
+        assert "Not registered: wtf-server" in out
+
+    def test_a_longer_name_is_not_a_registration(self, sandbox_home: Path) -> None:
+        # The name must head its line: `sdlc-server-dev` is not `sdlc-server`, and a name
+        # in another server's command is not a registration either.
+        rc, out, err = run_uninstall(
+            ["--mcps"],
+            sandbox_home,
+            mcp_list="sdlc-server-dev: /opt/sdlc-server --dev - ✓ Connected\n",
+        )
+        assert _install_ok(rc, out, err), f"uninstall --mcps failed (rc={rc}):\n{out}\n{err}"
+        assert not (sandbox_home.parent / "curl.log").exists()
+        assert "Not registered: sdlc-server" in out
+
+    def test_unreadable_registrations_skip_removal(self, sandbox_home: Path) -> None:
+        env = _stubbed_env(sandbox_home)
+        claude = sandbox_home.parent / "stubs" / "claude"
+        claude.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >>"$STUB_CLAUDE_LOG"\nexit 1\n')
+        result = subprocess.run(
+            ["bash", _UNINSTALL_SCRIPT, "--mcps"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+        )
+        out = result.stdout + result.stderr
+        assert _install_ok(result.returncode, out, ""), f"uninstall --mcps failed:\n{out}"
+        assert not (sandbox_home.parent / "curl.log").exists()
+        assert "cannot read MCP registrations (claude mcp list failed) — skipping MCP removal" in out
+
 
 @_SKIP_NO_BASH
 @_SKIP_NO_PYTHON3
@@ -731,8 +828,15 @@ class TestUninstallDryRun:
         assert len(pre_files) > 0, "Nothing installed — can't test dry-run"
 
         # Dry-run uninstall
-        rc, out, err = run_uninstall(["--dry-run"], sandbox_home)
+        rc, out, err = run_uninstall(
+            ["--dry-run"], sandbox_home, mcp_list="sdlc-server: sdlc-server - ✓ Connected\n"
+        )
         assert _install_ok(rc, out, err), f"--dry-run uninstall failed: {err}"
+
+        # A global dry-run still lists a registered server, and only that one (#1361).
+        assert "Would uninstall MCP server: sdlc-server" in out
+        assert "Would uninstall MCP server: wtf-server" not in out
+        assert not (sandbox_home.parent / "curl.log").exists()
 
         # Output should mention dry-run
         assert "dry run" in out.lower() or "dry-run" in out.lower(), (
@@ -1115,13 +1219,16 @@ class TestLocalScopeInstall:
             ["bash", _UNINSTALL_SCRIPT, "--local"],
             capture_output=True,
             text=True,
-            env=_make_env(home),
+            env=_stubbed_env(home),
             cwd=str(project),
             timeout=120,
         )
         assert _install_ok(result.returncode, result.stdout, result.stderr), (
             f"--local uninstall failed:\nstdout: {result.stdout}\nstderr: {result.stderr}"
         )
+        # --local never touches MCP servers (#815): no header, no fetch.
+        assert "Removing MCP servers" not in result.stdout
+        assert not (tmp_path / "curl.log").exists()
 
         # Project skills removed.
         for skill_name in _expected_skill_dirs():
@@ -1140,6 +1247,24 @@ class TestLocalScopeInstall:
         assert list((home / ".claude" / "skills").iterdir()) == [], (
             "--local uninstall touched global skills"
         )
+
+    def test_local_uninstall_dry_run_lists_no_mcps(self, tmp_path: Path) -> None:
+        """#815: `uninstall.sh --local --dry-run` lists no MCP server, even with one registered."""
+        home = tmp_path / "home"
+        (home / ".claude" / "skills").mkdir(parents=True)
+        project = tmp_path / "project"
+        project.mkdir()
+        result = subprocess.run(
+            ["bash", _UNINSTALL_SCRIPT, "--local", "--dry-run"],
+            capture_output=True,
+            text=True,
+            env=_stubbed_env(home, "sdlc-server: sdlc-server - ✓ Connected\n"),
+            cwd=str(project),
+            timeout=120,
+        )
+        assert _install_ok(result.returncode, result.stdout, result.stderr), result.stderr
+        assert "Would uninstall MCP server:" not in result.stdout
+        assert not (tmp_path / "curl.log").exists()
 
 
 @_SKIP_NO_BASH

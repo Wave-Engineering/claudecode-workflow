@@ -22,7 +22,7 @@ Operators reference this doc when:
 
 ## Body Template
 
-The body shape below is reproduced verbatim from [§5.1.2 of the Dev Spec](./phase-epic-taxonomy-devspec.md). If the two ever disagree, the Dev Spec wins.
+The body shape below is reproduced verbatim from [§5.1.2 of the Dev Spec](./phase-epic-taxonomy-devspec.md), with one exception: the line in place of §5.1.2's "Kahuna→main MR merged clean", a criterion only a merge can assess, which BJ ruled out on 2026-10-24 (#1365). §5.1.2 is frozen after approval, so it stays as written. On that line this template wins. On anything else, if the two ever disagree, the Dev Spec wins.
 
 ```markdown
 # Plan: <Name>
@@ -42,7 +42,7 @@ The body shape below is reproduced verbatim from [§5.1.2 of the Dev Spec](./pha
 - [ ] Phase 1 DoD satisfied
 - [ ] Phase 2 DoD satisfied
 - [ ] (... one line per Phase)
-- [ ] Kahuna→main MR merged clean
+- [ ] Every wave in the plan is integrated onto the campaign branch
 - [ ] VRTM complete
 - [ ] (... cross-cutting conditions)
 
@@ -183,7 +183,7 @@ Decouple Phase from Epic in the wave-pattern pipeline taxonomy. Rename "epic" to
 - [ ] Phase 1 DoD satisfied
 - [ ] Phase 2 DoD satisfied
 - [ ] Phase 3 DoD satisfied
-- [ ] Kahuna→main MR merged clean on `kahuna/499-phase-epic-taxonomy`
+- [ ] Every wave in the plan is integrated onto the campaign branch
 - [ ] Memory files present: `decision_plan_phase_epic_taxonomy.md`, `principle_user_attention_is_the_cost.md`
 - [ ] VRTM complete
 

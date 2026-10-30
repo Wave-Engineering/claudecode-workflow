@@ -242,6 +242,19 @@ async function main() {
   // The DoD node must ANSWER, never act — a node that could merge would make routeRelease advisory.
   ok(!/pr_merge\b/.test(dodP) && !/gh pr merge/.test(dodP), 'dod prompt: NEVER merges — it answers; routing is the pure predicate\'s job')
   ok(DOD_VERDICT.required.includes('met') && DOD_VERDICT.additionalProperties === false, 'DOD_VERDICT schema requires met, no extra props')
+  // #1365: a BJ-waived DoD line (e.g. a post-merge criterion) is waived, never unmet.
+  ok(dodP.includes('WAIVED by BJ <date>: <reason> (<url>)') && /never count it as unmet/.test(dodP), 'dod prompt: a BJ-waived DoD line is listed as waived, never counted as unmet')
+  // #1365: the DoD node runs before the campaign→protected PR exists (it is told not to open one),
+  // so a Plan-template DoD line about that PR or its merge-result CI is unmet on every run.
+  const planDodLines = []
+  for (const f of ['skills/issue/SKILL.md', 'docs/plan-issue-template.md']) {
+    const src = readFileSync(new URL(`../../${f}`, import.meta.url), 'utf8')
+    for (const sec of src.split('## Plan-level Definition of Done').slice(1)) {
+      planDodLines.push(...sec.split('\n## ')[0].split('\n').filter((l) => /^- \[ \]/.test(l)))
+    }
+  }
+  ok(planDodLines.length > 0 && planDodLines.every((l) => !/\bPR\b|pull request|merge.result|campaign→/i.test(l)),
+    'plan template: no DoD line needs the campaign→protected PR or its merge-result CI (the DoD node grades before it exists)')
 
   const relArgs = { planId: '56', targetRepo: 'o/r', campaignBranch: 'campaign/56-x', protectedBranch: 'main', wavesIntegrated: ['w1', 'w2'] }
   const ciP = releaseCiPrompt(relArgs)
@@ -250,6 +263,10 @@ async function main() {
   // needs its OWN merge-result CI run against current trunk. A branch-CI signal is weaker.
   ok(/require_merge_result=true/.test(ciP) && /ci_wait_run/.test(ciP), 'release-CI prompt: gates on a MERGE-RESULT CI run (no per-wave pipeline tested this diff against current trunk)')
   ok(/timeout_sec=1800, poll_interval_sec=20/.test(ciP), 'release-CI prompt: the explicit bounded wait (#1035)')
+  // #1357: ci_wait_run's ref is required, and a GitLab merged-results pipeline is never under the branch.
+  ok(ciP.includes('GitLab: ref="refs/merge-requests/<n>/merge"') && ciP.includes('GitHub: ref="campaign/56-x"'),
+    'release CI prompt names refs/merge-requests/<n>/merge and the campaign branch')
+  ok(ciP.indexOf('pr_wait_ci(') >= 0 && ciP.indexOf('pr_wait_ci(') < ciP.indexOf('sdlc-server ci_wait_run('), 'release-CI prompt: the no-run probe precedes the wait (#1357)')
   // #1211: the release gate had no fallback, so a GitLab ci_wait_run that saw nothing (sdlc#585)
   // waited 1800s and could only hold. It now carries the shared direct read, verbatim.
   ok(ciP.includes(directMergeReadSteps({ targetRepo: 'o/r', windowSec: 600 })[0]), 'release-CI prompt: carries the shared direct /merge read (#1211)')
@@ -263,6 +280,11 @@ async function main() {
   const last = ciP.indexOf('report it as head_sha_final')
   ok(first >= 0 && first < ciP.indexOf('sdlc-server ci_wait_run('), 'release-CI prompt: the first head read comes before ci_wait_run')
   ok(last > ciP.indexOf('DIRECT READ'), 'release-CI prompt: the final head read comes after ci_wait_run AND the direct read')
+  // #1356 (triage #7): the target tip is read last, against the PROTECTED branch, so a /merge pipeline
+  // built before trunk moved is held as stale; and the run's sha is copied, so the success path binds.
+  const tip = ciP.indexOf("Read the TARGET branch main's tip NOW and report it as target_sha")
+  ok(tip > last && ciP.includes('gh api repos/o/r/branches/main --jq .commit.sha'), 'release CI prompt asks for target_sha against the protected branch, after the final head read')
+  ok(/head_sha_final and target_sha \(step 4\)/.test(ciP) && /copied as returned \(ok, final_status, reason, error, sha, run_id, url\)/.test(ciP), 'release CI prompt returns target_sha and copies the run sha')
 
   const relP = releaseMergePrompt({ ...relArgs, prNumber: 77, headSha: 'f'.repeat(40), ciReason: 'graded-green-reason' })
   ok(/campaign\/56-x/.test(relP) && /main/.test(relP), 'release prompt: names both refs (campaign → protected)')
@@ -270,7 +292,7 @@ async function main() {
   ok(relP.includes('graded-green-reason'), "release prompt: carries the gate's reason")
   ok(relP.includes(`pr merge 77 --match-head-commit ${'f'.repeat(40)}`), 'release prompt: GitHub merge is bound to the graded head')
   ok(relP.includes(`merge_requests/77/merge?sha=${'f'.repeat(40)}`), 'release prompt: GitLab merge is bound to the graded head')
-  ok(/the merge refuses\. Then STOP and return\s+released=false/.test(relP), 'release prompt: a moved head is a HOLD, never a merge of unseen code')
+  ok(/If the merge fails for ANY reason.*STOP and return released=false/s.test(relP), 'release prompt: any failed pinned merge (a moved head is one) is a HOLD, never a merge of unseen code')
   ok(relP.includes('glab mr update 77 --ready -R o/r'), 'release prompt: GitLab marks the MR ready before merging (GitLab refuses to merge a draft)')
   // #1211 review I-2: no graded head, no merge. The old fallback bound to "the head SHA you read now".
   for (const headSha of [undefined, '', 'HEAD', 'F'.repeat(40)]) {

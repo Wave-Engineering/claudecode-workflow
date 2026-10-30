@@ -19,11 +19,38 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+**Needs sdlc v5.2.0 on the host before any auto wave runs.** The per-wave engine now counts a
+pinned merge only on pr_merge's `pinned_head_sha` echo, which first ships in mcp-server-sdlc
+v5.2.0. Before v5.1.0 the server drops the pin; v5.1.x pins but does not echo. On either, every
+auto wave halts `pinned-merge-unproven` after its first group. The kit image bakes sdlc v5.0.4,
+so bump it with this release.
+
 ### Upgrading
 - **`/disc` still posts to Discord. Use `/owtx` for OaW Mattermost.** Nothing that worked stops
   working: every `/disc` intent goes where it went, and only gains a one-line deprecation notice.
 
+### Fixed
+- **The wave gate binds to graded evidence (#1356).** Each flight is graded on its own head in
+  code (`flightCiVerdict`) before reconcile, and only green flights reach it. Reconcile and promote
+  merge pinned to the graded head (`expected_head_sha`), and a merge counts only when pr_merge
+  reports `merged:true` and echoes that head. The trivy scan must be of the head CI graded. A
+  merge that landed without a proven pin is reported `landedUnproven` with its merge commit, never
+  as not landed. A new legal exit, `pinned-merge-unproven`, holds the wave on any unproven
+  reconcile merge.
+
 ### Added
+- **A mechanical AC gate, and no post-merge criteria (#1365).** `/precheck` used to tick
+  "Implementation (AC verified)" from the agent's own reading, and nothing read the boxes. The new
+  `scripts/precheck-ac-gate.sh` is Job E: every AC box on each closing issue, and every box in the
+  PR/MR body, must be checked or carry `WAIVED by BJ <date>: <reason> (<url>)`, and it exits
+  non-zero on a fetch error. Its `lint` refuses a criterion that needs a merge to assess (BJ,
+  2026-10-24), and `/issue`, `/prepwaves` and devspec upshift run it before they write. The Plan
+  template no longer asks for "Kahuna→main MR merged clean", the line a campaign release gate held
+  on forever. The release gate's DoD node treats a BJ-waived line as waived.
+- **The merge-call notice goes to a named lead (#1365).** A `lead` field in
+  `.claude/agent-identity.json` (written by `/grunt`; `/name` now merges the file rather than
+  rewriting it) routes `/precheck`'s notice to that lead by `SendMessage`, with no `#precheck` post
+  and no `vox`. With no `lead`, the notice goes to BJ as before (`scripts/precheck-notify-target.sh`).
 - **`/owtx` and `/owrx`: chat on the OaW Mattermost server by default (#1348).** They replace
   `/disc`'s send and read sides with no verbs: `#<channel>` is a channel, `@<user>` a DM, and a
   bare `/owtx` a roll-call check-in. With no route, neither passes `backend`, so the default
@@ -50,23 +77,16 @@ are worth keeping apart:
   the `> <route>` grammar. Every skill that pointed at `/disc` for them points at the doc.
 - **crewchat is pinned to v0.2.6 (#1348):** Mattermost channel names resolve (mattermost-crew
   #145), and `crewchat-send` exists (#146).
-- **`/disc` arms `crewchat-doorbell` with no timeout (#1346).** The arm line was
-  `CREWCHAT_DOORBELL_TIMEOUT=1800`. Every exit 3 woke the agent for a turn with nothing in it,
-  about 48 a day per agent. Since mattermost-crew v0.2.4 the doorbell's failures exit by
-  themselves, 2 when the session isn't registered and 4 when the daemon is down, so the timeout
-  bought no liveness. Running agents keep the old line until they pick up this release.
-- **`install-crewchat.sh` pins mattermost-crew v0.2.4 (#1342).** A v0.2.2 client sends no
-  project key, so the daemon can't apply a server's per-project allowlist, and agents in partner
-  repos get no account there. Its doorbell also exited 4 on every daemon restart, sending each
-  agent back to the one-shots. v0.2.4's doorbell waits 60 s through a restart, and its shim pings
-  the daemon every 15 s and registers again by itself, so an idle session's doorbell re-arms
-  with no tool call. `/disc`'s and `docs/chat-tools.md`'s exit tables now give exits 2 and 4 that
-  60 s grace, and say which causes still exit 4 at once (no permission, a connect timeout, a bad
-  reply). The shim's own re-register needs a daemon with `ping`. A v0.2.4 client works against an older daemon: its `ping` gets `unsupported`, and the
-  shim falls back to registering on the next tool call. Agents pick it up at their next restart.
 
 ### Deprecated
 - **`/disc` (#1348).** Use `/owtx` and `/owrx`. Removing it is a later major release.
+
+## [8.19.0] - 2026-10-30
+
+crewchat-doorbell is now the kit's only doorbell: discord-watcher is retired, and the doorbell
+arms with no timeout. The crewchat clients move to mattermost-crew v0.2.4. The nerf mode now
+decides what the context reseed gate does at the ouch dart. Ship it together with
+mcp-server-nerf v2.1.0, which makes `ultraviolence` the default.
 
 ### Removed
 - **discord-watcher is retired from the kit (#1344).** `crewchat-doorbell` has been the doorbell
@@ -84,6 +104,47 @@ are worth keeping apart:
 
   **Consequence:** a host without the crewchat daemon, including the contained-workflow image,
   has no Discord doorbell from the kit. `disc-server` still sends and reads there.
+
+### Changed
+- **The nerf mode now picks what the context reseed gate does (#1352).** The gate used to have
+  one behavior, and nerf's modes and ouch dart were read by nothing. `context-reseed-gate.sh` now
+  reads `mode` and `darts_pct.ouch` from the session's nerf config (`/tmp/nerf-<session_id>.json`):
+  - `ultraviolence` blocks with "run /reseed now", as before;
+  - `hurt-me-plenty` blocks and has the agent ask the user before it reseeds;
+  - `not-too-rough` gives one reminder per session and no block.
+
+  The threshold is `RESEED_CONTEXT_THRESHOLD_PCT` if set, else `100 - ouch`, else 15. A session
+  with no nerf config, or one the hook can't read, behaves exactly as before.
+
+  **Ships with mcp-server-nerf's next release**, which makes `ultraviolence` its default. Until a
+  host has that release, a session whose nerf file was written with the old `hurt-me-plenty`
+  default asks before reseeding.
+- **`/disc` arms `crewchat-doorbell` with no timeout (#1346).** The arm line was
+  `CREWCHAT_DOORBELL_TIMEOUT=1800`. Every exit 3 woke the agent for a turn with nothing in it,
+  about 48 a day per agent. Since mattermost-crew v0.2.4 the doorbell's failures exit by
+  themselves, 2 when the session isn't registered and 4 when the daemon is down, so the timeout
+  bought no liveness. Running agents keep the old line until they pick up this release.
+- **`install-crewchat.sh` pins mattermost-crew v0.2.4 (#1342).** A v0.2.2 client sends no
+  project key, so the daemon can't apply a server's per-project allowlist, and agents in partner
+  repos get no account there. Its doorbell also exited 4 on every daemon restart, sending each
+  agent back to the one-shots. v0.2.4's doorbell waits 60 s through a restart, and its shim pings
+  the daemon every 15 s and registers again by itself, so an idle session's doorbell re-arms
+  with no tool call. `/disc`'s and `docs/chat-tools.md`'s exit tables now give exits 2 and 4 that
+  60 s grace, and say which causes still exit 4 at once (no permission, a connect timeout, a bad
+  reply). The shim's own re-register needs a daemon with `ping`. A v0.2.4 client works against an older daemon: its `ping` gets `unsupported`, and the
+  shim falls back to registering on the next tool call. Agents pick it up at their next restart.
+
+### Fixed
+- **CI checks Workflow scripts as function bodies, not ESM (#1350).** Node 24's `node --check`
+  rejects a Workflow script's top-level `await` and `return`, so every regression test that
+  syntax-checked one failed. `scripts/ci/wf-syntax-check.mjs` wraps the script in an async
+  function body, the way the Workflow runtime does, and the tests call it.
+
+### Image
+
+- **MCP servers:** mcp-server-sdlc v5.0.4, mcp-server-wtf v1.5.2, mcp-server-discord v1.4.3 and
+  mcp-server-nerf v2.1.0 (was v2.0.0). discord-watcher is no longer baked (#1344). crewchat is
+  still not baked: the image has no daemon socket.
 
 ## [8.18.0] - 2026-10-26
 

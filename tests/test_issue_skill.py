@@ -829,3 +829,42 @@ class TestPlanTypeCallout:
         assert not re.search(r"mcp-server-sdlc#477|sdlc#477", skill_text), (
             "sdlc#477 is CLOSED — it must not be cited as an open blocker"
         )
+
+
+# ---------------------------------------------------------------------------
+# #1365: no AC or DoD line may need a merge to assess
+# ---------------------------------------------------------------------------
+
+ACGATE = _ROOT / "scripts" / "precheck-ac-gate.sh"
+PLAN_DOC = _ROOT / "docs" / "plan-issue-template.md"
+
+
+def _markdown_blocks(text: str) -> list[str]:
+    return re.findall(r"^```markdown\s*\n(.*?)^```\s*$", text, re.MULTILINE | re.DOTALL)
+
+
+def test_plan_templates_pass_the_lint(skill_text: str, tmp_path: Path) -> None:
+    import subprocess
+
+    plan_doc = PLAN_DOC.read_text(encoding="utf-8")
+    blocks = [_extract_template_block(skill_text, "Plan Template")]
+    blocks += [b for b in _markdown_blocks(plan_doc) if b.lstrip().startswith("# Plan:")]
+    assert len(blocks) == 3 and all("## Plan-level Definition of Done" in b for b in blocks)
+    files = []
+    for i, b in enumerate(blocks):
+        assert "merged clean" not in b
+        p = tmp_path / f"plan{i}.md"
+        p.write_text(b)
+        files.append(str(p))
+    r = subprocess.run(["bash", str(ACGATE), "lint", *files], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_issue_skill_lints_before_create(skill_text: str) -> None:
+    lint = skill_text.index("## Step 2.5: Pre-merge lint")
+    assert lint < skill_text.index("## Step 4: Create the Issue")
+    body = skill_text[lint:skill_text.index("## Step 3: Determine Labels")]
+    assert '"$ACGATE" lint <file>; echo "exit=$?"' in body
+    assert "**Never create an issue with a flagged line.**" in body
+    assert "<!-- ac-gate: pre-merge -->" in body
+    assert "`precheck-ac-gate.sh lint` refuses one that is not." in skill_text

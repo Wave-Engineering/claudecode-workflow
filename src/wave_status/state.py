@@ -84,12 +84,15 @@ def html_path(root: Path) -> Path:
     """Return the path to the generated HTML dashboard.
 
     If ``.sdlc/`` exists, writes to ``.sdlc/waves/dashboard.html``,
-    otherwise falls back to ``.status-panel.html``.
+    otherwise to ``.claude/status/dashboard.html``. Either way it sits beside
+    ``state.json`` in :func:`status_dir`, which consumer repos already ignore.
+    It used to fall back to the repo root, which left an untracked file in
+    every consumer (cc-workflow#1362).
     """
     sdlc_dir = root / ".sdlc"
     if sdlc_dir.exists():
         return sdlc_dir / "waves" / "dashboard.html"
-    return root / ".status-panel.html"
+    return root / ".claude" / "status" / "dashboard.html"
 
 
 def ensure_status_dir(root: Path) -> Path:
@@ -1640,6 +1643,98 @@ def close_issue(n: int | str, root: Path) -> dict:
         action="close-issue",
         label=str(resolved),
     )
+    return state_data
+
+
+def add_issue(
+    wave_id: str, n: int | str, root: Path, *, title: str | None = None
+) -> dict:
+    """Add issue *n* to the existing wave *wave_id* (cc-workflow#1362).
+
+    A HOLD fix filed as a new issue is re-driven with its wave, so it has to
+    be in that wave's plan entry: everything that reads a wave's issue list
+    (the wavemachine launch input, sdlc's ``wave_finalize`` /
+    ``wave_reconcile``, the work-item counts, the release PR's closing refs)
+    reads ``phases-waves.json``. ``init --extend`` only appends whole phases.
+
+    *n* is a bare number or an ``owner/repo#N`` ref. Idempotent when the
+    issue is already in this wave: nothing is written, unless an earlier
+    run saved the plan but not the state, and then the missing state entry
+    is filled in. Raises ``ValueError``,
+    with both files unchanged, for an unparseable ref, a wave not in the
+    plan, a completed wave, or an issue already in another wave.
+    """
+    d = status_dir(root)
+    phases_path = d / "phases-waves.json"
+    state_path = d / "state.json"
+    plan_data = load_json(phases_path)
+    state_data = load_state(state_path)
+
+    if isinstance(n, str) and "#" in n:
+        ref_repo, ref_num = _parse_issue_key(n)
+        if ref_num is None:
+            raise ValueError(f"Error: '{n}' is not an issue number or owner/repo#N ref.")
+        display = n
+    else:
+        ref_repo = None
+        try:
+            ref_num = int(n)
+        except (TypeError, ValueError):
+            raise ValueError(f"Error: '{n}' is not an issue number or owner/repo#N ref.")
+        display = f"#{ref_num}"
+
+    target = None
+    for phase in plan_data.get("phases", []):
+        for wave in phase.get("waves", []):
+            if wave.get("id") == wave_id:
+                target = wave
+                break
+        if target is not None:
+            break
+    if target is None:
+        raise ValueError(f"Error: wave '{wave_id}' is not in the plan.")
+
+    entry: dict = {"number": ref_num, "title": title or display, "depends_on": []}
+    if ref_repo:
+        entry["ref"] = f"{ref_repo}#{ref_num}"
+    key = _compose_issue_key(ref_num, _issue_repo(plan_data, entry))
+    issues = state_data.setdefault("issues", {})
+    # Dedup against the bare form too, as extend_state does, so a pre-v3
+    # state doesn't grow a duplicate entry.
+    needs_state = key not in issues and str(ref_num) not in issues
+
+    # The same key shape _all_issue_refs gives every issue already planned, per
+    # wave, so a re-drive retry is a no-op and a second wave is refused.
+    for phase in plan_data.get("phases", []):
+        for wave in phase.get("waves", []):
+            for issue in wave.get("issues", []):
+                if _compose_issue_key(issue["number"], _issue_repo(plan_data, issue)) != key:
+                    continue
+                if wave.get("id") != wave_id:
+                    raise ValueError(
+                        f"Error: issue {key} is already in wave '{wave.get('id')}'; "
+                        "each issue belongs to exactly one wave."
+                    )
+                # Already planned here. A run that died between the two writes
+                # left the plan entry without its state entry: finish it.
+                if needs_state:
+                    issues[key] = {"status": "open"}
+                    state_data["last_updated"] = _now_iso()
+                    save_json(state_path, state_data)
+                return state_data
+
+    if state_data.get("waves", {}).get(wave_id, {}).get("status") == "completed":
+        raise ValueError(
+            f"Error: wave '{wave_id}' is completed; an issue cannot be added to a finished wave."
+        )
+
+    target.setdefault("issues", []).append(entry)
+    save_json(phases_path, plan_data)
+    if needs_state:
+        issues[key] = {"status": "open"}
+    state_data["last_updated"] = _now_iso()
+    save_json(state_path, state_data)
+    _emit_event(root, "step", wave=wave_id, action="add-issue", label=key)
     return state_data
 
 

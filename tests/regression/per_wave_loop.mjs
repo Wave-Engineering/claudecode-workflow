@@ -253,8 +253,10 @@ await check('rework returns already-present on the rejected head → rework-noop
   const run = await runPerWave({ args: RETRY_ARGS, responder: reworkScenario({ status: 'already-present', head_sha: H1 }) })
   assertHalted(run, 'rework-noop:#31')
   assert.ok(run.result.haltReason.includes('head 1111111 unchanged'), run.result.haltReason)
+  // With the no-op the round's only flight, nothing is green to reconcile, so merge:2 is skipped (#1356).
   const merge2 = run.calls.find((c) => c.label === 'merge:2')
-  assert.ok(merge2 && !merge2.prompt.includes('issue #31'), 'the no-op is not handed to reconcile')
+  assert.ok(!merge2 || !merge2.prompt.includes('issue #31'), 'the no-op is not handed to reconcile')
+  assert.ok(!run.calls.some((c) => c.label === 'flight-ci:#31' && run.calls.indexOf(c) > run.calls.findIndex((x) => x.label === 'plan:2')), 'the no-op is not sent to flight CI either')
   assert.deepEqual(run.result.reworkCount, { 31: 1 }, 'the no-op dispatch does not count as a rework cycle')
   assert.equal(terminalBlob(run.calls).reworkContext['31'].reason, REASON, 'the held blob keeps the reason for the retry')
 })
@@ -339,7 +341,7 @@ await check('a resumed run hands the rework flight the persisted reason and head
 // carry on, so for those the claim is only "no throw". The gate and promote nodes must also leave
 // the wave not integrated.
 const MUST_NOT_INTEGRATE = ['gate:open-pr', 'gate:commutativity', 'gate:ci', 'gate:review:stage', 'gate:review', 'gate:trivy', 'promote']
-const MUST_NOT_THROW = ['rehydrate', 'worktrees:*', 'flight:*', 'persist:*', 'cleanup:*']
+const MUST_NOT_THROW = ['rehydrate', 'worktrees:*', 'flight:*', 'flight-ci:*', 'persist:*', 'cleanup:*']
 
 for (const label of MUST_NOT_INTEGRATE) {
   await check(`${label} returns null → no throw, not integrated`, async () => {
@@ -358,6 +360,241 @@ for (const label of MUST_NOT_THROW) {
     assert.ok(['PASS', 'HOLD', 'SKIPPED'].includes(run.result.gate), `gate was '${run.result.gate}'`)
   })
 }
+
+// ── flight CI (#1356, triage #39) ─────────────────────────────────────────────────────────────
+const BUDGET_ARGS_BASE = { waveId: 'W1', planId: 'P1', targetRepo: 'Example-Org/harness-target', targetRepoDir: '/nonexistent/harness-target', issues: [1, 2], mode: 'auto' }
+// Wave-Engineering/mattermost-crew#72 merged into its kahuna with every check-run failed: reconcile
+// opened and merged flight PRs with no CI condition. Each flight is now graded on its own head first.
+const FAN_ARGS = { ...BUDGET_ARGS_BASE, dispatch: 'fan' }
+const ranJob = { name: 'unit', conclusion: 'failure', started_at: '2026-10-25T04:30:00Z', finished_at: '2026-10-25T04:33:00Z' }
+const defaultHead = (n) => n.toString(16).padStart(40, 'e') // the head the harness's default flight returns
+const ciFor = (n, over) => ({ issue: n, pr_number: 100 + n, head_sha: defaultHead(n), head_sha_final: defaultHead(n), ...over })
+
+await check('flight CI: a code-red flight is never handed to reconcile, and is re-opened with the CI reason', async () => {
+  let ci2 = 0
+  let flights2 = 0
+  const run = await runPerWave({
+    args: FAN_ARGS,
+    responder: (label) => {
+      if (label === 'flight-ci:#2' && ++ci2 === 1) return ciFor(2, { wait: { ok: true, final_status: 'failure', run_id: 7, url: 'https://ci/r/7' }, failed_jobs: [ranJob] })
+      // the rework flight commits its fix, so it returns a new head (the default CI then grades it green)
+      if (label === 'flight:#2' && ++flights2 === 2) return { issue: 2, status: 'implemented', head_sha: H2 }
+      return HARNESS_DEFAULT
+    },
+  })
+  assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
+  const merge1 = run.calls.find((c) => c.label === 'merge:1').prompt
+  assert.ok(merge1.includes('issue #1') && !merge1.includes('issue #2'), 'only the green flight goes to reconcile')
+  assert.ok(merge1.includes(`PR #101, graded head ${defaultHead(1)}`), 'reconcile is told the PR and the graded head')
+  assert.ok(run.calls.find((c) => c.label === 'merge:2').prompt.includes(`graded head ${H2}`), 'the reworked flight is reconciled on its new head')
+  const [, rework2] = flightPrompts(run.calls, 2)
+  assert.ok(rework2 && rework2.includes('CI red on head eeeeeeee: failed jobs unit (https://ci/r/7)'), 'the rework flight is told the CI reason')
+  assert.deepEqual(run.result.reworkCount, { 2: 1 })
+  assert.equal(run.result.integrated, true, 'the reworked flight goes green next round and the wave integrates')
+})
+
+await check('flight CI: a blocked flight halts flight-ci-blocked after the green one merges', async () => {
+  const billing = { ...ranJob, started_at: '2026-10-25T04:39:44Z', finished_at: '2026-10-25T04:39:44Z' }
+  const run = await runPerWave({
+    args: FAN_ARGS,
+    responder: only({ 'flight-ci:#2': ciFor(2, { wait: { ok: true, final_status: 'failure' }, failed_jobs: [billing, billing, billing] }) }),
+  })
+  assertHalted(run, 'flight-ci-blocked:')
+  assert.ok(run.result.haltReason.includes('#2 (CI could not grade head eeeeeeee: failed jobs never ran'), run.result.haltReason)
+  assert.deepEqual(run.result.merged, [1], 'the green flight merged')
+  assert.deepEqual(run.result.pending, [2], 'the blocked flight is still pending')
+  assert.deepEqual(terminalBlob(run.calls).merged, [1], 'and the merge was persisted before the halt')
+  assert.deepEqual(run.result.reworkCount, {}, 'a blocked flight is not a rework cycle')
+})
+
+await check('loop: a flight whose CI never started halts flight-ci-blocked naming "no run for head" (#1357)', async () => {
+  const probe = { status: 'no_checks_yet', blocker: 'conflicts', mergeable_state: 'CONFLICTING/DIRTY' }
+  const run = await runPerWave({
+    args: FAN_ARGS,
+    responder: only({ 'flight-ci:#2': ciFor(2, { wait: {}, probe }) }),
+  })
+  assertHalted(run, 'flight-ci-blocked:#2')
+  assert.ok(run.result.haltReason.includes(`no run for head ${'2'.padStart(40, 'e')}; mergeable=CONFLICTING/DIRTY; blocker=conflicts`), run.result.haltReason)
+  assert.deepEqual(run.result.merged, [1], 'the green flight still merges')
+  assert.deepEqual(run.result.reworkCount, {}, 'a flight CI never graded is not a rework cycle')
+})
+
+await check('flight CI: reconcile\'s claim to merge a flight it was not handed is ignored', async () => {
+  const run = await runPerWave({
+    args: FAN_ARGS,
+    responder: only({
+      'flight-ci:#2': ciFor(2, { wait: { ok: false, error: 'No CI run found' } }),
+      'merge:1': { merged: [1, 2], needs_rework: [] },
+    }),
+  })
+  assertHalted(run, 'flight-ci-blocked:#2')
+  assert.deepEqual(run.result.merged, [1])
+  assert.deepEqual(run.result.pending, [2])
+  assert.ok(run.logs.some((l) => l.includes('ignoring reconcile') && l.includes('#2')), 'the ignored claim is logged')
+})
+
+await check('flight CI: a resumed already-present flight already in the kahuna counts as merged without reconcile', async () => {
+  const run = await runPerWave({
+    args: FAN_ARGS,
+    responder: only({
+      'flight:#2': { issue: 2, status: 'already-present', head_sha: defaultHead(2) },
+      'flight-ci:#2': { issue: 2, already_integrated: true, integrated_head: defaultHead(2), integrated_exit: 0 },
+    }),
+  })
+  assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
+  const merge1 = run.calls.find((c) => c.label === 'merge:1').prompt
+  assert.ok(merge1.includes('issue #1') && !merge1.includes('issue #2'), 'the integrated flight is not sent to reconcile')
+  assert.deepEqual([...run.result.merged].sort(), [1, 2], 'it is counted as merged')
+  assert.equal(run.result.integrated, true, 'and the wave integrates')
+  assert.ok(run.logs.some((l) => l.includes('flight #2 is already in')), 'the resume is logged')
+})
+
+await check('flight CI: a resumed rework flight already in the kahuna at its new head counts as merged', async () => {
+  let ci2 = 0
+  let flights2 = 0
+  const run = await runPerWave({
+    args: FAN_ARGS,
+    responder: (label) => {
+      if (label === 'flight-ci:#2' && ++ci2 === 1) return ciFor(2, { wait: { ok: true, final_status: 'failure', run_id: 7 }, failed_jobs: [ranJob] })
+      if (label === 'flight:#2' && ++flights2 === 2) return { issue: 2, status: 'implemented', head_sha: H2 }
+      if (label === 'flight-ci:#2') return { issue: 2, already_integrated: true, integrated_head: H2, integrated_exit: 0 }
+      return HARNESS_DEFAULT
+    },
+  })
+  assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
+  assert.ok(!run.calls.some((c) => c.label === 'merge:2'), 'nothing left to reconcile in round 2')
+  assert.deepEqual([...run.result.merged].sort(), [1, 2])
+  assert.equal(run.result.integrated, true)
+})
+
+await check('flight CI: an implemented flight whose head is already in the kahuna is blocked, not merged', async () => {
+  const run = await runPerWave({
+    args: FAN_ARGS,
+    responder: only({ 'flight-ci:#2': { issue: 2, already_integrated: true, integrated_head: defaultHead(2), integrated_exit: 0 } }),
+  })
+  assertHalted(run, 'flight-ci-blocked:#2')
+  assert.ok(run.result.haltReason.includes('committed nothing new'), run.result.haltReason)
+  assert.deepEqual(run.result.merged, [1])
+})
+
+await check('flight CI: a group with no green flight skips reconcile', async () => {
+  const run = await runPerWave({ responder: only({ 'flight-ci:#1': null }) })
+  assertHalted(run, 'flight-ci-blocked:#1 (no CI evidence for #1)')
+  assert.ok(!run.calls.some((c) => c.label.startsWith('merge:')), 'no reconcile ran')
+})
+
+await check('reconcile prompt: pr_merge carries expected_head_sha, and reconcile opens no PRs', async () => {
+  const run = await runPerWave()
+  const p = run.calls.find((c) => c.label === 'merge:1').prompt
+  assert.ok(p.includes('pr_merge(number=<its PR>, expected_head_sha="<its graded head>")'), p)
+  assert.ok(!p.includes('pr_create'), 'reconcile never opens a PR')
+  assert.ok(p.includes('Merge ONLY the PRs listed above'), p)
+  assert.ok(/for ANY reason \(ok=false: head_moved on GitLab, gh_pr_merge_failed on GitHub/.test(p), 'any non-ok pinned merge is a refusal, not only head_moved')
+  assert.ok(p.includes('Never retry it without expected_head_sha'), p)
+  assert.ok(p.includes('A flight is merged ONLY when pr_merge reports it merged'), 'ok=true without a merge is not a merge')
+})
+
+// ── the gate binds promote and the scan to the graded head (#1356, triage #6 and #25) ────────
+await check('promote: the prompt passes expected_head_sha = the CI-graded head', async () => {
+  const run = await runPerWave()
+  assert.equal(run.result.integrated, true)
+  const p = run.calls.find((c) => c.label === 'promote').prompt
+  assert.ok(p.includes(`expected_head_sha="${'a'.repeat(40)}"`), p)
+})
+
+await check('gate HOLDs when gate:trivy kahuna_sha differs from gate:ci head_sha', async () => {
+  const older = 'c'.repeat(40)
+  const run = await runPerWave({
+    responder: only({ 'gate:trivy': { signal: 'trivy', passed: true, found: 1, ingested: 1, unscanned: [], declared: false, scanned_sha: older, kahuna_sha: older } }),
+  })
+  assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
+  assert.equal(run.result.gate, 'HOLD')
+  assert.equal(run.result.integrated, false)
+  const trivy = run.result.failing.find((s) => s.signal === 'trivy')
+  assert.ok(trivy && /SCAN NOT OF THE GRADED HEAD/.test(trivy.detail), JSON.stringify(run.result.failing))
+  assert.ok(!run.calls.some((c) => c.label === 'promote'), 'a HOLD never promotes')
+})
+
+// ── #1356 review: a pinned merge counts only on pr_merge's echo of the pin (mocked v5.2.0 / older) ──
+const MC = 'c'.repeat(40) // the merge commit the promote node reports
+for (const [what, promo, why] of [
+  ['an old server (no pinned_head_sha)', { promoted: true, merged: true, mr_ref: '#99', merge_commit_sha: MC }, /pr_merge returned no pinned_head_sha/],
+  ['a pin echo that is not the graded head', { promoted: true, merged: true, mr_ref: '#99', merge_commit_sha: MC, pinned_head_sha: 'e'.repeat(40) }, /pr_merge pinned eeeeeeee, not the graded head/],
+  // m2: the node's poll says it landed, but pr_merge's own merged is not reported, so the echo is unpaired.
+  ['a right echo with no pr_merge merged:true', { promoted: true, mr_ref: '#99', merge_commit_sha: MC, pinned_head_sha: 'a'.repeat(40) }, /pr_merge did not report merged:true/],
+]) {
+  await check(`promote: ${what} → landed-unproven, not "did not land"`, async () => {
+    const run = await runPerWave({ responder: only({ promote: promo }) })
+    assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
+    assert.equal(run.result.gate, 'PASS')
+    assert.equal(run.result.integrated, false)
+    assert.equal(run.result.landedUnproven, true)
+    assert.equal(run.result.merge_commit_sha, MC)
+    assert.match(run.result.reason, new RegExp(`^landed-unproven: merged on \\S+ as ${MC}; pin not proven against graded head aaaaaaaa`))
+    assert.match(run.result.reason, why)
+    assert.match(run.result.reason, /— verify or revert$/)
+    const terminal = run.calls.find((c) => c.label.startsWith('persist:') && c.prompt.includes('TERMINAL'))
+    assert.ok(terminal && terminal.prompt.includes('landed-unproven: merged on'), 'the durable record says it landed')
+    assert.ok(!terminal.prompt.includes('promotion did not land'), 'never "did not land" for a merge that landed')
+  })
+}
+
+await check('promote that did not merge → "did not land", not landed-unproven', async () => {
+  const run = await runPerWave({ responder: only({ promote: { promoted: false, notes: 'head_moved' } }) })
+  assert.equal(run.result.landedUnproven, undefined)
+  assert.match(run.result.reason, /^promotion did not land: head_moved/)
+})
+
+await check('reconcile on an old server (merges without pinned_head_sha) → pinned-merge-unproven, nothing merged', async () => {
+  const proof = (issue) => ({ issue, merged: true, merge_commit_sha: 'd'.repeat(40) })
+  const run = await runPerWave({
+    responder: only({ 'merge:1': { merged: [1, 2], merges: [proof(1), proof(2)], needs_rework: [] } }),
+  })
+  assertHalted(run, 'pinned-merge-unproven:#1 (pr_merge returned no pinned_head_sha')
+  assert.deepEqual(run.result.merged, [], 'no unproven flight is counted merged')
+  assert.deepEqual([...run.result.pending].sort(), [1, 2], 'both stay pending')
+})
+
+await check('an unproven merge beside a blocked flight leads the halt; the other reason is kept', async () => {
+  const run = await runPerWave({
+    args: FAN_ARGS,
+    responder: only({
+      'flight-ci:#2': ciFor(2, { wait: { ok: false, error: 'No CI run found' } }),
+      'merge:1': { merged: [1], merges: [{ issue: 1, merged: true, merge_commit_sha: 'd'.repeat(40) }], needs_rework: [] },
+    }),
+  })
+  assertHalted(run, 'pinned-merge-unproven:#1 (')
+  assert.match(run.result.haltReason, /; also: flight-ci-blocked:#2 \(/)
+})
+
+await check('an undone merge in needs_rework is not counted merged, even with a valid proof', async () => {
+  const run = await runPerWave({
+    args: FAN_ARGS,
+    responder: (label, prompt) => {
+      if (label === 'merge:1') {
+        const head = (n) => prompt.match(new RegExp(`issue #${n}:.*, graded head ([0-9a-f]{40})$`, 'm'))[1]
+        const proof = (n) => ({ issue: n, merged: true, merge_commit_sha: 'd'.repeat(40), pinned_head_sha: head(n) })
+        return { merged: [2], merges: [proof(1), proof(2)], needs_rework: [{ issue: 1, reason: 'interface break' }] }
+      }
+      return HARNESS_DEFAULT
+    },
+  })
+  const g1 = run.result.groupsRun[0]
+  assert.deepEqual(g1.merged, [2], 'only #2 merged in group 1')
+  assert.deepEqual(g1.needs_rework.map((r) => r.issue), [1])
+  const firstCleanup = run.calls.find((c) => c.label.startsWith('cleanup:'))
+  assert.ok(firstCleanup, 'round 1 cleans up its merged flight')
+  assert.deepEqual(firstCleanup.label.slice('cleanup:'.length).split(','), ['2'], 'the reworked flight #1 is not cleaned up in round 1')
+})
+
+await check('a passing trivy signal labelled "dependency-scan" is still bound (its label is forced)', async () => {
+  const older = 'c'.repeat(40)
+  const run = await runPerWave({
+    responder: only({ 'gate:trivy': { signal: 'dependency-scan', passed: true, found: 1, ingested: 1, unscanned: [], declared: false, scanned_sha: older, kahuna_sha: older } }),
+  })
+  assert.equal(run.result.gate, 'HOLD')
+  assert.ok(run.result.failing.some((s) => s.signal === 'trivy' && /SCAN NOT OF THE GRADED HEAD/.test(s.detail)), JSON.stringify(run.result.failing))
+})
 
 // ── CI wait budget (#1302) ────────────────────────────────────────────────────────────────────
 // The budget reaches the live gate:ci prompt; a rejected one falls back to 420 and says so.

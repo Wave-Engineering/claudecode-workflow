@@ -67,8 +67,8 @@ At any wall — prod boundary, judgment call, blocker, ambiguity — do all thre
 - The standard stack still applies (from `CLAUDE.md`): an issue for tracked work, a branch,
   precheck. No shortcuts because you're "just a grunt."
 - **Your PR/MR stops at ready. You never merge it.** When your `/precheck` STOPs for the merge
-  call, that STOP is your handoff. `SendMessage` your lead `grunt <slug> ready: <PR/MR url> @
-  <sha7>`, then idle. Don't wait on the human in your own session. Your lead runs its own
+  call, that STOP is your handoff. Your `/precheck` sends the ready notice to your lead itself
+  (the `lead` field in your identity); send no second one, then idle. Don't wait on the human in your own session. Your lead runs its own
   precheck on that head, in your worktree, and takes the merge. Leave the worktree untouched
   (no checkout, no new mission branch) until your lead reports the merge.
 
@@ -77,7 +77,7 @@ You can *post* to Discord but you do **not** receive `@`-mentions — your lead 
 `SendMessage` (or the operator by `aoe send`). So a requester's "ping me when live" only works if
 the contract is written into this mission. Report each mission's outcome as **signal, not a digest**: `landed ✅` or
 `parked ⛔ — <why>`, plus whatever confirmation this mission's contract requires — not a wall of
-SHAs and PR numbers. (The ready handoff above, one URL and one short SHA, is the exception.)
+SHAs and PR numbers. (The ready notice your `/precheck` sends is the exception.)
 
 ## After each mission
 Append the non-recoverable facts to `live-context.md`, report completion to your lead by

@@ -24,6 +24,8 @@ opinion to the only opinion.
 """
 
 import re
+import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -53,6 +55,14 @@ def precheck_text() -> str:
 
 
 class TestMmrCiGateIsDefaultDeny:
+    def test_no_checks_yet_stop_names_head_and_mergeable_state(self, mmr_text: str) -> None:
+        """#1357 (triage #42): a PR whose CI never started is not a bare STOP; the line says
+        which head and what mergeability, so the cause is not rediscovered by hand."""
+        bullet = next(line for line in mmr_text.splitlines() if line.lstrip().startswith("- `no_checks_yet` → **STOP.**"))
+        assert "no run for head <head sha from pr_status>; mergeable=<mergeable_state>" in bullet
+        assert "blocker=<blocker>" in bullet
+        assert "mcp-server-sdlc#609" in mmr_text and "certified no runs" in mmr_text
+
     def test_gate_requires_an_explicit_pass(self, mmr_text: str) -> None:
         """The gate must name all_passed as the condition to PROCEED.
 
@@ -179,6 +189,58 @@ class TestAutonomousPathsDependOnThisGate:
                 "explicit exclusion, never in the list of paths that merge "
                 "without a human"
             )
+
+
+class TestMmrRegradesTheAc:
+    def test_ac_gate_runs_just_before_pr_merge(self, mmr_text: str) -> None:
+        """#1365: the precheck status pins the head, not the bodies, so /mmr re-runs
+        the AC gate just before pr_merge and STOPs on any non-zero exit."""
+        flat = " ".join(mmr_text.split())
+        assert '"$ACGATE" pr <repo_root> <N> <issue>; echo "exit=$?"' in flat
+        assert "**Any non-zero exit → STOP**" in flat
+        assert flat.index("6.5. **Re-grade the AC (#1365).**") < flat.index("7. `pr_merge(number)`")
+        step = flat.split("6.5. **Re-grade the AC (#1365).**")[1].split("7. `pr_merge(number)`")[0]
+        assert "ibm()" not in step
+        assert "never from the local checkout" in step
+
+    def test_waiver_line_stops_for_bj(self, mmr_text: str) -> None:
+        """#1365: an exit-0 gate with a waiver line merges only on BJ's own call."""
+        flat = " ".join(mmr_text.split())
+        assert "**`exit=0` with any `[waived]` or `[override]` line → STOP and route to BJ** (`#precheck` + `vox`), never to a lead," in flat
+        assert "BJ himself typed this merge call in this session" in flat
+        assert "the checklist or STOP he answered showed those same waiver lines" in flat
+        assert "print every `[waived]` and `[override]` line from the gate's output verbatim on the STOP" in flat
+        assert "Any exception path (kahuna, autochain, a standing merge grant, a lead-agent grant) with a waiver line is a STOP for BJ." in flat
+
+    @pytest.mark.parametrize(
+        ("head", "expected"),
+        [
+            ("feature/1365-precheck-ac-gate", "issue=1365"),
+            ("fix/42-x", "issue=42"),
+            ("chore/7-y", "issue=7"),
+            ("doc/9-z", "issue=9"),
+            ("kahuna/56-W-1", "issue=56"),
+            ("campaign/499-phase-epic-taxonomy", "issue=499"),
+        ],
+    )
+    def test_issue_from_head_branch(self, mmr_text: str, head: str, expected: str) -> None:
+        """#1365: the documented extraction, run for real on each head shape."""
+        result = _run_issue_block(mmr_text, head)
+        assert result.returncode == 0 and result.stdout.strip() == expected
+
+    @pytest.mark.parametrize("head", ["main", "docs/9-z", "feature/no-number", "feature/12x-y", "kahuna/W-1"])
+    def test_issue_from_head_branch_no_match_stops(self, mmr_text: str, head: str) -> None:
+        result = _run_issue_block(mmr_text, head)
+        assert result.returncode != 0 and result.stdout.startswith("STOP:")
+
+
+def _run_issue_block(mmr_text: str, head: str) -> subprocess.CompletedProcess[str]:
+    rest = mmr_text[mmr_text.index("6.5. **Re-grade the AC (#1365).**"):]
+    m = re.search(r"```bash\n(.*?)```", rest, re.DOTALL)
+    assert m, "no bash block in step 6.5"
+    script = textwrap.dedent(m.group(1)).replace("<head-branch>", head)
+    assert "BASH_REMATCH" in script
+    return subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
 
 
 class TestDefaultDenyDoesNotBecomeATotalBlock:

@@ -47,6 +47,20 @@ Parse the user's input and call the corresponding MCP tool:
 - A bare number (e.g., `/nerf 85`) routes to `nerf_budget`, not `nerf_darts`.
 - Mode names are exact: `not-too-rough`, `hurt-me-plenty`, `ultraviolence`.
 
+## Modes
+
+The mode tells the context reseed gate (`context-reseed-gate.sh`) what to do at the ouch
+dart. The gate's threshold is `100 - ouch`, unless `RESEED_CONTEXT_THRESHOLD_PCT` is set.
+
+| mode | at the ouch dart |
+|---|---|
+| `ultraviolence` (default) | the gate blocks the turn, and the agent runs `/reseed` at once |
+| `hurt-me-plenty` | the gate blocks the turn, and the agent asks the user before it reseeds |
+| `not-too-rough` | one reminder per session, no block |
+
+The gate reads `mode` and `darts_pct.ouch` from `/tmp/nerf-<session_id>.json`, the file nerf
+writes. A missing or unreadable file means `ultraviolence`.
+
 ## Session ID (required for all calls)
 
 You MUST pass the real Claude Code session ID on every `nerf_*` call. The MCP

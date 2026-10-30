@@ -16,9 +16,11 @@ unit-level contract. cc-workflow#795.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
-_GATE_JS = Path(__file__).resolve().parent.parent / "skills" / "nextwave" / "gate.js"
+_REPO = Path(__file__).resolve().parent.parent
+_GATE_JS = _REPO / "skills" / "nextwave" / "gate.js"
 # #1211: the merge-result rule gate.js grades the CI signal with, shared with the release gate.
 _MERGE_RESULT_JS = _GATE_JS.with_name("merge-result.js")
 _WF_JS = _GATE_JS.with_name("per-wave-workflow.js")
@@ -127,6 +129,14 @@ class TestPromotionLifecycle:
             "promotion must delete the disposable per-wave kahuna after landing"
         )
 
+    def test_promote_without_graded_head_is_stop(self) -> None:
+        # #1356 (triage #6): the promote merge is pinned to the head CI graded. With no graded
+        # head there is nothing to pin, so the prompt is a STOP, never an unpinned pr_merge.
+        src = _gate_src()
+        assert "if (!isMergeSha(headSha)) {" in src, "promotePrompt must fail closed on a missing graded head"
+        assert "No graded head SHA was handed to" in src, "the fail-closed branch must be the STOP prompt"
+        assert 'expected_head_sha="${headSha}"' in src, "the pinned merge must pass expected_head_sha"
+
     def test_promoted_true_only_if_merge_landed(self) -> None:
         # promoted must reflect actually-landed, never merge-requested-but-pending.
         # Promoted = delivered: confirm the merge is observable on the protected branch.
@@ -200,8 +210,12 @@ class TestCiSignal:
             "the unsatisfiable #1035 rule must not come back into the prompt"
         )
         mr = _merge_result_src()
-        assert "c.parent_ids[1] === head" in mr, (
+        assert "p[1] !== head" in mr, (
             "a green /merge pipeline must be bound to the head through its merge commit's parents"
+        )
+        # #1356 (triage #7): and its first parent must be the target tip, read last.
+        assert "p[0] !== target" in mr and "isMergeSha(target)" in mr, (
+            "a merge commit must be built on the current target tip"
         )
         # #1211 review I-1: the head is read before the wait AND after the last read, and a pass
         # needs both equal, so a head that moved while it was graded can never pass.
@@ -220,6 +234,39 @@ class TestCiSignal:
             "the gate:ci node must be graded by ciVerdict against the gate's own PR number"
         )
 
+    @staticmethod
+    def _ci_prompt() -> str:
+        # The prompt as rendered, not its source: the ref and probe lines come from merge-result.js helpers.
+        script = (
+            "import { ciSignalPrompt } from './skills/nextwave/gate.js';"
+            "process.stdout.write(ciSignalPrompt({ waveId: 'W-1', kahunaBranch: 'kahuna/9-x',"
+            " integrationBase: 'main', targetRepo: 'o/r', prNumber: 77, ciWaitSec: 420 }))"
+        )
+        return subprocess.run(
+            ["node", "--input-type=module", "-e", script], cwd=_REPO, check=True, capture_output=True, text=True
+        ).stdout
+
+    def test_ci_signal_names_the_ref_per_platform(self) -> None:
+        # #1357 (triage #9): ci_wait_run's ref is required, and a merged-results pipeline is never
+        # listed under the branch, so the prompt names it per platform.
+        p = self._ci_prompt()
+        assert 'GitLab: ref="refs/merge-requests/77/merge"' in p
+        assert 'GitHub: ref="kahuna/9-x"' in p
+        assert "with ref=<below>, require_merge_result=true" in p
+
+    def test_ci_signal_probes_pr_wait_ci_before_waiting(self) -> None:
+        # #1357 (triage #42): a PR whose CI never starts fails fast instead of riding the wait budget.
+        p = self._ci_prompt()
+        probe = p.index("PROBE, before ci_wait_run: sdlc-server pr_wait_ci(number=77")
+        assert probe < p.index("call sdlc-server ci_wait_run")
+        assert "ONLY when CI cannot start for this head" in p
+        assert "a blocker of draft, not_mergeable, checks_not_registered or evidence_unavailable" in p, (
+            "the draft exemption and the three not-fail-fast blockers must be stated"
+        )
+        assert "is one of conflicts, closed, merged, locked, mergeability_unknown." in p, (
+            "not_mergeable is not fail-fast (#1371 lead review)"
+        )
+
 
 class TestTrivySignal:
     """Trivy trust signal — #1206: scans a detached worktree of origin/<kahuna>, never the
@@ -231,8 +278,8 @@ class TestTrivySignal:
             "the trivy signal must stage a detached worktree of origin/<kahuna>"
         )
         assert "  find <w>/tree \\\\(" in src, "the enumeration must be rooted at the kahuna worktree"
-        assert "--quiet <w>/tree > <w>/trivy-0.json" in src, "the main scan must be rooted at the kahuna worktree"
-        assert "find ${targetRepoDir}" not in src and "--quiet ${targetRepoDir}" not in src, (
+        assert "' <w>/tree > <w>/trivy-0.json" in src, "the main scan must be rooted at the kahuna worktree"
+        assert "find ${targetRepoDir}" not in src and " ${targetRepoDir} > " not in src, (
             "no find or trivy fs may be rooted at the operator's checkout"
         )
         assert "Do NOT run git checkout or git switch in ${targetRepoDir}" in src

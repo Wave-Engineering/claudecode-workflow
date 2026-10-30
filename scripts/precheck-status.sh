@@ -13,6 +13,18 @@
 # GitLab: the status is attached to the SHA's EXISTING pipeline (pipeline_id). A bare
 # status post makes GitLab create a separate "external" pipeline, which can become the
 # MR's latest pipeline and hide the real CI verdict from the merge check.
+# On a merged-results MR the head SHA has no pipeline (MR pipelines run on an ephemeral
+# merge commit), so the post is bare by necessity. It stays on the head, because every
+# reader keys on the head (pr-head + get, pr-ready-gate.sh, sdlc's pr_create/pr_ready/
+# pr_merge). Each open MR's head_pipeline is read before the post, then polled after it
+# (PRECHECK_HP_POLLS reads, PRECHECK_HP_STEP_SEC apart: 6 × 5 s). If one moves in that
+# window, the post replaces its success with `failed` and exits 3: the hazard above,
+# measured instead of assumed (#1357). A move after the window is not seen.
+# Three more cases put `failed` on the head and exit 3: an MR whose head_pipeline is
+# already external before the post (nothing else is posted), one that reads external
+# during the poll, and a poll re-read that fails. The pipeline lookup never attaches to an
+# external pipeline, or to one with no source: either takes the guarded bare path. If the
+# `failed` post itself fails 3 times, the script says the success still stands and exits 3.
 #
 # Every read fails closed: `get` prints `success` only when the platform said so. An API
 # error is exit 3, never a state.
@@ -157,6 +169,43 @@ get_state() {
 	esac
 }
 
+# head_pipeline <iid> -> "<id> <source>" for GitLab MR <iid>'s head_pipeline ("" for no
+# id; the source read from pipelines/<id> when the MR answer omits it). A pipeline whose
+# source can't be told reads as `external`: the guard fails closed. Non-zero when an API
+# call fails.
+head_pipeline() {
+	local mr id src
+	mr="$(gl_api "projects/$enc/merge_requests/$1")" || return 1
+	id="$(printf '%s' "$mr" | jq -er '.head_pipeline.id // "" | tostring' 2>/dev/null)" || return 1
+	src="$(printf '%s' "$mr" | jq -r '.head_pipeline.source // empty' 2>/dev/null)"
+	if [[ -n "$id" && -z "$src" ]]; then
+		src="$(gl_api "projects/$enc/pipelines/$id" | jq -er '.source // "external"' 2>/dev/null)" || return 1
+	fi
+	printf '%s %s\n' "$id" "${src:-none}"
+}
+
+# refuse_pass <reason> <description>: on GitLab, put `failed` on the head's precheck
+# context (replacing any success there) with <description>, read it back, and exit 3 with
+# the reason. The failed post is tried 3 times: the outage that sent us here may be the one
+# that fails it, and a success left on the head would still read as a pass.
+refuse_pass() {
+	local try st
+	for try in 1 2 3; do
+		gl_api -X POST "projects/$enc/statuses/$sha" -f state=failed -f name="$CONTEXT" \
+			-f description="$2" >/dev/null && break
+		if ((try == 3)); then
+			echo "precheck-status: $platform API call failed: post the failed status on $sha, 3 tries (after: $1)." >&2
+			echo "Any success on $sha STILL STANDS. It is not a pass, and it must be replaced before the PR/MR is marked ready." >&2
+			exit 3
+		fi
+		sleep "$step"
+	done
+	st="$(get_state "$sha")" || st=unreadable
+	[[ "$st" == failure ]] || echo "and the failed status reads back '$st', not failure" >&2
+	echo "no pass on $sha: $1. Its precheck status is now failed." >&2
+	exit 3
+}
+
 case "$cmd" in
 post)
 	sha="${3:-}"
@@ -170,6 +219,15 @@ post)
 		exit 2
 	}
 	desc="$(printf '%s' "$desc" | tr '\n\r' '  ' | cut -c1-140)"
+	# The head_pipeline poll's seams, checked before anything is posted: a bad value must
+	# never skip the guard, or die after success is already on the head.
+	polls="${PRECHECK_HP_POLLS:-6}" step="${PRECHECK_HP_STEP_SEC:-5}"
+	[[ "$polls" =~ ^[1-9][0-9]*$ && "$step" =~ ^[0-9]+$ ]] || {
+		echo "PRECHECK_HP_POLLS must be a positive integer and PRECHECK_HP_STEP_SEC a non-negative one (got '$polls', '$step')" >&2
+		exit 2
+	}
+	hp_before=()
+	hides="no pass: an external pipeline hides the MR's CI verdict"
 	case "$platform" in
 	github)
 		gh api -X POST "repos/$slug/statuses/$sha" -f state=success -f context="$CONTEXT" \
@@ -178,10 +236,29 @@ post)
 	gitlab)
 		# A failed lookup is a failure, never "no pipeline": a bare post is exactly the
 		# external pipeline that hides the real CI verdict (header).
-		pl="$(gl_api "projects/$enc/pipelines?sha=$sha&order_by=id&sort=desc&per_page=1")" ||
+		# Never an external pipeline: after any earlier bare post the newest pipeline for the
+		# head is our own, and attaching to it would skip the guard below (#1371 review). A
+		# pipeline with no source is not trusted either: it takes the guarded path.
+		pl="$(gl_api "projects/$enc/pipelines?sha=$sha&order_by=id&sort=desc&per_page=20")" ||
 			api_fail "read the pipeline of $sha"
-		pid="$(printf '%s' "$pl" | jq -er 'if type == "array" then (.[0].id // "") else error end' 2>/dev/null)" ||
+		pid="$(printf '%s' "$pl" | jq -er 'if type == "array" then ([.[] | select((.source // "external") != "external")][0].id // "") else error end' 2>/dev/null)" ||
 			api_fail "read the pipeline of $sha (unexpected answer)"
+		# No pipeline for the head (a merged-results MR runs on its merge commit): the post
+		# is bare by necessity. Record each open MR's head_pipeline at this head first, so
+		# the post fails loudly if GitLab ever promotes the external pipeline (#1357). An MR
+		# whose head_pipeline is already external is the hazard itself: no pass at all.
+		if [[ -z "$pid" ]]; then
+			mrs="$(gl_api "projects/$enc/repository/commits/$sha/merge_requests")" || api_fail "list MRs of $sha"
+			iids="$(printf '%s' "$mrs" | jq -er --arg s "$sha" \
+				'if type == "array" then ([.[] | select(.state == "opened" and .sha == $s) | .iid] | map(tostring) | join(" ")) else error end' \
+				2>/dev/null)" || api_fail "list MRs of $sha (unexpected answer)"
+			for iid in $iids; do
+				hp="$(head_pipeline "$iid")" || api_fail "read MR !$iid"
+				[[ "${hp#* }" == external ]] &&
+					refuse_pass "MR !$iid's head_pipeline ${hp%% *} is already an external pipeline, which hides its CI verdict; re-run the MR pipeline to recover" "$hides"
+				hp_before+=("$iid=${hp%% *}")
+			done
+		fi
 		args=(-X POST "projects/$enc/statuses/$sha" -f state=success -f name="$CONTEXT" -f description="$desc")
 		[[ -n "$pid" ]] && args+=(-f pipeline_id="$pid")
 		gl_api "${args[@]}" >/dev/null || api_fail "post status on $sha"
@@ -192,6 +269,28 @@ post)
 	if [[ "$state" != success ]]; then
 		echo "posted, but $sha reads back '$state', not success" >&2
 		exit 3
+	fi
+	# GitLab moves head_pipeline in an async worker, so one immediate re-read nearly always
+	# sees the old value. Poll for a bounded window (#1371 lead review), and trip on the
+	# condition as well as on a change: a head_pipeline that moved, or one that is external.
+	# Either way, and on a re-read that fails, the success already on the head would still
+	# read as a pass, so refuse_pass replaces it with `failed` before exiting 3.
+	if ((${#hp_before[@]} > 0)); then
+		for ((i = 1; i <= polls; i++)); do
+			sleep "$step"
+			for rec in "${hp_before[@]}"; do
+				iid="${rec%%=*}" before="${rec#*=}"
+				hp="$(head_pipeline "$iid")" ||
+					refuse_pass "MR !$iid could not be re-read, so the guard cannot vouch for the pass" \
+						"no pass: the MR could not be re-read after the post"
+				after="${hp%% *}"
+				if [[ "$after" != "$before" ]]; then
+					refuse_pass "MR !$iid's head_pipeline moved from ${before:-none} to ${after:-none}: the external pipeline the post created now hides its CI verdict; re-run the MR pipeline to recover" "$hides"
+				fi
+				[[ "${hp#* }" == external ]] &&
+					refuse_pass "MR !$iid's head_pipeline $after is an external pipeline, which hides its CI verdict; re-run the MR pipeline to recover" "$hides"
+			done
+		done
 	fi
 	echo "success $sha"
 	;;

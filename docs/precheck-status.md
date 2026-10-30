@@ -10,11 +10,21 @@ The contract between the kit, which **produces** the mark, and everything that *
 |---|---|
 | GitHub | a commit status (`POST /repos/{owner}/{repo}/statuses/{sha}`) with `context` = `precheck` |
 | GitLab | a commit status (`POST /projects/:id/statuses/:sha`) with `name` = `precheck`, attached to the SHA's existing pipeline through `pipeline_id` when one exists |
-| state | `success`. Precheck posts nothing else: no pass means no status. |
+| state | `success`. No pass means no status. The one exception is the merged-results guard below, which posts `failed` to refuse a pass, replacing any `success` on the head. |
 | description | one line, 140 characters or fewer. It names the issue, the review passes and where the lane results came from, for example `#1235 review full+delta clean; lanes ci; trivy 0` |
 | SHA | the HEAD that was reviewed. It must already be pushed. |
 
 **Why GitLab passes `pipeline_id`:** a bare status post makes GitLab create a separate "external" pipeline. That pipeline can become the MR's latest pipeline and hide the real CI verdict from the merge check.
+
+**Merged-results MRs (#1357):** the head SHA has no pipeline there, because MR pipelines run on an ephemeral merge commit. So the post is bare by necessity. It still goes on the head, because every reader keys on the head. Before posting, `precheck-status.sh post` reads `head_pipeline` for each open MR at that head. GitLab moves `head_pipeline` in an async worker, so after the read-back the script polls it again: 6 reads, 5 seconds apart (`PRECHECK_HP_POLLS`, `PRECHECK_HP_STEP_SEC`). If one moves in that window, it replaces the `success` with `failed` on the same context and exits 3, so the head carries no pass. What is guaranteed is only that window: a move later than about 30 seconds after the post is not seen.
+
+The guard refuses a pass in three more cases, each by putting `failed` on the head and exiting 3:
+
+- **Already external before the post.** An open MR's `head_pipeline` is an external pipeline, so its CI verdict is already hidden. Nothing but the `failed` status is posted. Re-run the MR pipeline to recover.
+- **External during the poll.** A poll reads `head_pipeline` as an external pipeline, whether or not its id moved.
+- **A failed re-read.** The MR can't be read during the poll, so the guard can't vouch for the pass.
+
+A `head_pipeline` whose source can't be told counts as external. The pipeline lookup that picks `pipeline_id` skips external pipelines, and pipelines with no source, because after an earlier bare post the newest pipeline for the head is our own external one. If none is left, the post takes the guarded bare path. The `failed` post is tried 3 times. If it still fails, the script says on stderr that the `success` on the head still stands and is not a pass, and exits 3. That `success` must be replaced before the PR/MR is marked ready.
 
 ## Reading it
 

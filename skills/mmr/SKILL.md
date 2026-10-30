@@ -20,6 +20,7 @@ Squash-merge a pull request (GitHub) or merge request (GitLab) with a detailed c
 - `mcp__sdlc-server__pr_wait_ci` — server-side block on pending checks (default 30s interval, 30min timeout)
 - `mcp__sdlc-server__pr_merge` — squash merge (direct; the fleet is queue-less)
 - `mcp__sdlc-server__ci_wait_run` — optional post-merge main-branch pipeline wait (default 10s interval)
+- `precheck-ac-gate.sh` — re-grades the AC just before the merge (step 6.5)
 
 ## Procedure
 
@@ -53,7 +54,7 @@ Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix)
    - `failed` → STOP.
    - `timed_out` → STOP.
    - `no_checks_configured` → **STOP.** The head-SHA cross-check ran and found no CI runs: this repo genuinely runs no checks for this ref. **A repo with no required checks is not a repo whose checks passed.** Route it to the no-checks-configured branch below.
-   - `no_checks_yet` → **STOP.** Either runs exist for the head SHA that have not registered as checks, or the cross-check could not be run at all (`blocker: evidence_unavailable`). Never `mergeable`. This is not a question for a human — it means **wait, or find out why CI is not reporting**. If a forge routinely takes longer than the 45s default to register, widen `settle_window_sec` rather than learning to wave the status through.
+   - `no_checks_yet` → **STOP.** The STOP line names the facts: `no run for head <head sha from pr_status>; mergeable=<mergeable_state>`, plus `blocker=<blocker>` when there is one. Either runs exist for the head SHA that have not registered as checks, a hard blocker (a conflict, a criss-cross base) keeps CI from starting at all, or the cross-check could not be run (`blocker: evidence_unavailable`). Never `mergeable`. This is not a question for a human — it means **wait, or find out why CI is not reporting**. If a forge routinely takes longer than the 45s default to register, widen `settle_window_sec` rather than learning to wave the status through.
    - `no_checks_required` → **gone as of `mcp-server-sdlc` v4.0.0 (#508).** Kept named here because the history is the reason the rule above exists. It was a *definite, successful* verdict returned at t=0 on an empty rollup (`mcp-server-sdlc#416`) — and an empty rollup is also exactly what a merely-QUEUED check looks like, so a PR whose CI had not started got a verdict whose plain-English name reads as "nothing is wrong." It was **removed rather than aliased** precisely so callers matching the old literal stop matching. If you are reading this in a transcript where it still appears, the server is older than v4.0.0: **STOP**.
    - `{ok: false}` or any error envelope → **STOP** and surface the error; do not silently continue past a gate that failed to run.
    - anything else → **STOP.** Two independent sources unable to confirm a pass is a stop, not a shrug.
@@ -66,7 +67,7 @@ Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix)
 
    Once `pr_wait_ci` has stopped you, distinguish the causes by hand, because they need different responses:
    - **no checks configured on this repo** (`no_checks_configured`) → a human decides whether merging without CI is acceptable here;
-   - **checks exist but have not reported** (`no_checks_yet`) → not a decision, a wait. Re-run the gate, or widen `settle_window_sec`. If `blocker: evidence_unavailable`, the ref cross-check itself could not run — fix that before inferring anything;
+   - **checks exist but have not reported** (`no_checks_yet`) → not a decision, a wait. Re-run the gate, or widen `settle_window_sec`. If `blocker: evidence_unavailable`, the ref cross-check itself could not run — fix that before inferring anything. Report it as `no run for head <sha>; mergeable=<mergeable_state>; blocker=<blocker>`, so the cause is on the line, not left to be rediscovered. Since Wave-Engineering/mcp-server-sdlc#609, `no_checks_configured` means only a mergeable PR whose run query certified no runs; a hard blocker or a persistent `UNKNOWN` mergeability reads `no_checks_yet`;
    - **the query failed** (unsupported flag, auth, network) → fix the query; infer nothing about the checks.
 
    **If there is no human — HALT, do not improvise.** On a `kahuna/*` sandbox, under `/wavemachine` in `auto` mode, with an armed `godspeed` mandate, or in an approved `/autochain` run, "a human decides" has no addressee. Do **not** resolve it yourself: **do not merge**, emit a structured blocker (`wave-hold` shape on wave paths) naming the PR and the unresolved cause, and let the wave gate escalate it. An autochain run has no wave gate, so it stops the chain and gets loud per `/autochain`'s Stopping section, which also disarms its approval. An autonomous agent that reaches an underspecified branch will improvise, and improvising toward *proceed* is the exact failure this gate exists to prevent — the more so because `/precheck` lists this gate as non-bypassable *precisely because* it is the last control once the human is gone. **Under a standing merge grant or a lead-agent grant there is a human, so ask:** the grant covers a clean precheck, and a repo with no CI is not one.
@@ -92,6 +93,26 @@ Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix)
    - Comprehensive enough that `git log` alone tells the full story without opening the PR
    - **A draft that goes into a block** (step 4's last case) is checked by the server. It must meet every `squash_message` rule in `/scpmr` step 2: a subject of 72 characters or fewer with one of the listed types, `Closes #N`, and the `Co-Authored-By: Name <email>` trailer. Otherwise the merge is refused just as the missing block was.
 6. **The approval is how you got here.** Since #1235 BJ's approval is the merge call itself. `/mmr` or `/scpmmr` typed after a precheck STOP, or an affirmative to it, IS the approval, and so is an exception path (`[AUTO-APPROVED: kahuna sandbox]`, `[AUTO-APPROVED: autochain #<epic>]`, a standing merge grant named on the checklist, or `[AUTO-APPROVED: lead-agent grant]` with the grant on the checklist). Show the PR/MR number, title, source→target branches and the squash message (the block, or the one drafted in step 5), and proceed. **Reached any other way** (an agent deciding on its own to merge, with no STOP answered and no exception), ask "May I merge this PR/MR?" and WAIT.
+6.5. **Re-grade the AC (#1365).** The precheck status pins the head, not the bodies, so an edit to the issue or the PR/MR body after the pass, with no push, would otherwise merge ungraded. Resolve `precheck-ac-gate.sh` as `/precheck` Step 0 does (as `ACGATE`), and take the issue from `<head-branch>`, the head that step 1.5's `pr-head` printed, never from the local checkout, which may be the base or another branch. An integration head (`kahuna/*`, `campaign/*`) gives its plan id:
+
+   ```bash
+   if [[ "<head-branch>" =~ ^(feature|fix|chore|doc)/([0-9]+)- || "<head-branch>" =~ ^(kahuna|campaign)/([0-9]+)- ]]; then
+     echo "issue=${BASH_REMATCH[2]}"
+   else
+     echo "STOP: no issue number in head branch <head-branch>"
+     exit 1
+   fi
+   ```
+
+   No match → **STOP**. Then, just before step 7:
+
+   ```bash
+   "$ACGATE" pr <repo_root> <N> <issue>; echo "exit=$?"
+   ```
+
+   - **Any non-zero exit → STOP**, and surface its `ac-gate:` lines. A script that cannot be found is a STOP too.
+   - **`exit=0` with any `[waived]` or `[override]` line → STOP and route to BJ** (`#precheck` + `vox`), never to a lead, and print every `[waived]` and `[override]` line from the gate's output verbatim on the STOP. The gate checks a waiver's form, not who wrote it. The one way through: BJ himself typed this merge call in this session (`/mmr`, `/scpmmr`, or an affirmative to the STOP), and the checklist or STOP he answered showed those same waiver lines. Any exception path (kahuna, autochain, a standing merge grant, a lead-agent grant) with a waiver line is a STOP for BJ.
+   - `exit=0` and no waiver line → step 7.
 7. `pr_merge(number)` for a gated PR/MR on a gated server (step 4's last case); otherwise `pr_merge(number, squash_message)`. It's a squash merge, and it returns `merge_method`, `merge_commit_sha` and `url`.
 8. **Post-merge**: switch to target branch, pull, delete local source branch if present. Optionally `ci_wait_run(ref: <PR/MR target from step 1>, expected_sha: <merge_commit_sha from step 7>, timeout_sec: 1800)` to confirm the target-branch pipeline lands clean — skip if the user wants to move on immediately.
 
