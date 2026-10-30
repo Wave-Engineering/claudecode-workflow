@@ -206,9 +206,10 @@ class TestMmrRegradesTheAc:
     def test_waiver_line_stops_for_bj(self, mmr_text: str) -> None:
         """#1365: an exit-0 gate with a waiver line merges only on BJ's own call."""
         flat = " ".join(mmr_text.split())
-        assert "**`exit=0` with any `[waived]` or `[override]` line → STOP and route to BJ** (`#precheck` + `vox`), never to a lead." in flat
+        assert "**`exit=0` with any `[waived]` or `[override]` line → STOP and route to BJ** (`#precheck` + `vox`), never to a lead," in flat
         assert "BJ himself typed this merge call in this session" in flat
-        assert "the checklist he answered showed those same waiver lines" in flat
+        assert "the checklist or STOP he answered showed those same waiver lines" in flat
+        assert "print every `[waived]` and `[override]` line from the gate's output verbatim on the STOP" in flat
         assert "Any exception path (kahuna, autochain, a standing merge grant, a lead-agent grant) with a waiver line is a STOP for BJ." in flat
 
     @pytest.mark.parametrize(

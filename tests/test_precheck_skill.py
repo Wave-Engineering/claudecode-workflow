@@ -662,6 +662,8 @@ def test_precheck_waiver_routes_to_bj_and_dirties_rearm() -> None:
     rearm = flat.split("### `/precheck rearm`")[1].split("## Dependency Vulnerability Scan")[0]
     assert "and Job E exit 0, and no `[waived]`/`[override]` line in the Job E log. A waiver line makes the rearm not clean: STOP and route the notice to BJ" in rearm
     assert rearm.index("A waiver line makes the rearm not clean") < rearm.index("continue to `/mmr`")
+    assert "The STOP prints every `[waived]` and `[override]` line from the Job E log verbatim" in rearm
+    assert "his affirmative to that STOP is also the merge call" in rearm
 
 
 def test_precheck_kahuna_notice_ignores_lead_routing() -> None:
