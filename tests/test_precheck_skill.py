@@ -632,7 +632,7 @@ def test_precheck_job_e_gates_the_pass() -> None:
     assert "- Job C exit 0; - Job E exit 0, with no `[waived]` or `[override]` line in its log." in step5
     rearm = flat.split("### `/precheck rearm`")[1].split("## Dependency Vulnerability Scan")[0]
     assert "Then run Job E yourself at `HEAD_SHA`" in rearm
-    assert "every lane `exit=0`, and Job E exit 0." in rearm
+    assert "every lane `exit=0`, and Job E exit 0, and no `[waived]`/`[override]` line in the Job E log." in rearm
     assert "AC gate (precheck-ac-gate.sh exit=<n>: <C>/<T> checked, <W> waived, <P> post-merge)" in flat
     assert "Implementation (AC verified)" not in flat
 
@@ -649,6 +649,19 @@ def test_precheck_waiver_forces_human_stop() -> None:
     assert "matches `^kahuna/[0-9]+-` and the Job E log holds no `[waived]` or `[override]` line" in step5
     assert "the same mechanical pass as the autochain bullets above, so no `[waived]` or `[override]` line in the Job E log" in step5
     assert "on this exact head, so no `[waived]` or `[override]` line in the Job E log. A waiver stops a lead's merge too, and goes to BJ." in step5
+
+
+def test_precheck_waiver_routes_to_bj_and_dirties_rearm() -> None:
+    """#1365: Step 4 reads the Job E log before routing, and a rearm with a waiver
+    line is not clean, so neither tells a lead it may merge."""
+    flat = " ".join(SKILL_PATH.read_text().split())
+    step4 = flat.split("### Step 4")[1].split("### Step 5")[0]
+    rule = "**any `[waived]` or `[override]` line → the `bj` route below, whatever `$NOTIFY` prints.**"
+    assert rule in step4
+    assert step4.index(rule) < step4.index('Otherwise run `"$NOTIFY" <repo_root> <your Dev-Name>`')
+    rearm = flat.split("### `/precheck rearm`")[1].split("## Dependency Vulnerability Scan")[0]
+    assert "and Job E exit 0, and no `[waived]`/`[override]` line in the Job E log. A waiver line makes the rearm not clean: STOP and route the notice to BJ" in rearm
+    assert rearm.index("A waiver line makes the rearm not clean") < rearm.index("continue to `/mmr`")
 
 
 def test_precheck_kahuna_notice_ignores_lead_routing() -> None:
@@ -695,7 +708,7 @@ def test_name_preserves_unknown_identity_keys(tmp_path: Path) -> None:
     ident.parent.mkdir()
     ident.write_text(json.dumps({"dev_name": "old", "lead": {"session": "babelfish", "dev_name": "babelfish"}}))
     r = subprocess.run(["bash", "-c", script], env={"PATH": os.environ["PATH"], "project_root": str(tmp_path)},
-                       capture_output=True, text=True, timeout=30)
+                       capture_output=True, text=True, timeout=30, check=False)
     assert r.returncode == 0, r.stderr
     got = json.loads(ident.read_text())
     assert got == {"dev_name": "sorting-hat", "dev_team": "oaw", "dev_avatar": "🎩",
@@ -703,7 +716,7 @@ def test_name_preserves_unknown_identity_keys(tmp_path: Path) -> None:
     # No file at all: the merge creates one.
     ident.unlink()
     r = subprocess.run(["bash", "-c", script], env={"PATH": os.environ["PATH"], "project_root": str(tmp_path)},
-                       capture_output=True, text=True, timeout=30)
+                       capture_output=True, text=True, timeout=30, check=False)
     assert r.returncode == 0, r.stderr
     assert json.loads(ident.read_text())["dev_name"] == "sorting-hat"
 
