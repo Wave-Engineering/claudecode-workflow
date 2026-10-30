@@ -1289,7 +1289,9 @@ def test_prose_exclusion_names_exactly_the_lock_names():
     line = ", ".join(names) + ";"
     gate = (REPO_ROOT / "skills" / "nextwave" / "gate.js").read_text()
     for where, text in (("gate.js", gate), ("SKILL.md", _skill_body())):
-        assert line in text, f"{where} exclusion (1) must name exactly LOCK_NAMES: {line}"
+        # The list opens its own line in both files. Anchoring there is what fails a list whose
+        # leading names drifted out of LOCK_NAMES; a bare substring would still match.
+        assert re.search(r"(?m)^[ \t`]*" + re.escape(line), text), f"{where} exclusion (1) must name exactly LOCK_NAMES: {line}"
         assert "requirements.lock" in " ".join(text.split()).split(line, 1)[1][:120], f"{where} must say requirements.lock is a requirements file"
 
 
