@@ -18,6 +18,7 @@ import pytest
 _NW = Path(__file__).resolve().parent.parent / "skills" / "nextwave"
 _SRC = _NW / "per-wave-workflow.js"
 _BUNDLE = _NW / "per-wave-workflow.bundled.js"
+_WF_CHECK = _NW.parent.parent / "scripts" / "ci" / "wf-syntax-check.mjs"
 
 _HAS_NODE = shutil.which("node") is not None
 
@@ -217,7 +218,8 @@ class TestBundle:
         assert r.returncode == 0, f"bundle stale — run node bundle.mjs\n{r.stdout}\n{r.stderr}"
 
     def test_bundle_valid_js(self):
-        r = subprocess.run(["node", "--check", str(_BUNDLE)], capture_output=True, text=True)
+        # A Workflow script is a function body, not ESM: `node --check` rejects it on Node 24 (#1350).
+        r = subprocess.run(["node", str(_WF_CHECK), str(_BUNDLE)], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
 
     def test_bundle_carries_five_tees(self, bundle):

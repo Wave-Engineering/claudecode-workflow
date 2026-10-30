@@ -3,7 +3,7 @@
 #
 # Picked up by scripts/ci/validate.sh's "Regression tests" loop (tests/regression/*.sh).
 # Two assertions for the #687 seam:
-#   1. node --check on the gate helper + the workflow that imports it (syntax must hold).
+#   1. node --check on the gate helper, wf-syntax-check on the workflow that imports it (syntax must hold).
 #   2. the gate-signal invariants: conservativeFail HOLDs (never silent PASS), each signal
 #      prompt names its real sdlc-server tool + pass predicate (diff-scoped), the CI signal
 #      passes ONLY on final_status == "success", and promotion is wave_finalize →
@@ -25,7 +25,7 @@ fi
 
 node --check "$REPO_DIR/skills/nextwave/gate.js"
 echo "  [PASS] gate.js syntax (node --check)"
-node --check "$REPO_DIR/skills/nextwave/per-wave-workflow.js"
-echo "  [PASS] per-wave-workflow.js syntax (node --check)"
+node "$REPO_DIR/scripts/ci/wf-syntax-check.mjs" "$REPO_DIR/skills/nextwave/per-wave-workflow.js"
+echo "  [PASS] per-wave-workflow.js syntax (wf-syntax-check)"
 
 exec node "$REPO_DIR/tests/regression/gate_signals_roundtrip.mjs"

@@ -4,7 +4,7 @@
 # Picked up by scripts/ci/validate.sh's "Regression tests" loop (tests/regression/*.sh).
 # Proves the wave `dispatch` hint (/prepwaves #823) is actually ENFORCED by the executor, not
 # documentation-only (the wave-1a review-gate finding). Assertions:
-#   1. node --check on the dispatch seam + the Workflow source that calls it (syntax must hold).
+#   1. node --check on the dispatch seam, wf-syntax-check on the Workflow source that calls it (syntax must hold).
 #   2. WIRING GUARD (source + bundle): per-wave-workflow.js calls applyDispatchCeiling on the
 #      planned flight-group, and campaign-workflow.js threads `dispatch` into the per-wave args —
 #      so the enforcement path can't silently vanish (mirrors the #748 producer-wiring guard).
@@ -29,8 +29,8 @@ fi
 # 1. syntax
 node --check "$REPO_DIR/$NW/dispatch.js"
 echo "  [PASS] dispatch.js syntax (node --check)"
-node --check "$REPO_DIR/$NW/per-wave-workflow.js"
-echo "  [PASS] per-wave-workflow.js syntax (node --check)"
+node "$REPO_DIR/scripts/ci/wf-syntax-check.mjs" "$REPO_DIR/$NW/per-wave-workflow.js"
+echo "  [PASS] per-wave-workflow.js syntax (wf-syntax-check)"
 
 # 2. WIRING GUARD — the loop must actually CALL the ceiling (source AND the runnable bundle), and
 #    the campaign launcher must thread dispatch into the per-wave args. Assert in both so a
