@@ -35,6 +35,8 @@ import {
   flightCiVerdict,
   promotePrompt,
   PROMOTE_RESULT,
+  pinnedMergeVerdict,
+  reconciledMerges,
 } from '../../skills/nextwave/gate.js'
 import { readFileSync } from 'node:fs'
 
@@ -493,6 +495,50 @@ try {
   ok('promotePrompt: no graded head → STOP, no pr_merge (#1356)')
 } catch (e) { bad('promote with no graded head (#1356)', e) }
 
+// ── 3d. #1356 review: a pinned merge counts only on the server's echo of the pin ───────────────
+// pr_merge's response is mocked: sdlc v5.2.0 returns pinned_head_sha; an older server returns none.
+try {
+  const H = 'a'.repeat(40)
+  const old = { ok: true, merged: true, merge_commit_sha: 'b'.repeat(40) } // < v5.2.0: pin dropped
+  const echoed = { ...old, pinned_head_sha: H }
+  const other = { ...old, pinned_head_sha: 'c'.repeat(40) }
+  assert.equal(pinnedMergeVerdict(old, H).landed, false, 'no echo (old server) is refused')
+  assert.match(pinnedMergeVerdict(old, H).reason, /older than v5\.2\.0 drops expected_head_sha, so no echo means no pin/)
+  assert.equal(pinnedMergeVerdict(other, H).landed, false, 'a mismatched echo is refused')
+  assert.equal(pinnedMergeVerdict(other, H).reason, 'pr_merge pinned cccccccc, not the graded head aaaaaaaa')
+  assert.equal(pinnedMergeVerdict(echoed, H).landed, true, 'an echo of the graded head is merged')
+  assert.equal(pinnedMergeVerdict(echoed, null).landed, false, 'no graded head: nothing was pinned to it')
+  assert.equal(pinnedMergeVerdict(null, H).landed, false, 'no report is refused')
+
+  const p = promotePrompt({ ...A, prNumber: PR, headSha: GRADED })
+  assert.match(p, /older than v5\.2\.0 drops expected_head_sha[\s\S]*no echo means no pin/, 'the prompt names the reason')
+  assert.match(p, /pinned_head_sha \(pr_merge's, as returned\)/)
+  for (const k of ['pinned_head_sha', 'merge_commit_sha']) assert.equal(PROMOTE_RESULT.properties[k].type, 'string')
+
+  // Reconcile: merged counts only a merges entry with its merge commit and the graded head echoed.
+  const handed = [{ issue: 7, head: H }, { issue: 8, head: H }, { issue: 9, head: H }, { issue: 10, head: H }]
+  const rec = {
+    merged: [7, 8, 9, 10, 11],
+    merges: [
+      { issue: 7, merge_commit_sha: 'b'.repeat(40), pinned_head_sha: H }, // proven
+      { issue: 8, merge_commit_sha: 'b'.repeat(40) }, // old server: no echo
+      { issue: 9, merge_commit_sha: 'b'.repeat(40), pinned_head_sha: 'c'.repeat(40) }, // mismatch
+      { issue: 11, merge_commit_sha: 'b'.repeat(40), pinned_head_sha: H }, // not handed: ignored
+    ],
+    needs_rework: [],
+  }
+  const r = reconciledMerges(rec, handed)
+  assert.deepEqual(r.merged, [7], 'only the proven merge counts')
+  assert.deepEqual(r.refused.map((x) => x.issue), [8, 9, 10])
+  assert.match(r.refused[0].reason, /no echo means no pin/)
+  assert.match(r.refused[1].reason, /not the graded head/)
+  assert.match(r.refused[2].reason, /reported merged with no merges entry/)
+  const noCommit = reconciledMerges({ merged: [7], merges: [{ issue: 7, pinned_head_sha: H }] }, [handed[0]])
+  assert.deepEqual(noCommit, { merged: [], refused: [{ issue: 7, reason: 'no merge_commit_sha for its merge' }] })
+  assert.deepEqual(reconciledMerges({ merged: [], needs_rework: [{ issue: 7, reason: 'x' }] }, [handed[0]]), { merged: [], refused: [] }, 'a reworked flight is neither merged nor refused')
+  ok('pinnedMergeVerdict/reconciledMerges: no echo (old server) or a mismatch is refused; the graded head echoed is merged (#1356 review)')
+} catch (e) { bad('pinned merge echo (#1356 review)', e) }
+
 // ── 4. #1356 (triage #25): the trivy scan binds to the head CI graded ───────────────────────
 try {
   const G = '9'.repeat(40)
@@ -516,6 +562,20 @@ try {
   const r = bindScanToGradedHead([failingCi, older])
   assert.equal(r[0], failingCi, 'a failing CI is left as it is')
   assert.equal(r[1], older, 'with no graded head to compare to, trivy is left as it is (CI already HOLDs the gate)')
+  // #1356 review: the bind finds the scan by its label, so a mislabelled passing scan must not skip it.
+  for (const label of ['Trivy', 'dependency-scan']) {
+    const mis = bindScanToGradedHead([others[0], ci, others[1], { ...older, signal: label }])
+    assert.equal(mis.length, 5, `a ${label}-labelled scan leaves no trivy signal: a HOLD is appended`)
+    assert.deepEqual(mis[4], { signal: 'trivy', passed: false, detail: 'signal ERRORED — conservative-fail (HOLD): no trivy signal to bind the scan to the graded head' })
+    assert.ok(mis.some((s) => !s.passed), 'the gate HOLDs')
+  }
+  const noCi = bindScanToGradedHead([others[0], others[1], trivy])
+  assert.equal(noCi.at(-1).signal, 'ci')
+  assert.equal(noCi.at(-1).passed, false, 'no ci signal: nothing to bind to, HOLD')
+  // The workflow forces the label in code, ahead of the binds.
+  const wf = readFileSync(new URL('../../skills/nextwave/per-wave-workflow.js', import.meta.url), 'utf8')
+  assert.ok(wf.includes(".then((s) => ({ ...s, signal: 'trivy' })).then(trivyTreeBound)"), 'the trivy chain must force its label')
+  ok('bindScanToGradedHead: a mislabelled scan or a missing ci signal HOLDs; the trivy label is forced (#1356 review)')
   ok('bindScanToGradedHead: trivy kahuna_sha != ci head HOLDs trivy; equal SHAs pass through; a headless CI pass HOLDs; never turns a fail into a pass (#1356)')
 } catch (e) { bad('bindScanToGradedHead (#1356)', e) }
 
@@ -565,6 +625,16 @@ try {
   assert.equal(pushed.outcome, 'blocked')
   assert.match(pushed.reason, /push rejected: pre-push gate refused/)
   for (const r of [red, b, pushed]) assert.equal(r.head, null, 'only proceed carries a head')
+  // #1356 review: a verdict with no PR to merge binds to nothing, and a green run must be of the flight head.
+  for (const pr of [undefined, null, 0, -1, 1.5, '107']) {
+    const r = v(ev({ pr_number: pr }))
+    assert.equal(r.outcome, 'blocked', `pr_number ${JSON.stringify(pr)} is blocked`)
+    assert.equal(r.reason, 'the flight CI evidence carries no PR number')
+  }
+  const elsewhere = v(ev({ wait: { ok: true, final_status: 'success', sha: 'e'.repeat(40) } }))
+  assert.equal(elsewhere.outcome, 'blocked', 'green on another sha is blocked')
+  assert.equal(elsewhere.reason, 'CI ran on eeeeeeee, not the flight head ffffffff')
+  assert.equal(v(ev({ wait: { ok: true, final_status: 'success' } })).reason, 'CI ran on no sha, not the flight head ffffffff', 'green with no sha is blocked')
   assert.match(v(ev({ wait: { ok: false, error: 'No CI run found for ref x' } })).reason, /must run on PRs into kahuna\/\*/, 'no run names the CI trigger')
   assert.doesNotMatch(v(ev({ wait: { ok: false, error: 'rate limited' } })).reason, /kahuna\/\*/, 'other errors carry no trigger hint')
   ok('flightCiVerdict: green proceeds; ran-red reworks; billing/infra/no-verdict, moved or foreign heads, null evidence and a rejected push are blocked (#1356)')

@@ -54,6 +54,24 @@ class TestFlightCiBeforeReconcile:
         assert "flightCiVerdict(flightCi[i] ?? null" in src, "a null flight-CI result must grade as blocked"
         assert "halt = `flight-ci-blocked:" in src, "a blocked flight must halt the wave after persisting"
 
+    def test_reconcile_never_skips_a_merge(self) -> None:
+        """#1356 review: flight-CI step 0 grades an already-integrated flight, so the old "already
+        in kahuna, SKIP it" rule could only let reconcile report merged without calling pr_merge."""
+        p = self._reconcile_prompt()
+        assert "SKIP it" not in p, "reconcile must not skip a merge it was handed"
+        assert "{issue, merge_commit_sha, pinned_head_sha}" in p, "reconcile must report each merge's proof"
+        assert "no echo means no pin" in p, "the prompt must name why the echo is required"
+
+    def test_merges_count_only_on_the_pin_echo(self) -> None:
+        src = _wf_src()
+        assert "const pinned = reconciledMerges(rec, proceeding)" in src
+        assert "[...integrated, ...pinned.merged]" in src, "only proven merges (and resumes) count as merged"
+        assert "rec.merged || []).filter((n) => handed.has" not in src, "reconcile's merged claim alone must not count"
+        assert "halt = `pinned-merge-unproven:" in src, "an unproven merge must halt the wave"
+        assert "const promoted = !!(promo && promo.promoted) && pin.landed" in src, (
+            "promote counts only when pr_merge echoed the graded head"
+        )
+
 
 class TestFourSignalFanout:
     """The gate weighs exactly four signals, run in parallel (§3.4) — relocated

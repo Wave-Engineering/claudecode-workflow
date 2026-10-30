@@ -503,6 +503,38 @@ await check('gate HOLDs when gate:trivy kahuna_sha differs from gate:ci head_sha
   assert.ok(!run.calls.some((c) => c.label === 'promote'), 'a HOLD never promotes')
 })
 
+// ── #1356 review: a pinned merge counts only on pr_merge's echo of the pin (mocked v5.2.0 / older) ──
+for (const [what, promo] of [
+  ['an old server (no pinned_head_sha)', { promoted: true, mr_ref: '#99' }],
+  ['a pin echo that is not the graded head', { promoted: true, mr_ref: '#99', pinned_head_sha: 'c'.repeat(40) }],
+]) {
+  await check(`promote: ${what} → not integrated, the reason is named`, async () => {
+    const run = await runPerWave({ responder: only({ promote: promo }) })
+    assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
+    assert.equal(run.result.gate, 'PASS')
+    assert.equal(run.result.integrated, false)
+    assert.match(run.result.reason, /merge not counted: pr_merge (returned no pinned_head_sha|pinned cccccccc, not the graded head)/)
+  })
+}
+
+await check('reconcile on an old server (merges without pinned_head_sha) → pinned-merge-unproven, nothing merged', async () => {
+  const run = await runPerWave({
+    responder: only({ 'merge:1': { merged: [1, 2], merges: [{ issue: 1, merge_commit_sha: 'd'.repeat(40) }, { issue: 2, merge_commit_sha: 'd'.repeat(40) }], needs_rework: [] } }),
+  })
+  assertHalted(run, 'pinned-merge-unproven:#1 (pr_merge returned no pinned_head_sha')
+  assert.deepEqual(run.result.merged, [], 'no unproven flight is counted merged')
+  assert.deepEqual([...run.result.pending].sort(), [1, 2], 'both stay pending')
+})
+
+await check('a passing trivy signal labelled "dependency-scan" is still bound (its label is forced)', async () => {
+  const older = 'c'.repeat(40)
+  const run = await runPerWave({
+    responder: only({ 'gate:trivy': { signal: 'dependency-scan', passed: true, found: 1, ingested: 1, unscanned: [], declared: false, scanned_sha: older, kahuna_sha: older } }),
+  })
+  assert.equal(run.result.gate, 'HOLD')
+  assert.ok(run.result.failing.some((s) => s.signal === 'trivy' && /SCAN NOT OF THE GRADED HEAD/.test(s.detail)), JSON.stringify(run.result.failing))
+})
+
 // ── CI wait budget (#1302) ────────────────────────────────────────────────────────────────────
 // The budget reaches the live gate:ci prompt; a rejected one falls back to 420 and says so.
 const ciPrompt = (run) => run.calls.find((c) => c.label === 'gate:ci').prompt

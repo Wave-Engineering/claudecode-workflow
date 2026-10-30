@@ -74,6 +74,8 @@ import {
   FLIGHT_CI_EVIDENCE,
   flightCiPrompt,
   flightCiVerdict,
+  pinnedMergeVerdict,
+  reconciledMerges,
   promotePrompt,
   PROMOTE_RESULT,
 } from './gate.js'
@@ -263,9 +265,18 @@ const WORK = {
 const RECONCILE = {
   type: 'object',
   additionalProperties: false,
-  required: ['merged', 'needs_rework'],
+  required: ['merged', 'merges', 'needs_rework'],
   properties: {
-    merged: { type: 'array', items: { type: 'integer' } }, // issues now on kahuna this round
+    merged: { type: 'array', items: { type: 'integer' } }, // issues now on kahuna this round (a claim; merges is the proof)
+    merges: { // #1356 review: one per pr_merge that merged, as returned; reconciledMerges() grades them
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['issue'],
+        properties: { issue: { type: 'integer' }, merge_commit_sha: { type: 'string' }, pinned_head_sha: { type: 'string' } },
+      },
+    },
     needs_rework: {
       type: 'array',
       items: {
@@ -717,7 +728,6 @@ function primeReconcilePrompt(built, merged) {
     `Merge ONLY the PRs listed above. A flight not listed here is not green, and must not be merged.`,
     ``,
     `1. Merge each flight's PR into ${KAHUNA_BRANCH} in dependency order (providers before consumers).`,
-    `   IDEMPOTENT (§3.3): if a branch is already in ${KAHUNA_BRANCH}, SKIP it (do not double-merge).`,
     `2. Resolve conflicts coherently — combine, do not drop. A shared interface two issues touch is a CROSS-FLIGHT`,
     `   fix you make HERE (you have the multi-branch view); record it in conflicts_resolved (§3.2.3).`,
     `   Do NOT fix a flight's OWN defect (its red CI, a bug only its code has) — that is the flight's work.`,
@@ -733,6 +743,11 @@ function primeReconcilePrompt(built, merged) {
     `   "pinned merge refused: <the error>". Never retry it without expected_head_sha, and never merge it any other way.`,
     `   A flight is merged ONLY when pr_merge reports it merged; ok=true with merged=false (enrolled, queued,`,
     `   pending) is not a merge: leave that flight out of merged and report it in needs_rework the same way.`,
+    `   For each merge, put {issue, merge_commit_sha, pinned_head_sha} in merges, copied from pr_merge's`,
+    `   response as returned; leave pinned_head_sha out if the response has none. An sdlc server older than`,
+    `   v5.2.0 drops expected_head_sha without a word and merges unpinned, so no echo means no pin: the`,
+    `   workflow counts a flight merged only when its merges entry has the merge commit and a pinned_head_sha`,
+    `   equal to its graded head.`,
     `4. If a flight's code BREAKS another's interface (signature mismatch surfaced at integration): UNDO just that`,
     `   flight's merge (keep integration green) and report it in needs_rework with the precise reason — the loop`,
     `   re-opens it as a surfaced dependency and re-schedules it next group (§3.1 dynamic re-plan).`,
@@ -745,7 +760,8 @@ function primeReconcilePrompt(built, merged) {
     `   strands the wave off origin and produces a degenerate ${KAHUNA_BRANCH}→release MR that can never promote.`,
     `   A blocked push HOLDs the wave with a clear cause — the loop never promotes work that never reached origin.`,
     ``,
-    `Return: merged (issues now green in ${KAHUNA_BRANCH} this round), needs_rework (list of {issue, reason} you`,
+    `Return: merged (issues now green in ${KAHUNA_BRANCH} this round), merges (list of {issue, merge_commit_sha,`,
+    `pinned_head_sha}, one per merge, step 3), needs_rework (list of {issue, reason} you`,
     `reset), conflicts_resolved (files + 1-line how), reconcile_applied_fix (list of {issue, summary}, usually`,
     `empty), concerns (array), suite_summary (final test line),`,
     `blocked (true ONLY if a push to origin was rejected — see step 5) + block_reason, notes.`,
@@ -1018,7 +1034,11 @@ while (true) {
   const handed = new Set(proceeding.map((w) => Number(w.issue)))
   const ignored = [...(rec.merged || []), ...(rec.needs_rework || []).map((r) => r.issue)].filter((n) => !handed.has(Number(n)))
   if (ignored.length) log(`[#1213/#1356] ignoring reconcile's report on flight(s) it was not given: #${[...new Set(ignored)].join(', #')}`)
-  const newlyMerged = [...new Set([...integrated, ...(rec.merged || []).filter((n) => handed.has(Number(n))).map(Number)])].filter((n) => !merged.has(n))
+  // #1356 review: reconcile's merged list is a claim. A flight counts only on a merges entry with its
+  // merge commit and a pin echo equal to its graded head; a claim without one halts the wave below.
+  const pinned = reconciledMerges(rec, proceeding)
+  for (const r of pinned.refused) log(`[#1356] flight #${r.issue} not counted merged: ${r.reason}`)
+  const newlyMerged = [...new Set([...integrated, ...pinned.merged])].filter((n) => !merged.has(n))
   const reworked = [...ciRework, ...(rec.needs_rework || []).filter((r) => handed.has(Number(r.issue)))]
   newlyMerged.forEach((n) => { merged.add(n); pending.delete(n); delete reworkCtx[n] })
   idleRounds = newlyMerged.length ? 0 : idleRounds + 1 // thrash detector
@@ -1044,6 +1064,7 @@ while (true) {
   await persistIteration({ merged, pending, reworkCount, reworkContext: reworkCtx, idleRounds, groupsRun: groupsRunBase + groupsRun.length, newlyMerged: newlyMerged.filter((n) => merged.has(n)) }) // defensive: drop any newlyMerged that the rework loop re-opened
   if (!halt && noops.length) halt = `rework-noop:${noops.map((w) => `#${w.issue} (${noopWhy(w)})`).join(', ')}` // #1213
   if (!halt && ciBlocked.length) halt = `flight-ci-blocked:${ciBlocked.map((b) => `#${b.issue} (${b.reason})`).join(', ')}` // #1356
+  if (!halt && pinned.refused.length) halt = `pinned-merge-unproven:${pinned.refused.map((r) => `#${r.issue} (${r.reason})`).join(', ')}` // #1356 review
   if (halt) break // breaker tripped inside the for-loop → leave the while with pending still non-empty
 }
 
@@ -1137,7 +1158,9 @@ if (!halt && pending.size === 0) {
       () => agent(
         trivySignalPrompt({ waveId: WAVE_ID, kahunaBranch: KAHUNA_BRANCH, integrationBase: INTEGRATION_BASE, targetRepoDir: TARGET_REPO_DIR }),
         { label: 'gate:trivy', phase: 'Trust gate', schema: TRIVY_SIG, agentType: 'general-purpose' },
-      ).then(trivyTreeBound).then(trivyCoverage).catch((e) => conservativeFail('trivy', e)),
+      // The label is forced in code (#1356 review): bindScanToGradedHead finds the scan by it, and the
+      // agent writes its own.
+      ).then((s) => ({ ...s, signal: 'trivy' })).then(trivyTreeBound).then(trivyCoverage).catch((e) => conservativeFail('trivy', e)),
       // A null/undefined slot (an SDK-level failure upstream of the per-signal .catch) must become a
       // conservative-fail, NEVER be dropped — the gate must always weigh exactly 4 signals, or a
       // missing signal silently becomes a PASS (absence-of-evidence-as-safety). #687 review.
@@ -1187,7 +1210,10 @@ if (gate.verdict === 'PASS') {
       log(`[#687] promote soft-fail — wave HELD for manual promotion: ${e?.message || e}`)
       return { promoted: false, notes: `promote error: ${e?.message || e}` }
     })
-    const promoted = !!(promo && promo.promoted)
+    // #1356 review: promoted counts only when pr_merge echoed the pin as the graded head.
+    const pin = pinnedMergeVerdict(promo, gate.gradedHead)
+    if (promo?.promoted && !pin.landed) promo.notes = `merge not counted: ${pin.reason}${promo.notes ? `; ${promo.notes}` : ''}`
+    const promoted = !!(promo && promo.promoted) && pin.landed
     await persistTerminal(promoted ? 'promoted' : 'held',
       promoted
         ? `gate PASS, promoted ${KAHUNA_BRANCH}→${INTEGRATION_BASE}${promo.mr_ref ? ` (${promo.mr_ref})` : ''}`
