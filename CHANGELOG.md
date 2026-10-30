@@ -19,6 +19,13 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.19.0] - 2026-10-30
+
+crewchat-doorbell is now the kit's only doorbell: discord-watcher is retired, and the doorbell
+arms with no timeout. The crewchat clients move to mattermost-crew v0.2.4. The nerf mode now
+decides what the context reseed gate does at the ouch dart. Ship it together with
+mcp-server-nerf v2.1.0, which makes `ultraviolence` the default.
+
 ### Removed
 - **discord-watcher is retired from the kit (#1344).** `crewchat-doorbell` has been the doorbell
   since kit 8.17.0, carrying Discord, Mattermost and squawk answers in one stream on any host that
@@ -64,6 +71,18 @@ are worth keeping apart:
   60 s grace, and say which causes still exit 4 at once (no permission, a connect timeout, a bad
   reply). The shim's own re-register needs a daemon with `ping`. A v0.2.4 client works against an older daemon: its `ping` gets `unsupported`, and the
   shim falls back to registering on the next tool call. Agents pick it up at their next restart.
+
+### Fixed
+- **CI checks Workflow scripts as function bodies, not ESM (#1350).** Node 24's `node --check`
+  rejects a Workflow script's top-level `await` and `return`, so every regression test that
+  syntax-checked one failed. `scripts/ci/wf-syntax-check.mjs` wraps the script in an async
+  function body, the way the Workflow runtime does, and the tests call it.
+
+### Image
+
+- **MCP servers:** mcp-server-sdlc v5.0.4, mcp-server-wtf v1.5.2, mcp-server-discord v1.4.3 and
+  mcp-server-nerf v2.1.0 (was v2.0.0). discord-watcher is no longer baked (#1344). crewchat is
+  still not baked: the image has no daemon socket.
 
 ## [8.18.0] - 2026-10-26
 
