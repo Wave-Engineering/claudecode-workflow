@@ -216,10 +216,13 @@ rm -rf "$L"
 P="$(mktemp -d)"
 cp "$GATE" "$P/check-scannable.sh"
 printf 'flask==3.0.0\n' >"$P/requirements.txt"
-bash "$P/check-scannable.sh" "$P" >/dev/null 2>&1
+out="$(bash "$P/check-scannable.sh" "$P" 2>&1)"
 rc=$?
-[[ "$rc" == "1" ]] && ok "a missing lock-predicate.sh exits 1 (partial install)" ||
-	no "a missing lock-predicate.sh must exit 1 (rc=$rc)"
+# rc 1 is also the ordinary "nothing scannable" verdict, which a silently missing predicate
+# would reach too; the message is what proves the guard fired.
+[[ "$rc" == "1" ]] && grep -q 'lock-predicate.sh missing' <<<"$out" &&
+	ok "a missing lock-predicate.sh exits 1 (partial install), naming it" ||
+	no "a missing lock-predicate.sh must exit 1 and say so (rc=$rc): $out"
 rm -rf "$P"
 
 # --- the denominator is always printed, including on success -----------------

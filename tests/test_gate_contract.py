@@ -231,8 +231,8 @@ class TestTrivySignal:
             "the trivy signal must stage a detached worktree of origin/<kahuna>"
         )
         assert "  find <w>/tree \\\\(" in src, "the enumeration must be rooted at the kahuna worktree"
-        assert "--quiet <w>/tree > <w>/trivy-0.json" in src, "the main scan must be rooted at the kahuna worktree"
-        assert "find ${targetRepoDir}" not in src and "--quiet ${targetRepoDir}" not in src, (
+        assert "' <w>/tree > <w>/trivy-0.json" in src, "the main scan must be rooted at the kahuna worktree"
+        assert "find ${targetRepoDir}" not in src and " ${targetRepoDir} > " not in src, (
             "no find or trivy fs may be rooted at the operator's checkout"
         )
         assert "Do NOT run git checkout or git switch in ${targetRepoDir}" in src

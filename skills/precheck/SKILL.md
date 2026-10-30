@@ -260,9 +260,12 @@ Exit codes:
            find <repo_root> \( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \) -prune -o -type f \( -name 'bun.lock' -o -name 'bun.lockb' -o -name 'package-lock.json' -o -name 'yarn.lock' -o -name 'pnpm-lock.yaml' -o -name 'go.sum' -o -name 'Cargo.lock' -o -name 'uv.lock' -o -name 'poetry.lock' -o -name 'Pipfile.lock' -o -name '*requirements*.txt' -o -name '*requirements*.lock' -o -name '*constraints*.txt' -o -path '*/requirements/*.txt' \) -print
          Every line it prints is in the denominator, less two exclusions, both
          matching check-scannable.sh:
-         (1) a pip requirements file (any line the find printed that is not
-         one of its -name lock files) with no entry pinned by '==' is a range
-         declaration, not a lock. Test each one with
+         (1) a pip requirements file (any line the find printed whose file
+         name is not exactly one of
+         bun.lock, bun.lockb, package-lock.json, yarn.lock, pnpm-lock.yaml, go.sum, Cargo.lock, uv.lock, poetry.lock, Pipfile.lock;
+         every file a * pattern or -path matched is one, requirements.lock
+         included) with no entry pinned by '==' is a range declaration, not a
+         lock. Test each one with
            grep -cE '^[[:space:]]*[A-Za-z0-9._-]+[[:space:]]*===?[[:space:]]*[0-9]' '<that file>'
          and where it prints 0, leave it out of the denominator and name it
          as unpinned, not UNSCANNED.

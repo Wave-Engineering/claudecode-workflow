@@ -1281,6 +1281,18 @@ def test_a_committed_trivyignore_or_trivy_yaml_suppresses_nothing(tmp_path: Path
     assert proc.returncode == 1, proc.stdout + proc.stderr
 
 
+def test_prose_exclusion_names_exactly_the_lock_names():
+    """Exclusion (1) tells a requirements file from a lock by name, as is_req_file
+    does. The prose names the locks outright, because "not one of the find's -name
+    files" reads `requirements.lock`, itself a -name match, as a lock (#1358 review)."""
+    names = predicate('printf "%s\\n" "${LOCK_NAMES[@]}"').split()
+    line = ", ".join(names) + ";"
+    gate = (REPO_ROOT / "skills" / "nextwave" / "gate.js").read_text()
+    for where, text in (("gate.js", gate), ("SKILL.md", _skill_body())):
+        assert line in text, f"{where} exclusion (1) must name exactly LOCK_NAMES: {line}"
+        assert "requirements.lock" in " ".join(text.split()).split(line, 1)[1][:120], f"{where} must say requirements.lock is a requirements file"
+
+
 def test_every_prose_trivy_run_disables_ignore_and_config():
     runs = [ln for ln in _skill_body().splitlines() if "trivy fs " in ln and ln.lstrip().startswith(("trivy fs ", "d=$(mktemp"))]
     assert len(runs) >= 2, f"expected the main and the per-file fallback scans, found {runs}"
