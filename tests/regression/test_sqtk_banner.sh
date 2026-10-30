@@ -55,6 +55,12 @@ m=$(msg "$(run)")
 [[ "$m" == *"#7 v65 → v66 broke the gate"* && "$m" != *"(answered)"* ]] && pass "prose arrow kept, not an answer" ||
 	fail "prose arrow (m='$m')"
 
+# 1c. A pristine squawk is never answered, whatever arrows its text holds (#1363).
+body '{"squawks":[{"seq":8,"state":"open","text":"campaign→main","created_at":"t","updated_at":"t"}]}'
+m=$(msg "$(run)")
+[[ "$m" == *"#8 campaign→main"* && "$m" != *"(answered)"* ]] && pass "pristine prose arrow: not (answered)" ||
+	fail "pristine prose arrow (m='$m')"
+
 # 2. The list's name is URL-encoded on the request.
 [[ "$(tail -1 "$CURL_LOG")" == *"name=bj%3Aneeds"* ]] && pass "list name encoded" ||
 	fail "encoding ($(tail -1 "$CURL_LOG"))"

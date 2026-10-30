@@ -12,9 +12,11 @@
 #
 # It listens on squawkie's SSE feed (GET /api/stream) for a `squawk.updated` event on one of
 # the ids in <repo>/.claude/sqtk-mine.json, where the squawk is no longer open or has an
-# answer after its last `→`. Ids the drain hook has already reported in a terminal state
-# (<repo>/.claude/sqtk-seen.json) are left out. The id set is read once at arming time, so
-# re-arm after adding new squawks.
+# answer. The answer is hooks/workflow/sqtk-answer.jq's (#1363): an arrow in the author's own
+# text never counts. Each squawk's baseline comes from its mine entry's `.text`, else from
+# <repo>/.claude/sqtk-baseline.json (the drain hook's). Ids the drain hook has already
+# reported in a terminal state (<repo>/.claude/sqtk-seen.json) are left out. The id set and
+# baselines are read once at arming time, so re-arm after adding new squawks.
 #
 # An answer can land between the drain hook's run at the start of a turn and the arming of
 # this doorbell at its end. So once the stream is live (squawkie writes `: connected` on
@@ -42,9 +44,12 @@ TIMEOUT="${SQTK_DOORBELL_TIMEOUT:-0}"
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 MINE="$ROOT/.claude/sqtk-mine.json"
 SEEN="$ROOT/.claude/sqtk-seen.json"
-# The drain hook sits beside this script in the repo and in the install (~/.claude/scripts/).
+BASELINE="$ROOT/.claude/sqtk-baseline.json"
+# The drain hook and sqtk-answer.jq sit beside this script in the repo and in the install
+# (~/.claude/scripts/).
 HERE=$(dirname "$(readlink -f "$0")")
 DRAIN="${SQTK_DRAIN:-$HERE/hooks/workflow/sqtk-drain.sh}"
+LIB="$HERE/hooks/workflow"
 
 [[ -n "$BASE" ]] || {
 	echo "sqtk-doorbell: SQUAWK_URL is not set" >&2
@@ -66,6 +71,15 @@ ids=$(jq -c --argjson seen "$seen" '
 	echo "sqtk-doorbell: nothing open to wait for in $MINE" >&2
 	exit 2
 }
+# {"<id>": P}: the mine entry's own `.text` wins over the drain's baseline file.
+baseline='{}'
+if [[ -s "$BASELINE" ]]; then
+	baseline=$(jq -c 'if type == "object" then . else {} end' "$BASELINE" 2>/dev/null) || baseline='{}'
+fi
+bl=$(jq -c -L "$LIB" --argjson base "$baseline" '
+	include "sqtk-answer";
+	reduce (.[] | select((.text | type) == "string")) as $m ($base;
+		.[($m.id | tostring)] = ($m.text | prose_arrows))' "$MINE" 2>/dev/null) || bl="$baseline"
 
 auth=()
 if [[ -n "${SQUAWK_API_TOKEN:-}" ]]; then
@@ -88,10 +102,11 @@ curl_pid=$!
 ring_if_answer() {
 	[[ "$1" == data:* ]] || return 0
 	local ev="${1#data:}"
-	if jq -e --argjson ids "$ids" '
-		def answer: (split("→") | if length > 1 then .[-1] | gsub("^\\s+|\\s+$"; "") else "" end);
+	if jq -e -L "$LIB" --argjson ids "$ids" --argjson bl "$bl" '
+		include "sqtk-answer";
 		.type == "squawk.updated" and (.squawk.id as $i | $ids | index($i)) != null
-		and (.squawk.state != "open" or (.squawk.text | answer) != "")' <<<"$ev" >/dev/null 2>&1; then
+		and (.squawk.state != "open"
+			or (.squawk | sq_answer($bl[(.id | tostring)] | numbers // null)) != "")' <<<"$ev" >/dev/null 2>&1; then
 		kill "$curl_pid" 2>/dev/null
 		printf '%s\n' "$ev"
 		exit 0

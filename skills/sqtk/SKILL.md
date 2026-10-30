@@ -22,10 +22,9 @@ list. It is never deleted: it changes state, and each state has a glyph:
 | `retired` | ◌ | let go, no verdict |
 | `recorded` | ↗ | it became tracked work (an issue) |
 
-A non-yes/no answer goes after the squawk's **last** `→`. **End every ask with ` →`**: it's
-the answer slot, and it keeps an arrow in your prose ("v65 → v66 broke the gate →") from being
-read as an answer. Without that closing arrow, everything after the prose's last `→` counts as
-the answer.
+A non-yes/no answer goes after the squawk's `→` slot. Arrows in your own text are never read
+as an answer: the answer is what comes after the first `→` added after your text. Keep ending
+each ask with ` →`, because it's the slot BJ answers in ("v65 → v66 broke the gate →").
 
 `SQUAWK_URL` must be set (BJ's shell sets it). There is no default, on purpose: a write to the
 wrong instance persists but never reaches the people watching.

@@ -141,6 +141,38 @@ out=$(run)
 [[ $? -eq 0 && "$out" == *'"id":31'* && "$(wc -l <"$DRAIN_LOG")" == 1 ]] &&
 	pass "nothing missed: catch-up runs once, then the stream answers" || fail "catch-up then stream (out='$out')"
 
+# 9. An arrow in the author's own text never rings (#1363). evt adds the timestamps.
+evt() { # <id> <state> <text> <created_at> <updated_at>
+	jq -cn --argjson i "$1" --arg s "$2" --arg x "$3" --arg c "$4" --arg u "$5" -r \
+		'"data:" + ({type: "squawk.updated", squawk: {id: $i, state: $s, text: $x, created_at: $c, updated_at: $u}} | tojson)'
+}
+stream "$(evt 31 open 'campaign→main' t1 t1)"
+run >/dev/null
+rc=$?
+[[ $rc -eq 4 ]] && pass "pristine prose arrow: no ring" || fail "pristine prose arrow rang (rc=$rc)"
+printf '%s\n' '{"31":1}' >"$REPO/.claude/sqtk-baseline.json"
+stream "$(evt 31 open 'campaign→main fixes' t1 t2)"
+run >/dev/null
+rc=$?
+[[ $rc -eq 4 ]] && pass "baselined prose edit: no ring" || fail "baselined prose edit rang (rc=$rc)"
+stream "$(evt 31 open 'campaign→main fix → go' t1 t3)"
+out=$(run)
+rc=$?
+[[ $rc -eq 0 && "$out" == *go* ]] && pass "baselined appended answer: rings" || fail "baselined answer (rc=$rc out='$out')"
+rm -f "$REPO/.claude/sqtk-baseline.json"
+
+# 10. The mine entry's own .text is the baseline at arming.
+printf '%s\n' '[{"list":"bj:needs","seq":3,"id":31,"created_at":"t","text":"campaign→main fix"}]' >"$REPO/.claude/sqtk-mine.json"
+stream "$(evt 31 open 'campaign→main fixes' t1 t2)"
+run >/dev/null
+rc=$?
+[[ $rc -eq 4 ]] && pass "mine .text baseline: prose edit, no ring" || fail "mine .text prose edit rang (rc=$rc)"
+stream "$(evt 31 open 'campaign→main fix → go' t1 t3)"
+run >/dev/null
+rc=$?
+[[ $rc -eq 0 ]] && pass "mine .text baseline: appended answer rings" || fail "mine .text answer (rc=$rc)"
+printf '%s\n' '[{"list":"bj:needs","seq":3,"id":31,"created_at":"t"}]' >"$REPO/.claude/sqtk-mine.json"
+
 echo
 if [[ $FAILS -eq 0 ]]; then
 	echo "  All sqtk-doorbell checks passed."

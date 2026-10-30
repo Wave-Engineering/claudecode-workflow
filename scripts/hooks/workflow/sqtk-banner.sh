@@ -24,8 +24,10 @@
 #   - Silent when nothing is open; an empty banner every turn trains the eye to skip it.
 #   - It fails open: any error prints nothing and exits 0.
 #   - The first line of each item only, clipped; the detail lives in squawkie.
-#   - An item answered after its last `→` but still open is marked "(answered)". The author
-#     drains it.
+#   - An item answered but still open is marked "(answered)". The author drains it. The
+#     answer is sqtk-answer.jq's (#1363). The banner shows every agent's items and has no
+#     baselines for them, so a pristine squawk is never answered, and an edited one is read
+#     after its last `→`.
 
 set -uo pipefail
 
@@ -46,14 +48,13 @@ enc=$(jq -rn --arg s "$LIST" '$s | @uri' 2>/dev/null) || exit 0
 body=$(curl -fsS --max-time "$TIMEOUT" "${auth[@]}" \
 	"${BASE%/}/api/lists/by-name?name=$enc" 2>/dev/null) || exit 0
 
-jq -c --arg list "$LIST" --arg human "$HUMAN" '
-	def answer: (split("→") | if length > 1 then .[-1] | gsub("^\\s+|\\s+$"; "") else "" end);
+jq -c -L "$(dirname "$(readlink -f "$0")")" --arg list "$LIST" --arg human "$HUMAN" '
+	include "sqtk-answer";
 	def clip: if length > 110 then .[0:107] + "..." else . end;
-	def prose: split("→") | if length > 1 then .[:-1] | join("→") else .[0] end;
 	[(.squawks // [])[] | select(.state == "open")] | sort_by(.seq) as $open
 	| if ($open | length) == 0 then empty else
 		{systemMessage: ("⏳ Waiting on \($human) (\($open | length)) in \($list):\n"
-			+ ($open | map("• #\(.seq) \(.text | prose | split("\n")[0] | gsub("\\s+$"; "") | clip)"
-				+ (if (.text | answer) != "" then "  (answered)" else "" end)) | join("\n")))}
+			+ ($open | map("• #\(.seq) \(sq_prose(null) | split("\n")[0] | gsub("\\s+$"; "") | clip)"
+				+ (if sq_answer(null) != "" then "  (answered)" else "" end)) | join("\n")))}
 	  end' <<<"$body" 2>/dev/null || true
 exit 0
