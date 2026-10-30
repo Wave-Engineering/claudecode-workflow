@@ -22,7 +22,7 @@
 // to the very top so it is the first statement. Function declarations hoist; the module arrow-const
 // helpers (wtRoot/blobPath/…) are emitted before the workflow body that calls them, so init order
 // holds. NOTE: meta's string values must not contain raw unbalanced `{`/`}` (the meta extractor
-// brace-counts) — the --check test + a `node --check` of the output catch any breakage.
+// brace-counts) — the --check test + `scripts/ci/wf-syntax-check.mjs` on the output catch any breakage.
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
