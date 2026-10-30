@@ -240,6 +240,13 @@ def test_waived_post_merge_line_passes_the_lint(tmp_path):
     assert "[waived]" in r.stdout
 
 
+@pytest.mark.parametrize("body", [f"- [ ] x — {WAIVER}\n", _ac(f"- [ ] x — {WAIVER}")], ids=["no-heading", "under-ac"])
+def test_lint_lists_every_waiver(tmp_path, body):
+    r = _run("lint", _file(tmp_path, body))
+    assert r.returncode == 0, r.stdout
+    assert r.stdout.count("[waived]") == 1
+
+
 def test_waiver_outside_ac_is_still_listed_in_pr_mode(world):
     """#1373 review: a waived DoD line in a closing issue is not graded, but its waiver
     still reaches the checklist, because the script checks only its form."""

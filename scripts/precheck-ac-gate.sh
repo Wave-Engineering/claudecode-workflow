@@ -101,12 +101,13 @@ def grade(ref, body, mode, lint):
     out, code = [], 0
     for n, is_checked, text, in_ac in boxes(body):
         w = waiver(text)
+        graded = mode == "all" or (mode == "section" and in_ac)
         if mode == "none":  # lint: count every box, grade none of them
             total += 1
             waived += bool(w)
             checked += bool(is_checked and not w)
             unchecked += bool(not is_checked and not w)
-        elif mode == "all" or in_ac:
+        elif graded:
             total += 1
             if w:
                 waived += 1
@@ -125,9 +126,9 @@ def grade(ref, body, mode, lint):
                 post += 1
                 out.append(f"  [post-merge] {ref}:{n} {hit}: {text}")
                 code = 2
-        elif lint and w and not (mode == "all" or in_ac):
-            # Every waiver reaches the checklist, graded box or not: the script checks its
-            # form only, so BJ must see each one at the merge call.
+        elif lint and w and not graded:
+            # Every waiver reaches the output, graded box or not (a graded one is listed
+            # above): the script checks its form only, so BJ must see each one.
             out.append(f"  [waived] {ref}:{n} BJ {w[0]} {w[1]}")
     if mode == "section" and total == 0:
         out.append(f"  [no-ac] {ref} no AC checkbox under ## Acceptance Criteria")
