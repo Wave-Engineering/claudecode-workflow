@@ -32,7 +32,7 @@ CELLAR_DIR="$HOME/.claude/scripts"
 # The first release whose tarball ships scripts/lib/settings-merge.sh, the merge
 # this installer sources (#1360). An older tarball is refused, and the message
 # names this version so an operator rolling back knows what to pick.
-SETTINGS_MERGE_FLOOR="8.20.0"
+SETTINGS_MERGE_FLOOR="8.21.0"
 
 VERSION=""
 NO_MCPS=false

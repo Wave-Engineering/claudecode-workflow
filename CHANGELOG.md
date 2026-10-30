@@ -39,7 +39,7 @@ so bump it with this release.
   `scripts/` files, so every template hook pointed at a missing file. Now the merge lives once in
   `scripts/lib/settings-merge.sh`, and both installers source it. The tarball ships `scripts/`
   recursively with its file modes, plus `assets/logrotate`. `install-remote.sh` refuses a tarball
-  older than v8.20.0 (the first with the lib), and `--dry-run` no longer writes settings. Also: a
+  older than v8.21.0 (the first with the lib), and `--dry-run` no longer writes settings. Also: a
   plugin the user set to `false` is no longer re-added, the template no longer pins `model`, and
   only executable skill helpers get a PATH link. Two skills claiming one helper name now fail the
   install instead of overwriting silently. **The duplicate-hooks guard moved** from
