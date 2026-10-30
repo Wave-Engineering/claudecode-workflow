@@ -71,15 +71,18 @@ ids=$(jq -c --argjson seen "$seen" '
 	echo "sqtk-doorbell: nothing open to wait for in $MINE" >&2
 	exit 2
 }
-# {"<id>": P}: the mine entry's own `.text` wins over the drain's baseline file.
-baseline='{}'
-if [[ -s "$BASELINE" ]]; then
-	baseline=$(jq -c 'if type == "object" then . else {} end' "$BASELINE" 2>/dev/null) || baseline='{}'
-fi
-bl=$(jq -c -L "$LIB" --argjson base "$baseline" '
-	include "sqtk-answer";
-	reduce (.[] | select((.text | type) == "string")) as $m ($base;
-		.[($m.id | tostring)] = ($m.text | prose_arrows))' "$MINE" 2>/dev/null) || bl="$baseline"
+# bl = {"<id>": P}: the mine entry's own `.text` wins over the drain's baseline file.
+load_baselines() {
+	local baseline='{}'
+	if [[ -s "$BASELINE" ]]; then
+		baseline=$(jq -c 'if type == "object" then . else {} end' "$BASELINE" 2>/dev/null) || baseline='{}'
+	fi
+	bl=$(jq -c -L "$LIB" --argjson base "$baseline" '
+		include "sqtk-answer";
+		reduce (.[] | select((.text | type) == "string")) as $m ($base;
+			.[($m.id | tostring)] = ($m.text | prose_arrows))' "$MINE" 2>/dev/null) || bl="$baseline"
+}
+load_baselines
 
 auth=()
 if [[ -n "${SQUAWK_API_TOKEN:-}" ]]; then
@@ -131,6 +134,9 @@ if [[ -x "$DRAIN" ]] && pending=$(cd "$ROOT" && "$DRAIN" --pending 2>/dev/null);
 		printf '%s\n' '{"type":"sqtk.catch-up","changes":[]}'
 	exit 0
 fi
+# The catch-up is often the first drain to see a squawk added this turn, and it takes that
+# squawk's baseline. Read the baselines again, or its updates would get the last-arrow rule.
+load_baselines
 # 0 is a line; above 128 is the 2 s timeout with the stream still open; anything else is EOF.
 if ((first_rc == 0)); then
 	ring_if_answer "$line"

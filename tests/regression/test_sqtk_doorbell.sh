@@ -41,6 +41,8 @@ chmod +x "$WORK/bin/curl"
 cat >"$WORK/bin/drain" <<'EOF'
 #!/usr/bin/env bash
 [[ "$1" == --pending ]] && printf 'called\n' >>"$DRAIN_LOG"
+# As the real one does, the catch-up may take a baseline (it runs in the repo root).
+[[ -z "${FAKE_TAKE_BASELINE:-}" ]] || printf '%s\n' "$FAKE_TAKE_BASELINE" >.claude/sqtk-baseline.json
 [[ "${FAKE_PENDING:-1}" == 0 ]] && printf '%s\n' '[{"id":31,"list":"bj:needs","seq":3,"state":"confirmed","answer":"","text":"tag v9? →"}]'
 exit "${FAKE_PENDING:-1}"
 EOF
@@ -159,6 +161,15 @@ stream "$(evt 31 open 'campaign→main fix → go' t1 t3)"
 out=$(run)
 rc=$?
 [[ $rc -eq 0 && "$out" == *go* ]] && pass "baselined appended answer: rings" || fail "baselined answer (rc=$rc out='$out')"
+rm -f "$REPO/.claude/sqtk-baseline.json"
+
+# 9b. A squawk added this turn has no baseline at arming. The catch-up takes it, and the
+#     doorbell reads it before the stream: a prose edit after that does not ring.
+stream ": connected" "$(evt 31 open 'campaign→main fixes' t1 t2)"
+FAKE_TAKE_BASELINE='{"31":1}' run >/dev/null
+rc=$?
+[[ $rc -eq 4 ]] && pass "baseline taken by the catch-up: prose edit, no ring" ||
+	fail "catch-up baseline ignored (rc=$rc)"
 rm -f "$REPO/.claude/sqtk-baseline.json"
 
 # 10. The mine entry's own .text is the baseline at arming.
