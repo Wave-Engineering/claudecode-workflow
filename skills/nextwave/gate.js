@@ -272,8 +272,9 @@ export function ciSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRe
     ...head('head_sha'),
     ...noRunProbeLines({ targetRepo, prNumber }).map((l, i) => (i === 0 ? `2. ${l}` : `   ${l}`)),
     `   Then call sdlc-server ci_wait_run (repo=${targetRepo}) with ref=<below>, require_merge_result=true, pr_number=${prNumber != null ? prNumber : '<the PR number>'},`,
+    `   AND explicit timeout_sec=${waitSec} + poll_interval_sec=15 (#1035 — do NOT omit them). The ref:`,
     ...ciWaitRefLines({ prNumber, headBranch: kahunaBranch }).map((l) => `   ${l}`),
-    `   AND explicit timeout_sec=${waitSec} + poll_interval_sec=15 (#1035 — do NOT omit them). All are load-bearing:`,
+    `   All are load-bearing:`,
     `     • require_merge_result makes the tool refuse to grade a BRANCH pipeline, a SKIPPED one, or a`,
     `       GitLab DETACHED (refs/merge-requests/N/head) pipeline — none of which validated the merge.`,
     `     • pr_number (#476) is the FRESHNESS anchor. Filtering to merge-result runs is not enough: a GREEN`,
@@ -399,7 +400,7 @@ export function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, 
     `2. Open the ${branch}→${kahunaBranch} PR with sdlc-server pr_create, NOT as a draft, or find the open`,
     `   one for that branch pair (idempotent: never open a second). Report its number as pr_number.`,
     ...head('head_sha'),
-    ...noRunProbeLines({ targetRepo }).map((l, i) => (i === 0 ? `3. ${l}` : `   ${l}`)),
+    ...noRunProbeLines({ targetRepo, next: 'step 5 (the head again), then step 6' }).map((l, i) => (i === 0 ? `3. ${l}` : `   ${l}`)),
     `   Then call sdlc-server ci_wait_run(repo=${targetRepo}, ref=<below>, require_merge_result=true, pr_number=<n>,`,
     `   timeout_sec=${waitSec}, poll_interval_sec=15).`,
     ...ciWaitRefLines({ headBranch: branch }).map((l) => `   ${l}`),
@@ -478,10 +479,7 @@ export function flightCiVerdict(ev, issue, flightHead, status, rework = false) {
     if (bound.pass) return out('proceed', `CI green on head ${flightHead.slice(0, 8)} (merge commit ${w.sha.slice(0, 8)} onto the kahuna tip)`, flightHead)
     return out('blocked', `a green run not bound to the flight head ${flightHead.slice(0, 8)}: ${bound.reason}`)
   }
-  // #1357: CI never started for this head (a criss-cross base, a hard blocker): fail fast, naming why.
-  const nr = noRunHold(ev.probe, flightHead)
-  if (nr) return out('blocked', nr)
-  const jobs = (Array.isArray(ev.failed_jobs) ? ev.failed_jobs : []).filter((j) => !FLIGHT_IGNORED_CONCLUSIONS.has(j?.conclusion))
+  const jobs =(Array.isArray(ev.failed_jobs) ? ev.failed_jobs : []).filter((j) => !FLIGHT_IGNORED_CONCLUSIONS.has(j?.conclusion))
   const ran = (j) => {
     const s = Date.parse(j?.started_at ?? '')
     const f = Date.parse(j?.finished_at ?? '')
@@ -492,6 +490,10 @@ export function flightCiVerdict(ev, issue, flightHead, status, rework = false) {
     const names = jobs.map((j) => j.name || '(unnamed)').join(', ')
     return out('needs_rework', `CI red on head ${flightHead.slice(0, 8)}: failed jobs ${names}${w.url ? ` (${w.url})` : ''}`)
   }
+  // #1357: CI cannot start for this head (a criss-cross base, a hard blocker): fail fast, naming why.
+  // After every graded rule, so a run the agent waited on anyway still decides.
+  const nr = noRunHold(ev.probe, flightHead)
+  if (nr) return out('blocked', nr)
   const why = isRed && jobs.length === 0
     ? 'failure with no failed jobs listed'
     : isRed

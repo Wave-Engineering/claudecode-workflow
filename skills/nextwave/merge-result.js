@@ -198,25 +198,34 @@ export function mergeResultVerdict(ev) {
 // ci_wait_run's budget ran out. pr_wait_ci answers fast: since mcp-server-sdlc#609 its no_checks_yet
 // names a blocker and the mergeable state. A non-draft no-run answer is the reason, exactly:
 //   no run for head <head>; mergeable=<mergeable_state>[; blocker=<blocker>] (pr_wait_ci <status>)
-// A draft is never fail-fast, on either status: the gate and release PRs are drafts on purpose, and a
-// server before #609 reports a draft as no_checks_configured, so without the exemption every draft
-// gate PR would HOLD. Pure; null when the probe says nothing that holds.
+// It holds only when CI cannot start: a certified no_checks_configured (the run query succeeded and
+// found nothing, on a mergeable PR), or a named obstruction. GitHub's mergeability_unknown is one: still
+// UNKNOWN after the settle window, there is no test-merge commit, so possibly no pull_request run at all.
+// Two no_checks_yet blockers are NOT fail-fast, so ci_wait_run still grades them (#1371 review):
+// checks_not_registered (runs exist for the head, not yet in the rollup: a queued run) and
+// evidence_unavailable (the run query failed, so nothing is known). A draft is never fail-fast, on
+// either status: the gate and release PRs are drafts on purpose, and a server before #609 reports a
+// draft as no_checks_configured. Pure; null when the probe says nothing that holds.
 const NO_RUN_STATUSES = new Set(['no_checks_yet', 'no_checks_configured'])
+const NO_RUN_OBSTRUCTIONS = new Set(['conflicts', 'not_mergeable', 'closed', 'merged', 'locked', 'mergeability_unknown'])
 export function noRunHold(probe, head) {
   if (!probe || typeof probe !== 'object' || !NO_RUN_STATUSES.has(probe.status)) return null
-  if (probe.blocker === 'draft') return null
+  const certified = probe.status === 'no_checks_configured' && !probe.blocker
+  if (!certified && !NO_RUN_OBSTRUCTIONS.has(probe.blocker)) return null
   const blocker = probe.blocker ? `; blocker=${probe.blocker}` : ''
   return `no run for head ${isMergeSha(head) ? head : 'unread'}; mergeable=${probe.mergeable_state ?? 'unknown'}${blocker} (pr_wait_ci ${probe.status})`
 }
 
 // The probe step, phrased once for every wait that runs it.
-export function noRunProbeLines({ targetRepo, prNumber }) {
+export function noRunProbeLines({ targetRepo, prNumber, next = 'the last head read' }) {
   const n = prNumber != null ? prNumber : '<n>'
   return [
     `PROBE, before ci_wait_run: sdlc-server pr_wait_ci(number=${n}, repo="${targetRepo}", settle_window_sec=90, timeout_sec=30, poll_interval_sec=15).`,
     `Report its answer as probe, copied as returned.`,
-    `If probe.status is no_checks_yet or no_checks_configured AND probe.blocker is not "draft", SKIP ci_wait_run and`,
-    `the direct read and go straight to the last head read: CI has not started for this head, and waiting will not start it.`,
+    `SKIP ci_wait_run and the direct read, and go straight to ${next}, ONLY when CI cannot start for this head:`,
+    `probe.status is no_checks_configured with no blocker, or probe.blocker is one of ${[...NO_RUN_OBSTRUCTIONS].join(', ')}.`,
+    `Any other answer (a blocker of draft, checks_not_registered or evidence_unavailable, or no no-checks status):`,
+    `call ci_wait_run as below, because a run may exist or CI may still start.`,
   ]
 }
 

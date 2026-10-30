@@ -223,7 +223,17 @@ for (const wait of [NOT_FOUND, { ok: true, final_status: 'timed_out' }, { ok: tr
     'noRunHold: a draft blocker is never fail-fast, on either status')
   ok(noRunHold({ status: 'no_checks_configured' }, HEAD) === `no run for head ${HEAD}; mergeable=unknown (pr_wait_ci no_checks_configured)`,
     'noRunHold: no mergeable_state prints mergeable=unknown')
-  ok(noRunHold({ status: 'no_checks_yet' }, 'abc') === 'no run for head unread; mergeable=unknown (pr_wait_ci no_checks_yet)', 'noRunHold: an unread head says so')
+  ok(noRunHold({ status: 'no_checks_configured' }, 'abc') === 'no run for head unread; mergeable=unknown (pr_wait_ci no_checks_configured)', 'noRunHold: an unread head says so')
+  // #1371 review: only a blocker that means CI cannot start is fail-fast. A queued run the rollup has
+  // not registered, or a run query that failed, still goes to ci_wait_run.
+  for (const b of ['checks_not_registered', 'evidence_unavailable', undefined, 'something_new']) {
+    ok(noRunHold({ status: 'no_checks_yet', blocker: b }, HEAD) === null, `noRunHold: no_checks_yet / ${b} is not fail-fast`)
+  }
+  for (const b of ['not_mergeable', 'closed', 'merged', 'locked', 'mergeability_unknown']) {
+    ok(noRunHold({ status: 'no_checks_yet', blocker: b }, HEAD)?.includes(`; blocker=${b} (pr_wait_ci no_checks_yet)`), `noRunHold: no_checks_yet / ${b} is fail-fast`)
+  }
+  ok(mergeResultVerdict(greenMerge({ probe: { status: 'no_checks_yet', blocker: 'checks_not_registered' } })).pass === true,
+    'mergeResultVerdict: a checks_not_registered probe leaves the direct read to grade')
   for (const p of [undefined, null, {}, { status: 'pending' }, { status: 'success' }, 'no_checks_yet']) {
     ok(noRunHold(p, HEAD) === null, `noRunHold: ${JSON.stringify(p)} holds nothing`)
   }
@@ -237,7 +247,7 @@ for (const wait of [NOT_FOUND, { ok: true, final_status: 'timed_out' }, { ok: tr
   ok(mergeResultVerdict(greenMerge({ probe: { ...conflicts, blocker: 'draft' } })).pass === true, 'mergeResultVerdict: a draft probe leaves the direct read to grade')
   ok(MERGE_RESULT_EVIDENCE.properties.probe?.additionalProperties === true, 'MERGE_RESULT_EVIDENCE carries the probe, copied as returned')
   const steps = noRunProbeLines({ targetRepo: 'grp/proj', prNumber: N }).join('\n')
-  ok(steps.includes(`pr_wait_ci(number=${N}, repo="grp/proj", settle_window_sec=90, timeout_sec=30, poll_interval_sec=15)`) && /AND probe\.blocker is not "draft"/.test(steps),
+  ok(steps.includes(`pr_wait_ci(number=${N}, repo="grp/proj", settle_window_sec=90, timeout_sec=30, poll_interval_sec=15)`) && /a blocker of draft, checks_not_registered or evidence_unavailable/.test(steps),
     'noRunProbeLines: the probe call and its draft exemption')
   const refs = ciWaitRefLines({ prNumber: N, headBranch: 'kahuna/7-x' }).join('\n')
   ok(refs.includes('GitHub: ref="kahuna/7-x"') && refs.includes(`GitLab: ref="${REF}"`), 'ciWaitRefLines: the ref per platform')

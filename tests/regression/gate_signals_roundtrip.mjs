@@ -99,7 +99,7 @@ try {
   assert.ok(at('report it as head_sha,') < at('call sdlc-server ci_wait_run'), 'the first head read comes before ci_wait_run')
   // #1357: the no-run probe runs before the wait, with the draft exemption, and the ref is named.
   assert.ok(at('PROBE, before ci_wait_run: sdlc-server pr_wait_ci(') < at('call sdlc-server ci_wait_run'), 'the probe precedes ci_wait_run')
-  assert.match(ci, /AND probe\.blocker is not "draft"/)
+  assert.match(ci, /ONLY when CI cannot start for this head/)
   assert.ok(ci.includes(`GitLab: ref="refs/merge-requests/${PR}/merge"`), 'GitLab waits on the /merge ref')
   assert.ok(ci.includes('GitHub: ref="kahuna/'), 'GitHub waits on the kahuna branch')
   assert.match(ci, /probe and wait \(step 2\)/)
@@ -684,6 +684,11 @@ try {
   assert.equal(never.reason, `no run for head ${FH}; mergeable=CONFLICTING/DIRTY; blocker=conflicts (pr_wait_ci no_checks_yet)`)
   assert.equal(v(ev({ probe: { status: 'no_checks_yet', blocker: 'conflicts' } })).outcome, 'proceed', 'a graded green beats a stale no-run probe')
   assert.match(v(ev({ wait: {}, probe: { status: 'no_checks_yet', blocker: 'draft' } })).reason, /^CI could not grade head/, 'a draft probe is not the no-run reason')
+  assert.match(v(ev({ wait: { ok: true, final_status: 'timed_out' }, probe: { status: 'no_checks_yet', blocker: 'checks_not_registered' } })).reason,
+    /^CI could not grade head .*final_status=timed_out/, 'a queued run (checks_not_registered) is graded by the wait, not failed fast')
+  // #1371 review: a code-red the agent waited on anyway is still rework, whatever the probe said.
+  const redAnyway = v(ev({ wait: { ok: true, final_status: 'failure', url: 'https://ci/r/9' }, failed_jobs: [job()], probe: { status: 'no_checks_yet', blocker: 'conflicts' } }))
+  assert.equal(redAnyway.outcome, 'needs_rework', 'a graded code-red beats a no-run probe')
   assert.match(v(ev({ wait: { ok: false, error: 'No CI run found for ref x' } })).reason, /must run on PRs into kahuna\/\*/, 'no run names the CI trigger')
   assert.doesNotMatch(v(ev({ wait: { ok: false, error: 'rate limited' } })).reason, /kahuna\/\*/, 'other errors carry no trigger hint')
   ok('flightCiVerdict: green proceeds; ran-red reworks; billing/infra/no-verdict, moved or foreign heads, null evidence and a rejected push are blocked (#1356)')

@@ -259,7 +259,10 @@ class TestCiSignal:
         p = self._ci_prompt()
         probe = p.index("PROBE, before ci_wait_run: sdlc-server pr_wait_ci(number=77")
         assert probe < p.index("call sdlc-server ci_wait_run")
-        assert 'AND probe.blocker is not "draft"' in p, "the draft exemption must be stated"
+        assert "ONLY when CI cannot start for this head" in p
+        assert "a blocker of draft, checks_not_registered or evidence_unavailable" in p, (
+            "the draft exemption and the two not-fail-fast blockers must be stated"
+        )
 
 
 class TestTrivySignal:

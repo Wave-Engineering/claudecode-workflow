@@ -198,7 +198,9 @@ post)
 				2>/dev/null)" || api_fail "list MRs of $sha (unexpected answer)"
 			for iid in $iids; do
 				mr="$(gl_api "projects/$enc/merge_requests/$iid")" || api_fail "read MR !$iid"
-				hp_before+=("$iid=$(printf '%s' "$mr" | jq -r '.head_pipeline.id // empty' 2>/dev/null)")
+				hp="$(printf '%s' "$mr" | jq -r '.head_pipeline.id // empty' 2>/dev/null)" ||
+					api_fail "read MR !$iid (unexpected answer)"
+				hp_before+=("$iid=$hp")
 			done
 		fi
 		args=(-X POST "projects/$enc/statuses/$sha" -f state=success -f name="$CONTEXT" -f description="$desc")
@@ -215,7 +217,8 @@ post)
 	for rec in "${hp_before[@]+"${hp_before[@]}"}"; do
 		iid="${rec%%=*}" before="${rec#*=}"
 		mr="$(gl_api "projects/$enc/merge_requests/$iid")" || api_fail "re-read MR !$iid"
-		after="$(printf '%s' "$mr" | jq -r '.head_pipeline.id // empty' 2>/dev/null)"
+		after="$(printf '%s' "$mr" | jq -r '.head_pipeline.id // empty' 2>/dev/null)" ||
+			api_fail "re-read MR !$iid (unexpected answer)"
 		if [[ "$after" != "$before" ]]; then
 			echo "posted, but MR !$iid's head_pipeline moved from ${before:-none} to ${after:-none}: the external pipeline the post created now hides its CI verdict" >&2
 			exit 3

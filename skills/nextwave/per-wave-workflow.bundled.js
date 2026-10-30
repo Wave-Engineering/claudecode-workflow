@@ -762,25 +762,34 @@ function mergeResultVerdict(ev) {
 // ci_wait_run's budget ran out. pr_wait_ci answers fast: since mcp-server-sdlc#609 its no_checks_yet
 // names a blocker and the mergeable state. A non-draft no-run answer is the reason, exactly:
 //   no run for head <head>; mergeable=<mergeable_state>[; blocker=<blocker>] (pr_wait_ci <status>)
-// A draft is never fail-fast, on either status: the gate and release PRs are drafts on purpose, and a
-// server before #609 reports a draft as no_checks_configured, so without the exemption every draft
-// gate PR would HOLD. Pure; null when the probe says nothing that holds.
+// It holds only when CI cannot start: a certified no_checks_configured (the run query succeeded and
+// found nothing, on a mergeable PR), or a named obstruction. GitHub's mergeability_unknown is one: still
+// UNKNOWN after the settle window, there is no test-merge commit, so possibly no pull_request run at all.
+// Two no_checks_yet blockers are NOT fail-fast, so ci_wait_run still grades them (#1371 review):
+// checks_not_registered (runs exist for the head, not yet in the rollup: a queued run) and
+// evidence_unavailable (the run query failed, so nothing is known). A draft is never fail-fast, on
+// either status: the gate and release PRs are drafts on purpose, and a server before #609 reports a
+// draft as no_checks_configured. Pure; null when the probe says nothing that holds.
 const NO_RUN_STATUSES = new Set(['no_checks_yet', 'no_checks_configured'])
+const NO_RUN_OBSTRUCTIONS = new Set(['conflicts', 'not_mergeable', 'closed', 'merged', 'locked', 'mergeability_unknown'])
 function noRunHold(probe, head) {
   if (!probe || typeof probe !== 'object' || !NO_RUN_STATUSES.has(probe.status)) return null
-  if (probe.blocker === 'draft') return null
+  const certified = probe.status === 'no_checks_configured' && !probe.blocker
+  if (!certified && !NO_RUN_OBSTRUCTIONS.has(probe.blocker)) return null
   const blocker = probe.blocker ? `; blocker=${probe.blocker}` : ''
   return `no run for head ${isMergeSha(head) ? head : 'unread'}; mergeable=${probe.mergeable_state ?? 'unknown'}${blocker} (pr_wait_ci ${probe.status})`
 }
 
 // The probe step, phrased once for every wait that runs it.
-function noRunProbeLines({ targetRepo, prNumber }) {
+function noRunProbeLines({ targetRepo, prNumber, next = 'the last head read' }) {
   const n = prNumber != null ? prNumber : '<n>'
   return [
     `PROBE, before ci_wait_run: sdlc-server pr_wait_ci(number=${n}, repo="${targetRepo}", settle_window_sec=90, timeout_sec=30, poll_interval_sec=15).`,
     `Report its answer as probe, copied as returned.`,
-    `If probe.status is no_checks_yet or no_checks_configured AND probe.blocker is not "draft", SKIP ci_wait_run and`,
-    `the direct read and go straight to the last head read: CI has not started for this head, and waiting will not start it.`,
+    `SKIP ci_wait_run and the direct read, and go straight to ${next}, ONLY when CI cannot start for this head:`,
+    `probe.status is no_checks_configured with no blocker, or probe.blocker is one of ${[...NO_RUN_OBSTRUCTIONS].join(', ')}.`,
+    `Any other answer (a blocker of draft, checks_not_registered or evidence_unavailable, or no no-checks status):`,
+    `call ci_wait_run as below, because a run may exist or CI may still start.`,
   ]
 }
 
@@ -1117,8 +1126,9 @@ function ciSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRepo, prN
     ...head('head_sha'),
     ...noRunProbeLines({ targetRepo, prNumber }).map((l, i) => (i === 0 ? `2. ${l}` : `   ${l}`)),
     `   Then call sdlc-server ci_wait_run (repo=${targetRepo}) with ref=<below>, require_merge_result=true, pr_number=${prNumber != null ? prNumber : '<the PR number>'},`,
+    `   AND explicit timeout_sec=${waitSec} + poll_interval_sec=15 (#1035 — do NOT omit them). The ref:`,
     ...ciWaitRefLines({ prNumber, headBranch: kahunaBranch }).map((l) => `   ${l}`),
-    `   AND explicit timeout_sec=${waitSec} + poll_interval_sec=15 (#1035 — do NOT omit them). All are load-bearing:`,
+    `   All are load-bearing:`,
     `     • require_merge_result makes the tool refuse to grade a BRANCH pipeline, a SKIPPED one, or a`,
     `       GitLab DETACHED (refs/merge-requests/N/head) pipeline — none of which validated the merge.`,
     `     • pr_number (#476) is the FRESHNESS anchor. Filtering to merge-result runs is not enough: a GREEN`,
@@ -1244,7 +1254,7 @@ function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, targetR
     `2. Open the ${branch}→${kahunaBranch} PR with sdlc-server pr_create, NOT as a draft, or find the open`,
     `   one for that branch pair (idempotent: never open a second). Report its number as pr_number.`,
     ...head('head_sha'),
-    ...noRunProbeLines({ targetRepo }).map((l, i) => (i === 0 ? `3. ${l}` : `   ${l}`)),
+    ...noRunProbeLines({ targetRepo, next: 'step 5 (the head again), then step 6' }).map((l, i) => (i === 0 ? `3. ${l}` : `   ${l}`)),
     `   Then call sdlc-server ci_wait_run(repo=${targetRepo}, ref=<below>, require_merge_result=true, pr_number=<n>,`,
     `   timeout_sec=${waitSec}, poll_interval_sec=15).`,
     ...ciWaitRefLines({ headBranch: branch }).map((l) => `   ${l}`),
@@ -1323,10 +1333,7 @@ function flightCiVerdict(ev, issue, flightHead, status, rework = false) {
     if (bound.pass) return out('proceed', `CI green on head ${flightHead.slice(0, 8)} (merge commit ${w.sha.slice(0, 8)} onto the kahuna tip)`, flightHead)
     return out('blocked', `a green run not bound to the flight head ${flightHead.slice(0, 8)}: ${bound.reason}`)
   }
-  // #1357: CI never started for this head (a criss-cross base, a hard blocker): fail fast, naming why.
-  const nr = noRunHold(ev.probe, flightHead)
-  if (nr) return out('blocked', nr)
-  const jobs = (Array.isArray(ev.failed_jobs) ? ev.failed_jobs : []).filter((j) => !FLIGHT_IGNORED_CONCLUSIONS.has(j?.conclusion))
+  const jobs =(Array.isArray(ev.failed_jobs) ? ev.failed_jobs : []).filter((j) => !FLIGHT_IGNORED_CONCLUSIONS.has(j?.conclusion))
   const ran = (j) => {
     const s = Date.parse(j?.started_at ?? '')
     const f = Date.parse(j?.finished_at ?? '')
@@ -1337,6 +1344,10 @@ function flightCiVerdict(ev, issue, flightHead, status, rework = false) {
     const names = jobs.map((j) => j.name || '(unnamed)').join(', ')
     return out('needs_rework', `CI red on head ${flightHead.slice(0, 8)}: failed jobs ${names}${w.url ? ` (${w.url})` : ''}`)
   }
+  // #1357: CI cannot start for this head (a criss-cross base, a hard blocker): fail fast, naming why.
+  // After every graded rule, so a run the agent waited on anyway still decides.
+  const nr = noRunHold(ev.probe, flightHead)
+  if (nr) return out('blocked', nr)
   const why = isRed && jobs.length === 0
     ? 'failure with no failed jobs listed'
     : isRed
