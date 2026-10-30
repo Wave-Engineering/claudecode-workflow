@@ -52,7 +52,7 @@ class TestFlightCiBeforeReconcile:
             "the flight CI node must run before reconcile, and reconcile gets only the proceed set"
         )
         assert "flightCiVerdict(flightCi[i] ?? null" in src, "a null flight-CI result must grade as blocked"
-        assert "halt = `flight-ci-blocked:" in src, "a blocked flight must halt the wave after persisting"
+        assert "ciBlocked.length && `flight-ci-blocked:" in src, "a blocked flight must halt the wave after persisting"
 
     def test_reconcile_never_skips_a_merge(self) -> None:
         """#1356 review: flight-CI step 0 grades an already-integrated flight, so the old "already
@@ -73,7 +73,7 @@ class TestFlightCiBeforeReconcile:
         assert "const pinned = reconciledMerges(rec, proceeding)" in src
         assert "[...integrated, ...pinned.merged]" in src, "only proven merges (and resumes) count as merged"
         assert "rec.merged || []).filter((n) => handed.has" not in src, "reconcile's merged claim alone must not count"
-        assert "halt = `pinned-merge-unproven:" in src, "an unproven merge must halt the wave"
+        assert "pinned.refused.length && `pinned-merge-unproven:" in src, "an unproven merge must halt the wave"
         assert "const promoted = !!(promo && promo.promoted) && pin.landed" in src, (
             "promote counts only when pr_merge echoed the graded head"
         )
