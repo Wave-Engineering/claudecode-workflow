@@ -84,7 +84,9 @@ def repo(tmp_path: Path) -> Path:
     return r
 
 
-def _run(tmp_path: Path, command: str, cwd: Path, path: str | None = None) -> dict | None:
+def _run_full(
+    tmp_path: Path, command: str, cwd: Path, path: str | None = None
+) -> tuple[dict | None, str]:
     path = path if path is not None else _tool_path(tmp_path)
     payload = {"session_id": "test-session", "cwd": str(cwd), "tool_input": {"command": command}}
     result = subprocess.run(
@@ -97,7 +99,11 @@ def _run(tmp_path: Path, command: str, cwd: Path, path: str | None = None) -> di
     )
     assert result.returncode == 0, result.stderr
     out = result.stdout.strip()
-    return json.loads(out) if out else None
+    return (json.loads(out) if out else None), result.stderr
+
+
+def _run(tmp_path: Path, command: str, cwd: Path, path: str | None = None) -> dict | None:
+    return _run_full(tmp_path, command, cwd, path)[0]
 
 
 def _blocked(decision: dict | None) -> bool:
@@ -278,6 +284,51 @@ def test_allowlisted_fingerprint_passes_commit_and_push(tmp_path: Path, repo: Pa
     _git(repo, "commit", "-qm", "allowlisted", env=env)
     # The short file:rule:line key also covers the commit-range scan.
     assert _run(tmp_path, "git push origin feature/1-x", repo) is None
+
+
+def _commit_secret_on_head(repo: Path, env: dict[str, str]) -> None:
+    (repo / "creds.txt").write_text(f"aws_key = {FAKE_KEY}\n")
+    _git(repo, "add", "creds.txt", env=env)
+    _git(repo, "commit", "-qm", "add key", env=env)
+
+
+# #1364: a plain delete of one branch publishes no commits, so it is never scanned.
+@needs_gitleaks
+def test_delete_only_push_is_not_scanned(tmp_path: Path, repo: Path):
+    env = _env(tmp_path, _tool_path(tmp_path))
+    _commit_secret_on_head(repo, env)
+    assert _run(tmp_path, "git push origin --delete scratch-1", repo) is None
+    # Control: the same repo's real push is scanned and blocked.
+    assert _blocked(_run(tmp_path, "git push -u origin feature/1-x", repo))
+
+
+def test_delete_only_push_passes_without_gitleaks(tmp_path: Path, repo: Path):
+    path = _tool_path(tmp_path, with_gitleaks=False)
+    assert _run(tmp_path, "git push origin :scratch-1", repo, path=path) is None
+
+
+def test_delete_of_branch_unknown_locally_does_not_error(tmp_path: Path, repo: Path):
+    env = _env(tmp_path, _tool_path(tmp_path))
+    _git(repo, "branch", "-q", "scratch-1", env=env)
+    _git(repo, "push", "-q", "origin", "scratch-1", env=env)
+    _git(repo, "branch", "-q", "-D", "scratch-1", env=env)
+    decision, stderr = _run_full(tmp_path, "git push origin --delete scratch-1", repo)
+    assert decision is None
+    assert stderr == ""
+
+
+@needs_gitleaks
+def test_mixed_push_and_delete_is_still_scanned(tmp_path: Path, repo: Path):
+    env = _env(tmp_path, _tool_path(tmp_path))
+    _commit_secret_on_head(repo, env)
+    assert _blocked(_run(tmp_path, "git push origin feature/1-x :scratch-1", repo))
+
+
+@needs_gitleaks
+def test_compound_delete_is_still_scanned(tmp_path: Path, repo: Path):
+    env = _env(tmp_path, _tool_path(tmp_path))
+    _commit_secret_on_head(repo, env)
+    assert _blocked(_run(tmp_path, f"cd {repo} && git push origin --delete scratch-1", repo))
 
 
 def test_missing_gitleaks_blocks_with_install_hint(tmp_path: Path, repo: Path):

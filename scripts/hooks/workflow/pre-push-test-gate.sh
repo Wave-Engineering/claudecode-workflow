@@ -20,6 +20,13 @@
 #      (after `cd X &&`, in a subshell, behind `sudo`, inside `bash -c "…"`, past git's
 #      global options), not only at its start.
 #
+# Before both: a PLAIN delete of ONE branch (`git push <remote> --delete <b>` or `:<b>`,
+# git_push_delete_target in git-detect.sh) publishes no code, so it needs no test run and
+# no working-branch prefix (#1364). If the target is protected, a release ref or a tag
+# (GIT_PROTECTED_DELETE_RE, git_push_delete_protected), it is refused outright, test run
+# or not: having run tests says nothing about deleting `main`. Other delete shapes fall
+# back to the test-run rule; the forge's branch and tag protection is their backstop.
+#
 # Must stay bash-3.2-safe (stock macOS): no `${x,,}`, no `mapfile`, no negative indices.
 #
 # Disable: PUSH_GATE_DISABLED=1
@@ -32,6 +39,8 @@ fi
 INPUT=$(cat 2>/dev/null || true)
 SESSION_ID=$(printf '%s' "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
+CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || true)
+[[ -n "$CWD" ]] || CWD="$PWD"
 
 if [[ -z "$SESSION_ID" ]]; then
 	exit 0
@@ -41,7 +50,11 @@ fi
 # The detector is shared with secret-scan-gate.sh; see git-detect.sh for what it matches.
 # Not a push → nothing to gate. A detector that fails to load must not read as "not a
 # push" (exit 0, gate silently off): without it, any command mentioning git is blocked.
-if ! source "$(dirname "$0")/git-detect.sh" 2>/dev/null || ! declare -F git_invokes >/dev/null; then
+# A git-detect.sh older than this gate (mid-./install) lacks the #1364 pieces; under
+# `set -u` an unset GIT_PROTECTED_REF_RE would abort with a non-blocking exit 1.
+if ! source "$(dirname "$0")/git-detect.sh" 2>/dev/null || ! declare -F git_invokes >/dev/null ||
+	! declare -F git_push_delete_target >/dev/null || ! declare -F git_push_delete_protected >/dev/null ||
+	[[ -z "${GIT_PROTECTED_REF_RE:-}" || -z "${GIT_PROTECTED_DELETE_RE:-}" ]]; then
 	case "$COMMAND" in *git*)
 		jq -cn '{decision: "block", reason: "Push gate cannot run: its git-detect.sh helper did not load, so this command is blocked. Re-run the kit'"'"'s ./install, then retry."}'
 		;;
@@ -59,10 +72,9 @@ fi
 # IS 100% WRONG"). A project with another convention (e.g. a Jira-keyed `DEVOPS-1234-x`)
 # adds it as an extended regex in PUSH_GATE_EXTRA_BRANCH_RE, typically through the
 # `env` block of its own .claude/settings.json. A protected or qualified ref is never
-# exempt, whatever that regex says: _protected_re is checked first.
+# exempt, whatever that regex says: GIT_PROTECTED_REF_RE (git-detect.sh) is checked first.
 _working_re='^(feature|fix|chore|doc)/.+'
 _extra_re="${PUSH_GATE_EXTRA_BRANCH_RE:-}"
-_protected_re='^(main|master|develop|trunk|HEAD|release/.*|v[0-9].*|(heads|tags|remotes|refs)/.*)$'
 
 # Integration-ref exemption (#724): pushes whose destination refs are all
 # kahuna/* or wave-*/* are governed by the WAVE trust gate (commutativity +
@@ -86,14 +98,12 @@ fi
 
 _exempt_plain_push() {
 	local cmd="$COMMAND" tok dst remote="" n=0 skip=0
-	local tail_re='[[:space:]]*\|[[:space:]]*(tail|head)([[:space:]]+-n)?([[:space:]]+-?[0-9]+)?[[:space:]]*$'
-	local redir_re='[[:space:]]+(2>&1|[12]?>[[:space:]]*/dev/null|&>[[:space:]]*/dev/null)[[:space:]]*$'
 
 	# One optional trailing `| tail -N` / `| head -N`, then any trailing redirections.
-	if [[ "$cmd" =~ $tail_re ]]; then
+	if [[ "$cmd" =~ $GIT_PUSH_TAIL_RE ]]; then
 		cmd="${cmd%"${BASH_REMATCH[0]}"}"
 	fi
-	while [[ "$cmd" =~ $redir_re ]]; do
+	while [[ "$cmd" =~ $GIT_PUSH_REDIR_RE ]]; do
 		cmd="${cmd%"${BASH_REMATCH[0]}"}"
 	done
 
@@ -145,7 +155,7 @@ _exempt_plain_push() {
 		# be a revision shorthand (`@` is HEAD) that a permissive PUSH_GATE_EXTRA_BRANCH_RE
 		# could otherwise exempt.
 		[[ "$dst" =~ ^[A-Za-z0-9] ]] || return 1
-		[[ "$dst" =~ $_protected_re ]] && return 1
+		[[ "$dst" =~ $GIT_PROTECTED_REF_RE ]] && return 1
 		if [[ "$dst" == kahuna/* || "$dst" == campaign/* || "$dst" == wave-*/* ]]; then
 			: # integration refs (kahuna, /wavemachine campaign, old wave-*/ flight stem)
 		elif [[ -n "$_flight_re" && "$dst" =~ $_flight_re ]]; then
@@ -162,6 +172,26 @@ _exempt_plain_push() {
 	[[ $skip -eq 0 && $n -gt 0 ]]
 }
 
+_delete_reason=$(
+	cat <<'TXT'
+This branch delete was refused. A delete needs no test run when it is ONE plain command deleting ONE branch that is not protected or a release ref: `git push <remote> --delete <branch>` or `git push <remote> :<branch>`, run as its own Bash call: no `cd … &&`, no `VAR=… git`, no `bash -c`, one branch per push. Put a remote's SSH key in `git config core.sshCommand '…'` once, not on the push line. A plain delete of a protected or release ref (main, master, develop, trunk, HEAD, release, release-*/release_*/release/*, stable, production, prod, gh-pages, version names like 1.2.3 or v1.2.3, any tag, qualified refs/…) is refused even after tests, and other shapes fall back to the test-run rule. Either way an agent never deletes one: ask the user. Do not delete it through the forge's API instead.
+TXT
+)
+_block_delete() {
+	source "$(dirname "$0")/metrics.sh"
+	log_metric "$SESSION_ID" "hook_block" "hook=pre-push-test-gate" "command=git push --delete"
+	jq -cn --arg r "$_delete_reason" '{decision: "block", reason: $r}'
+	exit 0
+}
+
+# #1364: a plain single-branch delete. Protected (or a tag) → refused even after a test run.
+if _del=$(git_push_delete_target "$COMMAND"); then
+	if git_push_delete_protected "$CWD" "$COMMAND" "$_del"; then
+		_block_delete
+	fi
+	exit 0
+fi
+
 if _exempt_plain_push; then
 	exit 0
 fi
@@ -170,6 +200,11 @@ SENTINEL="/tmp/claude-tests-ran-${SESSION_ID}"
 
 if [[ -f "$SENTINEL" ]]; then
 	exit 0
+fi
+
+# Anything that looks like a delete but was not a plain one gets told the approved path.
+if [[ "$COMMAND" =~ (^|[[:space:]])(--delete|-d|:[^[:space:]]*)([[:space:]]|$) ]]; then
+	_block_delete
 fi
 
 source "$(dirname "$0")/metrics.sh"
