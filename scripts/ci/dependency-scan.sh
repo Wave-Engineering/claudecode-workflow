@@ -56,7 +56,7 @@
 #
 # THIS SCRIPT CARRIES NO LOCK LIST (#1289). Its denominator is check-scannable.sh's
 # `[scannable]` lines, by name, so a lock type is counted and matched here exactly
-# when check-scannable.sh's JS_LOCKS / PAIRED_LOCKS / LONE_LOCKS name it. trivy
+# when lock-predicate.sh's LOCK_NAMES or requirements globs name it (#1358). trivy
 # names each Python lock by its own path (measured, trivy 0.74.0: Target uv.lock,
 # poetry.lock, Pipfile.lock), so none needs an alias in names() below.
 #
@@ -89,6 +89,13 @@ if [[ ! -f "$HERE/check-scannable.sh" ]]; then
 	echo "dependency-scan: FAIL — check-scannable.sh missing at $HERE (partial install?)" >&2
 	exit 5
 fi
+# The shared lock predicate (#1358): the prune list below comes from it.
+if [[ ! -f "$HERE/lock-predicate.sh" ]]; then
+	echo "dependency-scan: FAIL — lock-predicate.sh missing at $HERE (partial install?)" >&2
+	exit 5
+fi
+# shellcheck source=scripts/ci/lock-predicate.sh
+source "$HERE/lock-predicate.sh"
 scannable_out="$(bash "$HERE/check-scannable.sh" "$ROOT" 2>&1)"
 scannable_rc=$?
 printf '%s\n' "$scannable_out"
@@ -117,15 +124,18 @@ if [[ -z "$scannable_n" ]]; then
 fi
 
 # --- the scan ------------------------------------------------------------------
-# --skip-dirs MIRRORS check-scannable.sh's PRUNE list, so trivy walks the same
-# pruned tree check-scannable.sh counts in: it prunes node_modules/vendor/dist/...
-# and trivy, unasked, does not. Since coverage is matched by name (#1247), a VENDORED lockfile
-# can no longer stand in for one of the repo's own (its Result is outside the
-# denominator and covers nothing), but without this list its Results, and their
-# findings, would still decide a verdict about dependencies the repo does not
-# declare. Keep this list in step with check-scannable.sh.
-SKIP_DIRS=(--skip-dirs "**/node_modules" --skip-dirs "**/dist" --skip-dirs "**/build"
-	--skip-dirs "**/vendor" --skip-dirs "**/.venv" --skip-dirs "**/venv" --skip-dirs "**/target")
+# --skip-dirs is lock-predicate.sh's LOCK_PRUNE (less .git, which trivy never
+# walks), so trivy walks the same pruned tree check-scannable.sh counts in: it
+# prunes node_modules/vendor/dist/... and trivy, unasked, does not. Since coverage
+# is matched by name (#1247), a VENDORED lockfile can no longer stand in for one
+# of the repo's own (its Result is outside the denominator and covers nothing),
+# but without this list its Results, and their findings, would still decide a
+# verdict about dependencies the repo does not declare.
+SKIP_DIRS=()
+for d in "${LOCK_PRUNE[@]}"; do
+	[[ "$d" == .git ]] && continue
+	SKIP_DIRS+=(--skip-dirs "**/$d")
+done
 
 # `timeout` because trivy pulls its vulnerability DB on first run; a flaky network
 # would otherwise turn validate.sh — which /precheck runs on every gate — into a
@@ -157,11 +167,32 @@ SKIP_DIRS=(--skip-dirs "**/node_modules" --skip-dirs "**/dist" --skip-dirs "**/b
 # committed .trivyignore silently suppress findings with nothing here
 # checking for one. Forcing an empty ignore file makes "every HIGH/CRITICAL
 # blocks, no suppression channel" actually true rather than merely intended.
+#
+# --config /dev/null (#1358): trivy also auto-loads a `trivy.yaml` from the
+# current directory. Measured, trivy 0.74.0, a requirements.txt pinning
+# django==2.2.0 (22 HIGH/CRITICAL): a trivy.yaml in cwd with
+# `scan: skip-files: [requirements.txt]` left 0 Results, the lock gone without a
+# word. With --config /dev/null the same run reported all 22.
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 trivy_err="$work/trivy.err"
 TRIVY_FLAGS=(--scanners vuln --severity "$SEVERITY" --include-dev-deps --list-all-pkgs
-	--ignorefile /dev/null --format json --quiet)
+	--ignorefile /dev/null --config /dev/null --format json --quiet)
+
+# Every exit 5 from here on keeps the evidence (#1358). An exit 5 on a clean tree
+# under load kept no raw output, so its cause could only be guessed: copy the
+# work directory out before the EXIT trap removes it, and say where.
+fail5() {
+	local keep
+	printf '%s\n' "$1" >&2
+	keep="${DEP_SCAN_KEEP_DIR:-${TMPDIR:-/tmp}}/dependency-scan-fail.$(date -u +%Y%m%dT%H%M%SZ).$$"
+	if cp -r "$work" "$keep" 2>/dev/null; then
+		echo "dependency-scan: raw scanner output kept at $keep" >&2
+	else
+		echo "dependency-scan: could not keep the raw scanner output at $keep" >&2
+	fi
+	exit 5
+}
 
 # Run trivy on $1 (extra flags after it); its JSON goes to stdout. A timeout or an
 # empty answer exits 5 here, naming what was being scanned.
@@ -171,18 +202,16 @@ scan() {
 	out="$(timeout "${DEP_SCAN_TIMEOUT:-300}" trivy fs "${TRIVY_FLAGS[@]}" "$@" "$target" 2>"$trivy_err")"
 	rc=$?
 	if ((rc == 124)); then
-		echo "dependency-scan: FAIL — trivy timed out after ${DEP_SCAN_TIMEOUT:-300}s scanning ${what} (DB pull? network?)" >&2
 		sed 's/^/    /' "$trivy_err" >&2
-		exit 5
+		fail5 "dependency-scan: FAIL — trivy timed out after ${DEP_SCAN_TIMEOUT:-300}s scanning ${what} (DB pull? network?)"
 	fi
 	if [[ -z "$out" ]]; then
 		# NOT exit 2. A scanner that failed is not a lockfile that could not be parsed,
 		# and conflating them sends the operator hunting an ecosystem problem that does
 		# not exist. Most likely cause is the vulnerability-DB pull: first run, offline
 		# box, registry rate-limit, air-gap.
-		echo "dependency-scan: FAIL — trivy produced no output scanning ${what} (rc=$rc)" >&2
 		sed 's/^/    /' "$trivy_err" >&2
-		exit 5
+		fail5 "dependency-scan: FAIL — trivy produced no output scanning ${what} (rc=$rc)"
 	fi
 	printf '%s' "$out"
 }
@@ -193,8 +222,9 @@ printf '%s' "$raw" >"$work/main.json"
 # --- pip locks trivy will not read under their own name (#1247) -----------------
 # trivy's pip analyzer reads ONLY a file named exactly `requirements.txt`. Any
 # other pip lock (requirements-dev.txt, dev-requirements.txt, the pip-tools
-# requirements/base.txt) is skipped with no warning, though check-scannable.sh
-# rightly counts it (its REQ_FIND matches all of them), so the coverage line
+# requirements/base.txt, a hash-locked requirements.lock, a constraints.txt) is
+# skipped with no warning, though check-scannable.sh rightly counts it
+# (lock-predicate.sh's REQ_NAMES and REQ_PATHS match all of them), so the coverage line
 # below could never close. Measured: a dev lock of 209 packages, never examined.
 #
 # So each sibling is scanned ALONE: copied into an empty directory under the one
@@ -208,8 +238,7 @@ sed -n 's/^  \[scannable\] \.\/\(.*\) — [0-9][0-9]* pinned entr.*$/\1/p' <<<"$
 # or the names below are not the set that was counted.
 sed -n 's/^  \[scannable\] \.\///p' <<<"$scannable_out" | sed 's/ — [0-9][0-9]* pinned entr.*$//' >"$work/denominator"
 if [[ "$(grep -c . "$work/denominator")" != "$scannable_n" ]]; then
-	echo "dependency-scan: FAIL — could not read check-scannable.sh's ${scannable_n} scannable lock(s) by name" >&2
-	exit 5
+	fail5 "dependency-scan: FAIL — could not read check-scannable.sh's ${scannable_n} scannable lock(s) by name"
 fi
 : >"$work/siblings.tsv"
 n=0
@@ -219,8 +248,7 @@ while IFS= read -r lock; do
 	# A lock that cannot be staged was never scanned: a tooling error (5), never
 	# a silent skip that the coverage line would only later call partial.
 	if ! mkdir "$work/sib-$n" || ! cp -- "$ROOT/$lock" "$work/sib-$n/requirements.txt"; then
-		echo "dependency-scan: FAIL — could not stage ${lock} for its own scan" >&2
-		exit 5
+		fail5 "dependency-scan: FAIL — could not stage ${lock} for its own scan"
 	fi
 	sib_raw="$(scan "$work/sib-$n" "$lock")" || exit $?
 	printf '%s' "$sib_raw" >"$work/sib-$n.json"
@@ -231,7 +259,15 @@ done <"$work/pip-locks"
 # DENOMINATOR FIRST, on every path including the passing one — the same rule
 # check-scannable.sh states for its own count. A verdict without the number that
 # qualifies it is the failure this whole family of checks exists to prevent.
-summary="$(python3 -c '
+#
+# The summary goes to a FILE, and every check below reads the file (#1358). Piped
+# from printf into `grep -q '^COUNTS'` under pipefail, a summary
+# bigger than the 64 KiB pipe buffer failed 50 of 50 runs: grep -q exits on the
+# first line, printf takes SIGPIPE (141), and pipefail plus `!` read that as "no
+# COUNTS line" while the line was there. Below that size it is a scheduling race,
+# which is how a clean tree exited 5 on a box at load ~62. Never pipe the summary.
+summary_file="$work/summary.txt"
+python3 -c '
 import json, sys
 main_path, siblings_path, denominator_path = sys.argv[1:4]
 def load(path):
@@ -303,28 +339,33 @@ for r in results:
 # something is missing, not what.
 for lock in unscanned:
     print(f"UNSCANNED\t{lock}")
-' "$work/main.json" "$work/siblings.tsv" "$work/denominator")"
+' "$work/main.json" "$work/siblings.tsv" "$work/denominator" >"$summary_file"
+py_rc=$?
 
-if printf '%s' "$summary" | grep -q '^PARSE_ERROR'; then
+if grep -q '^PARSE_ERROR' "$summary_file"; then
 	# exit 5 (scanner error), NOT 2 (present-but-uningested): malformed JSON is
 	# a broken scanner, not an unparseable lockfile — the same distinction
 	# test_stub_scanner_error_exits_5_NOT_2 pins for the timeout/no-output
 	# cases. Conflating them sends the operator hunting an ecosystem problem
 	# that does not exist.
-	echo "dependency-scan: FAIL — could not parse trivy output" >&2
-	printf '%s\n' "$summary" >&2
-	exit 5
+	cat "$summary_file" >&2
+	fail5 "dependency-scan: FAIL — could not parse trivy output"
 fi
 
-if ! printf '%s' "$summary" | grep -q '^COUNTS'; then
+# A killed or OOM'd python is not unparseable JSON: say which it was.
+if ((py_rc != 0)); then
+	fail5 "dependency-scan: FAIL — summary step exited rc=$py_rc"
+fi
+
+# Read from the file, never through a pipe (the SIGPIPE note above the python step).
+if ! grep -q '^COUNTS' "$summary_file"; then
 	# Without this guard the `${var:-0}` defaults below turn a python failure into
 	# a PASS: no COUNTS line means no UNSCANNED lines either, so nothing below
 	# fails. An unmeasured zero must never reach a verdict.
-	echo "dependency-scan: FAIL — could not extract counts from trivy output" >&2
-	printf '%s\n' "$summary" | head -5 >&2
-	exit 5
+	head -5 "$summary_file" >&2
+	fail5 "dependency-scan: FAIL — could not extract counts from trivy output"
 fi
-read -r _ ingested denom packages findings results_n outside <<<"$(printf '%s' "$summary" | grep '^COUNTS' | head -1)"
+read -r _ ingested denom packages findings results_n outside < <(grep -m1 '^COUNTS' "$summary_file")
 ingested="${ingested:-0}"
 denom="${denom:-0}"
 packages="${packages:-0}"
@@ -338,7 +379,7 @@ outside="${outside:-0}"
 # green" is this same defect class, one layer down.
 echo "dependency-scan: scanner: $(trivy --version 2>/dev/null | head -1 | tr -d '\n')"
 echo "dependency-scan: manifests ingested: ${ingested}"
-printf '%s\n' "$summary" | sed -n "s/^LINE$(printf '\t')//p"
+sed -n "s/^LINE$(printf '\t')//p" "$summary_file"
 echo "dependency-scan: packages scanned: ${packages}"
 if ((outside > 0)); then
 	echo "dependency-scan: ${outside} trivy Result(s) outside the denominator: listed, never counted toward coverage"
@@ -350,7 +391,7 @@ fi
 if ((denom > 0)); then
 	echo "dependency-scan: coverage: ${ingested} of ${denom} scannable manifest(s) ingested"
 fi
-unscanned="$(sed -n "s/^UNSCANNED$(printf '\t')//p" <<<"$summary")"
+unscanned="$(sed -n "s/^UNSCANNED$(printf '\t')//p" "$summary_file")"
 unscanned_n=0
 if [[ -n "$unscanned" ]]; then
 	unscanned_n="$(wc -l <<<"$unscanned" | tr -d ' ')"
@@ -366,7 +407,7 @@ fi
 # a lock check-scannable.sh does not count is still a CVE.
 if ((findings > 0)); then
 	echo "dependency-scan: FINDINGS — ${findings} ${SEVERITY} across ${results_n} manifest(s)" >&2
-	printf '%s\n' "$summary" | sed -n "s/^VULN$(printf '\t')/  /p" |
+	sed -n "s/^VULN$(printf '\t')/  /p" "$summary_file" |
 		awk -F'\t' '{printf "  %s | %s | %s | %s\n", $1, $2, $3, $4}' >&2
 	exit 1
 fi
