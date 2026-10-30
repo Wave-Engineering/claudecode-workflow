@@ -96,7 +96,7 @@ Call `mcp__sdlc-server__branch_guard({ role: "base" })`. It resolves the **live*
 ### Step 2 — Parallel verification batch
 **No sub-agent report is a gate value. Jobs A, B and C are instruments the orchestrator runs itself; their JSON or exit code goes on the checklist as read. Only Job D, a judgment, is delegated.**
 
-After `ibm()` passes: first run `precheck-review-scope.sh reset <repo_root> <marker_dir>` (this is what makes pass 1 of the cycle mechanically full), then `… resolve …` to learn which Job D prompt to compose. Then, **in a single message**, dispatch Job D as an Agent call and start A, B and C directly in the same message: Job A's `spec_validate_structure` call, Job B's `resolve` (then its `ci_wait_run` call or its lane commands), and Job C's `dependency-scan.sh` command. Do NOT wait for one before starting the next — they have no data dependencies on each other. See the Job D section below for both prompts and the full rule.
+After `ibm()` passes: first run `precheck-review-scope.sh reset <repo_root> <marker_dir>` (this is what makes pass 1 of the cycle mechanically full), then `… resolve …` to learn which Job D prompt to compose. Then, **in a single message**, dispatch Job D as an Agent call and start A, B and C directly in the same message: Job A's `spec_validate_structure` call, Job B's `resolve` (then its `ci_wait_run` call or its lane commands), and Job C's `dependency-scan.sh` command. Do NOT wait for one before starting the next — they have no data dependencies on each other. See the Job D section below for both prompts and the full rule. The one exception is Job C when Job B goes local (below).
 
 **Why the orchestrator runs them (#1275).** Until #1275 these three were delegated too, and the gate read what the delegate wrote, not what the instrument returned. On 2026-10-19 that misreported twice. A Job A delegate never called `spec_validate_structure`: it read the issue by hand and labelled its own reading `Raw tool response: ... PASS`. A Job B delegate reported `shellcheck exit=0` while its own output listed SC1091 in two files; `shellcheck -f gcc` returns 1 there, and through `xargs` the code reads 123, because `xargs` maps any child exit from 1 to 125 to 123. Reading the instrument's own JSON or `$?` removes the layer that misreported.
 
@@ -194,6 +194,8 @@ bash <repo_root>/scripts/ci/dependency-scan.sh <repo_root> > <log> 2>&1; echo "e
 git -C <repo_root> rev-parse HEAD
 ```
 
+When Job B's source is B-local, start Job C after the last lane has printed `exit=`, not in the batch: in cc-workflow `validate.sh` runs `dependency-scan.sh` itself, and two trivy runs contend for one cache. When the source is B-ci, start Job C in the batch as now.
+
 Run the scan with `run_in_background: true`. Each trivy run inside it may take up to `DEP_SCAN_TIMEOUT` (300 s by default), which is longer than the Bash tool lets a foreground command run, and a killed command never reaches `echo`. A scan that has not printed `exit=` has no result, and is never a pass.
 
 The item's value is that `exit=`, read from the command's own output and graded by the table below, at that commit. Then read `<log>` in full, and put its `coverage:` line and every UNSCANNED lock by name on the checklist, on every exit. A run covering 1 of 2 manifests is a scan over half a denominator, and it exits 6, not 0. Do not summarise, do not re-derive the counts, and do not substitute your own judgement for the exit code.
@@ -217,11 +219,10 @@ Exit codes:
 **If the script is missing** (an older checkout, and today every repo but this one; see "Reach" below), run the raw-trivy fallback yourself, with its steps exactly as written:
 
 ```
-         If the script is MISSING (older checkout), say so and fall back to
-         `trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps
-         --list-all-pkgs --format json --quiet <repo_root>`, reporting the
-         manifest count first. Do not report a verdict without a denominator.
-         Both flags are
+         If the script is MISSING (older checkout), say so and run the
+         raw-trivy steps below, reporting the manifest count first. Do not
+         report a verdict without a denominator.
+         --include-dev-deps and --list-all-pkgs are
          REQUIRED on the fallback, not optional (cc-workflow#1169): trivy
          suppresses dev/test dependencies by default (a project whose entire
          dependency tree is dev-only scans ZERO packages without
@@ -239,7 +240,12 @@ Exit codes:
          Run the main scan, and each per-file scan below, with
          run_in_background: true (a first DB pull can outlast the foreground
          limit), in this form, where <n> numbers the runs (0 for this one):
-           trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet <repo_root> > <marker_dir>/trivy-0.json 2> <marker_dir>/trivy-0.err; echo "exit=$?"
+           trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --ignorefile /dev/null --config /dev/null --format json --quiet --skip-dirs '**/node_modules' --skip-dirs '**/dist' --skip-dirs '**/build' --skip-dirs '**/vendor' --skip-dirs '**/.venv' --skip-dirs '**/venv' --skip-dirs '**/target' <repo_root> > <marker_dir>/trivy-0.json 2> <marker_dir>/trivy-0.err; echo "exit=$?"
+         --ignorefile /dev/null and --config /dev/null are REQUIRED: trivy
+         reads a .trivyignore and a trivy.yaml from the current directory, and
+         either can hide a finding or a whole lock (#1358). Run the main scan
+         and each per-file scan below one at a time, never in parallel: they
+         share one trivy cache.
          stderr has its own file, so a warning cannot make good JSON
          unparseable. Read the packages and findings per target FROM THE
          FILE, with jq, never from tool output:
@@ -251,11 +257,15 @@ Exit codes:
 
          On the fallback, FIRST enumerate the lockfiles. Run this exactly (one
          command, do not split it); it is the trust gate's own find:
-           find <repo_root> \( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \) -prune -o -type f \( -name 'bun.lock' -o -name 'bun.lockb' -o -name 'package-lock.json' -o -name 'yarn.lock' -o -name 'pnpm-lock.yaml' -o -name 'go.sum' -o -name 'Cargo.lock' -o -name 'uv.lock' -o -name 'poetry.lock' -o -name 'Pipfile.lock' -o -name '*requirements*.txt' -o -path '*/requirements/*.txt' \) -print
+           find <repo_root> \( -name node_modules -o -name .git -o -name dist -o -name build -o -name vendor -o -name .venv -o -name venv -o -name target \) -prune -o -type f \( -name 'bun.lock' -o -name 'bun.lockb' -o -name 'package-lock.json' -o -name 'yarn.lock' -o -name 'pnpm-lock.yaml' -o -name 'go.sum' -o -name 'Cargo.lock' -o -name 'uv.lock' -o -name 'poetry.lock' -o -name 'Pipfile.lock' -o -name '*requirements*.txt' -o -name '*requirements*.lock' -o -name '*constraints*.txt' -o -path '*/requirements/*.txt' \) -print
          Every line it prints is in the denominator, less two exclusions, both
          matching check-scannable.sh:
-         (1) a pip requirements file with no entry pinned by '==' is a range
-         declaration, not a lock. Test each one with
+         (1) a pip requirements file (any line the find printed whose file
+         name is not exactly one of
+         bun.lock, bun.lockb, package-lock.json, yarn.lock, pnpm-lock.yaml, go.sum, Cargo.lock, uv.lock, poetry.lock, Pipfile.lock;
+         every file a * pattern or -path matched is one, requirements.lock
+         included) with no entry pinned by '==' is a range declaration, not a
+         lock. Test each one with
            grep -cE '^[[:space:]]*[A-Za-z0-9._-]+[[:space:]]*===?[[:space:]]*[0-9]' '<that file>'
          and where it prints 0, leave it out of the denominator and name it
          as unpinned, not UNSCANNED.
@@ -267,7 +277,7 @@ Exit codes:
          (#1247), so the scan above skips every other pinned requirements
          file. Scan each of those ALONE, under the name trivy reads, with the
          same flags and the same capture, giving each its own <n>:
-           d=$(mktemp -d) && cp '<that file>' $d/requirements.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --format json --quiet $d > <marker_dir>/trivy-<n>.json 2> <marker_dir>/trivy-<n>.err; echo "exit=$?"; rm -rf ${d:?}
+           d=$(mktemp -d) && cp '<that file>' $d/requirements.txt && trivy fs --scanners vuln --severity HIGH,CRITICAL --include-dev-deps --list-all-pkgs --ignorefile /dev/null --config /dev/null --format json --quiet $d > <marker_dir>/trivy-<n>.json 2> <marker_dir>/trivy-<n>.err; echo "exit=$?"; rm -rf ${d:?}
          Its HIGH/CRITICAL findings count toward the verdict exactly like the
          main scan's. Its jq row's Target reads requirements.txt, and that row
          is that file's. A lock in the denominator is INGESTED when a jq row
@@ -541,7 +551,7 @@ Job C in the parallel batch: the orchestrator runs `dependency-scan.sh` (or the 
 - **SKIP** → emit `[SKIPPED — trivy not installed]` on the checklist. Do not fail the gate.
 - **FINDINGS** (`dependency-scan.sh` exit 1) → report each finding (package, CVE, severity, fixed version if any) as a deferred checklist item. Do NOT auto-upgrade dependencies — the user approves the codebase state at the gate. **The checklist item FAILS on any HIGH/CRITICAL finding, with or without a fix available** — `dependency-scan.sh` does not distinguish them (no `--ignore-unfixed` support; `.trivyignore` is explicitly disabled via `--ignorefile /dev/null`, not merely undocumented), which is stricter than this skill's own prose promised before this scan was a real tool rather than an agent's judgment call. Tracked for a policy decision: #1188. **Escape hatch that exists today, undocumented until now:** `DEP_SCAN_SEVERITY` (env var, default `HIGH,CRITICAL`) overrides the severity filter — e.g. `DEP_SCAN_SEVERITY=CRITICAL ./scripts/ci/validate.sh` to stop blocking on HIGH while #1188 is unresolved. This is a manual, visible override for an operator to reach for, not something Job C or this skill invokes on its own.
 - **SCANNER/TOOLING ERROR** (`dependency-scan.sh` exit 5 — timeout, no scanner output, unparseable scanner output, OR a partial install missing `check-scannable.sh`) → the checklist item FAILS. This is not a skip: the scan did not run to completion, which is not evidence of a clean dependency tree. Ordinary triggers (first DB pull, rate-limited/air-gapped network) are not a reason to wave it through.
-- **PARTIAL COVERAGE** (`dependency-scan.sh` exit 6: some counted locks ingested, at least one UNSCANNED, matched by name) → the checklist item FAILS, naming each unscanned lock. A clean result over part of the denominator is not a pass (#1247); the trust gate's `trivyCoverage()` HOLDs the same shape, so the two gates agree on every lock `check-scannable.sh` counts. They do not yet agree on which locks are counted: a second JS lock in one directory, or a lock with no manifest beside it, is counted by the gate's find alone.
+- **PARTIAL COVERAGE** (`dependency-scan.sh` exit 6: some counted locks ingested, at least one UNSCANNED, matched by name) → the checklist item FAILS, naming each unscanned lock. A clean result over part of the denominator is not a pass (#1247); the trust gate's `trivyCoverage()` HOLDs the same shape, so the two gates agree on every lock `check-scannable.sh` counts. All three count the same locks: the predicate lives in `scripts/ci/lock-predicate.sh`, and `gen-lock-find.sh --check` fails CI when a copy drifts.
 
 ## The Checklist (full every time; a checkmark means VERIFIED by reading the codebase)
 **Context:** Project | Issue #N — title | Branch `feature/N-...` → `<base>` | PR/MR #<PR_NUMBER> @ `<HEAD_SHA7>`

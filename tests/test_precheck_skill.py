@@ -585,3 +585,13 @@ class TestClaudeMdExceptionDocumentsBothPlatforms:
         body = match.group(1)
         assert SENTINEL_LITERAL in body
         assert "`/mmr`" in body
+
+
+def test_precheck_job_c_waits_for_local_lanes() -> None:
+    """#1358: validate.sh runs dependency-scan.sh itself, so a Job C started in the
+    batch beside B-local's lanes puts two trivy runs on one cache. Job C waits for
+    the last lane, and the fallback's scans run one at a time."""
+    flat = " ".join(SKILL_PATH.read_text().split())
+    assert "When Job B's source is B-local, start Job C after the last lane has printed `exit=`, not in the batch" in flat
+    assert "When the source is B-ci, start Job C in the batch as now." in flat
+    assert "Run the main scan and each per-file scan below one at a time, never in parallel" in flat
