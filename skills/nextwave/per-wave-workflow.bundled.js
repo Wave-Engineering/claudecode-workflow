@@ -597,6 +597,7 @@ const PR_WAIT_CI_PROBE = {
     mergeable: { type: ['string', 'boolean', 'null'] },
     mergeable_state: { type: ['string', 'null'] }, // GitHub's, e.g. CONFLICTING/DIRTY
     settled_sec: { type: 'number' },
+    pending_runs: { type: 'array' }, // runs the server found for the head; any one means CI started
   },
 }
 
@@ -774,6 +775,9 @@ const NO_RUN_STATUSES = new Set(['no_checks_yet', 'no_checks_configured'])
 const NO_RUN_OBSTRUCTIONS = new Set(['conflicts', 'not_mergeable', 'closed', 'merged', 'locked', 'mergeability_unknown'])
 function noRunHold(probe, head) {
   if (!probe || typeof probe !== 'object' || !NO_RUN_STATUSES.has(probe.status)) return null
+  // Runs found for the head beat any blocker: the server reports mergeability_unknown ahead of
+  // checks_not_registered, so a queued run can arrive under either label (#1371 delta review).
+  if (Array.isArray(probe.pending_runs) && probe.pending_runs.length > 0) return null
   const certified = probe.status === 'no_checks_configured' && !probe.blocker
   if (!certified && !NO_RUN_OBSTRUCTIONS.has(probe.blocker)) return null
   const blocker = probe.blocker ? `; blocker=${probe.blocker}` : ''
@@ -787,9 +791,10 @@ function noRunProbeLines({ targetRepo, prNumber, next = 'the last head read' }) 
     `PROBE, before ci_wait_run: sdlc-server pr_wait_ci(number=${n}, repo="${targetRepo}", settle_window_sec=90, timeout_sec=30, poll_interval_sec=15).`,
     `Report its answer as probe, copied as returned.`,
     `SKIP ci_wait_run and the direct read, and go straight to ${next}, ONLY when CI cannot start for this head:`,
-    `probe.status is no_checks_configured with no blocker, or probe.blocker is one of ${[...NO_RUN_OBSTRUCTIONS].join(', ')}.`,
-    `Any other answer (a blocker of draft, checks_not_registered or evidence_unavailable, or no no-checks status):`,
-    `call ci_wait_run as below, because a run may exist or CI may still start.`,
+    `probe.pending_runs is empty or absent, AND probe.status is no_checks_configured with no blocker, or probe.blocker`,
+    `is one of ${[...NO_RUN_OBSTRUCTIONS].join(', ')}. Any other answer (a non-empty pending_runs,`,
+    `a blocker of draft, checks_not_registered or evidence_unavailable, or no no-checks status): call ci_wait_run`,
+    `as below, because a run may exist or CI may still start.`,
   ]
 }
 
@@ -1280,9 +1285,10 @@ function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, targetR
 // head that is not the head the flight returned (read before and after the wait) is BLOCKED; green on
 // that head PROCEEDS, where the run's sha is the head itself (GitHub) or a merge commit with parents
 // exactly [kahuna tip, head] (a GitLab merged-results run, bound as mergeResultVerdict binds it); a
-// probe saying CI never started is BLOCKED with that reason (#1357); a red whose failed jobs all
-// really ran is NEEDS_REWORK (the flight's own code); everything else is BLOCKED. The asymmetry is deliberate: a misread code-red becomes a hold, never a
-// merge, so the safety property (never merge red) holds whichever way a job is classified.
+// red whose failed jobs all really ran is NEEDS_REWORK (the flight's own code); after every graded
+// rule, a probe saying CI cannot start is BLOCKED with that reason (#1357); everything else is
+// BLOCKED. The asymmetry is deliberate: a misread code-red becomes a hold, never a merge, so the
+// safety property (never merge red) holds whichever way a job is classified.
 //
 // CODE-RED, exactly: final_status failure (or GitLab's failed), at least one job concluded failure,
 // every such job has started_at and finished_at with finished strictly after started, and no job
@@ -1333,7 +1339,7 @@ function flightCiVerdict(ev, issue, flightHead, status, rework = false) {
     if (bound.pass) return out('proceed', `CI green on head ${flightHead.slice(0, 8)} (merge commit ${w.sha.slice(0, 8)} onto the kahuna tip)`, flightHead)
     return out('blocked', `a green run not bound to the flight head ${flightHead.slice(0, 8)}: ${bound.reason}`)
   }
-  const jobs =(Array.isArray(ev.failed_jobs) ? ev.failed_jobs : []).filter((j) => !FLIGHT_IGNORED_CONCLUSIONS.has(j?.conclusion))
+  const jobs = (Array.isArray(ev.failed_jobs) ? ev.failed_jobs : []).filter((j) => !FLIGHT_IGNORED_CONCLUSIONS.has(j?.conclusion))
   const ran = (j) => {
     const s = Date.parse(j?.started_at ?? '')
     const f = Date.parse(j?.finished_at ?? '')

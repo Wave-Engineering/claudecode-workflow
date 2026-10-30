@@ -232,6 +232,14 @@ for (const wait of [NOT_FOUND, { ok: true, final_status: 'timed_out' }, { ok: tr
   for (const b of ['not_mergeable', 'closed', 'merged', 'locked', 'mergeability_unknown']) {
     ok(noRunHold({ status: 'no_checks_yet', blocker: b }, HEAD)?.includes(`; blocker=${b} (pr_wait_ci no_checks_yet)`), `noRunHold: no_checks_yet / ${b} is fail-fast`)
   }
+  // #1371 delta review: the server names mergeability_unknown ahead of checks_not_registered, so runs
+  // found for the head beat any blocker.
+  const queued = [{ id: 7, status: 'queued' }]
+  for (const b of ['mergeability_unknown', 'conflicts', undefined]) {
+    ok(noRunHold({ status: b ? 'no_checks_yet' : 'no_checks_configured', blocker: b, pending_runs: queued }, HEAD) === null, `noRunHold: pending_runs beats blocker ${b}`)
+  }
+  ok(noRunHold({ status: 'no_checks_yet', blocker: 'mergeability_unknown', pending_runs: [] }, HEAD) !== null, 'noRunHold: an empty pending_runs does not exempt')
+  ok(/probe\.pending_runs is empty or absent/.test(noRunProbeLines({ targetRepo: 'o/r' }).join('\n')), 'noRunProbeLines: the agent is told the pending_runs rule too')
   ok(mergeResultVerdict(greenMerge({ probe: { status: 'no_checks_yet', blocker: 'checks_not_registered' } })).pass === true,
     'mergeResultVerdict: a checks_not_registered probe leaves the direct read to grade')
   for (const p of [undefined, null, {}, { status: 'pending' }, { status: 'success' }, 'no_checks_yet']) {
