@@ -651,6 +651,18 @@ def test_precheck_waiver_forces_human_stop() -> None:
     assert "on this exact head, so no `[waived]` or `[override]` line in the Job E log. A waiver stops a lead's merge too, and goes to BJ." in step5
 
 
+def test_precheck_kahuna_notice_ignores_lead_routing() -> None:
+    """#1365: the kahuna sandbox merges with no human, so CLAUDE.md's condition 2 holds:
+    its notice is `#precheck` + `vox` even under a lead, and a SendMessage only adds."""
+    flat = " ".join(SKILL_PATH.read_text().split())
+    step4 = flat.split("### Step 4")[1].split("### Step 5")[0]
+    assert "**Not on the kahuna sandbox path.** When the base matches `^kahuna/[0-9]+-`" in step4
+    assert "notify as for `bj` (`#precheck`, then `vox`), exactly as CLAUDE.md's kahuna condition 2 requires. The `SendMessage` to the lead goes in addition, never instead." in step4
+    assert "the `#precheck` post and `vox`, even when a lead is named; a `SendMessage` to the lead goes in addition, never instead" in flat
+    assert "except on the kahuna path, where it is `#precheck` + `vox` regardless of lead routing" in flat
+    assert "(Discord and `vox`, or the named lead)" not in flat
+
+
 def test_precheck_body_patch_resolves_repo_from_origin() -> None:
     """#1365: the Step 3.5 body PATCH defines its placeholders from origin."""
     flat = " ".join(SKILL_PATH.read_text().split())
