@@ -42,6 +42,22 @@ check() {
 	fi
 }
 
+# check_reason <command> <text>...: the command is blocked and its reason carries each text.
+check_reason() {
+	local cmd="$1" out want
+	shift
+	out=$(jq -n --arg s "$SID" --arg c "$cmd" '{session_id: $s, tool_input: {command: $c}}' |
+		env -u WAVE_FLIGHT_ID PUSH_GATE_EXTRA_BRANCH_RE= bash "$GATE")
+	for want in "$@"; do
+		if ! printf '%s' "$out" | jq -e --arg w "$want" '.decision == "block" and (.reason | contains($w))' >/dev/null; then
+			printf '  WRONG reason of %s lacks: %s\n' "$cmd" "$want"
+			fail=1
+			return
+		fi
+	done
+	printf '  ok    reason %s\n' "$cmd"
+}
+
 DEVOPS='^DEVOPS-[0-9]+-.+'
 
 # --- EXEMPT: plain pushes to working / integration branches ---
@@ -169,10 +185,55 @@ check BLOCK "grep -rn \"git push\" scripts/"
 check BLOCK "git commit -m \"doc: explain the git push gate\""
 check BLOCK "gh issue create --body \"then run git push\""
 
+# --- #1364: a plain delete of ONE non-protected branch needs no sentinel and no prefix ---
+check PASS "git push origin --delete fix/18-mutant-bad-unit"
+check PASS "git push lanebox --delete scratch-run-3"
+check PASS "git push lanebox :scratch-run-3"
+check PASS "git push -d origin chore/x"
+check PASS "git push --delete origin scratch-1"
+check PASS "git push origin --delete refs/heads/scratch-1"
+check PASS "git -C /tmp/x push lanebox :scratch-1"
+check PASS "git push origin --delete scratch-1 2>&1 | tail -3"
+check PASS "git push -q origin --delete kahuna/4-campaign"
+# protected, release, qualified and revision targets stay refused
+check BLOCK "git push origin --delete main"
+check BLOCK "git push origin :master"
+check BLOCK "git push origin --delete release/1.2"
+check BLOCK "git push origin --delete v1.0.0"
+check BLOCK "git push origin --delete tags/v1"
+check BLOCK "git push origin :refs/tags/v1"
+check BLOCK "git push origin :refs/heads/main"
+check BLOCK "git push origin --delete HEAD"
+check BLOCK "git push origin --delete @"
+# only a single-ref delete is exempt without a prefix
+check BLOCK "git push origin --delete a b"
+check BLOCK "git push origin :scratch-1 :scratch-2"
+check BLOCK "git push origin :scratch-1 feature/2-x"
+check BLOCK "git push origin -d --delete scratch-1"
+# malformed deletes and disallowed flags
+check BLOCK "git push origin --delete"
+check BLOCK "git push --delete origin"
+check BLOCK "git push origin --delete +x"
+check BLOCK "git push origin --delete scratch-1 --force"
+check BLOCK "git push origin --delete :scratch-1"
+check BLOCK "git push https://example.com/r.git --delete scratch-1"
+# non-plain deletes are still gated
+check BLOCK "cd /tmp && git push origin --delete scratch-1"
+check BLOCK "GIT_SSH_COMMAND=x git push lanebox :scratch-1"
+check BLOCK "bash -c \"git push origin :scratch-1\""
+# a refused delete names the approved path
+check_reason "git push origin --delete main" "git push <remote> --delete <branch>" "core.sshCommand" "ask the user" "its own Bash call"
+check_reason "cd /tmp && git push origin --delete x" "git push <remote> --delete <branch>" "core.sshCommand" "ask the user" "its own Bash call"
+check_reason "git push origin main" "Cannot push untested code" # a non-delete keeps the test reason
+
 # --- the sentinel still lets any push through, as before ---
 touch "$SENTINEL"
 check PASS "git push origin main"
 check PASS "git commit -m x && git push origin feature/1-a"
+check PASS "cd /tmp && git push origin --delete scratch-1"
+# #1364: except a plain delete of a protected ref, which a test run does not license
+check BLOCK "git push origin --delete main"
+check BLOCK "git push origin :release/1.0"
 cleanup
 
 echo "──────────────────────────────────────────"
