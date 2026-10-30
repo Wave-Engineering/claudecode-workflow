@@ -28,10 +28,11 @@ fi
 # 2. red on a mutated copy: drop yarn.lock from gate.js's find
 T="$(mktemp -d)"
 trap 'rm -rf "$T"' EXIT
-mkdir -p "$T/scripts/ci" "$T/skills/nextwave" "$T/skills/precheck"
+mkdir -p "$T/scripts/ci" "$T/skills/nextwave" "$T/skills/precheck" "$T/docs"
 cp "$REPO_DIR/scripts/ci/gen-lock-find.sh" "$REPO_DIR/scripts/ci/lock-predicate.sh" "$T/scripts/ci/"
 cp "$REPO_DIR/skills/nextwave/gate.js" "$T/skills/nextwave/"
 cp "$REPO_DIR/skills/precheck/SKILL.md" "$T/skills/precheck/"
+cp "$REPO_DIR/docs/kahuna-guide.md" "$REPO_DIR/docs/kahuna-devspec.md" "$T/docs/"
 sed -i "s/ -o -name 'yarn.lock'//" "$T/skills/nextwave/gate.js"
 if cmp -s "$REPO_DIR/skills/nextwave/gate.js" "$T/skills/nextwave/gate.js"; then
 	echo "  [FAIL] the mutation changed nothing; the red case proves nothing"
@@ -43,6 +44,24 @@ else
 		echo "  [PASS] a drifted gate.js find fails --check, naming gate.js"
 	else
 		echo "  [FAIL] a drifted gate.js find must exit 1 naming gate.js (rc=$rc)"
+		printf '%s\n' "$out" | sed 's/^/    /'
+		fail=1
+	fi
+fi
+
+# 3. red on a doc that lost a flag: the operator guide's scan without --ignorefile
+cp "$REPO_DIR/skills/nextwave/gate.js" "$T/skills/nextwave/"
+sed -i 's| --ignorefile /dev/null||' "$T/docs/kahuna-guide.md"
+if cmp -s "$REPO_DIR/docs/kahuna-guide.md" "$T/docs/kahuna-guide.md"; then
+	echo "  [FAIL] the doc mutation changed nothing; the red case proves nothing"
+	fail=1
+else
+	out="$(bash "$T/scripts/ci/gen-lock-find.sh" --check "$T" 2>&1)"
+	rc=$?
+	if [[ $rc -eq 1 ]] && grep -q 'DRIFT docs/kahuna-guide.md' <<<"$out" && ! grep -q 'DRIFT skills/' <<<"$out"; then
+		echo "  [PASS] a drifted kahuna-guide.md scan fails --check, naming only it"
+	else
+		echo "  [FAIL] a drifted kahuna-guide.md scan must exit 1 naming it alone (rc=$rc)"
 		printf '%s\n' "$out" | sed 's/^/    /'
 		fail=1
 	fi

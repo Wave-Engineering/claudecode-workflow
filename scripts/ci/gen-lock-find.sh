@@ -4,12 +4,14 @@
 # The trust gate's TRIVY prompt (skills/nextwave/gate.js) and the /precheck Job C
 # fallback (skills/precheck/SKILL.md) cannot source lock-predicate.sh: a Workflow
 # bundle is self-contained, and the fallback runs in repos without scripts/ci. So
-# this script owns exactly four lines in them, and writes each from the predicate:
+# this script owns exactly these lines, and writes each from the predicate:
 #
-#   (a) gate.js     the find over <w>/tree
-#   (b) gate.js     the main trivy scan of <w>/tree
-#   (c) SKILL.md    the find over <repo_root>
-#   (d) SKILL.md    the main trivy scan of <repo_root>
+#   (a) gate.js            the find over <w>/tree
+#   (b) gate.js            the main trivy scan of <w>/tree
+#   (c) SKILL.md           the find over <repo_root>
+#   (d) SKILL.md           the main trivy scan of <repo_root>
+#   (e) kahuna-guide.md    the trust-signal list's trivy scan
+#   (f) kahuna-devspec.md  the gate procedure's trivy scan
 #
 # Each line is found by an anchored regex that must match EXACTLY ONCE: zero or
 # more than one exits 2, naming the file and the pattern, rather than guess.
@@ -17,7 +19,7 @@
 # Usage:  scripts/ci/gen-lock-find.sh [--check] [repo_root]
 #         Write mode rewrites the lines, then regenerates the per-wave bundle.
 #         --check writes nothing, prints `DRIFT <file>: <expected>` per drifted
-#         line, and exits 1 on any drift, 0 when all four lines match.
+#         line, and exits 1 on any drift, 0 when every owned line matches.
 # Exit:   0 in sync (or written), 1 drift (--check), 2 a line not found exactly once
 set -uo pipefail
 
@@ -54,6 +56,8 @@ owned = [
     ("skills/nextwave/gate.js", r"^    `  trivy fs .* <w>/tree > <w>/trivy-0\.json .*`,$", lambda m: f"    `  {scan_w}`,"),
     ("skills/precheck/SKILL.md", r"^(\s+)find <repo_root> .+ -print$", lambda m: f"{m.group(1)}find <repo_root> {expr}"),
     ("skills/precheck/SKILL.md", r"^(\s+)trivy fs .* <repo_root> > <marker_dir>/trivy-0\.json .*$", lambda m: f"{m.group(1)}{scan_r}"),
+    ("docs/kahuna-guide.md", r"^4\. `trivy fs .*` reports zero findings \(#1169\)$", lambda m: f"4. `trivy fs {flags} {skip}` reports zero findings (#1169)"),
+    ("docs/kahuna-devspec.md", r"^(\s+)- `Bash\(\"trivy fs .* <repo_path>\"\)` \(cc-workflow#1169\)$", lambda m: f"{m.group(1)}- `Bash(\"trivy fs {flags} {skip} <repo_path>\")` (cc-workflow#1169)"),
 ]
 texts, drift = {}, 0
 for rel, pattern, render in owned:

@@ -1334,9 +1334,15 @@ def test_no_tested_pipeline_reads_the_summary():
 
 
 def test_measured_trivy_version_is_the_pinned_one():
-    """Every trivy version a comment says was measured is the one CI pins."""
+    """Every trivy version a comment says was measured is the one CI pins, and the
+    workflow container bakes that same version (triage #19: the two had drifted)."""
     pin = re.search(r'TRIVY_VERSION:\s*"([\d.]+)"', (REPO_ROOT / ".github" / "workflows" / "validate.yml").read_text())
     assert pin
+    container = REPO_ROOT / "containers" / "oakandwave-workflow"
+    baked = re.findall(r"^ARG TRIVY_VERSION=([\d.]+)$", (container / "Dockerfile").read_text(), re.M)
+    assert baked == [pin.group(1)], f"the Dockerfile bakes trivy {baked}; CI pins {pin.group(1)}"
+    stated = re.findall(r"TRIVY_VERSION=([\d.]+)", (container / "README.md").read_text())
+    assert stated and set(stated) == {pin.group(1)}, f"the container README states trivy {stated}; CI pins {pin.group(1)}"
     seen = 0
     for name in ("check-scannable.sh", "lock-predicate.sh", "dependency-scan.sh"):
         for v in re.findall(r"trivy (\d+\.\d+\.\d+)", (REPO_ROOT / "scripts" / "ci" / name).read_text()):
