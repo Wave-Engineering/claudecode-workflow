@@ -66,28 +66,40 @@ jq -n -L "$LIB" 'include "sqtk-answer"; 1' >/dev/null 2>&1 || {
 	echo "sqtk-doorbell: cannot load sqtk-answer.jq from $LIB; not arming" >&2
 	exit 4
 }
-seen='{}'
-if [[ -s "$SEEN" ]]; then
-	seen=$(jq -c 'if type == "object" then . else {} end' "$SEEN" 2>/dev/null) || seen='{}'
-fi
-ids=$(jq -c --argjson seen "$seen" '
+# Every payload goes to jq through a file, never argv: the seen, baseline and mine files only
+# grow, and one argv string over 128 KiB would fail every jq call below, so the doorbell
+# would never ring.
+WORK=$(mktemp -d 2>/dev/null) || {
+	echo "sqtk-doorbell: cannot make a temp dir" >&2
+	exit 4
+}
+trap 'rm -rf "$WORK"' EXIT
+# Copy a JSON object state file to $2, or {} if it is missing or malformed.
+load_obj() {
+	if [[ -s "$1" ]] && jq -c 'if type == "object" then . else {} end' "$1" >"$2" 2>/dev/null; then
+		return 0
+	fi
+	printf '{}\n' >"$2"
+}
+load_obj "$SEEN" "$WORK/seen.json"
+jq -c --slurpfile seen "$WORK/seen.json" '
 	def terminal: test("^(confirmed|rejected|retired|recorded|gone)\\|");
-	[.[] | select(($seen[(.id | tostring)] // "") | terminal | not) | .id | numbers]' \
-	"$MINE" 2>/dev/null) || ids='[]'
-[[ "$ids" != "[]" ]] || {
+	[.[] | select(($seen[0][(.id | tostring)] // "") | terminal | not) | .id | numbers]' \
+	"$MINE" >"$WORK/ids.json" 2>/dev/null || printf '[]\n' >"$WORK/ids.json"
+jq -e 'length > 0' "$WORK/ids.json" >/dev/null 2>&1 || {
 	echo "sqtk-doorbell: nothing open to wait for in $MINE" >&2
 	exit 2
 }
-# bl = {"<id>": "<original text>"}: the mine entry's own `.text` wins over the drain's
-# baseline file.
+# $WORK/bl.json = {"<id>": "<original text>"} for the ids waited on, and no others: the mine
+# entry's own `.text` wins over the drain's baseline file.
 load_baselines() {
-	local baseline='{}'
-	if [[ -s "$BASELINE" ]]; then
-		baseline=$(jq -c 'if type == "object" then . else {} end' "$BASELINE" 2>/dev/null) || baseline='{}'
-	fi
-	bl=$(jq -c --argjson base "$baseline" '
-		reduce (.[] | select((.text | type) == "string")) as $m ($base;
-			.[($m.id | tostring)] = $m.text)' "$MINE" 2>/dev/null) || bl="$baseline"
+	load_obj "$BASELINE" "$WORK/base.json"
+	jq -c --slurpfile base "$WORK/base.json" --slurpfile ids "$WORK/ids.json" '
+		($ids[0] | map(tostring)) as $want
+		| reduce (.[] | select((.text | type) == "string")) as $m ($base[0];
+			.[($m.id | tostring)] = $m.text)
+		| with_entries(select(.key as $k | $want | index($k)))' \
+		"$MINE" >"$WORK/bl.json" 2>/dev/null || printf '{}\n' >"$WORK/bl.json"
 }
 load_baselines
 
@@ -112,11 +124,11 @@ curl_pid=$!
 ring_if_answer() {
 	[[ "$1" == data:* ]] || return 0
 	local ev="${1#data:}"
-	if jq -e -L "$LIB" --argjson ids "$ids" --argjson bl "$bl" '
+	if jq -e -L "$LIB" --slurpfile ids "$WORK/ids.json" --slurpfile bl "$WORK/bl.json" '
 		include "sqtk-answer";
-		.type == "squawk.updated" and (.squawk.id as $i | $ids | index($i)) != null
+		.type == "squawk.updated" and (.squawk.id as $i | $ids[0] | index($i)) != null
 		and (.squawk.state != "open"
-			or (.squawk | sq_answer($bl[(.id | tostring)] | strings // null)) != "")' <<<"$ev" >/dev/null 2>&1; then
+			or (.squawk | sq_answer($bl[0][(.id | tostring)] | strings // null)) != "")' <<<"$ev" >/dev/null 2>&1; then
 		kill "$curl_pid" 2>/dev/null
 		printf '%s\n' "$ev"
 		exit 0

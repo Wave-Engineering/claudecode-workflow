@@ -190,6 +190,22 @@ rc=$?
 [[ $rc -eq 0 ]] && pass "mine .text baseline: appended answer rings" || fail "mine .text answer (rc=$rc)"
 printf '%s\n' '[{"list":"bj:needs","seq":3,"id":31,"created_at":"t"}]' >"$REPO/.claude/sqtk-mine.json"
 
+# 10b. Baselines past argv's 128 KiB per-string cap still ring: they reach jq through a file.
+#      300 open squawks of 600 characters each, in both the mine file and the baseline file.
+jq -cn '[range(300) | {list: "bj:needs", seq: (. + 100), id: (. + 1000), created_at: "t",
+	text: ("open ask, padded " + ("x" * 600))}] + [{list: "bj:needs", seq: 3, id: 31, created_at: "t",
+	text: "campaign→main fix"}]' >"$REPO/.claude/sqtk-mine.json"
+jq -cn '[range(300) | {key: (. + 2000 | tostring), value: ("old ask, padded " + ("y" * 600))}]
+	| from_entries' >"$REPO/.claude/sqtk-baseline.json"
+stream "$(evt 31 open 'campaign→main fix → go' t1 t3)"
+out=$(run)
+rc=$?
+size=$(($(wc -c <"$REPO/.claude/sqtk-mine.json") + $(wc -c <"$REPO/.claude/sqtk-baseline.json")))
+[[ $size -gt 262144 && $rc -eq 0 && "$out" == *go* ]] && pass "baselines over 128 KiB: still rings" ||
+	fail "big baselines (size=$size rc=$rc out='$out')"
+rm -f "$REPO/.claude/sqtk-baseline.json"
+printf '%s\n' '[{"list":"bj:needs","seq":3,"id":31,"created_at":"t"}]' >"$REPO/.claude/sqtk-mine.json"
+
 # 11. Without sqtk-answer.jq it refuses to arm: exit 4 and a stderr line, before the stream.
 mkdir -p "$WORK/nolib"
 cp "$BELL" "$WORK/nolib/sqtk-doorbell.sh"

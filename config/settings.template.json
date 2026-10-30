@@ -232,7 +232,7 @@
             "command": "~/.claude/scripts/hooks/workflow/reseed-ack.sh"
           },
           {
-            "_comment": "sqtk drain (cc-workflow#1236). When one of this repo's squawks (.claude/sqtk-mine.json, written by sqtk add) is answered, confirmed, rejected, retired or recorded, injects the change into the agent's context once, at the start of its next turn. No mine file or no SQUAWK_URL: exits before any network call. Fails open, never blocks.",
+            "_comment": "sqtk drain (cc-workflow#1236). When one of this repo's squawks (.claude/sqtk-mine.json, written by sqtk add) is answered, confirmed, rejected, retired or recorded, injects the change into the agent's context once, at the start of its next turn. No mine file or no SQUAWK_URL: exits before any network call. Fails open and never blocks; the one non-zero exit is 3, with a stderr line, when sqtk-answer.jq can't be loaded (cc-workflow#1363).",
             "type": "command",
             "command": "~/.claude/scripts/hooks/workflow/sqtk-drain.sh",
             "timeout": 10

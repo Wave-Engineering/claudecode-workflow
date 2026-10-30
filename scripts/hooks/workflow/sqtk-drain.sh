@@ -42,7 +42,9 @@
 # Contract (CC UserPromptSubmit hook):
 #   stdin:  JSON with .cwd
 #   stdout: nothing, or one hookSpecificOutput JSON object carrying additionalContext
-#   exit:   always 0. It fails open: any error prints nothing and blocks nothing.
+#   exit:   always 0, except 3 when sqtk-answer.jq can't be loaded (non-blocking in
+#           UserPromptSubmit). Otherwise it fails open: any error prints nothing and blocks
+#           nothing.
 #
 # `sqtk-drain.sh --pending` is the doorbell's catch-up check: the same fetch and comparison.
 # Exit 0 prints the unreported changes as a JSON array; 1 means nothing is waiting. It leaves
