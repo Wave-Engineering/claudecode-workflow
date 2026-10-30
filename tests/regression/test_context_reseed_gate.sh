@@ -30,8 +30,11 @@ fail() {
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 export CLAUDE_CONTEXT_STATE_DIR="$WORK/state"
+# Never the real /tmp: a live nerf config for this session id would change every case.
+export NERF_CONFIG_DIR="$WORK/nerf"
+unset RESEED_CONTEXT_THRESHOLD_PCT
 P="$WORK/proj"
-mkdir -p "$P/.claude" "$CLAUDE_CONTEXT_STATE_DIR"
+mkdir -p "$P/.claude" "$CLAUDE_CONTEXT_STATE_DIR" "$NERF_CONFIG_DIR"
 SID="sess-1"
 
 reading() { # <pct> [age-seconds]
@@ -208,6 +211,77 @@ expect "CLAUDE_CODE_AUTO_COMPACT_WINDOW=0.4M is 400000" block CLAUDE_CODE_AUTO_C
 full_reading 50000 claude-other-model
 expect "CLAUDE_CODE_AUTO_COMPACT_WINDOW=50000 is raised to 100k (50k of 67k usable, 25%)" silent CLAUDE_CODE_AUTO_COMPACT_WINDOW=50000
 rm -f "$CLAUDE_CONTEXT_STATE_DIR"/*
+
+# --- nerf modes (#1352) -------------------------------------------------------------
+# nerf's per-session config picks the behavior at the threshold; its ouch dart sets
+# the threshold. Anything unreadable is ultraviolence — today's behavior.
+NERF="$NERF_CONFIG_DIR/nerf-$SID.json"
+nerf() { printf '%s' "$1" >"$NERF"; } # <json>
+# reason_has <label> <substring>... — the gate's block reason contains each
+reason_has() {
+	local label="$1" out r s
+	shift
+	out="$(gate)"
+	r="$(jq -r '.reason // empty' <<<"$out")"
+	for s in "$@"; do
+		[[ "$r" == *"$s"* ]] || {
+			fail "$label (reason lacks '$s': $out)"
+			return
+		}
+	done
+	pass "$label"
+}
+
+rm -f "$NERF"
+reading 10
+reason_has "no nerf file at 10% → 'run /reseed now'" "run /reseed now, before anything else"
+nerf '{"mode": "ultraviolence"}'
+reason_has "ultraviolence at 10% → 'run /reseed now'" "run /reseed now, before anything else"
+nerf '{"mode": "hurt-me-plenty"}'
+expect "hurt-me-plenty at 10% → block" block
+reason_has "…and the reason says to ask first" "ask" "do not reseed without" "nerf: hurt-me-plenty"
+nerf '{"mode": "not-too-rough"}'
+out="$(gate)"
+if [[ -z "$(jq -r '.decision // empty' <<<"$out")" && "$(jq -r '.systemMessage // empty' <<<"$out")" == *"/reseed advised"* ]]; then
+	pass "not-too-rough at 10% → a systemMessage, no block"
+else
+	fail "not-too-rough: '$out'"
+fi
+expect "…and nothing on a second Stop" silent
+rm -f "$CLAUDE_CONTEXT_STATE_DIR"/*.reseed-advised
+nerf '{"mode": "nightmare"}'
+reason_has "unknown mode → ultraviolence" "run /reseed now, before anything else"
+nerf '{"mode": '
+reason_has "malformed nerf JSON → ultraviolence" "run /reseed now, before anything else"
+nerf '{"darts_pct": {"ouch": 85}}'
+reason_has "no mode field → ultraviolence" "run /reseed now, before anything else"
+
+# The threshold: env, then 100 - ouch, then 15.
+nerf '{"mode": "ultraviolence", "darts_pct": {"soft": 50, "hard": 60, "ouch": 70}}'
+reading 30
+expect "ouch 70 → blocks at 30% remaining" block
+reason_has "…and names threshold 30%" "threshold 30%"
+reading 31
+expect "ouch 70 → no block at 31%" silent
+reading 30
+expect "ouch 70 with RESEED_CONTEXT_THRESHOLD_PCT=15 → no block at 30% (env wins)" silent RESEED_CONTEXT_THRESHOLD_PCT=15
+expect "ouch 70 with a junk RESEED_CONTEXT_THRESHOLD_PCT → ouch applies (30%)" block RESEED_CONTEXT_THRESHOLD_PCT=junk
+# 18446744073709551685 is 2^64 + 69: it would wrap to 69 in bash arithmetic (31%).
+for o in 0 100 '"x"' '"70"' 70.5 18446744073709551685; do
+	nerf "{\"darts_pct\": {\"ouch\": $o}}"
+	reading 16
+	expect "ouch $o → falls back to 15 (no block at 16%)" silent
+	reading 15
+	expect "ouch $o → falls back to 15 (block at 15%)" block
+done
+
+# Above the threshold, every mode is silent.
+reading 50
+for m in ultraviolence hurt-me-plenty not-too-rough; do
+	nerf "{\"mode\": \"$m\"}"
+	expect "$m at 50% → no output" silent
+done
+rm -f "$NERF" "$CLAUDE_CONTEXT_STATE_DIR"/*
 
 # --- loop guards ------------------------------------------------------------------
 reading 5

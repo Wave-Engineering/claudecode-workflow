@@ -37,6 +37,19 @@ are worth keeping apart:
   has no Discord doorbell from the kit. `disc-server` still sends and reads there.
 
 ### Changed
+- **The nerf mode now picks what the context reseed gate does (#1352).** The gate used to have
+  one behavior, and nerf's modes and ouch dart were read by nothing. `context-reseed-gate.sh` now
+  reads `mode` and `darts_pct.ouch` from the session's nerf config (`/tmp/nerf-<session_id>.json`):
+  - `ultraviolence` blocks with "run /reseed now", as before;
+  - `hurt-me-plenty` blocks and has the agent ask the user before it reseeds;
+  - `not-too-rough` gives one reminder per session and no block.
+
+  The threshold is `RESEED_CONTEXT_THRESHOLD_PCT` if set, else `100 - ouch`, else 15. A session
+  with no nerf config, or one the hook can't read, behaves exactly as before.
+
+  **Ships with mcp-server-nerf's next release**, which makes `ultraviolence` its default. Until a
+  host has that release, a session whose nerf file was written with the old `hurt-me-plenty`
+  default asks before reseeding.
 - **`/disc` arms `crewchat-doorbell` with no timeout (#1346).** The arm line was
   `CREWCHAT_DOORBELL_TIMEOUT=1800`. Every exit 3 woke the agent for a turn with nothing in it,
   about 48 a day per agent. Since mattermost-crew v0.2.4 the doorbell's failures exit by
