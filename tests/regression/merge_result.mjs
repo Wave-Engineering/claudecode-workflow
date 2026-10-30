@@ -12,6 +12,9 @@ import {
   targetReadLines,
   isMergeSha,
   MERGE_RESULT_EVIDENCE,
+  noRunHold,
+  noRunProbeLines,
+  ciWaitRefLines,
 } from '../../skills/nextwave/merge-result.js'
 
 let passed = 0
@@ -209,6 +212,56 @@ for (const wait of [NOT_FOUND, { ok: true, final_status: 'timed_out' }, { ok: tr
   const errored = mergeResultVerdict({ error: 'agent timed out' })
   ok(errored.pass === false && /agent timed out/.test(errored.reason), 'an errored evidence node HOLDs and says why')
   ok(mergeResultVerdict({ ...greenMerge(), pr_number: '42' }).pass === false, 'a PR number that is not an integer HOLDs')
+}
+
+// ── #1357: the no-run probe fails fast, in code ─────────────────────────────────────────────
+{
+  const conflicts = { status: 'no_checks_yet', blocker: 'conflicts', mergeable_state: 'CONFLICTING/DIRTY' }
+  ok(noRunHold(conflicts, HEAD) === `no run for head ${HEAD}; mergeable=CONFLICTING/DIRTY; blocker=conflicts (pr_wait_ci no_checks_yet)`,
+    'noRunHold: no_checks_yet / conflicts gives the named reason')
+  ok(noRunHold({ ...conflicts, blocker: 'draft' }, HEAD) === null && noRunHold({ status: 'no_checks_configured', blocker: 'draft' }, HEAD) === null,
+    'noRunHold: a draft blocker is never fail-fast, on either status')
+  ok(noRunHold({ status: 'no_checks_configured' }, HEAD) === `no run for head ${HEAD}; mergeable=unknown (pr_wait_ci no_checks_configured)`,
+    'noRunHold: no mergeable_state prints mergeable=unknown')
+  ok(noRunHold({ status: 'no_checks_configured' }, 'abc') === 'no run for head unread; mergeable=unknown (pr_wait_ci no_checks_configured)', 'noRunHold: an unread head says so')
+  // #1371 review: only a blocker that means CI cannot start is fail-fast. A queued run the rollup has
+  // not registered, or a run query that failed, still goes to ci_wait_run.
+  for (const b of ['checks_not_registered', 'evidence_unavailable', 'not_mergeable', undefined, 'something_new']) {
+    ok(noRunHold({ status: 'no_checks_yet', blocker: b }, HEAD) === null, `noRunHold: no_checks_yet / ${b} is not fail-fast`)
+  }
+  // #1371 lead review: a fresh GitLab MR reads not_mergeable before its pipeline exists, so it waits.
+  ok(noRunHold({ status: 'no_checks_configured', blocker: 'not_mergeable' }, HEAD) === null,
+    'noRunHold: no_checks_configured / not_mergeable, no pending_runs, waits')
+  for (const b of ['closed', 'merged', 'locked', 'mergeability_unknown']) {
+    ok(noRunHold({ status: 'no_checks_yet', blocker: b }, HEAD)?.includes(`; blocker=${b} (pr_wait_ci no_checks_yet)`), `noRunHold: no_checks_yet / ${b} is fail-fast`)
+  }
+  // #1371 delta review: the server names mergeability_unknown ahead of checks_not_registered, so runs
+  // found for the head beat any blocker.
+  const queued = [{ id: 7, status: 'queued' }]
+  for (const b of ['mergeability_unknown', 'conflicts', undefined]) {
+    ok(noRunHold({ status: b ? 'no_checks_yet' : 'no_checks_configured', blocker: b, pending_runs: queued }, HEAD) === null, `noRunHold: pending_runs beats blocker ${b}`)
+  }
+  ok(noRunHold({ status: 'no_checks_yet', blocker: 'mergeability_unknown', pending_runs: [] }, HEAD) !== null, 'noRunHold: an empty pending_runs does not exempt')
+  ok(/probe\.pending_runs is empty or absent/.test(noRunProbeLines({ targetRepo: 'o/r' }).join('\n')), 'noRunProbeLines: the agent is told the pending_runs rule too')
+  ok(mergeResultVerdict(greenMerge({ probe: { status: 'no_checks_yet', blocker: 'checks_not_registered' } })).pass === true,
+    'mergeResultVerdict: a checks_not_registered probe leaves the direct read to grade')
+  for (const p of [undefined, null, {}, { status: 'pending' }, { status: 'success' }, 'no_checks_yet']) {
+    ok(noRunHold(p, HEAD) === null, `noRunHold: ${JSON.stringify(p)} holds nothing`)
+  }
+  const probed = mergeResultVerdict(greenMerge({ wait: NOT_FOUND, merge_pipelines: [], probe: conflicts }))
+  ok(probed.pass === false && probed.path === 'probe' && probed.reason.startsWith(`no run for head ${HEAD}`),
+    'mergeResultVerdict: a no-run probe with no wait verdict HOLDs path probe')
+  const graded = mergeResultVerdict({ pr_number: N, head_sha: HEAD, head_sha_final: HEAD, target_sha: TARGET, wait: { ok: true, final_status: 'success', sha: HEAD }, probe: conflicts })
+  const red = mergeResultVerdict(greenMerge({ wait: { ok: true, final_status: 'failure' }, probe: conflicts }))
+  ok(graded.pass === true && red.pass === false && red.path === 'ci_wait_run',
+    'mergeResultVerdict: a graded success beats a no-run probe; a graded red still wins first')
+  ok(mergeResultVerdict(greenMerge({ probe: { ...conflicts, blocker: 'draft' } })).pass === true, 'mergeResultVerdict: a draft probe leaves the direct read to grade')
+  ok(MERGE_RESULT_EVIDENCE.properties.probe?.additionalProperties === true, 'MERGE_RESULT_EVIDENCE carries the probe, copied as returned')
+  const steps = noRunProbeLines({ targetRepo: 'grp/proj', prNumber: N }).join('\n')
+  ok(steps.includes(`pr_wait_ci(number=${N}, repo="grp/proj", settle_window_sec=90, timeout_sec=30, poll_interval_sec=15)`) && /a blocker of draft, not_mergeable, checks_not_registered or evidence_unavailable/.test(steps),
+    'noRunProbeLines: the probe call and its draft exemption')
+  const refs = ciWaitRefLines({ prNumber: N, headBranch: 'kahuna/7-x' }).join('\n')
+  ok(refs.includes('GitHub: ref="kahuna/7-x"') && refs.includes(`GitLab: ref="${REF}"`), 'ciWaitRefLines: the ref per platform')
 }
 
 // ── the contract the agent fills ────────────────────────────────────────────────────────────

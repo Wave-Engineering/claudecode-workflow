@@ -31,6 +31,12 @@ STUB = """#!/bin/sh
 echo "$(basename "$0") $*" >>"$STUB_DIR/calls.log"
 case "$*" in
 */jobs*) cat "$STUB_DIR/jobs.json"; exit 0 ;;
+*"merge_requests?state=opened"*)
+	[ -f "$STUB_DIR/mr_api_fail" ] && exit 1
+	cat "$STUB_DIR/mrs.json" 2>/dev/null || echo '[]'
+	exit 0 ;;
+*"/merge_requests/"*"/pipelines"*) cat "$STUB_DIR/mr_pipelines.json"; exit 0 ;;
+*"/repository/commits/"*) cat "$STUB_DIR/commit.json"; exit 0 ;;
 *"runs?"* | *"pipelines?"*)
 	[ -f "$STUB_DIR/api_fail" ] && exit 1
 	[ -f "$STUB_DIR/slow_api" ] && sleep 1
@@ -134,7 +140,7 @@ def test_no_ci_config_runs_locally(tmp_path: Path) -> None:
 def test_github_run_at_head_is_the_source(tmp_path: Path) -> None:
     repo = _repo(tmp_path, "github")
     state = _state(tmp_path, **{"runs.json": GH_RUN})
-    assert _resolve(repo, state) == f"ci run=555 ref={BRANCH}"
+    assert _resolve(repo, state) == f"ci run=555 ref={BRANCH} sha={SHA}"
     assert any(f"repos/Org/proj/actions/runs?head_sha={SHA}" in c for c in _calls(state))
     assert _triggers(state) == []
 
@@ -144,7 +150,7 @@ def test_gitlab_run_at_head_is_read_directly_by_sha(tmp_path: Path) -> None:
     not the branch), against the URL-encoded project path on origin's host."""
     repo = _repo(tmp_path, "gitlab")
     state = _state(tmp_path, **{"runs.json": GL_RUN})
-    assert _resolve(repo, state) == f"ci run=777 ref={BRANCH}"
+    assert _resolve(repo, state) == f"ci run=777 ref={BRANCH} sha={SHA}"
     reads = [c for c in _calls(state) if "pipelines?" in c]
     assert reads == [
         f"glab api --hostname gitlab.com projects/group%2Fsub%2Fproj/pipelines?sha={SHA}&per_page=20"
@@ -156,7 +162,7 @@ def test_gitlab_mr_pipeline_reports_its_own_ref(tmp_path: Path) -> None:
     so handing it the branch name would miss an MR pipeline (review finding, #1282)."""
     repo = _repo(tmp_path, "gitlab")
     state = _state(tmp_path, **{"runs.json": GL_MR_RUN})
-    assert _resolve(repo, state) == "ci run=778 ref=refs/merge-requests/1/head"
+    assert _resolve(repo, state) == f"ci run=778 ref=refs/merge-requests/1/head sha={SHA}"
 
 
 @pytest.mark.parametrize(
@@ -183,7 +189,7 @@ def test_origin_url_forms(tmp_path: Path, url: str, platform: str, expected: str
 def test_no_run_declared_triggers_exactly_once(tmp_path: Path) -> None:
     repo = _repo(tmp_path, "gitlab", project=DECLARED_GL)
     state = _state(tmp_path, **{"runs.json": GL_NO_RUNS, "runs_after.json": GL_RUN})
-    assert _resolve(repo, state, wait="5") == f"ci triggered run=777 ref={BRANCH}"
+    assert _resolve(repo, state, wait="5") == f"ci triggered run=777 ref={BRANCH} sha={SHA}"
     assert _triggers(state) == [f"glab ci run --branch {BRANCH}"]
 
 
@@ -205,7 +211,99 @@ def test_resolve_keeps_to_its_wall_clock_budget(tmp_path: Path) -> None:
 def test_github_null_head_branch_falls_back_to_the_branch(tmp_path: Path) -> None:
     repo = _repo(tmp_path, "github")
     state = _state(tmp_path, **{"runs.json": '{"workflow_runs":[{"id":556,"head_branch":null}]}'})
-    assert _resolve(repo, state) == f"ci run=556 ref={BRANCH}"
+    assert _resolve(repo, state) == f"ci run=556 ref={BRANCH} sha={SHA}"
+
+
+# --- #1357: a GitLab merged-results pipeline runs on an ephemeral merge commit ----------
+# The recorded shape (skills/nextwave/merge-result.js, THE BINDING FACT): the pipeline's sha
+# is not the head, and its commit's parent_ids are [target tip, head].
+
+MERGE = "fedcba9876543210fedcba9876543210fedcba98"
+TARGET = "1111111111111111111111111111111111111111"
+GL_MR_AT_HEAD = '[{"iid":3,"sha":"%s","source_branch":"%s"}]' % (SHA, BRANCH)
+GL_MERGE_PIPES = (
+    '[{"id":901,"sha":"%s","ref":"refs/merge-requests/3/merge","status":"success"},'
+    '{"id":950,"sha":"%s","ref":"refs/merge-requests/3/head","status":"success"},'
+    '{"id":900,"sha":"%s","ref":"refs/merge-requests/3/merge","status":"success"}]'
+) % (MERGE, SHA, "2" * 40)
+GL_MERGE_COMMIT = '{"id":"%s","parent_ids":["%s","%s"]}' % (MERGE, TARGET, SHA)
+
+
+def _merged_results_state(tmp_path: Path, **over: str) -> Path:
+    files = {
+        "runs.json": GL_NO_RUNS,
+        "mrs.json": GL_MR_AT_HEAD,
+        "mr_pipelines.json": GL_MERGE_PIPES,
+        "commit.json": GL_MERGE_COMMIT,
+    }
+    files.update(over)
+    return _state(tmp_path, **files)
+
+
+def test_gitlab_merged_results_pipeline_is_the_source(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "gitlab")
+    state = _merged_results_state(tmp_path)
+    assert _resolve(repo, state) == f"ci run=901 ref=refs/merge-requests/3/merge sha={MERGE}"
+    calls = _calls(state)
+    assert any(f"merge_requests?state=opened&source_branch=feature%2F1268-x" in c for c in calls), calls
+    assert any("merge_requests/3/pipelines?per_page=100" in c for c in calls), calls
+    assert any(f"repository/commits/{MERGE}" in c for c in calls), calls
+    assert _triggers(state) == []
+
+
+def test_gitlab_external_pipeline_at_head_is_never_the_source(tmp_path: Path) -> None:
+    """#1371 lead review: our own bare status post leaves an external pipeline on the head. A
+    re-run at the same head must still resolve to the /merge pipeline, not grade off it."""
+    repo = _repo(tmp_path, "gitlab")
+    external = '[{"id":990,"sha":"%s","ref":"%s","status":"success","source":"external"}]' % (SHA, BRANCH)
+    state = _merged_results_state(tmp_path, **{"runs.json": external})
+    assert _resolve(repo, state) == f"ci run=901 ref=refs/merge-requests/3/merge sha={MERGE}"
+
+
+def test_gitlab_merged_results_newest_merge_pipeline_wins(tmp_path: Path) -> None:
+    """Of /merge pipelines 900 and 901, 901 wins; the newer /head pipeline 950 is never taken."""
+    repo = _repo(tmp_path, "gitlab")
+    state = _merged_results_state(tmp_path)
+    line = _resolve(repo, state)
+    assert line.startswith("ci run=901 "), line
+    assert "/head" not in line
+
+
+def test_gitlab_merged_results_for_an_older_head_is_not_the_source(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "gitlab")
+    stale = '{"id":"%s","parent_ids":["%s","%s"]}' % (MERGE, TARGET, "3" * 40)
+    state = _merged_results_state(tmp_path, **{"commit.json": stale})
+    assert _resolve(repo, state).startswith("local NO-RUN no run for 0123456")
+
+
+def test_gitlab_mr_at_another_head_is_not_the_source(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "gitlab")
+    other = '[{"iid":3,"sha":"%s","source_branch":"%s"}]' % ("4" * 40, BRANCH)
+    state = _merged_results_state(tmp_path, **{"mrs.json": other})
+    assert _resolve(repo, state).startswith("local NO-RUN no run for 0123456")
+    assert not any("/pipelines?per_page=100" in c for c in _calls(state))
+
+
+def test_gitlab_mr_pipeline_read_failure_is_no_run_with_reason(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "gitlab", project=DECLARED_GL)
+    state = _merged_results_state(tmp_path, mr_api_fail="")
+    assert _resolve(repo, state) == "local NO-RUN cannot read MR pipelines for 0123456"
+    assert _triggers(state) == [], "an unreadable MR list is not a reason to start a pipeline"
+
+
+def test_github_never_queries_merge_requests(tmp_path: Path) -> None:
+    repo = _repo(tmp_path, "github")
+    state = _state(tmp_path, **{"runs.json": GH_NO_RUNS})
+    assert _resolve(repo, state).startswith("local NO-RUN no run for 0123456")
+    assert not any("merge_requests" in c for c in _calls(state)), _calls(state)
+
+
+def test_github_empty_head_branch_keeps_the_sha_out_of_the_ref(tmp_path: Path) -> None:
+    """An empty field must not shift the next one into its place (the `|` separator)."""
+    repo = _repo(tmp_path, "github")
+    runs = '{"workflow_runs":[{"id":557,"head_branch":"","head_sha":"%s"}]}' % MERGE
+    state = _state(tmp_path, **{"runs.json": runs})
+    assert _resolve(repo, state) == f"ci run=557 ref={BRANCH} sha={MERGE}"
 
 
 def test_failed_trigger_is_reported_as_failed_and_not_retried(tmp_path: Path) -> None:
@@ -322,7 +420,7 @@ def test_skill_resolves_the_source_before_waiting(skill: str) -> None:
 
 
 def test_skill_waits_with_the_resolved_ref(skill: str) -> None:
-    assert 'ci_wait_run({ ref: "<ref>", expected_sha: "<HEAD_SHA>"' in skill
+    assert 'ci_wait_run({ ref: "<ref>", expected_sha: "<sha>"' in skill
     assert 'ci_wait_run({ ref: "<branch>"' not in skill
 
 

@@ -29,14 +29,19 @@
 # precheck-review-scope.sh: a non-zero exit inside an agent's `if` is easy to swallow.
 #
 #   resolve  -> local no-ci                       no CI config for this platform
-#               ci run=<id> ref=<ref>              a run exists for <sha>
-#               ci triggered run=<id> ref=<ref>    none existed; the declared trigger
+#               ci run=<id> ref=<ref> sha=<rsha>   a run exists for <sha>, or (GitLab) a
+#                                                  merged-results pipeline bound to it
+#               ci triggered run=<id> ref=<ref> sha=<rsha>
+#                                                  none existed; the declared trigger
 #                                                  ran once and a run for <sha> appeared
 #               local NO-RUN <reason>              CI exists but cannot answer
 #
-#   <ref> is the run's own ref, and Job B-ci waits with it. On GitLab an MR pipeline's
-#   ref is refs/merge-requests/<iid>/head, and `ci_wait_run` filters by ref AND sha, so
-#   waiting with the branch name would miss the very run found here.
+#   <ref> and <rsha> are the run's own ref and sha, and Job B-ci waits with both. On
+#   GitLab an MR pipeline's ref is refs/merge-requests/<iid>/head, and `ci_wait_run`
+#   filters by ref AND sha, so waiting with the branch name would miss the very run
+#   found here. For a head pipeline <rsha> is <sha>. A merged-results pipeline (ref
+#   refs/merge-requests/<iid>/merge) runs on an ephemeral merge commit, so its <rsha> is
+#   that commit, bound to <sha> because <sha> is its second parent (#1357).
 #   coverage -> covered                            every declared job present and green
 #                                                  (or no jobs declared)
 #               missing <job>[,<job>...]           declared jobs the run does not contain
@@ -123,26 +128,57 @@ has_ci() {
 	fi
 }
 
-# Prints "<id> <ref>" for the newest run/pipeline for <sha>, or nothing. Returns
-# non-zero only when CI could not be read. By SHA alone: GitLab MR pipelines carry the
-# ref refs/merge-requests/<iid>/head, so a branch-ref filter would miss them.
+# Prints "<id> <ref> <run sha>" for the newest run/pipeline for <sha>, or nothing.
+# Returns non-zero only when CI could not be read. By SHA alone: GitLab MR pipelines
+# carry the ref refs/merge-requests/<iid>/head, so a branch-ref filter would miss them.
 run_for_sha() {
 	local sha="$1" out
 	if [[ "$(platform)" == github ]]; then
 		out="$(gh api "repos/${SLUG}/actions/runs?head_sha=${sha}&per_page=100")" || return 1
-		jq -r '.workflow_runs[0] // empty | "\(.id) \(.head_branch // "")"' <<<"$out" 2>/dev/null || return 1
+		jq -r '.workflow_runs[0] // empty | "\(.id)|\(.head_branch // "")|\(.head_sha // "")"' <<<"$out" 2>/dev/null || return 1
 	else
 		out="$(glab api --hostname "$HOST" "projects/${SLUG//\//%2F}/pipelines?sha=${sha}&per_page=20")" || return 1
-		jq -r '.[0] // empty | "\(.id) \(.ref)"' <<<"$out" 2>/dev/null || return 1
+		# Never an external pipeline: a bare status post (our own precheck pass) creates one
+		# for the head, and grading off it would wait on our own success (#1371 lead review).
+		jq -r '[.[] | select(.source != "external")][0] // empty | "\(.id)|\(.ref // "")|\(.sha // "")"' <<<"$out" 2>/dev/null || return 1
 	fi
 }
 
-# "run=<id> ref=<ref>" from run_for_sha's "<id> <ref>". A run with no ref (GitHub can
-# report a null head_branch) falls back to the branch, which is what Job B-ci used before.
+# GitLab only. Prints "<id> <ref> <merge sha>" for the newest merged-results pipeline
+# bound to <sha>, or nothing. Returns non-zero only when an API call fails. A
+# merged-results pipeline runs on an ephemeral merge commit, so pipelines?sha=<head>
+# never lists it (#1357). It is bound when its sha is <sha>, or when its commit has
+# exactly two parents and <sha> is the second (merge-result.js, THE BINDING FACT).
+merge_result_for_head() {
+	local branch="$1" sha="$2" enc="${SLUG//\//%2F}" ebranch out iid line id psha
+	ebranch="$(jq -rn --arg b "$branch" '$b | @uri')" || return 1
+	out="$(glab api --hostname "$HOST" "projects/${enc}/merge_requests?state=opened&source_branch=${ebranch}")" || return 1
+	iid="$(jq -r --arg s "$sha" '[.[]? | select(.sha == $s)][0].iid // empty' <<<"$out" 2>/dev/null)" || return 1
+	[[ -n "$iid" ]] || return 0
+	out="$(glab api --hostname "$HOST" "projects/${enc}/merge_requests/${iid}/pipelines?per_page=100")" || return 1
+	line="$(jq -r --arg r "refs/merge-requests/${iid}/merge" \
+		'[.[]? | select(.ref == $r and (.id | type) == "number")] | max_by(.id) // empty | "\(.id)|\(.sha // "")"' \
+		<<<"$out" 2>/dev/null)" || return 1
+	[[ -n "$line" ]] || return 0
+	id="${line%%|*}" psha="${line#*|}"
+	[[ -n "$psha" ]] || return 0
+	if [[ "$psha" != "$sha" ]]; then
+		out="$(glab api --hostname "$HOST" "projects/${enc}/repository/commits/${psha}")" || return 1
+		jq -e --arg s "$sha" '(.parent_ids | length) == 2 and .parent_ids[1] == $s' <<<"$out" >/dev/null 2>&1 || return 0
+	fi
+	echo "$id|refs/merge-requests/${iid}/merge|$psha"
+}
+
+# "run=<id> ref=<ref> sha=<run sha>" from "<id>|<ref>|<run sha>". `|`, not a space,
+# because `read` collapses adjacent whitespace and an empty ref would take the sha's
+# place. A run with no ref (GitHub can report a null head_branch) falls back to the
+# branch, which is what Job B-ci used before; a run with no sha falls back to <sha>.
 run_line() {
-	local id="${1%% *}" ref="${1#* }"
-	[[ -z "$ref" || "$ref" == "$1" || "$ref" == null ]] && ref="$2"
-	echo "run=$id ref=$ref"
+	local id ref rsha
+	IFS='|' read -r id ref rsha <<<"$1"
+	[[ -z "$ref" || "$ref" == null ]] && ref="$2"
+	[[ -z "$rsha" || "$rsha" == null ]] && rsha="$3"
+	echo "run=$id ref=$ref sha=$rsha"
 }
 
 local_line() {
@@ -175,8 +211,18 @@ cmd_resolve() {
 		return 0
 	fi
 	if [[ -n "$found" ]]; then
-		echo "ci $(run_line "$found" "$branch")"
+		echo "ci $(run_line "$found" "$branch" "$sha")"
 		return 0
+	fi
+	if [[ "$(platform)" == gitlab ]]; then
+		if ! found="$(merge_result_for_head "$branch" "$sha")"; then
+			local_line "NO-RUN cannot read MR pipelines for ${sha:0:7}"
+			return 0
+		fi
+		if [[ -n "$found" ]]; then
+			echo "ci $(run_line "$found" "$branch" "$sha")"
+			return 0
+		fi
 	fi
 
 	trigger="$(first_code_span "$(project_field "$ROOT" "CI on demand")")"
@@ -215,7 +261,7 @@ cmd_resolve() {
 	while :; do
 		found="$(run_for_sha "$sha" || true)"
 		if [[ -n "$found" ]]; then
-			echo "ci triggered $(run_line "$found" "$branch")"
+			echo "ci triggered $(run_line "$found" "$branch" "$sha")"
 			return 0
 		fi
 		((SECONDS + POLL > deadline)) && break

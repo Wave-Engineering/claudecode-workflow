@@ -17,7 +17,7 @@
 // on PASS+integrated+continue, ends on a HOLD/flag" procedures are deterministic unit tests, not
 // integration runs. No LLM in the loop CONTROL FLOW ⇒ it provably cannot stall (#736 dissolves).
 
-import { directMergeReadSteps, headReadLines, targetReadLines, isMergeSha } from './merge-result.js'
+import { directMergeReadSteps, headReadLines, targetReadLines, isMergeSha, ciWaitRefLines, noRunProbeLines } from './merge-result.js'
 
 // ── args intake (same contract as per-wave-workflow.js #1/#3: the runtime global is `args`,
 //    which may arrive as an object OR a JSON string from tool-call quoting) ──────────────────
@@ -404,9 +404,12 @@ export function releaseCiPrompt({ planId, targetRepo, campaignBranch, protectedB
     ...head('head_sha'),
     ``,
     `2. GATE ON THE MERGE-RESULT PIPELINE AGAINST ${protectedBranch}. This is a REQUIRED, INDEPENDENT`,
-    `   check — not a re-run of the per-wave signals, and not optional:`,
-    `     sdlc-server ci_wait_run(repo="${targetRepo}", require_merge_result=true, pr_number=<n>,`,
+    `   check — not a re-run of the per-wave signals, and not optional.`,
+    ...noRunProbeLines({ targetRepo }).map((l) => `   ${l}`),
+    `   Then:`,
+    `     sdlc-server ci_wait_run(repo="${targetRepo}", ref=<below>, require_merge_result=true, pr_number=<n>,`,
     `                             timeout_sec=1800, poll_interval_sec=20)`,
+    ...ciWaitRefLines({ headBranch: campaignBranch }).map((l) => `   ${l}`),
     `   WHY IT CANNOT BE SKIPPED even though every wave was green: each wave's CI validated`,
     `   kahuna→${campaignBranch}, i.e. the wave against the CAMPAIGN branch. ${campaignBranch} itself`,
     `   drifts from ${protectedBranch} for the whole campaign — other people's merges land on trunk`,
@@ -427,7 +430,7 @@ export function releaseCiPrompt({ planId, targetRepo, campaignBranch, protectedB
     ...head('head_sha_final'),
     ...targetReadLines({ targetRepo, branch: protectedBranch, field: 'target_sha' }).map((l) => `   ${l}`),
     ``,
-    `Return: pr_number, pr_ref, head_sha (step 1), wait (step 2); merge_commit whenever step 3 had you`,
+    `Return: pr_number, pr_ref, head_sha (step 1), probe and wait (step 2); merge_commit whenever step 3 had you`,
     `read one (a GitLab green on a sha that is not the head, or the direct read); merge_pipelines ONLY if`,
     `you ran the direct read; head_sha_final and target_sha (step 4); notes (1-2 sentences). Report what you`,
     `READ. A missing fact holds the release; it never passes it.`,

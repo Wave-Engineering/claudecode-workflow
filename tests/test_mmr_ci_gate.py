@@ -53,6 +53,14 @@ def precheck_text() -> str:
 
 
 class TestMmrCiGateIsDefaultDeny:
+    def test_no_checks_yet_stop_names_head_and_mergeable_state(self, mmr_text: str) -> None:
+        """#1357 (triage #42): a PR whose CI never started is not a bare STOP; the line says
+        which head and what mergeability, so the cause is not rediscovered by hand."""
+        bullet = next(line for line in mmr_text.splitlines() if line.lstrip().startswith("- `no_checks_yet` → **STOP.**"))
+        assert "no run for head <head sha from pr_status>; mergeable=<mergeable_state>" in bullet
+        assert "blocker=<blocker>" in bullet
+        assert "mcp-server-sdlc#609" in mmr_text and "certified no runs" in mmr_text
+
     def test_gate_requires_an_explicit_pass(self, mmr_text: str) -> None:
         """The gate must name all_passed as the condition to PROCEED.
 
