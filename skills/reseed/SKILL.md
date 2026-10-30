@@ -211,9 +211,18 @@ and `#call-4-bj`, naming the pane. Outcomes are logged to
 
 > "Seed written. Run `/clear`, then `/reseed revive`."
 
-**The automatic trigger.** A Stop hook (`context-reseed-gate.sh`) blocks a turn's end when
-remaining context is at or below `RESEED_CONTEXT_THRESHOLD_PCT` (default 15) and says to run
-`/reseed`. When that happens, run this skill before anything else. The reading comes from the
+**The automatic trigger.** A Stop hook (`context-reseed-gate.sh`) acts when remaining context
+is at or below the threshold: `RESEED_CONTEXT_THRESHOLD_PCT` if set, else `100 - ` nerf's
+`ouch` dart, else 15. What it does depends on the session's nerf mode (`/nerf mode`):
+
+| nerf mode | at the threshold |
+|---|---|
+| `ultraviolence` (default) | blocks the turn: run this skill now, before anything else |
+| `hurt-me-plenty` | blocks the turn: tell the user, and ask whether to reseed now or after the current step; don't reseed without the answer |
+| `not-too-rough` | no block: one reminder per session that `/reseed` is advised |
+
+A session with no nerf config, or one the hook can't read, gets `ultraviolence`. Autocompact
+stays the backstop under every mode. The reading comes from the
 statusline, so headless (`claude -p`) sessions never have one and the gate never fires
 there. It reports a missing reading only after three turns without one, which most
 headless runs never reach, so there it is usually silent.

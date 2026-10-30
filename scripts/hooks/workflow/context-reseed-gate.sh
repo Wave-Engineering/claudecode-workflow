@@ -45,6 +45,21 @@
 # report on them, silencing a later, real failure. So a miss must recur on
 # MISS_TURNS consecutive Stops before it is reported.
 #
+# NERF MODES (#1352). nerf (mcp-server-nerf) writes a per-session config to
+# ${NERF_CONFIG_DIR:-/tmp}/nerf-<session_id>.json; this hook reads .mode and
+# .darts_pct.ouch from it. At or below the threshold:
+#   ultraviolence (default)  block: run /reseed now, before anything else
+#   hurt-me-plenty           block: ask the user whether to /reseed now or after
+#                            the current step; do not reseed without the answer
+#   not-too-rough            no block: one systemMessage per session advising
+#                            /reseed (marker <state dir>/<session_id>.reseed-advised)
+# A missing file, unreadable JSON, or a missing or unknown mode is ultraviolence:
+# a gate that can't read nerf must never get weaker. Autocompact stays the
+# backstop under every mode.
+#
+# THE THRESHOLD, first match wins: a numeric RESEED_CONTEXT_THRESHOLD_PCT; then
+# 100 - .darts_pct.ouch, when ouch is an integer from 1 to 99; then 15.
+#
 # LOOP GUARDS:
 #   - stop_hook_active == true → exit 0. Claude Code's own guard: this Stop is
 #     the continuation of a turn a Stop hook already blocked.
@@ -55,11 +70,14 @@
 # Contract (CC Stop hook):
 #   stdin:  JSON with .session_id, .cwd, .stop_hook_active
 #   stdout: {"decision":"block","reason":…} to block, {"systemMessage":…} to
-#           report an unavailable reading or an unmatched autocompact window
-#           (a block carries that report in the same object), nothing otherwise
+#           report an unavailable reading or an unmatched autocompact window, or
+#           to advise a reseed under not-too-rough (a block carries the report in
+#           the same object), nothing otherwise
 #   exit:   always 0
 #
-# Env: RESEED_CONTEXT_THRESHOLD_PCT (default 15) — block at <= this many percent
+# Env: RESEED_CONTEXT_THRESHOLD_PCT — act at <= this many percent; overrides
+#        nerf's ouch dart (see THE THRESHOLD)
+#      NERF_CONFIG_DIR (default /tmp) — where nerf's per-session config lives
 #      RESEED_CONTEXT_GATE_DISABLED=1 — kill-switch
 #      CLAUDE_CONTEXT_STATE_DIR — where the statusline persists readings
 #      CLAUDE_CODE_AUTO_COMPACT_WINDOW — autocompact window override (tokens)
@@ -82,11 +100,29 @@ HOOK_CWD="$(field '.cwd // empty')"
 HOOK_CWD="${HOOK_CWD:-$(pwd)}"
 [[ -f "$HOOK_CWD/.claude/reseed-armed.json" ]] && exit 0
 
-THRESHOLD="${RESEED_CONTEXT_THRESHOLD_PCT:-$DEFAULT_THRESHOLD}"
-[[ "$THRESHOLD" =~ ^[0-9]+([.][0-9]+)?$ ]] || THRESHOLD="$DEFAULT_THRESHOLD"
-
 STATE_DIR="${CLAUDE_CONTEXT_STATE_DIR:-$HOME/.claude/state/context}"
 SESSION_ID="$(field '.session_id // empty')"
+
+# nerf's per-session config: the mode picks what happens at the threshold, and the
+# ouch dart sets it. Anything unreadable is ultraviolence: this gate never weakens
+# because it can't read nerf.
+NERF_MODE=ultraviolence NERF_OUCH=""
+if [[ "$SESSION_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
+	NERF_FILE="${NERF_CONFIG_DIR:-/tmp}/nerf-${SESSION_ID}.json"
+	if [[ -f "$NERF_FILE" ]]; then
+		m="$(jq -r '.mode // empty' "$NERF_FILE" 2>/dev/null || true)"
+		case "$m" in hurt-me-plenty | not-too-rough) NERF_MODE="$m" ;; esac
+		NERF_OUCH="$(jq -r '.darts_pct.ouch | numbers' "$NERF_FILE" 2>/dev/null || true)"
+	fi
+fi
+
+if [[ "${RESEED_CONTEXT_THRESHOLD_PCT:-}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+	THRESHOLD="$RESEED_CONTEXT_THRESHOLD_PCT"
+elif [[ "$NERF_OUCH" =~ ^[0-9]+$ ]] && ((10#$NERF_OUCH >= 1 && 10#$NERF_OUCH <= 99)); then
+	THRESHOLD=$((100 - 10#$NERF_OUCH))
+else
+	THRESHOLD="$DEFAULT_THRESHOLD"
+fi
 
 # A miss: count it, and report once per session after MISS_TURNS consecutive
 # misses. Without a usable session id there is nowhere to count, so report at once.
@@ -193,10 +229,33 @@ if [[ "$USED" =~ ^[0-9]+$ ]] && is_tokens "$WINDOW"; then
 	fi
 fi
 
+block() {
+	jq -cn --arg r "$1" --arg n "$NOTE" '{decision: "block", reason: $r} + (if $n == "" then {} else {systemMessage: $n} end)'
+}
+note_only() {
+	[[ -z "$NOTE" ]] || jq -cn --arg n "$NOTE" '{systemMessage: $n}'
+}
+
 if awk -v p="$PCT" -v t="$THRESHOLD" 'BEGIN { exit !(p <= t) }'; then
-	jq -cn --arg r "Context at ${PCT%.*}% remaining${OF} (threshold ${THRESHOLD}%) — run /reseed now, before anything else." \
-		--arg n "$NOTE" '{decision: "block", reason: $r} + (if $n == "" then {} else {systemMessage: $n} end)'
-elif [[ -n "$NOTE" ]]; then
-	jq -cn --arg n "$NOTE" '{systemMessage: $n}'
+	AT="Context at ${PCT%.*}% remaining${OF} (threshold ${THRESHOLD}%"
+	case "$NERF_MODE" in
+	hurt-me-plenty)
+		block "$AT, nerf: hurt-me-plenty) — the user chose to be asked first: tell them and ask whether to /reseed now or after the current step; do not reseed without their answer. If they already chose after the current step, finish it, then /reseed."
+		;;
+	not-too-rough)
+		ADVISED="$STATE_DIR/${SESSION_ID}.reseed-advised"
+		if [[ -e "$ADVISED" ]]; then
+			note_only
+		else
+			mkdir -p "$STATE_DIR" 2>/dev/null
+			: >"$ADVISED" 2>/dev/null
+			jq -cn --arg m "$AT, nerf: not-too-rough) — /reseed advised." --arg n "$NOTE" \
+				'{systemMessage: ([$m, $n] | map(select(. != "")) | join("\n"))}'
+		fi
+		;;
+	*) block "$AT) — run /reseed now, before anything else." ;;
+	esac
+else
+	note_only
 fi
 exit 0
