@@ -85,6 +85,11 @@ def test_owrx_reads_and_lists() -> None:
     assert "`mcp__disc-server__disc_list(guild_id, type: \"text\")`, on both kinds of host" in owrx
     assert "chat_list_channels" not in owrx
     assert "there is no channel listing" in owrx
+    # The docs' tool tables describe /owrx too, and drifted once (cheatsheet.md).
+    for doc in sorted((_REPO / "docs").rglob("*.md")):
+        for line in doc.read_text().splitlines():
+            if line.startswith("| `/owrx`"):
+                assert "chat_list_channels" not in line, f"{doc.name}: {line}"
 
 
 def test_disc_is_deprecated_but_unchanged() -> None:
