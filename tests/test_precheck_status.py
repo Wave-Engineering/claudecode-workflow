@@ -152,8 +152,11 @@ else:
         print(json.dumps({"id": int(m.group(2)), "source": src})); sys.exit(0)
     m = re.fullmatch(r"projects/([^/]+)/statuses/([0-9a-f]{40})", endpoint)
     if method == "POST" and m:
+        if fields["state"] == "failed" and state.get("failed_posts", 0) < int(os.environ.get("FAKE_FAILED_POST_FAILS", "0")):
+            state["failed_posts"] = state.get("failed_posts", 0) + 1  # the first N `failed` posts 500
+            save(); print(json.dumps({"message": "500 Internal Server Error"})); sys.exit(0)
         n = state["next"]; state["next"] = n + 1
-        state["s"].setdefault(m.group(2), []).append({"id": n, "name": fields["name"], "status": fields["state"], "pipeline_id": fields.get("pipeline_id")})
+        state["s"].setdefault(m.group(2), []).append({"id": n, "name": fields["name"], "status": fields["state"], "pipeline_id": fields.get("pipeline_id"), "description": fields.get("description")})
         save(); print("{}"); sys.exit(0)
     m = re.fullmatch(r"projects/([^/]+)/repository/commits/([0-9a-f]{40})/statuses\?name=precheck&all=true&per_page=100", endpoint)
     if method == "GET" and m:
@@ -415,6 +418,66 @@ def test_gitlab_failed_re_read_replaces_the_pass(world):
     assert r.returncode == 3, r.stderr
     assert "could not be re-read" in r.stderr
     assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "failure"
+    # #1371 N3: the failed status names its own cause, not an external pipeline.
+    st = json.loads((tmp / "state.json").read_text())["s"][shas[-1]]
+    assert st[-1]["description"] == "no pass: the MR could not be re-read after the post"
+
+
+def test_gitlab_refusal_for_a_move_says_how_to_recover(world):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = {**_merged_results_mr(shas), "FAKE_HEAD_PIPELINE_AFTER_POST": "2983506881"}
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
+    assert r.returncode == 3, r.stderr
+    assert "re-run the MR pipeline to recover" in r.stderr
+    st = json.loads((tmp / "state.json").read_text())["s"][shas[-1]]
+    assert st[-1]["description"] == "no pass: an external pipeline hides the MR's CI verdict"
+
+
+def test_gitlab_failed_post_that_keeps_failing_says_the_success_still_stands(world):
+    """#1371 N1: the outage that trips the guard can fail its own `failed` post too."""
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = {**_merged_results_mr(shas), "FAKE_HEAD_PIPELINE_AFTER_POST": "2983506881", "FAKE_FAILED_POST_FAILS": "3"}
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
+    assert r.returncode == 3, r.stderr
+    assert f"Any success on {shas[-1]} STILL STANDS" in r.stderr
+    assert "must be replaced before the PR/MR is marked ready" in r.stderr
+    posts = [c for c in _calls(tmp) if "-X" in c and "state=failed" in c]
+    assert len(posts) == 3, "the failed post is tried 3 times"
+    assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "success", "the stub kept it, as GitLab would"
+
+
+def test_gitlab_failed_post_retry_recovers(world):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = {**_merged_results_mr(shas), "FAKE_HEAD_PIPELINE_AFTER_POST": "2983506881", "FAKE_FAILED_POST_FAILS": "2"}
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
+    assert r.returncode == 3, r.stderr
+    assert "STILL STANDS" not in r.stderr
+    assert "Its precheck status is now failed" in r.stderr
+    assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "failure"
+
+
+def test_gitlab_head_pipeline_with_no_source_is_treated_as_external(world):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = {**_merged_results_mr(shas), "FAKE_PIPELINE_SOURCES": json.dumps({"2983401888": None})}
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
+    assert r.returncode == 3, r.stderr
+    assert "already an external pipeline" in r.stderr
+    assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "failure"
+
+
+def test_gitlab_lookup_never_attaches_to_a_pipeline_with_no_source(world):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = {**_merged_results_mr(shas), "FAKE_PIPELINES": json.dumps([{"id": 991}])}
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
+    assert r.returncode == 0, r.stderr
+    st = json.loads((tmp / "state.json").read_text())["s"][shas[-1]]
+    assert st[0]["pipeline_id"] is None, "a pipeline with no source takes the guarded bare path"
+    assert any(c[-1] == "projects/group%2Fsub%2Fproj/merge_requests/3" for c in _calls(tmp)), "the guard ran"
 
 
 @pytest.mark.parametrize(
