@@ -95,6 +95,15 @@ check SENTINEL './tools/check-all.sh > l 2>&1; echo "exit=$?"' "exit=0"
 check NONE 'pytest > a 2>&1; echo "exit=$?"; pytest > b 2>&1; echo "exit=$?"' $'exit=0\nexit=2'
 check SENTINEL 'pytest > a 2>&1; echo "exit=$?"; pytest > b 2>&1; echo "exit=$?"' $'exit=0\nexit=0'
 check NONE 'ls; echo "exit=$?"' "exit=0" # a status line with no test segment is not a test
+# The echo must report the test's own status, not a later step's (#1375 review).
+check NONE 'pytest -q | tail -5; echo "exit=$?"' "exit=0"
+check NONE 'pytest || true; echo "exit=$?"' "exit=0"
+check NONE 'pytest; ls; echo "exit=$?"' "exit=0"
+check SENTINEL 'cd engine && pytest > l 2>&1; echo "exit=$?"' "exit=0"
+check SENTINEL $'pytest > l 2>&1\necho "exit=$?"' "exit=0"
+# A backslash continuation is one command, not a newline connector.
+check SENTINEL $'python3 -m pytest \\\n  tests/ -q'
+check SENTINEL $'pytest -q \\\n  --tb=short && echo ok'
 # No status line: a connector after the test masks its exit, so the status is unknown.
 check NONE "pytest -q | tail -5"
 check NONE "pytest; echo done"

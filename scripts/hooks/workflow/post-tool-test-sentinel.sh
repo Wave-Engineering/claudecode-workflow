@@ -22,7 +22,9 @@
 # lane run as `<cmd> > <log> 2>&1; echo "exit=$?"`. PostToolUse fires when the whole
 # command line exits 0, which says nothing about a test that ran before a `;`, `||`, `|`
 # or `&`. So the sentinel is written only when the test's own status is known to be 0:
-#   (a) stdout has one or more `exit=N` lines: a segment matches and every one is exit=0;
+#   (a) stdout has one or more `exit=N` lines: every one is exit=0, and a matching segment
+#       is followed (through `&&` only, then one `;` or newline) by `echo … exit=$?`, so
+#       the line is the test's own status, not a later `tail`'s or `|| true`'s;
 #   (b) no such line: some matching segment is followed only by `&&` (or is last), so the
 #       command line's 0 is its own exit, or a later `&&` step's, which ran only after it;
 #   (c) anything else is unknown, and writes nothing.
@@ -143,15 +145,23 @@ seg_matches() {
 	printf '%s' "$1" | grep -qE "$TEST_PATTERN" || declared_match "$1"
 }
 
-# Trailing newlines and spaces are not a connector.
+# Trailing newlines and spaces are not a connector, and neither is a backslash line
+# continuation. $nl, not $'\n', inside the pattern: bash <= 4.2 keeps the quotes.
+nl=$'\n'
 TRIMMED="${COMMAND%"${COMMAND##*[![:space:]]}"}"
+TRIMMED="${TRIMMED//\\$nl/ }"
 split_segments "$TRIMMED"
 
-any_match=false
+# reported_match: a matching segment whose own status an `echo … exit=$?` prints. Only
+# `&&` may come between the two, plus one `;` or newline just before the echo. So
+# `pytest | tail; echo "exit=$?"` (tail's status) and `pytest || true; echo …` do not count.
+is_status_echo() {
+	printf '%s' "$1" | grep -qE '^[[:space:]]*echo[[:space:]].*exit=\$\?'
+}
 clean_match=false
+reported_match=false
 for ((k = 0; k < ${#SEGS[@]}; k++)); do
 	seg_matches "${SEGS[k]}" || continue
-	any_match=true
 	tail_ok=true
 	for ((j = k; j < ${#CONNS[@]}; j++)); do
 		[[ "${CONNS[j]}" == '&&' || "${CONNS[j]}" == END ]] || {
@@ -160,13 +170,21 @@ for ((k = 0; k < ${#SEGS[@]}; k++)); do
 		}
 	done
 	[[ "$tail_ok" == true ]] && clean_match=true
+	for ((j = k; j < ${#CONNS[@]} - 1; j++)); do
+		if [[ "${CONNS[j]}" == ';' || "${CONNS[j]}" == NL ]]; then
+			is_status_echo "${SEGS[j + 1]}" && reported_match=true
+			break
+		fi
+		[[ "${CONNS[j]}" == '&&' ]] || break
+	done
 done
 
 counts=false
 STATUS_LINES=$(printf '%s\n' "$STDOUT" | grep -E '^exit=[0-9]+$' || true)
 if [[ -n "$STATUS_LINES" ]]; then
-	# (a) an explicit status: every exit= line must be exit=0.
-	if [[ "$any_match" == true ]] && ! printf '%s\n' "$STATUS_LINES" | grep -qv '^exit=0$'; then
+	# (a) an explicit status: every exit= line is exit=0, and it reports a test's own exit.
+	if ! printf '%s\n' "$STATUS_LINES" | grep -qv '^exit=0$' &&
+		[[ "$reported_match" == true || "$clean_match" == true ]]; then
 		counts=true
 	fi
 elif [[ "$clean_match" == true ]]; then
