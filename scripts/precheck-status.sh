@@ -13,6 +13,11 @@
 # GitLab: the status is attached to the SHA's EXISTING pipeline (pipeline_id). A bare
 # status post makes GitLab create a separate "external" pipeline, which can become the
 # MR's latest pipeline and hide the real CI verdict from the merge check.
+# On a merged-results MR the head SHA has no pipeline (MR pipelines run on an ephemeral
+# merge commit), so the post is bare by necessity. It stays on the head, because every
+# reader keys on the head (pr-head + get, pr-ready-gate.sh, sdlc's pr_create/pr_ready/
+# pr_merge). Each open MR's head_pipeline is read before and after, and the post exits
+# 3 if one moved: that is the hazard above, measured instead of assumed (#1357).
 #
 # Every read fails closed: `get` prints `success` only when the platform said so. An API
 # error is exit 3, never a state.
@@ -182,6 +187,20 @@ post)
 			api_fail "read the pipeline of $sha"
 		pid="$(printf '%s' "$pl" | jq -er 'if type == "array" then (.[0].id // "") else error end' 2>/dev/null)" ||
 			api_fail "read the pipeline of $sha (unexpected answer)"
+		# No pipeline for the head (a merged-results MR runs on its merge commit): the post
+		# is bare by necessity. Record each open MR's head_pipeline at this head first, so
+		# the post fails loudly if GitLab ever promotes the external pipeline (#1357).
+		hp_before=()
+		if [[ -z "$pid" ]]; then
+			mrs="$(gl_api "projects/$enc/repository/commits/$sha/merge_requests")" || api_fail "list MRs of $sha"
+			iids="$(printf '%s' "$mrs" | jq -er --arg s "$sha" \
+				'if type == "array" then ([.[] | select(.state == "opened" and .sha == $s) | .iid] | map(tostring) | join(" ")) else error end' \
+				2>/dev/null)" || api_fail "list MRs of $sha (unexpected answer)"
+			for iid in $iids; do
+				mr="$(gl_api "projects/$enc/merge_requests/$iid")" || api_fail "read MR !$iid"
+				hp_before+=("$iid=$(printf '%s' "$mr" | jq -r '.head_pipeline.id // empty' 2>/dev/null)")
+			done
+		fi
 		args=(-X POST "projects/$enc/statuses/$sha" -f state=success -f name="$CONTEXT" -f description="$desc")
 		[[ -n "$pid" ]] && args+=(-f pipeline_id="$pid")
 		gl_api "${args[@]}" >/dev/null || api_fail "post status on $sha"
@@ -193,6 +212,15 @@ post)
 		echo "posted, but $sha reads back '$state', not success" >&2
 		exit 3
 	fi
+	for rec in "${hp_before[@]+"${hp_before[@]}"}"; do
+		iid="${rec%%=*}" before="${rec#*=}"
+		mr="$(gl_api "projects/$enc/merge_requests/$iid")" || api_fail "re-read MR !$iid"
+		after="$(printf '%s' "$mr" | jq -r '.head_pipeline.id // empty' 2>/dev/null)"
+		if [[ "$after" != "$before" ]]; then
+			echo "posted, but MR !$iid's head_pipeline moved from ${before:-none} to ${after:-none}: the external pipeline the post created now hides its CI verdict" >&2
+			exit 3
+		fi
+	done
 	echo "success $sha"
 	;;
 

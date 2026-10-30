@@ -16,6 +16,8 @@ The contract between the kit, which **produces** the mark, and everything that *
 
 **Why GitLab passes `pipeline_id`:** a bare status post makes GitLab create a separate "external" pipeline. That pipeline can become the MR's latest pipeline and hide the real CI verdict from the merge check.
 
+**Merged-results MRs (#1357):** the head SHA has no pipeline there, because MR pipelines run on an ephemeral merge commit. So the post is bare by necessity. It still goes on the head, because every reader keys on the head. Before posting, `precheck-status.sh post` reads each open MR at that head's `head_pipeline`. After the read-back it reads them again, and it exits 3 if one moved. If GitLab ever promotes the external pipeline, the post fails loudly instead of hiding the MR's CI verdict.
+
 ## Reading it
 
 A consumer treats the mark as present **only** when the latest `precheck` status on the exact head SHA is `success`.

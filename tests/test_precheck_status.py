@@ -54,7 +54,13 @@ def gl_title(n, pr):
 def gl_mr(n, pr):
     t = gl_title(n, pr)
     draft = bool(re.match(r"\s*(\[draft\]|\(draft\)|draft:)", t, re.I))  # GitLab's own rule; WIP: no longer counts
-    return {"iid": int(n), "sha": pr["sha"], "source_branch": pr["ref"], "target_branch": pr.get("base", "main"), "title": t, "draft": draft}
+    mr = {"iid": int(n), "sha": pr["sha"], "source_branch": pr["ref"], "target_branch": pr.get("base", "main"), "title": t, "draft": draft}
+    hp = os.environ.get("FAKE_HEAD_PIPELINE")
+    if state["s"] and os.environ.get("FAKE_HEAD_PIPELINE_AFTER_POST"):
+        hp = os.environ["FAKE_HEAD_PIPELINE_AFTER_POST"]  # what GitLab shows once a status was posted
+    if hp:
+        mr["head_pipeline"] = {"id": int(hp)}
+    return mr
 if tool == "gh" and endpoint == "graphql":
     assert "markPullRequestReadyForReview" in fields["query"], fields
     state.setdefault("ready", {})[fields["id"].removeprefix("PR_")] = True
@@ -91,6 +97,11 @@ if tool == "glab" and method == "GET":
         if not pr:
             print(json.dumps({"message": "404 Not found"})); sys.exit(0)
         print(json.dumps(gl_mr(m.group(2), pr))); sys.exit(0)
+    m = re.fullmatch(r"projects/([^/]+)/repository/commits/([0-9a-f]{40})/merge_requests", endpoint)
+    if m:
+        if os.environ.get("FAKE_COMMIT_MRS_ERROR") == "1":
+            print(json.dumps({"message": "500 Internal Server Error"})); sys.exit(0)
+        print(os.environ.get("FAKE_COMMIT_MRS", "[]")); sys.exit(0)
     m = re.fullmatch(r"projects/([^/]+)/merge_requests\?state=opened&source_branch=(.+)", endpoint)
     if m:
         from urllib.parse import unquote
@@ -286,6 +297,61 @@ def test_gitlab_post_without_a_pipeline_is_bare(world):
     _gitlab(repo)
     assert _run(env, "post", str(repo), shas[0], "ok").returncode == 0
     assert json.loads((tmp / "state.json").read_text())["s"][shas[0]][0]["pipeline_id"] is None
+
+
+# #1357: a merged-results MR's head has no pipeline (its pipelines run on an ephemeral merge
+# commit), so the post is bare by necessity, and each open MR's head_pipeline is guarded.
+def _merged_results_mr(shas: list[str]) -> dict[str, str]:
+    prs = json.dumps({"3": {"sha": shas[-1], "ref": "feature/1-x"}})
+    mrs = json.dumps([
+        {"iid": 3, "state": "opened", "sha": shas[-1]},
+        {"iid": 2, "state": "merged", "sha": shas[-1]},  # never read: not open
+        {"iid": 4, "state": "opened", "sha": shas[0]},  # never read: an older head
+    ])
+    return {"FAKE_PRS": prs, "FAKE_COMMIT_MRS": mrs, "FAKE_HEAD_PIPELINE": "2983401888"}
+
+
+def test_gitlab_merged_results_post_stays_on_head(world):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = _merged_results_mr(shas)
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
+    assert r.returncode == 0, r.stderr
+    assert json.loads((tmp / "state.json").read_text())["s"][shas[-1]][0]["pipeline_id"] is None
+    reads = [c for c in _calls(tmp) if c[-1] == "projects/group%2Fsub%2Fproj/merge_requests/3"]
+    assert len(reads) == 2, "head_pipeline is read before and after the post"
+    assert not any(c[-1].endswith(("merge_requests/2", "merge_requests/4")) for c in _calls(tmp))
+    # The readers agree: pr-head names the head, and get reads the pass on it.
+    head = _run(env, "pr-head", str(repo), "3", **extra).stdout.split()[0]
+    assert head == shas[-1]
+    assert _run(env, "get", str(repo), head).stdout.strip() == "success"
+
+
+def test_gitlab_post_fails_when_head_pipeline_moves(world):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = {**_merged_results_mr(shas), "FAKE_HEAD_PIPELINE_AFTER_POST": "2983506881"}
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
+    assert r.returncode == 3
+    assert "MR !3's head_pipeline moved from 2983401888 to 2983506881" in r.stderr
+    assert "hides its CI verdict" in r.stderr
+
+
+def test_gitlab_post_mr_lookup_failure_posts_nothing(world):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    r = _run(env, "post", str(repo), shas[-1], "ok", **_merged_results_mr(shas), FAKE_COMMIT_MRS_ERROR="1")
+    assert r.returncode == 3
+    assert f"list MRs of {shas[-1]}" in r.stderr
+    assert not (tmp / "state.json").exists(), "no status is written when the guard cannot read"
+
+
+def test_gitlab_post_with_a_pipeline_skips_the_guard(world):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    r = _run(env, "post", str(repo), shas[-1], "ok", FAKE_PIPELINE="77", **_merged_results_mr(shas))
+    assert r.returncode == 0, r.stderr
+    assert not any("merge_requests" in c[-1] for c in _calls(tmp))
 
 
 @pytest.mark.parametrize(("status", "want"), [("failed", "failure"), ("running", "pending"), ("canceled", "failure")])
