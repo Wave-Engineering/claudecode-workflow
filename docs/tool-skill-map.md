@@ -100,7 +100,7 @@ What each skill calls under the hood.
 | `/ddd` | `ddd_locate_domain_model`, `ddd_locate_sketchbook`, `ddd_summary`, `ddd_verify_committed` |
 | `/devspec` | `devspec_locate`, `devspec_summary`, `devspec_approve`, `devspec_finalize`, `devspec_parse_section_8`, `devspec_verify_approved` |
 | `/owtx` | `chat_send`, `chat_dm`, `chat_health` (routes); `disc_send` without crewchat ([chat-tools.md](chat-tools.md)) |
-| `/owrx` | `chat_read`, `chat_thread`, `chat_list_channels`; `disc_read`, `disc_list` without crewchat ([chat-tools.md](chat-tools.md)) |
+| `/owrx` | `chat_read`, `chat_thread`; `disc_read` without crewchat; `disc_list` on both kinds of host ([chat-tools.md](chat-tools.md)) |
 | `/disc` (deprecated) | `disc_send`, `disc_read`, `disc_list`, `disc_resolve`, `disc_create_channel`, `disc_create_thread`; on crewchat hosts `chat_send`, `chat_read` with `backend: "discord"` |
 | `/dod` | `dod_load_manifest`, `dod_verify_deliverable`, `dod_run_test_suite`, `dod_check_coverage` |
 | `/ibm` | `ibm` |

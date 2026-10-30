@@ -22,11 +22,11 @@ The transport, the route grammar and ask-once are the kit's chat rules in `docs/
 | `/owrx #precheck` | `chat_read(channel: "precheck", limit: 20)` |
 | `/owrx #general > discord` | `chat_read(channel: "general", limit: 20, backend: "discord")` |
 | `/owrx thread <post_id>` | `chat_thread(post_id: "<post_id>")`: the thread's own backend (R-12), so no route |
-| `/owrx list > discord` | `chat_list_channels(guild_id, type: "text")` |
+| `/owrx list > discord` | `mcp__disc-server__disc_list(guild_id, type: "text")`, on both kinds of host |
 
 **The route** is the same as `/owtx`'s: only the last token pair, `> <route>`, and only for a known name (`discord`, or a `<server_id>` that `chat_health()` lists). **No route → omit `backend`**, so the default applies, with ask-once on `needs_human`.
 
-**`list`** is Discord-only. Read the guild from `~/.claude/discord.json` (`.guild_id`). On Mattermost (no route, or a `<server_id>` route) say there is no channel listing and ask which channel to read.
+**`list`** is Discord-only, and Discord-only ops stay on `disc_*` on both kinds of host (`docs/chat-tools.md`), so it never goes through `chat_*`. Read the guild from `~/.claude/discord.json` (`.guild_id`). On Mattermost (no route, or a `<server_id>` route) say there is no channel listing and ask which channel to read.
 
 ## Summarize
 

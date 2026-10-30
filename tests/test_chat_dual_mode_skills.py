@@ -75,6 +75,27 @@ def test_no_skill_points_at_the_rule_in_disc() -> None:
         )
 
 
+# The doorbell's arm rule and exit table moved from /disc to docs/chat-tools.md with the
+# dual-mode rule (#1348). These are the shapes the old pointers took in the docs.
+_STALE_DOORBELL_POINTERS = (
+    "dual-mode rule in `/disc`",
+    '(`/disc`, "Doorbell")',
+    "table in `/disc`",
+    "(see `/disc`)",
+)
+
+
+def test_no_doc_points_at_the_doorbell_in_disc() -> None:
+    docs = sorted((_REPO / "docs").rglob("*.md"))
+    assert docs, "no docs found"
+    for doc in docs:
+        text = doc.read_text()
+        for stale in _STALE_DOORBELL_POINTERS:
+            assert stale not in text, (
+                f"{doc.relative_to(_REPO)} still points at /disc for the doorbell: {stale!r} (#1348)"
+            )
+
+
 def test_no_skill_uses_chat_tools_without_the_rule() -> None:
     for skill_md in sorted(_SKILLS.glob("*/SKILL.md")):
         text = skill_md.read_text()

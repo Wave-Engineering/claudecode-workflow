@@ -52,6 +52,7 @@ chmod +x "$SHIM/tmux"
 cat >"$SHIM/notify" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n---\n' "$@" >>"$NOTIFIED"
+printf '%s' "${NOTIFY_BJ_REPO_ROOT-<unset>}" >"$NOTIFIED.repo_root"
 SH
 chmod +x "$SHIM/notify"
 
@@ -101,6 +102,12 @@ if grep -q '%42' "$C/notified" 2>/dev/null; then
 	pass "pages BJ, naming the pane"
 else
 	fail "loud path not taken, or pane not named: $(cat "$C/notified" 2>/dev/null)"
+fi
+# notify-bj.sh posts as the checkout's agent, so the page must carry the project root (#1348).
+if [[ "$(cat "$C/notified.repo_root" 2>/dev/null)" == "$C/root" ]]; then
+	pass "the page carries NOTIFY_BJ_REPO_ROOT = the project root"
+else
+	fail "NOTIFY_BJ_REPO_ROOT was '$(cat "$C/notified.repo_root" 2>/dev/null)', want $C/root"
 fi
 if [[ ! -e "$C/root/.claude/reseed-ack" ]]; then
 	pass "no stale nonce left behind"

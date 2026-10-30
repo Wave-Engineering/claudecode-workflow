@@ -80,7 +80,10 @@ def test_owrx_reads_and_lists() -> None:
     owrx = _text("owrx")
     assert '`chat_read(channel: "general", limit: 20)`' in owrx
     assert '`chat_thread(post_id: "<post_id>")`' in owrx
-    assert "`chat_list_channels(guild_id, type: \"text\")`" in owrx
+    # Discord-only ops stay on disc_* on both kinds of host (docs/chat-tools.md), so list
+    # must not switch to chat_list_channels now and switch again later.
+    assert "`mcp__disc-server__disc_list(guild_id, type: \"text\")`, on both kinds of host" in owrx
+    assert "chat_list_channels" not in owrx
     assert "there is no channel listing" in owrx
 
 

@@ -545,7 +545,7 @@ Drives `sqtk`, the CLI for squawkie-talkie, the fleet's shared lists. A squawk i
 
 **How you hear back:**
 - **Busy:** the `sqtk-drain.sh` `UserPromptSubmit` hook puts each state change to your squawks into your next turn, once.
-- **Idle:** `~/.claude/scripts/sqtk-doorbell.sh`, run in the background, exits when one of your squawks is answered. On a crewchat host (`chat_send` in your tool list), `crewchat-doorbell` carries squawk answers instead. Arm only that one (see `/disc`).
+- **Idle:** `~/.claude/scripts/sqtk-doorbell.sh`, run in the background, exits when one of your squawks is answered. On a crewchat host (`chat_send` in your tool list), `crewchat-doorbell` carries squawk answers instead. Arm only that one (see `docs/chat-tools.md`, "Doorbell: `crewchat-doorbell` or the one-shots").
 - **BJ's banner:** `sqtk-banner.sh` is an opt-in `Stop` hook that prints the open `bj:needs` items. Wire it only into the sessions he picks, in that project's `.claude/settings.local.json`.
 
 **Examples:**
