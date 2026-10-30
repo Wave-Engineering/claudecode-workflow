@@ -798,6 +798,7 @@ function noRunProbeLines({ targetRepo, prNumber, next = 'the last head read' }) 
     `is one of ${[...NO_RUN_OBSTRUCTIONS].join(', ')}. Any other answer (a non-empty pending_runs,`,
     `a blocker of draft, not_mergeable, checks_not_registered or evidence_unavailable, or no no-checks status): call ci_wait_run`,
     `as below, because a run may exist or CI may still start.`,
+    `On a SKIP, still return every required field; report wait as {} (ci_wait_run was not called).`,
   ]
 }
 

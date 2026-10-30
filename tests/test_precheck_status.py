@@ -63,6 +63,10 @@ def gl_mr(n, pr):
         hp = os.environ["FAKE_HEAD_PIPELINE_AFTER_POST"]
     if hp:
         mr["head_pipeline"] = {"id": int(hp)}
+        if os.environ.get("FAKE_HEAD_PIPELINE_SOURCE"):  # unset: the answer omits it
+            mr["head_pipeline"]["source"] = os.environ["FAKE_HEAD_PIPELINE_SOURCE"]
+    if os.environ.get("FAKE_MR_READ_FAIL_AFTER_POST") == "1" and state["s"]:
+        return {"message": "500 Internal Server Error"}
     return mr
 if tool == "gh" and endpoint == "graphql":
     assert "markPullRequestReadyForReview" in fields["query"], fields
@@ -134,12 +138,18 @@ if tool == "gh":
             latest[s["context"]] = s
         print(json.dumps({"statuses": list(latest.values())[::-1]})); sys.exit(0)
 else:
-    m = re.fullmatch(r"projects/([^/]+)/pipelines\?sha=([0-9a-f]{40})&order_by=id&sort=desc&per_page=1", endpoint)
+    m = re.fullmatch(r"projects/([^/]+)/pipelines\?sha=([0-9a-f]{40})&order_by=id&sort=desc&per_page=20", endpoint)
     if method == "GET" and m:
         if os.environ.get("FAKE_PIPELINE_FAIL") == "1":
             print(json.dumps({"message": "500 Internal Server Error"})); sys.exit(0)
+        if os.environ.get("FAKE_PIPELINES"):
+            print(os.environ["FAKE_PIPELINES"]); sys.exit(0)  # newest first, with sources
         pid = os.environ.get("FAKE_PIPELINE")
-        print(json.dumps([{"id": int(pid)}] if pid else [])); sys.exit(0)
+        print(json.dumps([{"id": int(pid), "source": "push"}] if pid else [])); sys.exit(0)
+    m = re.fullmatch(r"projects/([^/]+)/pipelines/([0-9]+)", endpoint)
+    if method == "GET" and m:
+        src = json.loads(os.environ.get("FAKE_PIPELINE_SOURCES", "{}")).get(m.group(2), "merge_request_event")
+        print(json.dumps({"id": int(m.group(2)), "source": src})); sys.exit(0)
     m = re.fullmatch(r"projects/([^/]+)/statuses/([0-9a-f]{40})", endpoint)
     if method == "POST" and m:
         n = state["next"]; state["next"] = n + 1
@@ -365,6 +375,58 @@ def test_gitlab_post_fails_when_head_pipeline_moves_late(world):
     assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "failure"
     reads = [c for c in _calls(tmp) if c[-1] == "projects/group%2Fsub%2Fproj/merge_requests/3"]
     assert len(reads) == 1 + 2, "the poll stops at the move"
+
+
+def test_gitlab_second_post_on_an_external_head_pipeline_is_refused(world):
+    """#1371 re-review: after an earlier bare post the head's only pipeline is our external
+    one, and head_pipeline already sits on it. The post must not attach to it and pass."""
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = {
+        **_merged_results_mr(shas),
+        "FAKE_PIPELINES": json.dumps([{"id": 990, "source": "external"}]),
+        "FAKE_HEAD_PIPELINE": "990",
+        "FAKE_HEAD_PIPELINE_SOURCE": "external",
+    }
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
+    assert r.returncode == 3, r.stderr
+    assert "already an external pipeline" in r.stderr
+    st = json.loads((tmp / "state.json").read_text())["s"][shas[-1]]
+    assert [s["status"] for s in st] == ["failed"], "no success is ever posted"
+    assert st[0]["pipeline_id"] is None, "never attached to our own external pipeline"
+    assert _run(env, "get", str(repo), shas[-1]).stdout.strip() != "success"
+
+
+def test_gitlab_external_source_read_from_the_pipeline_when_the_mr_omits_it(world):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = {**_merged_results_mr(shas), "FAKE_PIPELINE_SOURCES": json.dumps({"2983401888": "external"})}
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
+    assert r.returncode == 3, r.stderr
+    assert any(c[-1] == "projects/group%2Fsub%2Fproj/pipelines/2983401888" for c in _calls(tmp))
+    assert _run(env, "get", str(repo), shas[-1]).stdout.strip() != "success"
+
+
+def test_gitlab_failed_re_read_replaces_the_pass(world):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = {**_merged_results_mr(shas), "FAKE_MR_READ_FAIL_AFTER_POST": "1"}
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
+    assert r.returncode == 3, r.stderr
+    assert "could not be re-read" in r.stderr
+    assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "failure"
+
+
+@pytest.mark.parametrize(
+    "polls,step", [("0", "5"), ("-1", "5"), ("x", "5"), ("6", "-1"), ("6", "1.5"), ("6", "y")]
+)
+def test_bad_poll_seams_exit_2_before_posting(world, polls, step):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    r = _run(env, "post", str(repo), shas[-1], "ok", **_merged_results_mr(shas),
+             PRECHECK_HP_POLLS=polls, PRECHECK_HP_STEP_SEC=step)
+    assert r.returncode == 2, r.stderr
+    assert not (tmp / "state.json").exists(), "nothing is posted"
 
 
 def test_gitlab_post_no_move_across_the_window_is_success(world):
