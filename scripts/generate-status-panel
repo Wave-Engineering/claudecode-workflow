@@ -13,7 +13,7 @@ Discovers the project root via `git rev-parse --show-toplevel`, so it works
 from any directory within a git repository.
 
 Usage:
-    generate-status-panel [--output <repo>/.status-panel.html] [--status-dir <repo>/.claude/status]
+    generate-status-panel [--output <repo>/.claude/status/dashboard.html] [--status-dir <repo>/.claude/status]
 """
 
 from __future__ import annotations
@@ -305,7 +305,9 @@ def render_current_action(state: dict) -> str:
 
 def generate_html(phases_waves: dict, flights: dict, state: dict) -> str:
     stats = compute_stats(phases_waves["phases"], state)
-    current_wave = state.get("current_wave", "unknown")
+    # `or`, not a default: a finished campaign keeps the key with value None,
+    # which html.escape below can't take (cc-workflow#1362).
+    current_wave = state.get("current_wave") or "unknown"
     last_updated = state.get("last_updated", "unknown")
 
     phase_blocks = "\n".join(
@@ -600,7 +602,9 @@ h2 {{
 def main() -> None:
     project_root = get_project_root()
     default_status_dir = project_root / ".claude" / "status"
-    default_output = project_root / ".status-panel.html"
+    # Beside the state files, which consumers already ignore, like the
+    # wave-status CLI's own dashboard (cc-workflow#1362).
+    default_output = project_root / ".claude" / "status" / "dashboard.html"
 
     parser = argparse.ArgumentParser(
         description="Generate wave execution status panel",
@@ -612,7 +616,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         default=str(default_output),
-        help="Output HTML file path (default: <repo>/.status-panel.html)",
+        help="Output HTML file path (default: <repo>/.claude/status/dashboard.html)",
     )
     parser.add_argument(
         "--status-dir",
@@ -635,6 +639,7 @@ def main() -> None:
     html_content = generate_html(phases_waves, flights, state)
 
     output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(html_content)
     print(f"Status panel generated: {output_path}")
 

@@ -161,3 +161,48 @@ def test_panel_resolves_qualified_issue_keys(tmp_path: Path) -> None:
     row19 = html.split("#19</td>", 1)[1].split("</tr>", 1)[0]
     assert "closed" not in row19, "#19 must stay pending — #119 must not false-match #19"
     assert "pending" in row19, "#19 (no state entry) renders pending"
+
+
+def test_panel_default_output_under_claude_status(tmp_path: Path) -> None:
+    """With no --output, the panel lands beside the state files, never at the
+    repo root (cc-workflow#1362)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True)
+    _write_status(repo)
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT)], cwd=str(repo), capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    assert (repo / ".claude" / "status" / "dashboard.html").is_file()
+    assert sorted(p.name for p in repo.iterdir()) == [".claude", ".git"]
+
+
+def test_panel_creates_the_output_directory(tmp_path: Path) -> None:
+    """An --output whose directory does not exist yet is created."""
+    status = _write_status(tmp_path)
+    out = tmp_path / "new" / "dir" / "panel.html"
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT), "--status-dir", str(status), "--output", str(out)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert out.is_file()
+
+
+def test_panel_renders_completed_campaign(tmp_path: Path) -> None:
+    """A finished campaign keeps current_wave as null. The panel must render it
+    as "unknown", not crash in html.escape(None) (cc-workflow#1362, triage #28)."""
+    status = _write_status(tmp_path)
+    out = tmp_path / "panel.html"
+    (status / "state.json").write_text(
+        json.dumps({**_STATE, "current_wave": None, "waves": {"wave-1": {"status": "completed"}}}),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT), "--status-dir", str(status), "--output", str(out)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "AttributeError" not in result.stderr
+    assert "unknown" in out.read_text(encoding="utf-8")
