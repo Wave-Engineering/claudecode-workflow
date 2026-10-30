@@ -212,7 +212,7 @@ and `#call-4-bj`, naming the pane. Outcomes are logged to
 > "Seed written. Run `/clear`, then `/reseed revive`."
 
 **The automatic trigger.** A Stop hook (`context-reseed-gate.sh`) acts when remaining context
-is at or below the threshold: `RESEED_CONTEXT_THRESHOLD_PCT` if set, else `100 - ` nerf's
+is at or below the threshold: `RESEED_CONTEXT_THRESHOLD_PCT` if it's a number, else `100 - ` nerf's
 `ouch` dart, else 15. What it does depends on the session's nerf mode (`/nerf mode`):
 
 | nerf mode | at the threshold |

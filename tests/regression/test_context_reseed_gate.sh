@@ -266,7 +266,8 @@ expect "ouch 70 → no block at 31%" silent
 reading 30
 expect "ouch 70 with RESEED_CONTEXT_THRESHOLD_PCT=15 → no block at 30% (env wins)" silent RESEED_CONTEXT_THRESHOLD_PCT=15
 expect "ouch 70 with a junk RESEED_CONTEXT_THRESHOLD_PCT → ouch applies (30%)" block RESEED_CONTEXT_THRESHOLD_PCT=junk
-for o in 0 100 '"x"' '"70"' 70.5; do
+# 18446744073709551685 is 2^64 + 69: it would wrap to 69 in bash arithmetic (31%).
+for o in 0 100 '"x"' '"70"' 70.5 18446744073709551685; do
 	nerf "{\"darts_pct\": {\"ouch\": $o}}"
 	reading 16
 	expect "ouch $o → falls back to 15 (no block at 16%)" silent

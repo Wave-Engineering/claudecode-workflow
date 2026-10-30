@@ -118,7 +118,7 @@ fi
 
 if [[ "${RESEED_CONTEXT_THRESHOLD_PCT:-}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
 	THRESHOLD="$RESEED_CONTEXT_THRESHOLD_PCT"
-elif [[ "$NERF_OUCH" =~ ^[0-9]+$ ]] && ((10#$NERF_OUCH >= 1 && 10#$NERF_OUCH <= 99)); then
+elif [[ "$NERF_OUCH" =~ ^[0-9]{1,2}$ ]] && ((10#$NERF_OUCH >= 1)); then
 	THRESHOLD=$((100 - 10#$NERF_OUCH))
 else
 	THRESHOLD="$DEFAULT_THRESHOLD"
