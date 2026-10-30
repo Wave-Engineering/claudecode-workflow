@@ -12,7 +12,7 @@
 # not deployed). Same wiring-guard shape as test_dispatch_ceiling.sh.
 #
 # Guards asserted:
-#   1. node --check on the source + bundle (syntax must hold).
+#   1. wf-syntax-check on the source + bundle (syntax must hold).
 #   2. campaignBranch === protectedBranch → throw. A campaign whose "integration branch" IS trunk
 #      restores per-wave trunk writes under a name claiming otherwise.
 #   3. An explicitly-passed campaignBranch is lowercased through the same normalization as the derived
@@ -50,12 +50,12 @@ fi
 
 # 1. syntax — source and bundle both parse
 for f in "$NW/campaign-workflow.js" "$NW/campaign-workflow.bundled.js" "$NW/per-wave-workflow.js"; do
-	if node --check "$REPO_DIR/$f" 2>/dev/null; then
+	if node "$REPO_DIR/scripts/ci/wf-syntax-check.mjs" "$REPO_DIR/$f" 2>/dev/null; then
 		pass=$((pass + 1))
-		echo "  [PASS] $(basename "$f") syntax (node --check)"
+		echo "  [PASS] $(basename "$f") syntax (wf-syntax-check)"
 	else
 		fail=$((fail + 1))
-		echo "  [FAIL] $(basename "$f") syntax (node --check)"
+		echo "  [FAIL] $(basename "$f") syntax (wf-syntax-check)"
 	fi
 done
 

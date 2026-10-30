@@ -41,7 +41,7 @@ else
 fi
 
 # 3. valid JS
-if node --check "$BUNDLE" 2>/dev/null; then
+if node "$REPO_DIR/scripts/ci/wf-syntax-check.mjs" "$BUNDLE" 2>/dev/null; then
 	echo "  [PASS] bundle parses as valid JS"
 else
 	echo "  [FAIL] bundle is not valid JS"
