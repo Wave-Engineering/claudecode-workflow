@@ -2335,6 +2335,8 @@ function primeReconcilePrompt(built, merged) {
     `   for ANY reason (ok=false: head_moved on GitLab, gh_pr_merge_failed on GitHub, where a stale pin is not`,
     `   classified, or any other error), that flight did not land: report it in needs_rework with reason`,
     `   "pinned merge refused: <the error>". Never retry it without expected_head_sha, and never merge it any other way.`,
+    `   A flight is merged ONLY when pr_merge reports it merged; ok=true with merged=false (enrolled, queued,`,
+    `   pending) is not a merge: leave that flight out of merged and report it in needs_rework the same way.`,
     `4. If a flight's code BREAKS another's interface (signature mismatch surfaced at integration): UNDO just that`,
     `   flight's merge (keep integration green) and report it in needs_rework with the precise reason — the loop`,
     `   re-opens it as a surfaced dependency and re-schedules it next group (§3.1 dynamic re-plan).`,
