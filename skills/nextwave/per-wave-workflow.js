@@ -1217,9 +1217,10 @@ if (gate.verdict === 'PASS') {
       log(`[#687] promote soft-fail — wave HELD for manual promotion: ${e?.message || e}`)
       return { promoted: false, notes: `promote error: ${e?.message || e}` }
     })
-    // #1356 review: promoted counts only when pr_merge echoed the pin as the graded head. The node
-    // confirmed the merge by polling, so its `promoted` is pr_merge's merged.
-    const pin = pinnedMergeVerdict({ ...promo, merged: promo?.promoted === true }, gate.gradedHead)
+    // #1356 review: promoted counts only when pr_merge itself returned merged:true and echoed the pin
+    // as the graded head. The node's `promoted` (its poll of the base) is required too, but it is not
+    // pr_merge's merged: the echo is proof only paired with pr_merge's own merged:true.
+    const pin = pinnedMergeVerdict(promo, gate.gradedHead)
     const promoted = !!(promo && promo.promoted) && pin.landed
     // A merge that LANDED with no proven pin is not "did not land": the code is on the base and the
     // kahuna is likely gone. The durable disposition stays `held` (a closed, persisted vocabulary), and

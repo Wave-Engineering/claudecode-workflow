@@ -506,8 +506,10 @@ await check('gate HOLDs when gate:trivy kahuna_sha differs from gate:ci head_sha
 // ── #1356 review: a pinned merge counts only on pr_merge's echo of the pin (mocked v5.2.0 / older) ──
 const MC = 'c'.repeat(40) // the merge commit the promote node reports
 for (const [what, promo, why] of [
-  ['an old server (no pinned_head_sha)', { promoted: true, mr_ref: '#99', merge_commit_sha: MC }, /pr_merge returned no pinned_head_sha/],
-  ['a pin echo that is not the graded head', { promoted: true, mr_ref: '#99', merge_commit_sha: MC, pinned_head_sha: 'e'.repeat(40) }, /pr_merge pinned eeeeeeee, not the graded head/],
+  ['an old server (no pinned_head_sha)', { promoted: true, merged: true, mr_ref: '#99', merge_commit_sha: MC }, /pr_merge returned no pinned_head_sha/],
+  ['a pin echo that is not the graded head', { promoted: true, merged: true, mr_ref: '#99', merge_commit_sha: MC, pinned_head_sha: 'e'.repeat(40) }, /pr_merge pinned eeeeeeee, not the graded head/],
+  // m2: the node's poll says it landed, but pr_merge's own merged is not reported, so the echo is unpaired.
+  ['a right echo with no pr_merge merged:true', { promoted: true, mr_ref: '#99', merge_commit_sha: MC, pinned_head_sha: 'a'.repeat(40) }, /pr_merge did not report merged:true/],
 ]) {
   await check(`promote: ${what} → landed-unproven, not "did not land"`, async () => {
     const run = await runPerWave({ responder: only({ promote: promo }) })

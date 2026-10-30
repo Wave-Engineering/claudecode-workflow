@@ -173,8 +173,11 @@ Inside the (real) prompts, replace the `// TODO(#687 gate wiring)` lines with re
 - **flight CI (#1356):** first checks whether the flight head's content is already in the kahuna
   (`merge-tree --write-tree` leaves the kahuna's tree unchanged, which also holds after a squash merge;
   the §3.3 resume case), then pushes the flight branch, `pr_create` (flight→kahuna),
-  `ci_wait_run(require_merge_result)` and, on a red, `ci_failed_jobs`. Returns `FLIGHT_CI_EVIDENCE`,
-  graded in code by `flightCiVerdict` (`proceed` / `needs_rework` / `blocked` / `integrated`); only
+  `ci_wait_run(require_merge_result)` and, on a red, `ci_failed_jobs`; on GitLab, the merge commit of a
+  green run whose sha is not the head; and last, the kahuna tip (`target_sha`). Returns `FLIGHT_CI_EVIDENCE`,
+  graded in code by `flightCiVerdict` (`proceed` / `needs_rework` / `blocked` / `integrated`). A green run
+  binds to the flight head directly (GitHub) or, as `mergeResultVerdict` binds it, through a merge commit
+  with parents exactly [kahuna tip, flight head] (GitLab merged results). Only
   `proceed` flights reach reconcile, and an `integrated` one (an `already-present` flight, or a rework
   flight at its new head, whose content is in the kahuna) counts as merged. The target repo's CI must run on PRs into `kahuna/*`, or every
   flight is `blocked` with "No CI run found".

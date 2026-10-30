@@ -647,10 +647,31 @@ try {
     assert.equal(r.outcome, 'blocked', `pr_number ${JSON.stringify(pr)} is blocked`)
     assert.equal(r.reason, 'the flight CI evidence carries no PR number')
   }
-  const elsewhere = v(ev({ wait: { ok: true, final_status: 'success', sha: 'e'.repeat(40) } }))
-  assert.equal(elsewhere.outcome, 'blocked', 'green on another sha is blocked')
-  assert.equal(elsewhere.reason, 'CI ran on eeeeeeee, not the flight head ffffffff')
-  assert.equal(v(ev({ wait: { ok: true, final_status: 'success' } })).reason, 'CI ran on no sha, not the flight head ffffffff', 'green with no sha is blocked')
+  const tip = { target_sha: 'b'.repeat(40) }
+  const elsewhere = v(ev({ ...tip, wait: { ok: true, final_status: 'success', sha: 'e'.repeat(40) } }))
+  assert.equal(elsewhere.outcome, 'blocked', 'green on another sha, with no merge commit read, is blocked')
+  assert.match(elsewhere.reason, /^a green run not bound to the flight head ffffffff: .*no merge commit read for it has the head as its second parent/)
+  assert.match(v(ev({ ...tip, wait: { ok: true, final_status: 'success' } })).reason, /^a green run not bound to the flight head ffffffff: .*names no run sha/, 'green with no sha is blocked')
+  assert.equal(v(ev({ wait: { ok: true, final_status: 'success', sha: 'e'.repeat(40) } })).outcome, 'blocked', 'green elsewhere with no kahuna tip is blocked')
+
+  // #1356 C1: a GitLab merged-results run is on an ephemeral merge commit, never the flight head.
+  // It binds through mergeResultVerdict's rule: parents exactly [kahuna tip, flight head].
+  const KT = 'b'.repeat(40) // the kahuna tip, read last
+  const MCS = 'd'.repeat(40) // the run's merge commit
+  const gl = (parent_ids, over = {}) => ev({ target_sha: KT, wait: { ok: true, final_status: 'success', sha: MCS }, merge_commit: { sha: MCS, parent_ids }, ...over })
+  assert.deepEqual(v(gl([KT, FH])), { issue: 7, outcome: 'proceed', head: FH, reason: 'CI green on head ffffffff (merge commit dddddddd onto the kahuna tip)' }, 'a GitLab merge commit [kahuna tip, flight head] proceeds')
+  for (const [what, e, re] of [
+    ['a wrong second parent', gl([KT, 'e'.repeat(40)]), /no merge commit read for it has the head as its second parent/],
+    ['a stale first parent (the kahuna moved)', gl(['9'.repeat(40), FH]), /STALE: the merge-result pipeline was built on target 99999999, and the target is now bbbbbbbb/],
+    ['no kahuna tip read', gl([KT, FH], { target_sha: undefined }), /the target tip was not read/],
+    ['a merge commit read for another sha', gl([KT, FH], { merge_commit: { sha: 'e'.repeat(40), parent_ids: [KT, FH] } }), /no merge commit read for it has the head as its second parent/],
+    ['three parents', gl([KT, FH, 'e'.repeat(40)]), /no merge commit read for it has the head as its second parent/],
+  ]) {
+    const r = v(e)
+    assert.equal(r.outcome, 'blocked', `${what} is blocked`)
+    assert.match(r.reason, re, what)
+    assert.equal(r.head, null)
+  }
   assert.match(v(ev({ wait: { ok: false, error: 'No CI run found for ref x' } })).reason, /must run on PRs into kahuna\/\*/, 'no run names the CI trigger')
   assert.doesNotMatch(v(ev({ wait: { ok: false, error: 'rate limited' } })).reason, /kahuna\/\*/, 'other errors carry no trigger hint')
   ok('flightCiVerdict: green proceeds; ran-red reworks; billing/infra/no-verdict, moved or foreign heads, null evidence and a rejected push are blocked (#1356)')

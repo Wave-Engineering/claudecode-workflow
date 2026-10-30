@@ -103,7 +103,7 @@ export async function runPerWave({ args = DEFAULT_ARGS, responder = () => HARNES
     if (label === 'gate:review') return { signal: 'review', passed: true, detail: 'harness: clean' }
     if (label === 'gate:trivy') return { signal: 'trivy', passed: true, found: 1, ingested: 1, unscanned: [], declared: false, scanned_sha: HEAD, kahuna_sha: HEAD }
     // An sdlc v5.2.0 pr_merge: it echoes the pin it was given (#1356 review).
-    if (label === 'promote') return { promoted: true, mr_ref: '#99', pinned_head_sha: String(prompt).match(/expected_head_sha="([0-9a-f]{40})"/)?.[1], merge_commit_sha: 'c'.repeat(40) }
+    if (label === 'promote') return { promoted: true, merged: true, mr_ref: '#99', pinned_head_sha: String(prompt).match(/expected_head_sha="([0-9a-f]{40})"/)?.[1], merge_commit_sha: 'c'.repeat(40) }
     throw new Error(`harness: no default response for agent label '${label}' — add one`)
   }
 

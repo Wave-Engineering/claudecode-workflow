@@ -342,8 +342,15 @@ export const FLIGHT_CI_EVIDENCE = {
     pr_number: { type: 'integer' },
     pr_ref: { type: 'string' },
     head_sha: { type: 'string' }, // the flight PR's head, read BEFORE ci_wait_run
-    head_sha_final: { type: 'string' }, // the flight PR's head, read again LAST
+    head_sha_final: { type: 'string' }, // the flight PR's head, read again after the wait
+    target_sha: { type: 'string' }, // the kahuna's tip, read LAST; a merge commit must be built on it
     wait: { type: 'object', additionalProperties: true }, // ci_wait_run's answer, copied as returned
+    merge_commit: {
+      // GitLab: the commit of a green run whose sha is not the head (an ephemeral merge commit)
+      type: 'object',
+      additionalProperties: true,
+      properties: { sha: { type: 'string' }, parent_ids: { type: 'array', items: { type: 'string' } } },
+    },
     failed_jobs: {
       // ci_failed_jobs(run_id)'s list, copied, only when final_status is failure or cancelled
       type: 'array',
@@ -392,15 +399,20 @@ export function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, 
     `3. Call sdlc-server ci_wait_run(repo=${targetRepo}, ref=<GitHub: "${branch}"; GitLab: "refs/merge-requests/<n>/merge">,`,
     `   require_merge_result=true, pr_number=<n>, timeout_sec=${waitSec}, poll_interval_sec=15).`,
     `   Report its answer as wait, copied as returned (ok, final_status, reason, error, sha, run_id, url).`,
+    `   GitLab only: when wait is a success whose sha is not head_sha, that sha is the merged-results`,
+    `   pipeline's ephemeral merge commit. Read it and report it as merge_commit, exactly as read:`,
+    `     glab api "projects/<url-encoded ${targetRepo}>/repository/commits/<wait.sha>" | jq '{sha: .id, parent_ids}'`,
     `4. ONLY if wait.final_status is failure or cancelled: call sdlc-server ci_failed_jobs(run_id=<wait.run_id>,`,
     `   repo=${targetRepo}) and report its failed_jobs list as failed_jobs, copied unfiltered.`,
-    `5. LAST: the head again.`,
+    `5. The head again.`,
     ...head('head_sha_final'),
+    `6. LAST: the kahuna's tip.`,
+    ...targetReadLines({ targetRepo, branch: kahunaBranch, field: 'target_sha' }).map((l) => `   ${l}`),
     ``,
     `Do NOT merge, do NOT mark anything ready, do NOT judge: the engine grades this in code.`,
     `Return: issue (${issue}), already_integrated + integrated_head + integrated_exit (step 0), pr_number, pr_ref,`,
-    `head_sha, wait, failed_jobs (step 4 only), head_sha_final, blocked + block_reason (step 1 only), notes`,
-    `(1-2 sentences). Report what you READ.`,
+    `head_sha, wait, merge_commit (step 3, GitLab only), failed_jobs (step 4 only), head_sha_final, target_sha,`,
+    `blocked + block_reason (step 1 only), notes (1-2 sentences). Report what you READ.`,
   ].join('\n')
 }
 
@@ -451,9 +463,13 @@ export function flightCiVerdict(ev, issue, flightHead, status, rework = false) {
   const w = ev.wait ?? {}
   const fs = w.final_status
   if (w.ok === true && fs === 'success') {
-    // The run must be of the flight head, as mergeResultVerdict requires of the merge-result run.
-    if (w.sha !== flightHead) return out('blocked', `CI ran on ${isMergeSha(w.sha) ? w.sha.slice(0, 8) : 'no sha'}, not the flight head ${flightHead.slice(0, 8)}`)
-    return out('proceed', `CI green on head ${flightHead.slice(0, 8)}`, flightHead)
+    // The run must be bound to the flight head. GitHub reports the head itself. A GitLab merged-results
+    // run is on an ephemeral merge commit, never the head (merge-result.js, THE BINDING FACT), so that
+    // run binds through mergeResultVerdict's rule: parents exactly [kahuna tip, flight head].
+    if (w.sha === flightHead) return out('proceed', `CI green on head ${flightHead.slice(0, 8)}`, flightHead)
+    const bound = mergeResultVerdict({ ...ev, head_sha: flightHead, head_sha_final: flightHead })
+    if (bound.pass) return out('proceed', `CI green on head ${flightHead.slice(0, 8)} (merge commit ${w.sha.slice(0, 8)} onto the kahuna tip)`, flightHead)
+    return out('blocked', `a green run not bound to the flight head ${flightHead.slice(0, 8)}: ${bound.reason}`)
   }
   const jobs = (Array.isArray(ev.failed_jobs) ? ev.failed_jobs : []).filter((j) => !FLIGHT_IGNORED_CONCLUSIONS.has(j?.conclusion))
   const ran = (j) => {
@@ -784,7 +800,8 @@ export function promotePrompt({ waveId, kahunaBranch, integrationBase, targetRep
     ...step4,
     ``,
     `Return: promoted (true ONLY if the merge actually landed on ${integrationBase}), mr_ref (the PR`,
-    `URL/number), pinned_head_sha (pr_merge's, as returned), merge_commit_sha (the merge commit),`,
+    `URL/number), merged (pr_merge's merged, as returned), pinned_head_sha (pr_merge's, as returned),`,
+    `merge_commit_sha (the merge commit),`,
     `notes (1-2 sentences; include any error — and on error, promoted=false).`,
   ].join('\n')
 }
