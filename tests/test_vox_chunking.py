@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import stat
 import subprocess
 import time
@@ -99,6 +100,31 @@ def _calls(path: Path) -> list[str]:
 
 def _run(argv, env, timeout=30):
     return subprocess.run(argv, env=env, capture_output=True, text=True, timeout=timeout)
+
+
+# The caller-timeout fixture's provider: it touches the ready file, then sleeps. It runs only
+# from inside synthesize, after vox has installed its EXIT and TERM traps (#1361).
+READY_PROVIDER = '#!/usr/bin/env bash\ntouch "$VOX_TEST_READY"\nexec sleep 20\n'
+
+
+def _signal_once_synthesizing(argv, env, ready: Path):
+    """Run vox, and SIGTERM its process group once the provider says it is running.
+
+    A one-second caller `timeout` raced the trap install on a loaded box (#1361). Here the signal can only
+    arrive once both traps are in place, with no wall-clock margin. It goes to the whole
+    group, as GNU `timeout` sends it, provider included: bash runs a trap only after its
+    foreground child exits, so signalling vox alone would wait out the sleep.
+    """
+    proc = subprocess.Popen(
+        argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True
+    )
+    if not _poll(ready.exists, timeout=30):
+        os.killpg(proc.pid, signal.SIGKILL)
+        _, err = proc.communicate(timeout=30)
+        pytest.fail(f"provider never started: {err}")
+    os.killpg(proc.pid, signal.SIGTERM)
+    out, err = proc.communicate(timeout=30)
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
 
 def test_short_message_is_one_call_with_signoff(env, wav_provider, calls, tmp_path):
@@ -201,9 +227,10 @@ def test_detached_failure_goes_to_error_log(env, tmp_path):
 
 
 def test_caller_timeout_kill_is_explained(env, tmp_path):
-    prov = _exe(tmp_path / "slow-provider.sh", "#!/usr/bin/env bash\nsleep 20\n")
+    prov = _exe(tmp_path / "slow-provider.sh", READY_PROVIDER)
     env["VOX_PROVIDER"] = str(prov)
-    r = _run(["timeout", "1", str(VOX), "a short message"], env)
+    env["VOX_TEST_READY"] = str(tmp_path / "ready")
+    r = _signal_once_synthesizing([str(VOX), "a short message"], env, tmp_path / "ready")
     assert r.returncode == 124
     assert "killed by SIGTERM" in r.stderr
     assert "caller timeout" in r.stderr
@@ -226,10 +253,11 @@ def test_host_forward_provider_is_not_chunked(env, tmp_path):
 def test_caller_timeout_kill_cleans_temp_files(env, tmp_path):
     tmpdir = tmp_path / "tmp"
     tmpdir.mkdir()
-    prov = _exe(tmp_path / "slow-provider.sh", "#!/usr/bin/env bash\nsleep 20\n")
+    prov = _exe(tmp_path / "slow-provider.sh", READY_PROVIDER)
     env["VOX_PROVIDER"] = str(prov)
     env["TMPDIR"] = str(tmpdir)
     env["VOX_LOCK"] = str(tmp_path / "vox.lock")
-    r = _run(["timeout", "1", str(VOX), "a short message"], env)
+    env["VOX_TEST_READY"] = str(tmp_path / "ready")
+    r = _signal_once_synthesizing([str(VOX), "a short message"], env, tmp_path / "ready")
     assert r.returncode == 124
     assert list(tmpdir.iterdir()) == []
