@@ -165,7 +165,7 @@ Rules in `CLAUDE.md` are prose — agents can drift from them. The enforcement l
 
 | Hook | Type | What it does |
 |------|------|-------------|
-| `pre-push-test-gate.sh` | PreToolUse (Bash) | Blocks `git push` unless tests were run this session; a plain push of a working branch (`feature/`, `fix/`, `chore/`, `doc/`, or `PUSH_GATE_EXTRA_BRANCH_RE`) is exempt, and so is a plain delete of one branch that is not protected or a release ref (`git push <remote> --delete <b>` or `:<b>`); a plain delete of a protected ref is refused even after tests. Kill switch: `PUSH_GATE_DISABLED=1` |
+| `pre-push-test-gate.sh` | PreToolUse (Bash) | Blocks `git push` unless tests were run this session; a plain push of a working branch (`feature/`, `fix/`, `chore/`, `doc/`, or `PUSH_GATE_EXTRA_BRANCH_RE`) is exempt, and so is a plain delete of one branch that is not protected or a release ref (`git push <remote> --delete <b>` or `:<b>`); a plain delete of a protected or release ref, or of a tag, is refused even after tests, and other delete shapes fall back to the test-run rule. Kill switch: `PUSH_GATE_DISABLED=1` |
 | `secret-scan-gate.sh` | PreToolUse (Bash) | Runs gitleaks before `git commit` (everything the commit could include) and `git push` (the commits it would push that are not yet on a remote); blocks on a finding without showing the value. A plain delete of one branch publishes no commits and is not scanned. Fails closed, no bypass flag. Allowlist via `.gitleaksignore` / `.gitleaks.toml` |
 | `pre-stage-secrets-gate.sh` | PreToolUse (Bash) | Warns on `git add` of secret-pattern filenames (.env, .pem, credentials.json, etc.) |
 | `post-tool-test-sentinel.sh` | PostToolUse (Bash) | Records successful test runs — creates the sentinel that unblocks the push gate |

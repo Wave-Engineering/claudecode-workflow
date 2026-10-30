@@ -22,8 +22,10 @@
 #
 # Before both: a PLAIN delete of ONE branch (`git push <remote> --delete <b>` or `:<b>`,
 # git_push_delete_target in git-detect.sh) publishes no code, so it needs no test run and
-# no working-branch prefix (#1364). If the branch is protected or a release ref, it is
-# refused outright, test run or not: having run tests says nothing about deleting `main`.
+# no working-branch prefix (#1364). If the target is protected, a release ref or a tag
+# (GIT_PROTECTED_DELETE_RE, git_push_delete_protected), it is refused outright, test run
+# or not: having run tests says nothing about deleting `main`. Other delete shapes fall
+# back to the test-run rule; the forge's branch and tag protection is their backstop.
 #
 # Must stay bash-3.2-safe (stock macOS): no `${x,,}`, no `mapfile`, no negative indices.
 #
@@ -52,7 +54,7 @@ fi
 # `set -u` an unset GIT_PROTECTED_REF_RE would abort with a non-blocking exit 1.
 if ! source "$(dirname "$0")/git-detect.sh" 2>/dev/null || ! declare -F git_invokes >/dev/null ||
 	! declare -F git_push_delete_target >/dev/null || ! declare -F git_push_delete_protected >/dev/null ||
-	[[ -z "${GIT_PROTECTED_REF_RE:-}" ]]; then
+	[[ -z "${GIT_PROTECTED_REF_RE:-}" || -z "${GIT_PROTECTED_DELETE_RE:-}" ]]; then
 	case "$COMMAND" in *git*)
 		jq -cn '{decision: "block", reason: "Push gate cannot run: its git-detect.sh helper did not load, so this command is blocked. Re-run the kit'"'"'s ./install, then retry."}'
 		;;
@@ -172,7 +174,7 @@ _exempt_plain_push() {
 
 _delete_reason=$(
 	cat <<'TXT'
-This branch delete was refused. A delete needs no test run when it is ONE plain command deleting ONE branch that is not protected or a release ref: `git push <remote> --delete <branch>` or `git push <remote> :<branch>`, run as its own Bash call: no `cd … &&`, no `VAR=… git`, no `bash -c`, one branch per push. Put a remote's SSH key in `git config core.sshCommand '…'` once, not on the push line. Protected and release refs (main, master, develop, trunk, HEAD, release, release-*/release_*/release/*, stable, production, prod, gh-pages, version names like 1.2.3 or v1.2.3, any tag, qualified refs/…) are never deleted by an agent: ask the user. Do not delete it through the forge's API instead.
+This branch delete was refused. A delete needs no test run when it is ONE plain command deleting ONE branch that is not protected or a release ref: `git push <remote> --delete <branch>` or `git push <remote> :<branch>`, run as its own Bash call: no `cd … &&`, no `VAR=… git`, no `bash -c`, one branch per push. Put a remote's SSH key in `git config core.sshCommand '…'` once, not on the push line. A plain delete of a protected or release ref (main, master, develop, trunk, HEAD, release, release-*/release_*/release/*, stable, production, prod, gh-pages, version names like 1.2.3 or v1.2.3, any tag, qualified refs/…) is refused even after tests, and other shapes fall back to the test-run rule. Either way an agent never deletes one: ask the user. Do not delete it through the forge's API instead.
 TXT
 )
 _block_delete() {
@@ -188,37 +190,6 @@ if _del=$(git_push_delete_target "$COMMAND"); then
 		_block_delete
 	fi
 	exit 0
-fi
-
-# Any other delete-shaped push that names a protected ref is refused too, test run or
-# not: a `--delete`/`-d` token and a protected name anywhere in the command, or a
-# `:`-led refspec naming one. A text match, not a parse, so it over-matches (a compound
-# command that deletes one branch and mentions `main` elsewhere), the safe direction.
-_names_protected_delete() {
-	local tok name del=0 hit=0
-	local -a toks
-	# Redirections go first, so the 2 of `2>&1` is not read as a version-named ref.
-	read -ra toks <<<"$(printf '%s' "$COMMAND" | sed -E 's/[0-9]*[<>]+&?[0-9]*/ /g' | tr ';&|()"`\n'"'" '         ')"
-	for tok in "${toks[@]+"${toks[@]}"}"; do
-		case "$tok" in
-		--delete | -d)
-			del=1
-			continue
-			;;
-		:?*)
-			name="${tok#:}"
-			name="${name#refs/heads/}"
-			[[ "$name" =~ $GIT_PROTECTED_REF_RE ]] && return 0
-			continue
-			;;
-		esac
-		name="${tok#refs/heads/}"
-		[[ "$name" =~ $GIT_PROTECTED_REF_RE ]] && hit=1
-	done
-	((del == 1 && hit == 1))
-}
-if _names_protected_delete; then
-	_block_delete
 fi
 
 if _exempt_plain_push; then

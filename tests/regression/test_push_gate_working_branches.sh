@@ -86,6 +86,11 @@ check PASS "git push origin feature/x 2>&1 | tail -n 5"
 check PASS "git push -u origin fix/3-a > /dev/null"
 check PASS "git push origin feature/x &>/dev/null"
 check PASS "git push origin DEVOPS-2069-record-image-digests" "$DEVOPS"
+# #1364 review: the widened names are for deletes only, so numeric-led branches still push
+check PASS "git push origin 12-fix" '^[0-9]+-.+'
+check PASS "git push -u origin 12-fix" '^[0-9]+-.+'
+check BLOCK "git push origin --delete 12-fix" '^[0-9]+-.+' # numeric-led: may be a tag-like name
+check BLOCK "git push origin :12-fix"
 check PASS "git push -o ci.skip -u origin DEVOPS-2069-record-image-digests" "$DEVOPS"
 # #1287: an agent in a second repo pushes with -C (its cwd resets after each Bash call).
 check PASS "git -C /tmp/x push origin chore/x"
@@ -267,11 +272,10 @@ check PASS "git push origin main"
 check PASS "git commit -m x && git push origin feature/1-a"
 check PASS "cd /tmp && git push origin --delete scratch-1"
 check PASS "cd /tmp && git push origin --delete scratch-1 2>&1 | tail -3"
-# #1364 review: a delete naming a protected ref is refused in any shape, test run or not
-check BLOCK "git push origin --delete main --no-progress"
-check BLOCK "cd . && git push origin :main"
-check BLOCK "true && git push origin --delete main"
-check BLOCK "git push origin --delete main 2>/tmp/x"
+# #1364 review: a PLAIN delete of a protected name or a tag is refused, test run or not.
+# Other delete shapes fall back to the test-run rule, so the sentinel lets them through.
+check PASS "git push origin --delete main --no-progress"
+check PASS "cd . && git push origin :main"
 check BLOCK "git push origin --delete 1.2.3"
 check BLOCK "git push origin --delete foo"
 # #1364: except a plain delete of a protected ref, which a test run does not license
