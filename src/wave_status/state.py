@@ -1658,7 +1658,9 @@ def add_issue(
     reads ``phases-waves.json``. ``init --extend`` only appends whole phases.
 
     *n* is a bare number or an ``owner/repo#N`` ref. Idempotent when the
-    issue is already in this wave (nothing is written). Raises ``ValueError``,
+    issue is already in this wave: nothing is written, unless an earlier
+    run saved the plan but not the state, and then the missing state entry
+    is filled in. Raises ``ValueError``,
     with both files unchanged, for an unparseable ref, a wave not in the
     plan, a completed wave, or an issue already in another wave.
     """
