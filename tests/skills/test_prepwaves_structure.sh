@@ -78,6 +78,16 @@ else
 	fail "test_prepwaves_pins_plan_identity: no extend-mode plan_id preservation guard"
 fi
 
+# #1365: step 3.c lints the Plan and sub-issue bodies itself, and STOPs before wave_init.
+if grep -qF 'c. **Pre-merge lint (#1365), run by you, never by a validator sub-agent.**' "$SKILL" &&
+	grep -qF 'precheck-ac-gate.sh lint <file>...; echo "exit=$?"' "$SKILL" &&
+	grep -qF '**STOP before `wave_init` (step 7)**' "$SKILL" &&
+	grep -qF 'NOT READY: post-merge criterion <pattern-id>: <line>' "$SKILL"; then
+	pass "test_prepwaves_lints_post_merge_criteria: step 3.c runs lint and STOPs before wave_init"
+else
+	fail "test_prepwaves_lints_post_merge_criteria: step 3.c lint or its STOP is missing"
+fi
+
 # --- Summary -----------------------------------------------------------------
 echo ""
 if [[ $FAILS -gt 0 ]]; then

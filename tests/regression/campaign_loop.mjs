@@ -242,6 +242,19 @@ async function main() {
   // The DoD node must ANSWER, never act — a node that could merge would make routeRelease advisory.
   ok(!/pr_merge\b/.test(dodP) && !/gh pr merge/.test(dodP), 'dod prompt: NEVER merges — it answers; routing is the pure predicate\'s job')
   ok(DOD_VERDICT.required.includes('met') && DOD_VERDICT.additionalProperties === false, 'DOD_VERDICT schema requires met, no extra props')
+  // #1365: a BJ-waived DoD line (e.g. a post-merge criterion) is waived, never unmet.
+  ok(dodP.includes('WAIVED by BJ <date>: <reason> (<url>)') && /never count it as unmet/.test(dodP), 'dod prompt: a BJ-waived DoD line is listed as waived, never counted as unmet')
+  // #1365: the DoD node runs before the campaign→protected PR exists (it is told not to open one),
+  // so a Plan-template DoD line about that PR or its merge-result CI is unmet on every run.
+  const planDodLines = []
+  for (const f of ['skills/issue/SKILL.md', 'docs/plan-issue-template.md']) {
+    const src = readFileSync(new URL(`../../${f}`, import.meta.url), 'utf8')
+    for (const sec of src.split('## Plan-level Definition of Done').slice(1)) {
+      planDodLines.push(...sec.split('\n## ')[0].split('\n').filter((l) => /^- \[ \]/.test(l)))
+    }
+  }
+  ok(planDodLines.length > 0 && planDodLines.every((l) => !/\bPR\b|pull request|merge.result|campaign→/i.test(l)),
+    'plan template: no DoD line needs the campaign→protected PR or its merge-result CI (the DoD node grades before it exists)')
 
   const relArgs = { planId: '56', targetRepo: 'o/r', campaignBranch: 'campaign/56-x', protectedBranch: 'main', wavesIntegrated: ['w1', 'w2'] }
   const ciP = releaseCiPrompt(relArgs)

@@ -37,21 +37,20 @@ Report the current session identity, or pick one if not yet established.
 4. **Pick identity (if needed)**
    - `Dev-Name`: A single memorable word or hyphenated phrase in **kebab-case** (e.g., `beacon`, `null-pointer`, `mother`). Draw from nerdcore canon — sci-fi, fantasy, comics, gaming, mythology, tech puns, wordplay. The wittier and more specific the reference, the better. Generic names are boring. Kebab-case is required so the name works as a routing key for `@<dev-name>` addressing.
    - `Dev-Avatar`: A Unicode emoji character (e.g., 🧠, 👾). Should feel like it belongs with the name.
-   - Persist to the resolved identity file (dual-write during transition window):
+   - Persist to the resolved identity file (dual-write during transition window). It is a **merge**: set only the three keys `/name` owns, and keep every other key, such as a `lead` that `/grunt` wrote before this session ran `/name` (#1365):
      ```bash
+     agent_file="${project_root}/.claude/agent-identity.json"
      mkdir -p "${project_root}/.claude"
-     cat > "$agent_file" << 'EOF'
-     {
-       "dev_team": "<Dev-Team>",
-       "dev_name": "<name>",
-       "dev_avatar": "<emoji>"
-     }
-     EOF
+     [[ -s "$agent_file" ]] || echo '{}' >"$agent_file"
+     tmp="$(mktemp "${agent_file}.XXXXXX")"
+     jq --arg t "<Dev-Team>" --arg n "<name>" --arg a "<emoji>" \
+       '.dev_team = $t | .dev_name = $n | .dev_avatar = $a' "$agent_file" >"$tmp" &&
+       mv "$tmp" "$agent_file" || { rm -f "$tmp"; echo "not written: $agent_file is not valid JSON" >&2; }
      # Also keep /tmp copy fresh for sessions that haven't re-run /name yet
      dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
      cp "$agent_file" "/tmp/claude-agent-${dir_hash}.json" 2>/dev/null || true
      ```
-     **Note:** When executing, dedent the heredoc body and closing `EOF` to column 0 so the shell correctly terminates the heredoc. `agent_file` is `${project_root}/.claude/agent-identity.json` — no md5 keying needed once the file lives under the project root.
+     **Never rewrite the whole file.** A whole-file write drops the `lead` field, and `/precheck` then notifies BJ instead of the lead. If the file is not valid JSON, the merge writes nothing: show the user the file and ask before replacing it. `agent_file` is `${project_root}/.claude/agent-identity.json` — no md5 keying needed once the file lives under the project root.
 
 5. **Announce** — Always respond with:
    > I'm **\<Dev-Name\>** \<Dev-Avatar\> from team `<Dev-Team>`.

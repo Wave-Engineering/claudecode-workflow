@@ -34,6 +34,20 @@ so bump it with this release.
   as not landed. A new legal exit, `pinned-merge-unproven`, holds the wave on any unproven
   reconcile merge.
 
+### Added
+- **A mechanical AC gate, and no post-merge criteria (#1365).** `/precheck` used to tick
+  "Implementation (AC verified)" from the agent's own reading, and nothing read the boxes. The new
+  `scripts/precheck-ac-gate.sh` is Job E: every AC box on each closing issue, and every box in the
+  PR/MR body, must be checked or carry `WAIVED by BJ <date>: <reason> (<url>)`, and it exits
+  non-zero on a fetch error. Its `lint` refuses a criterion that needs a merge to assess (BJ,
+  2026-10-24), and `/issue`, `/prepwaves` and devspec upshift run it before they write. The Plan
+  template no longer asks for "Kahuna→main MR merged clean", the line a campaign release gate held
+  on forever. The release gate's DoD node treats a BJ-waived line as waived.
+- **The merge-call notice goes to a named lead (#1365).** A `lead` field in
+  `.claude/agent-identity.json` (written by `/grunt`; `/name` now merges the file rather than
+  rewriting it) routes `/precheck`'s notice to that lead by `SendMessage`, with no `#precheck` post
+  and no `vox`. With no `lead`, the notice goes to BJ as before (`scripts/precheck-notify-target.sh`).
+
 ## [8.19.0] - 2026-10-30
 
 crewchat-doorbell is now the kit's only doorbell: discord-watcher is retired, and the doorbell

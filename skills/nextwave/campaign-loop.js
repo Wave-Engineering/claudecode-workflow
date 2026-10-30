@@ -367,6 +367,8 @@ export function dodVerificationPrompt({ planId, targetRepo, targetRepoDir, campa
     `     git -C ${targetRepoDir} fetch origin && git -C ${targetRepoDir} diff --stat origin/${protectedBranch}...origin/${campaignBranch}`,
     `   Check the ACTUAL tree, not the issue checkboxes — a checked box is a claim, the tree is the fact.`,
     `   Where a criterion names a test suite, RUN it (dod_run_test_suite / the project's own tooling).`,
+    `   A DoD line carrying \`WAIVED by BJ <date>: <reason> (<url>)\` is waived (#1365: no DoD line may`,
+    `   need a merge to assess): list it under evidence as waived, and never count it as unmet.`,
     `3. Be specific about what is NOT met. A blocked release must explain itself well enough that the`,
     `   human does not have to re-derive it: name the criterion, not "some criteria failed".`,
     ``,

@@ -654,3 +654,14 @@ class TestDevSpecCreateDecoupledFromDdd:
                 pytest.fail(
                     f"devspec-create unconditionally reads SKETCHBOOK.md: {line!r}"
                 )
+
+
+def test_upshift_lints_story_bodies(skill_text: str) -> None:
+    """#1365: upshift runs the post-merge lint over every Story body and the Plan body
+    before its work_item loop, and creates nothing on exit 2."""
+    upshift = _extract_template(skill_text, "devspec-upshift")
+    lint = upshift.index("### Step 3.5: Pre-merge lint (before any issue is created)")
+    assert lint < upshift.index("### Step 4: Create Story Issues")
+    body = " ".join(upshift[lint:upshift.index("### Step 4: Create Story Issues")].split())
+    assert '"$ACGATE" lint <story files> <dod file> <plan file>; echo "exit=$?"' in body
+    assert "**Any exit 2 → STOP.**" in body and "Create no issues." in body
