@@ -166,6 +166,65 @@ rc="$(run_gate "$T")"
 [[ "$rc" == "1" ]] && ok "an EMPTY declaration FAILS (silence with a filename is still silence)" ||
 	no "an empty declaration must not satisfy the gate (rc=$rc)"
 
+# --- #1358: lock-centric counting, one predicate -----------------------------
+# The count line, read without a pipe into the check (see run_gate).
+count_of() {
+	local out
+	out="$(bash "$GATE" "$1" 2>&1)"
+	sed -n 's/^check-scannable: \([0-9]*\) scannable.*/\1/p' <<<"$out"
+}
+L="$(mktemp -d)"
+mkdir -p "$L/web"
+printf '{}\n' >"$L/web/package-lock.json"
+printf '# yarn lockfile v1\n' >"$L/web/yarn.lock"
+[[ "$(count_of "$L")" == "2" ]] && ok "yarn.lock beside package-lock.json counts 2, not 1" ||
+	no "a second JS lock must be counted (got $(count_of "$L"))"
+rm -rf "${L:?}"/*
+
+for lock in bun.lock go.sum Cargo.lock; do
+	mkdir -p "$L/x"
+	printf 'x\n' >"$L/x/$lock"
+	[[ "$(count_of "$L")" == "1" ]] && ok "a lone $lock counts 1, no manifest needed" ||
+		no "a lone $lock must count 1 (got $(count_of "$L"))"
+	rm -rf "${L:?}"/*
+done
+
+printf '{}\n' >"$L/bun.lock"
+printf '\0bun\0' >"$L/bun.lockb"
+out="$(bash "$GATE" "$L" 2>&1)"
+[[ "$(count_of "$L")" == "1" ]] && grep -q '\[duplicate\] ./bun.lockb' <<<"$out" &&
+	ok "bun.lockb beside bun.lock counts 1, with a [duplicate] line" ||
+	no "bun.lockb beside bun.lock must count once and say [duplicate]: $out"
+rm -rf "${L:?}"/*
+
+for f in requirements.lock dev-constraints.txt; do
+	printf 'flask==3.0.0\n' >"$L/$f"
+	out="$(bash "$GATE" "$L" 2>&1)"
+	grep -q "\[scannable\] ./$f" <<<"$out" && ok "a pinned $f is scannable" ||
+		no "a pinned $f must be scannable: $out"
+	rm -f "$L/$f"
+done
+
+printf 'flask>=3\n' >"$L/requirements.lock"
+rc="$(run_gate "$L")"
+out="$(bash "$GATE" "$L" 2>&1)"
+[[ "$rc" == "1" ]] && grep -q '\[UNSCANNABLE\] ./requirements.lock' <<<"$out" &&
+	ok "an unpinned requirements.lock is UNSCANNABLE" ||
+	no "an unpinned requirements.lock must be UNSCANNABLE and fail (rc=$rc): $out"
+rm -rf "$L"
+
+P="$(mktemp -d)"
+cp "$GATE" "$P/check-scannable.sh"
+printf 'flask==3.0.0\n' >"$P/requirements.txt"
+out="$(bash "$P/check-scannable.sh" "$P" 2>&1)"
+rc=$?
+# rc 1 is also the ordinary "nothing scannable" verdict, which a silently missing predicate
+# would reach too; the message is what proves the guard fired.
+[[ "$rc" == "1" ]] && grep -q 'lock-predicate.sh missing' <<<"$out" &&
+	ok "a missing lock-predicate.sh exits 1 (partial install), naming it" ||
+	no "a missing lock-predicate.sh must exit 1 and say so (rc=$rc): $out"
+rm -rf "$P"
+
 # --- the denominator is always printed, including on success -----------------
 # The failure this whole gate guards against is a verdict without the count that
 # qualifies it, so the count must appear on the passing path too.

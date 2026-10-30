@@ -48,6 +48,8 @@
 set -uo pipefail
 
 ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+# Resolved before the cd below: a relative BASH_SOURCE stops resolving after it.
+PREDICATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lock-predicate.sh"
 cd "$ROOT" || {
 	echo "check-scannable: cannot enter $ROOT" >&2
 	exit 1
@@ -55,136 +57,86 @@ cd "$ROOT" || {
 
 DECLARATION=".no-scannable-dependencies"
 
-# Prune vendored/build trees. A package.json inside node_modules is a
-# DEPENDENCY's manifest, not ours: counting it would let a vendored tree satisfy
-# the gate for a repo that pins nothing of its own, and every one of them reports
-# UNSCANNABLE (they ship no lockfile), burying the repo's real state in noise.
-#
-# -name, NOT -path. The first cut used `-path ./node_modules`, which matches only
-# a node_modules at the REPO ROOT — so ./scripts/wave-watcher/node_modules sailed
-# through and five dependency manifests were judged as if they were ours.
-# Directory NAME matches at any depth; a path pattern has to guess the depth.
-PRUNE=(-name node_modules -o -name .git -o -name dist -o -name build
-	-o -name vendor -o -name .venv -o -name venv -o -name target)
-
-find_files() {
-	find . \( "${PRUNE[@]}" \) -prune -o -type f -name "$1" -print 2>/dev/null
-}
-
-# Every pip requirements file, not only `requirements.txt` (#1247): the
-# `requirements-dev.txt` sibling, the `dev-requirements.txt` prefix form, and the
-# pip-tools `requirements/<name>.txt` layout. THE single source of this predicate:
-# gate.js's trivySignalPrompt and SKILL.md's Job C fallback carry it verbatim, and
-# their tests extract it from this line, so keep it on one line.
-REQ_FIND=(\( -name '*requirements*.txt' -o -path '*/requirements/*.txt' \))
-find_reqs() {
-	find . \( "${PRUNE[@]}" \) -prune -o -type f "${REQ_FIND[@]}" -print 2>/dev/null
-}
-
-# THE LOCK NAMES, one array per rule, each on ONE line (#1289). gate.js's
-# trivySignalPrompt find and SKILL.md's Job C fallback find carry the same names
-# by hand (a Workflow bundle and a prose fallback that runs in repos without this
-# script cannot read a shared file), and test_lock_lists_agree in
-# tests/test_dependency_scan.py reads these three lines and those two finds and
-# fails on any difference. Add a name here and in both finds, or the test fails.
-#
-#   JS_LOCKS      counted when a package.json sits beside one (first match wins)
-#   PAIRED_LOCKS  manifest:lock, counted when the manifest sits beside its lock
-#   LONE_LOCKS    counted wherever found, no manifest required
-JS_LOCKS=(bun.lock bun.lockb package-lock.json yarn.lock pnpm-lock.yaml)
-PAIRED_LOCKS=("go.mod:go.sum" "Cargo.toml:Cargo.lock")
-LONE_LOCKS=(uv.lock poetry.lock Pipfile.lock)
-# Python locks are LONE: a pyproject.toml is often tool config with no
-# dependencies (ruff, pytest), so a pyproject.toml without a lock cannot be
-# called UNSCANNABLE, and trivy reads each of these locks with no manifest beside
-# it. Each name is here only because trivy 0.74.0 ingests it (#1289, measured
-# with this repo's flags, `--include-dev-deps --list-all-pkgs`, on a minimal real
-# lock, with and without its manifest beside it): uv.lock (Type uv, 4 packages),
-# poetry.lock (Type poetry, 3), Pipfile.lock (Type pipenv, 2). LEFT OUT ON PURPOSE:
-# pdm.lock. trivy 0.74.0 has no pdm analyzer, so it emits no Result for one, with
-# or without its pyproject.toml. Counted, every repo carrying one would fail as
-# UNSCANNED (dependency-scan.sh exit 6, or 2) with no way to clear it. Add it only
-# after re-measuring on a trivy that reads it.
+# THE PREDICATE lives in lock-predicate.sh (#1358): the prune list, the lock names,
+# the requirements globs and the pin test. gate.js's trivySignalPrompt and
+# SKILL.md's Job C fallback carry generated copies of the same find
+# (scripts/ci/gen-lock-find.sh), so all three count the same locks.
+if [[ ! -f "$PREDICATE" ]]; then
+	echo "check-scannable: lock-predicate.sh missing (partial install?)" >&2
+	exit 1
+fi
+# shellcheck source=scripts/ci/lock-predicate.sh
+source "$PREDICATE"
 
 scannable=0
 declare -a REPORT=()
 
-# --- shape 1: a manifest with a lockfile beside it ---------------------------
-# Presence of the lockfile is the test, not its contents. A lockfile whose
-# packages are all devDependencies scans as zero packages under trivy's DEFAULT
-# invocation (measured: scripts/wave-watcher) — not a trivy limitation, trivy
-# suppresses dev/test deps unless called with --include-dev-deps (fixed at the
-# call sites, cc-workflow#1169: scripts/ci/dependency-scan.sh — Job C's real
-# invocation as of #1137, superseding its own prose prompt — plus
-# skills/nextwave/gate.js's trivySignalPrompt and SKILL.md's fallback prose
-# for a checkout that predates the script). This script still counts the
-# lockfile's mere presence as scannable regardless — it answers "would a scan
-# have anything to look at", not "did the last scan use the right flags" — so
-# nothing here needed to change once the flag was added elsewhere.
-while IFS= read -r manifest; do
-	[[ -n "$manifest" ]] || continue
-	dir="$(dirname "$manifest")"
-	found_lock=""
-	for lock in "${JS_LOCKS[@]}"; do
-		[[ -f "$dir/$lock" ]] && {
-			found_lock="$lock"
-			break
-		}
-	done
-	if [[ -n "$found_lock" ]]; then
-		scannable=$((scannable + 1))
-		REPORT+=("  [scannable] $dir/$found_lock")
+# --- every lock the predicate finds is counted (#1358) -----------------------
+# Lock-centric, less two exclusions, the same on every path:
+#
+#   - a requirements file with no `==` pin is a range declaration, not a lock:
+#     named UNSCANNABLE, not counted. `>=` and `~=` are ranges too.
+#   - a bun.lockb with a bun.lock beside it is the same packages in bun's old
+#     binary format: named as a duplicate, not counted. A bun.lockb ALONE is
+#     counted, and dependency-scan.sh names it UNSCANNED (trivy cannot parse it).
+#
+# Presence is the test, not contents. A lockfile whose packages are all
+# devDependencies scans as zero packages under trivy's DEFAULT invocation, so
+# the scans pass --include-dev-deps (cc-workflow#1169); this script answers
+# "would a scan have anything to look at", not "did the scan use the right flags".
+#
+# Every requirements file counts, though trivy's pip analyzer reads only a file
+# named exactly `requirements.txt` (#1247). dependency-scan.sh scans each of the
+# others alone under that name, and takes the list from the
+# `[scannable] … pinned entr…` lines below.
+while IFS= read -r lock; do
+	[[ -n "$lock" ]] || continue
+	if is_req_file "$lock"; then
+		pinned="$(grep -cE "$PIN_RE" "$lock" 2>/dev/null || true)"
+		entries="$(grep -cE '^[[:space:]]*[A-Za-z0-9._-]+' "$lock" 2>/dev/null || true)"
+		if [[ "$pinned" =~ ^[0-9]+$ ]] && ((pinned > 0)); then
+			scannable=$((scannable + 1))
+			REPORT+=("  [scannable] $lock — $pinned pinned entr$([[ $pinned -eq 1 ]] && echo y || echo ies)")
+		elif [[ "$entries" =~ ^[0-9]+$ ]] && ((entries > 0)); then
+			REPORT+=("  [UNSCANNABLE] $lock — entries present but none pinned with '=='; trivy matches CVEs against versions")
+		fi
+	elif [[ "$(basename "$lock")" == bun.lockb && -f "$(dirname "$lock")/bun.lock" ]]; then
+		REPORT+=("  [duplicate] $lock — bun.lock beside it carries the same packages")
 	else
-		REPORT+=("  [UNSCANNABLE] $manifest — no lockfile beside it; a manifest carries ranges, not versions")
+		scannable=$((scannable + 1))
+		REPORT+=("  [scannable] $lock")
 	fi
-done < <(find_files 'package.json')
+done < <(lock_find . | LC_ALL=C sort)
 
-for pair in "${PAIRED_LOCKS[@]}"; do
+# --- diagnostics: a manifest with none of its locks beside it ----------------
+# A manifest carries ranges (`^5.7.0`), and a range is not an installed version,
+# so there is nothing to match a CVE against. Named, never counted.
+prune_args=()
+for d in "${LOCK_PRUNE[@]}"; do
+	((${#prune_args[@]})) && prune_args+=(-o)
+	prune_args+=(-name "$d")
+done
+for pair in "${MANIFEST_LOCKS[@]}"; do
 	manifest_name="${pair%%:*}"
-	lock_name="${pair##*:}"
+	IFS=, read -r -a locks <<<"${pair##*:}"
 	while IFS= read -r manifest; do
 		[[ -n "$manifest" ]] || continue
 		dir="$(dirname "$manifest")"
-		if [[ -f "$dir/$lock_name" ]]; then
-			scannable=$((scannable + 1))
-			REPORT+=("  [scannable] $dir/$lock_name")
+		found_lock=""
+		for l in "${locks[@]}"; do
+			[[ -f "$dir/$l" ]] && {
+				found_lock="$l"
+				break
+			}
+		done
+		[[ -n "$found_lock" ]] && continue
+		if [[ "$manifest_name" == package.json ]]; then
+			REPORT+=("  [UNSCANNABLE] $manifest — no lockfile beside it; a manifest carries ranges, not versions")
 		else
-			REPORT+=("  [UNSCANNABLE] $manifest — no $lock_name beside it")
+			REPORT+=("  [UNSCANNABLE] $manifest — no ${locks[*]} beside it")
 		fi
-	done < <(find_files "$manifest_name")
+	done < <(find . \( "${prune_args[@]}" \) -prune -o -type f -name "$manifest_name" -print 2>/dev/null | LC_ALL=C sort)
 done
-
-# --- shape 1b: a lockfile that stands alone (#1289) --------------------------
-# A uv.lock was invisible here: a repo whose only lock was one read "0
-# scannable" and never had it scanned. Presence is the test, as for the locks
-# above. The line shape is the one dependency-scan.sh reads its denominator from.
-for lock_name in "${LONE_LOCKS[@]}"; do
-	while IFS= read -r lock; do
-		[[ -n "$lock" ]] || continue
-		scannable=$((scannable + 1))
-		REPORT+=("  [scannable] $lock")
-	done < <(find_files "$lock_name")
-done
-
-# --- shape 2: requirements.txt with pinned entries ---------------------------
-# `==` only. `>=` and `~=` are ranges, and a range is not an installed version,
-# so they parse to nothing for the same reason a bare name does.
-#
-# Every requirements file REQ_FIND matches counts, though trivy's pip analyzer
-# reads only a file named exactly `requirements.txt` (#1247). dependency-scan.sh
-# closes that by scanning each of the others alone under the name trivy reads,
-# and it takes the list from the `[scannable] … pinned entr…` lines below.
-while IFS= read -r req; do
-	[[ -n "$req" ]] || continue
-	pinned="$(grep -cE '^[[:space:]]*[A-Za-z0-9._-]+[[:space:]]*===?[[:space:]]*[0-9]' "$req" 2>/dev/null || true)"
-	entries="$(grep -cE '^[[:space:]]*[A-Za-z0-9._-]+' "$req" 2>/dev/null || true)"
-	if [[ "$pinned" =~ ^[0-9]+$ ]] && ((pinned > 0)); then
-		scannable=$((scannable + 1))
-		REPORT+=("  [scannable] $req — $pinned pinned entr$([[ $pinned -eq 1 ]] && echo y || echo ies)")
-	elif [[ "$entries" =~ ^[0-9]+$ ]] && ((entries > 0)); then
-		REPORT+=("  [UNSCANNABLE] $req — entries present but none pinned with '=='; trivy matches CVEs against versions")
-	fi
-done < <(find_reqs)
 
 # --- verdict ------------------------------------------------------------------
 # DENOMINATOR FIRST, ALWAYS — before any verdict, and on every path including the

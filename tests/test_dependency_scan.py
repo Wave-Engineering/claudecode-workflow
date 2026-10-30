@@ -32,6 +32,15 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "ci" / "dependency-scan.sh"
+PREDICATE = REPO_ROOT / "scripts" / "ci" / "lock-predicate.sh"
+
+
+def predicate(expr: str) -> str:
+    """Evaluate `expr` with lock-predicate.sh sourced: the one lock predicate (#1358)."""
+    return subprocess.run(
+        ["bash", "-c", f'source "$1"; {expr}', "pred", str(PREDICATE)],
+        capture_output=True, text=True, timeout=30, check=True,
+    ).stdout.rstrip("\n")
 
 trivy_required = pytest.mark.skipif(
     shutil.which("trivy") is None, reason="trivy not installed"
@@ -70,22 +79,23 @@ def test_precheck_fallback_scans_siblings_like_the_script():
     agree with dependency-scan.sh: an unpinned sibling stays out of the
     denominator, and a sibling scan's findings count toward the verdict.
 
-    The pin regex is taken FROM check-scannable.sh, so the two cannot drift; a
-    literal copied here would only pin SKILL.md to itself.
+    The pin regex is taken FROM lock-predicate.sh (#1358), so the two cannot
+    drift; a literal copied here would only pin SKILL.md to itself.
     """
-    script = (REPO_ROOT / "scripts" / "ci" / "check-scannable.sh").read_text()
-    m = re.search(r"pinned=\"\$\(grep -cE '([^']+)' \"\$req\"", script)
-    assert m, "check-scannable.sh pin test not found; update this extraction with it"
+    pin_re = predicate('printf %s "$PIN_RE"')
+    assert pin_re, "lock-predicate.sh PIN_RE is empty"
     body = (REPO_ROOT / "skills" / "precheck" / "SKILL.md").read_text()
-    assert f"grep -cE '{m.group(1)}' '<that file>'" in body, (
-        "the fallback must test pins with check-scannable.sh's own regex"
+    assert f"grep -cE '{pin_re}' '<that file>'" in body, (
+        "the fallback must test pins with lock-predicate.sh's PIN_RE"
     )
     flat = " ".join(body.split())
     assert "leave it out of the denominator and name it as unpinned" in flat
     assert "findings count toward the verdict exactly like the main scan's" in flat
     assert "<same flags>" not in body, "a placeholder for flags is not runnable"
     # The main fallback scan names its target: `trivy fs` with no path errors when run as written.
-    assert "--list-all-pkgs --format json --quiet <repo_root>`" in flat, "the fallback trivy fs needs a target"
+    # Its flags and skip-dirs are lock-predicate.sh's, generated into the prose (#1358).
+    flags = predicate('printf %s "$TRIVY_PROSE_FLAGS"')
+    assert f"trivy fs {flags} {predicate('skip_dirs_args')} <repo_root> > " in body, "the fallback main scan must be lock-predicate.sh's, with a target"
     # The FULL denominator (babelfish's #1269 review): the fallback runs the trust
     # gate's own find, byte for byte, so a lone bun.lockb or a pinned lock trivy
     # read nothing from enters it and can be named UNSCANNED. The gate's find is
@@ -96,12 +106,11 @@ def test_precheck_fallback_scans_siblings_like_the_script():
     assert g, "gate.js trivy find not found; update this extraction with it"
     gate_find = g.group(1).replace("<w>/tree", "<repo_root>").replace("\\\\", "\\")
     assert f"  {gate_find}\n" in body, "the fallback must run the trust gate's own find"
-    # Its requirements predicate is check-scannable.sh's REQ_FIND, so all three agree.
-    r = re.search(r"^REQ_FIND=\(\\\( (.+) \\\)\)$", script, re.M)
-    assert r, "check-scannable.sh REQ_FIND not found; update this extraction with it"
-    assert r.group(1) in gate_find, "gate.js's find must carry check-scannable.sh's REQ_FIND"
+    # Both are lock-predicate.sh's lock_find_expr, so all three paths agree (#1358).
+    expr = predicate("lock_find_expr")
+    assert gate_find == f"find <repo_root> {expr}", "gate.js's find must be lock-predicate.sh's lock_find_expr"
     for layout in ("'*requirements*.txt'", "'*/requirements/*.txt'"):
-        assert layout in r.group(1), f"REQ_FIND lost {layout}"
+        assert layout in expr, f"the predicate lost {layout}"
     assert "Any UNSCANNED lock -> the checklist item FAILS" in flat
     assert "A declaration applies only when no lock is found; any found-but-unscanned lock FAILS." in flat
     assert "a bun.lockb with a bun.lock in the same directory" in flat
@@ -306,6 +315,14 @@ def test_trivy_invoked_with_include_dev_deps_and_list_all_pkgs(tmp_path: Path):
     argv = argv_log.read_text().split()
     assert "--include-dev-deps" in argv, f"trivy invoked without --include-dev-deps: {argv}"
     assert "--list-all-pkgs" in argv, f"trivy invoked without --list-all-pkgs: {argv}"
+    # #1358: a repo's .trivyignore or trivy.yaml must not hide a finding or a lock, and the
+    # vendored trees the find prunes are skipped by trivy too (.git it never walks).
+    joined = " ".join(argv)
+    assert "--ignorefile /dev/null" in joined, argv
+    assert "--config /dev/null" in joined, argv
+    prune = predicate('printf "%s\\n" "${LOCK_PRUNE[@]}"').split()
+    skips = [argv[i + 1] for i, a in enumerate(argv) if a == "--skip-dirs"]
+    assert skips == [f"**/{d}" for d in prune if d != ".git"], skips
 
 
 def test_stub_clean_scan_passes_and_reports_its_denominator(tmp_path: Path):
@@ -526,24 +543,19 @@ def test_the_pinned_trivy_ingests_each_counted_python_lock(tmp_path: Path, name:
 
 
 def test_lock_lists_agree():
-    """#1289: the lock names live in three places a shared file cannot reach. The
-    Workflow bundle is one self-contained file, and the /precheck fallback runs in
-    repos that carry no scripts/ci. So check-scannable.sh's arrays, gate.js's
-    trivy find and SKILL.md's fallback find must name the same set, and this
-    test is what holds them together. dependency-scan.sh has no list: its
-    denominator is check-scannable.sh's `[scannable]` lines, by name."""
-    script = (REPO_ROOT / "scripts" / "ci" / "check-scannable.sh").read_text()
-    counted: set[str] = set()
-    for array in ("JS_LOCKS", "PAIRED_LOCKS", "LONE_LOCKS"):
-        m = re.search(rf"^{array}=\((.+)\)$", script, re.M)
-        assert m, f"check-scannable.sh {array} not found on one line; update this extraction with it"
-        counted |= {w.split(":")[-1] for w in shlex.split(m.group(1))}
+    """#1289, #1358: the lock names live in lock-predicate.sh, which the scripts
+    source. The Workflow bundle is one self-contained file, and the /precheck
+    fallback runs in repos that carry no scripts/ci, so their finds are
+    generated copies (gen-lock-find.sh). This holds the copies to LOCK_NAMES.
+    dependency-scan.sh has no list: its denominator is check-scannable.sh's
+    `[scannable]` lines, by name."""
+    counted = set(predicate('printf "%s\\n" "${LOCK_NAMES[@]}"').split())
     assert {"uv.lock", "poetry.lock", "Pipfile.lock"} <= counted, counted
     assert "pdm.lock" not in counted, "trivy 0.74.0 cannot read pdm.lock (#1289); re-measure before adding it"
 
     def find_names(find: str) -> set[str]:
         # Quoted -name operands are lock names; the prune list is unquoted, and
-        # the requirements predicate (a glob) is REQ_FIND's, pinned above.
+        # the requirements patterns are globs.
         return {n for n in re.findall(r"-name '([^']+)'", find) if "*" not in n}
 
     gate = (REPO_ROOT / "skills" / "nextwave" / "gate.js").read_text()
@@ -552,8 +564,8 @@ def test_lock_lists_agree():
     body = (REPO_ROOT / "skills" / "precheck" / "SKILL.md").read_text()
     s = re.search(r"^\s+(find <repo_root> .+ -print)$", body, re.M)
     assert s, "the fallback find is missing from SKILL.md"
-    assert find_names(g.group(1)) == counted, f"gate.js find {sorted(find_names(g.group(1)))} != check-scannable.sh {sorted(counted)}"
-    assert find_names(s.group(1)) == counted, f"SKILL.md find {sorted(find_names(s.group(1)))} != check-scannable.sh {sorted(counted)}"
+    assert find_names(g.group(1)) == counted, f"gate.js find {sorted(find_names(g.group(1)))} != LOCK_NAMES {sorted(counted)}"
+    assert find_names(s.group(1)) == counted, f"SKILL.md find {sorted(find_names(s.group(1)))} != LOCK_NAMES {sorted(counted)}"
 
 
 def test_a_package_lock_beside_a_bun_lockb_fails_on_all_three_paths(tmp_path: Path):
@@ -562,8 +574,9 @@ def test_a_package_lock_beside_a_bun_lockb_fails_on_all_three_paths(tmp_path: Pa
     is the same packages in another format; a package-lock.json is another tool's
     resolution, so it is no stand-in.
 
-    - script: check-scannable.sh counts the bun.lockb for web/, trivy reads only
-      the package-lock.json, so by name the bun.lockb is UNSCANNED (6);
+    - script: check-scannable.sh counts both locks in web/ (lock-centric, #1358),
+      trivy reads only the package-lock.json, so by name the bun.lockb is
+      UNSCANNED (6), 2 of 3;
     - gate: its own find puts both in the denominator, exclusion (2) leaves the
       bun.lockb in, and trivyCoverage() HOLDs the counts that follow;
     - fallback: the same find, and any UNSCANNED lock FAILS."""
@@ -577,7 +590,8 @@ def test_a_package_lock_beside_a_bun_lockb_fails_on_all_three_paths(tmp_path: Pa
     proc = _run_env(repo, _stub_trivy(tmp_path, f'{{"Results":[{flask},{npm}]}}'))
     assert proc.returncode == 6, proc.stdout + proc.stderr
     assert "  - web/bun.lockb" in proc.stderr, proc.stderr
-    assert "web/package-lock.json  (npm, 1 packages, 0 finding(s); NOT in the denominator" in proc.stdout, proc.stdout
+    assert "  - web/package-lock.json  (npm, 1 packages, 0 finding(s))\n" in proc.stdout, proc.stdout
+    assert "coverage: 2 of 3 scannable manifest(s) ingested" in proc.stdout, proc.stdout
 
     body = (REPO_ROOT / "skills" / "precheck" / "SKILL.md").read_text()
     m = re.search(r"^\s+(find <repo_root> .+ -print)$", body, re.M)
@@ -608,6 +622,7 @@ def test_a_denominator_that_cannot_be_read_by_name_exits_5(tmp_path: Path):
     ci = tmp_path / "ci"
     ci.mkdir()
     shutil.copy(SCRIPT, ci / "dependency-scan.sh")
+    shutil.copy(PREDICATE, ci / "lock-predicate.sh")
     (ci / "check-scannable.sh").write_text(
         "#!/usr/bin/env bash\n"
         'echo "check-scannable: 2 scannable manifest(s) in $1"\n'
@@ -631,6 +646,7 @@ def test_an_unreadable_scannable_count_exits_5_not_pass(tmp_path: Path):
     ci = tmp_path / "ci"
     ci.mkdir()
     shutil.copy(SCRIPT, ci / "dependency-scan.sh")
+    shutil.copy(PREDICATE, ci / "lock-predicate.sh")
     (ci / "check-scannable.sh").write_text(
         "#!/usr/bin/env bash\n"
         'echo "check-scannable v2: found 1 lock in $1"\n'
@@ -1113,3 +1129,223 @@ def test_ci_trivy_checksum_check_targets_the_actual_downloaded_filename() -> Non
     assert "${asset}" in checksum_line, (
         f"checksum-check line does not reference ${{asset}}: {checksum_line!r}"
     )
+
+
+# ── #1358: one lock predicate, on all three paths ───────────────────────────────
+
+
+def _skill_body() -> str:
+    return (REPO_ROOT / "skills" / "precheck" / "SKILL.md").read_text()
+
+
+def _skill_find(root: Path) -> list[str]:
+    """Run the SKILL.md fallback's find line on `root`; paths relative to it."""
+    m = re.search(r"^\s+(find <repo_root> .+ -print)$", _skill_body(), re.M)
+    assert m, "the fallback find is missing from SKILL.md"
+    cmd = m.group(1).replace("<repo_root>", shlex.quote(str(root)))
+    out = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=30).stdout.split("\n")
+    return sorted(str(Path(p).relative_to(root)) for p in out if p)
+
+
+def _three_path_fixture(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    for d in ("web", "b", "g", "c", "bb", "node_modules/x"):
+        (repo / d).mkdir(parents=True)
+    (repo / "web" / "package-lock.json").write_text('{"lockfileVersion":3,"packages":{}}\n')
+    (repo / "web" / "yarn.lock").write_text("# yarn lockfile v1\n")
+    (repo / "b" / "bun.lock").write_text("{}\n")
+    (repo / "g" / "go.sum").write_text("example.com/m v1.0.0 h1:x=\n")
+    (repo / "c" / "Cargo.lock").write_text("version = 3\n")
+    (repo / "bb" / "bun.lock").write_text("{}\n")
+    (repo / "bb" / "bun.lockb").write_bytes(b"\x00bun\x00")
+    (repo / "requirements.lock").write_text("flask==3.0.0 \\\n    --hash=sha256:" + "a" * 64 + "\n")
+    (repo / "dev-requirements.lock").write_text("flask>=3\n")
+    (repo / "constraints.txt").write_text("six==1.16.0\n")
+    (repo / "node_modules" / "x" / "yarn.lock").write_text("# vendored\n")
+    return repo
+
+
+def test_three_paths_count_the_same_locks(tmp_path: Path):
+    """check-scannable.sh's [scannable] set equals the SKILL.md find, less its two
+    exclusions (an unpinned requirements file; a bun.lockb with a bun.lock beside
+    it), and the gate's find prints exactly what SKILL.md's does."""
+    repo = _three_path_fixture(tmp_path)
+    cs = subprocess.run(
+        ["bash", str(REPO_ROOT / "scripts" / "ci" / "check-scannable.sh"), str(repo)],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert cs.returncode == 0, cs.stdout + cs.stderr
+    script_set = sorted(re.findall(r"^  \[scannable\] \./(\S+)", cs.stdout, re.M))
+
+    found = _skill_find(repo)
+    pin_re = predicate('printf %s "$PIN_RE"')
+    names = set(predicate('printf "%s\\n" "${LOCK_NAMES[@]}"').split())
+
+    def excluded(rel: str) -> bool:
+        p = repo / rel
+        if p.name not in names:  # a requirements file: out when nothing is pinned
+            return subprocess.run(["grep", "-cE", pin_re, str(p)], capture_output=True, text=True).stdout.strip() == "0"
+        return p.name == "bun.lockb" and (p.parent / "bun.lock").exists()
+
+    prose_set = sorted(r for r in found if not excluded(r))
+    assert prose_set == script_set, f"SKILL.md {prose_set} != check-scannable.sh {script_set}"
+    assert script_set == [
+        "b/bun.lock", "bb/bun.lock", "c/Cargo.lock", "constraints.txt", "g/go.sum",
+        "requirements.lock", "web/package-lock.json", "web/yarn.lock",
+    ], script_set
+    assert not any(r.startswith("node_modules/") for r in found), "a vendored lock leaked in"
+
+    gate = (REPO_ROOT / "skills" / "nextwave" / "gate.js").read_text()
+    g = re.search(r"^    `  (find <w>/tree .+ -print)`,$", gate, re.M)
+    assert g, "gate.js trivy find not found"
+    cmd = g.group(1).replace("\\\\", "\\").replace("<w>/tree", shlex.quote(str(repo)))
+    gate_found = sorted(str(Path(p).relative_to(repo)) for p in subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=30).stdout.split("\n") if p)
+    assert gate_found == found, "the gate's find and the fallback's find must print the same locks"
+
+
+def test_lock_names_cover_every_manifest_lock():
+    names = set(predicate('printf "%s\\n" "${LOCK_NAMES[@]}"').split())
+    for entry in predicate('printf "%s\\n" "${MANIFEST_LOCKS[@]}"').split():
+        for lock in entry.split(":", 1)[1].split(","):
+            assert lock in names, f"MANIFEST_LOCKS names {lock}, which LOCK_NAMES does not count"
+
+
+def _npm(target: str) -> str:
+    return f'{{"Target":"{target}","Type":"npm","Packages":[{{"Name":"left-pad"}}]}}'
+
+
+def test_a_second_js_lock_is_counted(tmp_path: Path):
+    """A yarn.lock beside a package-lock.json is counted, not paired away (#1358):
+    trivy reading only the package-lock.json leaves the yarn.lock UNSCANNED (6)."""
+    repo = tmp_path / "repo"
+    (repo / "web").mkdir(parents=True)
+    (repo / "web" / "package-lock.json").write_text('{"lockfileVersion":3,"packages":{}}\n')
+    (repo / "web" / "yarn.lock").write_text("# yarn lockfile v1\n")
+    proc = _run_env(repo, _stub_trivy(tmp_path, f'{{"Results":[{_npm("web/package-lock.json")}]}}'))
+    assert proc.returncode == 6, proc.stdout + proc.stderr
+    assert "  - web/yarn.lock" in proc.stderr, proc.stderr
+    assert "coverage: 1 of 2 scannable manifest(s) ingested" in proc.stdout, proc.stdout
+
+
+def test_a_hash_locked_requirements_lock_is_scanned_alone(tmp_path: Path):
+    """requirements.lock (pins + --hash lines) and constraints.txt are pip locks
+    trivy reads only as requirements.txt, so each is scanned alone: 2 of 2."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.lock").write_text("flask==3.0.0 \\\n    --hash=sha256:" + "a" * 64 + "\n")
+    (repo / "constraints.txt").write_text("six==1.16.0\n")
+    proc = _run_env(repo, _routing_stub(tmp_path, '{"Results":[]}', f'{{"Results":[{_pip("requirements.txt", "x")}]}}'))
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 0, out
+    assert "coverage: 2 of 2 scannable manifest(s) ingested" in proc.stdout, out
+    for name in ("requirements.lock", "constraints.txt"):
+        assert f"{name}  (pip, 1 packages, 0 finding(s); scanned alone as requirements.txt)" in proc.stdout, out
+    assert (tmp_path / "calls.log").read_text().count("SIBLING") == 2
+
+
+@trivy_required
+def test_the_pinned_trivy_ingests_a_hash_locked_requirements_lock(tmp_path: Path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.lock").write_text(
+        "flask==3.0.0 \\\n    --hash=sha256:" + "a" * 64 + "\n"
+        "click==8.1.7 \\\n    --hash=sha256:" + "b" * 64 + "\n"
+    )
+    proc = run(repo)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "coverage: 1 of 1 scannable manifest(s) ingested" in proc.stdout, proc.stdout
+    assert re.search(r"^  - requirements\.lock  \(pip, 2 packages", proc.stdout, re.M), proc.stdout
+
+
+@trivy_required
+def test_a_committed_trivyignore_or_trivy_yaml_suppresses_nothing(tmp_path: Path):
+    """trivy reads .trivyignore and trivy.yaml from the CURRENT DIRECTORY. Run
+    from inside a repo carrying them, the scan must still find what is there."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "requirements.txt").write_text("django==2.2.0\n")
+    raw = subprocess.run(
+        ["trivy", "fs", "--scanners", "vuln", "--severity", "HIGH,CRITICAL", "--format", "json", "--quiet", str(repo)],
+        capture_output=True, text=True, timeout=300, cwd=tmp_path,
+    )
+    ids = sorted({v["VulnerabilityID"] for r in json.loads(raw.stdout).get("Results", []) for v in r.get("Vulnerabilities") or []})
+    assert ids, "django 2.2.0 should carry HIGH/CRITICAL advisories; the fixture proves nothing without them"
+
+    (repo / ".trivyignore").write_text("\n".join(ids) + "\n")
+    proc = subprocess.run(["bash", str(SCRIPT), str(repo)], capture_output=True, text=True, timeout=300, cwd=repo)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    (repo / ".trivyignore").unlink()
+
+    (repo / "trivy.yaml").write_text("scan:\n  skip-files:\n    - requirements.txt\n")
+    proc = subprocess.run(["bash", str(SCRIPT), str(repo)], capture_output=True, text=True, timeout=300, cwd=repo)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+
+
+def test_prose_exclusion_names_exactly_the_lock_names():
+    """Exclusion (1) tells a requirements file from a lock by name, as is_req_file
+    does. The prose names the locks outright, because "not one of the find's -name
+    files" reads `requirements.lock`, itself a -name match, as a lock (#1358 review)."""
+    names = predicate('printf "%s\\n" "${LOCK_NAMES[@]}"').split()
+    line = ", ".join(names) + ";"
+    gate = (REPO_ROOT / "skills" / "nextwave" / "gate.js").read_text()
+    for where, text in (("gate.js", gate), ("SKILL.md", _skill_body())):
+        # The list opens its own line in both files. Anchoring there is what fails a list whose
+        # leading names drifted out of LOCK_NAMES; a bare substring would still match.
+        assert re.search(r"(?m)^[ \t`]*" + re.escape(line), text), f"{where} exclusion (1) must name exactly LOCK_NAMES: {line}"
+        assert "requirements.lock" in " ".join(text.split()).split(line, 1)[1][:120], f"{where} must say requirements.lock is a requirements file"
+
+
+def test_every_prose_trivy_run_disables_ignore_and_config():
+    runs = [ln for ln in _skill_body().splitlines() if "trivy fs " in ln and ln.lstrip().startswith(("trivy fs ", "d=$(mktemp"))]
+    assert len(runs) >= 2, f"expected the main and the per-file fallback scans, found {runs}"
+    for ln in runs:
+        assert "--ignorefile /dev/null --config /dev/null" in ln, ln
+
+
+def test_a_summary_over_the_pipe_buffer_does_not_false_fail(tmp_path: Path):
+    """A summary bigger than the 64 KiB pipe buffer: piped into `grep -q` under
+    pipefail it read as "no COUNTS line" and exited 5 every run (#1358)."""
+    repo = _scannable_repo(tmp_path)
+    many = ",".join(_npm(f"pkg{i:04d}/very/long/path/to/a/vendored/package/lock/package-lock.json") for i in range(1500))
+    payload = f'{{"Results":[{_pip("requirements.txt", "flask")},{many}]}}'
+    proc = _run_env(repo, _stub_trivy(tmp_path, payload))
+    assert len(proc.stdout) > 65536, f"the summary is only {len(proc.stdout)} bytes; it proves nothing under the pipe buffer"
+    assert proc.returncode == 0, proc.stderr
+    assert "coverage: 1 of 1 scannable manifest(s) ingested" in proc.stdout
+
+
+def test_an_exit_5_keeps_the_raw_output(tmp_path: Path):
+    repo = _scannable_repo(tmp_path)
+    keep = tmp_path / "keep"
+    keep.mkdir()
+    env = {**_stub_trivy(tmp_path, "{not json"), "DEP_SCAN_KEEP_DIR": str(keep)}
+    proc = _run_env(repo, env)
+    assert proc.returncode == 5, proc.stdout + proc.stderr
+    m = re.search(r"raw scanner output kept at (\S+)", proc.stderr)
+    assert m, proc.stderr
+    kept = Path(m.group(1))
+    assert kept.parent == keep, kept
+    for f in ("main.json", "trivy.err", "summary.txt"):
+        assert (kept / f).is_file(), f"{f} not kept: {sorted(p.name for p in kept.iterdir())}"
+
+
+def test_no_tested_pipeline_reads_the_summary():
+    assert "printf '%s' \"$summary\" |" not in SCRIPT.read_text(), "never pipe the summary (#1358)"
+
+
+def test_measured_trivy_version_is_the_pinned_one():
+    """Every trivy version a comment says was measured is the one CI pins, and the
+    workflow container bakes that same version (triage #19: the two had drifted)."""
+    pin = re.search(r'TRIVY_VERSION:\s*"([\d.]+)"', (REPO_ROOT / ".github" / "workflows" / "validate.yml").read_text())
+    assert pin
+    container = REPO_ROOT / "containers" / "oakandwave-workflow"
+    baked = re.findall(r"^ARG TRIVY_VERSION=([\d.]+)$", (container / "Dockerfile").read_text(), re.M)
+    assert baked == [pin.group(1)], f"the Dockerfile bakes trivy {baked}; CI pins {pin.group(1)}"
+    stated = re.findall(r"TRIVY_VERSION=([\d.]+)", (container / "README.md").read_text())
+    assert stated and set(stated) == {pin.group(1)}, f"the container README states trivy {stated}; CI pins {pin.group(1)}"
+    seen = 0
+    for name in ("check-scannable.sh", "lock-predicate.sh", "dependency-scan.sh"):
+        for v in re.findall(r"trivy (\d+\.\d+\.\d+)", (REPO_ROOT / "scripts" / "ci" / name).read_text()):
+            seen += 1
+            assert v == pin.group(1), f"{name} names trivy {v}; CI pins {pin.group(1)}"
+    assert seen, "no measured trivy version found; the test is vacuous"
