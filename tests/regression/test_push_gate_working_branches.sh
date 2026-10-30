@@ -226,6 +226,20 @@ check_reason "git push origin --delete main" "git push <remote> --delete <branch
 check_reason "cd /tmp && git push origin --delete x" "git push <remote> --delete <branch>" "core.sshCommand" "ask the user" "its own Bash call"
 check_reason "git push origin main" "Cannot push untested code" # a non-delete keeps the test reason
 
+# a git-detect.sh older than the gate (mid-./install) blocks; it must not fail open
+old_dir=$(mktemp -d)
+cp "$GATE" "$old_dir/"
+sed '/^# Refs an agent never pushes/,$d' "$REPO_DIR/scripts/hooks/workflow/git-detect.sh" >"$old_dir/git-detect.sh"
+out=$(jq -n --arg s "$SID" --arg c "git push origin main" '{session_id: $s, tool_input: {command: $c}}' |
+	bash "$old_dir/pre-push-test-gate.sh")
+if printf '%s' "$out" | grep -q 'git-detect.sh helper did not load'; then
+	printf '  ok    BLOCK git push origin main  [old git-detect.sh]\n'
+else
+	printf '  WRONG (want the load-failure block) git push origin main  [old git-detect.sh]: %s\n' "$out"
+	fail=1
+fi
+rm -rf "$old_dir"
+
 # --- the sentinel still lets any push through, as before ---
 touch "$SENTINEL"
 check PASS "git push origin main"

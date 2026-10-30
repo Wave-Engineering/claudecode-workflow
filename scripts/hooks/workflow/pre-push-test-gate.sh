@@ -46,7 +46,10 @@ fi
 # The detector is shared with secret-scan-gate.sh; see git-detect.sh for what it matches.
 # Not a push → nothing to gate. A detector that fails to load must not read as "not a
 # push" (exit 0, gate silently off): without it, any command mentioning git is blocked.
-if ! source "$(dirname "$0")/git-detect.sh" 2>/dev/null || ! declare -F git_invokes >/dev/null; then
+# A git-detect.sh older than this gate (mid-./install) lacks the #1364 pieces; under
+# `set -u` an unset GIT_PROTECTED_REF_RE would abort with a non-blocking exit 1.
+if ! source "$(dirname "$0")/git-detect.sh" 2>/dev/null || ! declare -F git_invokes >/dev/null ||
+	! declare -F git_push_delete_target >/dev/null || [[ -z "${GIT_PROTECTED_REF_RE:-}" ]]; then
 	case "$COMMAND" in *git*)
 		jq -cn '{decision: "block", reason: "Push gate cannot run: its git-detect.sh helper did not load, so this command is blocked. Re-run the kit'"'"'s ./install, then retry."}'
 		;;
