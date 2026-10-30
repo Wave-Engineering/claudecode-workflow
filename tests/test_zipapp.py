@@ -413,14 +413,14 @@ class TestZipappDashboardCreated:
     def test_init_creates_dashboard(
         self, zipapp_binary: Path, temp_git_repo: Path
     ) -> None:
-        """After init via zipapp, ``.status-panel.html`` exists."""
+        """After init via zipapp, ``.claude/status/dashboard.html`` exists."""
         repo = temp_git_repo
         _write_plan(repo)
 
         rc, _, err = _run_zipapp(zipapp_binary, ["init", "plan.json"], repo)
         assert rc == 0, f"init failed: {err}"
 
-        html = repo / ".status-panel.html"
+        html = repo / ".claude" / "status" / "dashboard.html"
         assert html.exists(), "Dashboard HTML was not created by zipapp init"
         content = html.read_text(encoding="utf-8")
         assert "<!DOCTYPE html>" in content

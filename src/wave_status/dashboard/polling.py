@@ -53,10 +53,9 @@ def render_polling_script(state_path: str = "state.json") -> str:
     The script:
     - Uses ``setInterval`` to fetch ``state_path`` every 3 000 ms. Caller
       supplies the relative path from the HTML file's directory to
-      ``state.json`` so the same polling code works for both layouts:
-      ``.sdlc/waves/dashboard.html`` (sibling state.json → ``"state.json"``)
-      and ``.status-panel.html`` at project root (state under
-      ``.claude/status/`` → ``".claude/status/state.json"``).
+      ``state.json``. Both layouts put the dashboard beside its state, so
+      it is ``"state.json"`` for ``.sdlc/waves/dashboard.html`` and for
+      ``.claude/status/dashboard.html`` alike (cc-workflow#1362).
     - On success, updates every element that has a ``data-field`` attribute
       with the corresponding value from the JSON response.
     - On fetch failure (e.g. ``file://`` CORS or network error), clears the

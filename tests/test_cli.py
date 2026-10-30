@@ -150,6 +150,12 @@ class TestBuildParser:
         with pytest.raises(SystemExit):
             parser.parse_args(["nonexistent-command"])
 
+    def test_add_issue_registered(self) -> None:
+        args = _build_parser().parse_args(["add-issue", "wave-1", "59", "--title", "Fix X"])
+        assert (args.wave_id, args.n, args.title) == ("wave-1", "59", "Fix X")
+        args = _build_parser().parse_args(["add-issue", "wave-1", "org/r#7"])
+        assert (args.n, args.title) == ("org/r#7", None)
+
 
 # ---------------------------------------------------------------------------
 # init [R-02, R-03]
@@ -168,7 +174,7 @@ class TestCmdInit:
         assert (d / "state.json").exists()
         assert (d / "flights.json").exists()
         # Dashboard was generated.
-        assert (tmp_path / ".status-panel.html").exists()
+        assert (tmp_path / ".claude" / "status" / "dashboard.html").exists()
 
     def test_init_from_stdin(self, tmp_path: Path) -> None:
         """[R-03] init reads from stdin when given '-'."""
@@ -243,7 +249,7 @@ class TestCmdFlightPlan:
         """Dashboard is regenerated after storing flights."""
         # Generate initial dashboard so we know it exists.
         _regenerate_dashboard(project_root)
-        html = project_root / ".status-panel.html"
+        html = project_root / ".claude" / "status" / "dashboard.html"
         mtime_before = html.stat().st_mtime_ns
 
         code = _run_cli(["flight-plan", str(flights_file)], project_root)
@@ -266,7 +272,7 @@ class TestCmdPreflight:
     def test_preflight_regenerates_dashboard(self, project_root: Path) -> None:
         code = _run_cli(["preflight"], project_root)
         assert code == 0
-        assert (project_root / ".status-panel.html").exists()
+        assert (project_root / ".claude" / "status" / "dashboard.html").exists()
 
 
 class TestCmdPlanning:
@@ -280,7 +286,7 @@ class TestCmdPlanning:
     def test_planning_regenerates_dashboard(self, project_root: Path) -> None:
         code = _run_cli(["planning"], project_root)
         assert code == 0
-        assert (project_root / ".status-panel.html").exists()
+        assert (project_root / ".claude" / "status" / "dashboard.html").exists()
 
 
 class TestCmdFlight:
@@ -300,7 +306,7 @@ class TestCmdFlight:
         store_flight_plan(SAMPLE_FLIGHTS, project_root)
         code = _run_cli(["flight", "1"], project_root)
         assert code == 0
-        assert (project_root / ".status-panel.html").exists()
+        assert (project_root / ".claude" / "status" / "dashboard.html").exists()
 
 
 class TestCmdFlightDone:
@@ -322,7 +328,7 @@ class TestCmdFlightDone:
         flight(1, project_root)
         code = _run_cli(["flight-done", "1"], project_root)
         assert code == 0
-        assert (project_root / ".status-panel.html").exists()
+        assert (project_root / ".claude" / "status" / "dashboard.html").exists()
 
 
 class TestCmdReview:
@@ -335,7 +341,7 @@ class TestCmdReview:
     def test_review_regenerates_dashboard(self, project_root: Path) -> None:
         code = _run_cli(["review"], project_root)
         assert code == 0
-        assert (project_root / ".status-panel.html").exists()
+        assert (project_root / ".claude" / "status" / "dashboard.html").exists()
 
 
 class TestCmdComplete:
@@ -351,7 +357,7 @@ class TestCmdComplete:
         planning(project_root)
         code = _run_cli(["complete"], project_root)
         assert code == 0
-        assert (project_root / ".status-panel.html").exists()
+        assert (project_root / ".claude" / "status" / "dashboard.html").exists()
 
 
 class TestCmdWaiting:
@@ -372,7 +378,7 @@ class TestCmdWaiting:
     def test_waiting_regenerates_dashboard(self, project_root: Path) -> None:
         code = _run_cli(["waiting"], project_root)
         assert code == 0
-        assert (project_root / ".status-panel.html").exists()
+        assert (project_root / ".claude" / "status" / "dashboard.html").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -395,7 +401,37 @@ class TestCmdCloseIssue:
     def test_close_issue_regenerates_dashboard(self, project_root: Path) -> None:
         code = _run_cli(["close-issue", "13"], project_root)
         assert code == 0
-        assert (project_root / ".status-panel.html").exists()
+        assert (project_root / ".claude" / "status" / "dashboard.html").exists()
+
+
+# ---------------------------------------------------------------------------
+# add-issue (cc-workflow#1362)
+# ---------------------------------------------------------------------------
+
+def _plan_wave_issues(root: Path, wave_id: str) -> list[dict]:
+    plan = load_json(status_dir(root) / "phases-waves.json")
+    return next(w for p in plan["phases"] for w in p["waves"] if w["id"] == wave_id)["issues"]
+
+
+class TestCmdAddIssue:
+    def test_add_issue_cli(self, project_root: Path) -> None:
+        html = project_root / ".claude" / "status" / "dashboard.html"
+        html.unlink(missing_ok=True)
+        code = _run_cli(["add-issue", "wave-1", "59"], project_root)
+        assert code == 0
+        assert _plan_wave_issues(project_root, "wave-1")[-1]["number"] == 59
+        state = load_json(status_dir(project_root) / "state.json")
+        assert state["issues"]["59"] == {"status": "open"}
+        assert html.exists(), "add-issue must regenerate the dashboard at the new path"
+        assert not (project_root / ".status-panel.html").exists()
+
+    def test_add_issue_bad_wave_exits_1(self, project_root: Path) -> None:
+        assert _run_cli(["add-issue", "wave-9", "59"], project_root) == 1
+
+    def test_add_issue_title_flag(self, project_root: Path) -> None:
+        code = _run_cli(["add-issue", "wave-1", "59", "--title", "Fix X"], project_root)
+        assert code == 0
+        assert _plan_wave_issues(project_root, "wave-1")[-1]["title"] == "Fix X"
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +449,7 @@ class TestCmdRecordMr:
     def test_record_mr_regenerates_dashboard(self, project_root: Path) -> None:
         code = _run_cli(["record-mr", "13", "#14"], project_root)
         assert code == 0
-        assert (project_root / ".status-panel.html").exists()
+        assert (project_root / ".claude" / "status" / "dashboard.html").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -454,7 +490,7 @@ class TestCmdDefer:
     def test_defer_regenerates_dashboard(self, project_root: Path) -> None:
         code = _run_cli(["defer", "desc", "high"], project_root)
         assert code == 0
-        assert (project_root / ".status-panel.html").exists()
+        assert (project_root / ".claude" / "status" / "dashboard.html").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -480,7 +516,7 @@ class TestCmdDeferAccept:
         _run_cli(["defer", "Some item", "low"], project_root)
         code = _run_cli(["defer-accept", "1"], project_root)
         assert code == 0
-        assert (project_root / ".status-panel.html").exists()
+        assert (project_root / ".claude" / "status" / "dashboard.html").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -504,7 +540,7 @@ class TestCmdShow:
     def test_show_does_not_generate_dashboard(self, project_root: Path) -> None:
         """[R-06] show does NOT regenerate dashboard."""
         # Ensure no dashboard exists before show.
-        html = project_root / ".status-panel.html"
+        html = project_root / ".claude" / "status" / "dashboard.html"
         assert not html.exists()
         code = _run_cli(["show"], project_root)
         assert code == 0
@@ -840,7 +876,7 @@ class TestRegenerateDashboard:
     def test_regenerate_creates_html(self, project_root: Path) -> None:
         """_regenerate_dashboard loads all 3 files and creates HTML."""
         _regenerate_dashboard(project_root)
-        html = project_root / ".status-panel.html"
+        html = project_root / ".claude" / "status" / "dashboard.html"
         assert html.exists()
         content = html.read_text(encoding="utf-8")
         assert "<!DOCTYPE html>" in content
@@ -849,7 +885,7 @@ class TestRegenerateDashboard:
         """Dashboard reflects updated state."""
         planning(project_root)
         _regenerate_dashboard(project_root)
-        html = project_root / ".status-panel.html"
+        html = project_root / ".claude" / "status" / "dashboard.html"
         assert html.exists()
 
 
@@ -950,7 +986,7 @@ class TestFullLifecycleCLI:
         assert state["current_action"]["detail"] == "Wave 1 complete"
 
         # Dashboard exists.
-        assert (tmp_path / ".status-panel.html").exists()
+        assert (tmp_path / ".claude" / "status" / "dashboard.html").exists()
 
 
 # ---------------------------------------------------------------------------
