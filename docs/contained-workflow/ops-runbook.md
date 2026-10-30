@@ -211,6 +211,23 @@ PROMOTE_DRY_RUN=false OPERATOR_ACK=true \
 — or a green gate with no ACK — exits non-zero and retags nothing. The ACK is a
 switch that only closes over an already-green circuit.
 
+**A tag build cannot be re-run past its version tag (#1359).** The build writes
+`:vX.Y.Z` before signing, and the tag is written once. Every rebuild produces a new
+digest (the `created` label differs). So if a `v*` build fails after the version-tag
+step, for example a transient signing or TSA error, re-running the job rebuilds,
+gets a new digest, and stops at "already names … a version tag is never re-pushed".
+That refusal is the protection working, not a bug to route around. **Cut the next
+patch tag** (`vX.Y.Z+1`) from the same commit, which gets a clean build, sign and
+smoke. There is no hand path for the first digest: keyless cosign signing needs the
+workflow's OIDC identity, which an operator shell does not have. `:vX.Y.Z` stays on
+that unsigned, unsmoked digest, so it can never pass the gate. Say so in the release
+notes.
+
+The refused re-run has still pushed `:edge` onto its unsigned new digest. Promotion
+and the smoke ring pin by digest, so they are unaffected. Anything that pulls `:edge`
+by tag, such as the dogfood cutover, gets the unsigned build until the next good
+build moves `:edge` again.
+
 ---
 
 ## 4. Fleet adoption — §4.5

@@ -3,7 +3,10 @@
 **A candidate image is cut deliberately.** Merging to `main` does not build one,
 does not sign one, and does not push one to GHCR. Only a version tag or a manual
 dispatch mints a candidate, and only an explicit promote turns a candidate into
-`:stable`.
+`:stable`. Only a candidate built from a `v*` ref can be promoted: any other build carries
+a `git describe` fallback as its version label (`8.14.0-3-gabc`, or a bare short
+SHA in a shallow CI checkout), and promotion refuses any label that is not
+`X.Y.Z` (#1359).
 
 This page is the operator-facing half of #1063. The trigger's own header comment
 in `.github/workflows/oakandwave-workflow-image.yml` carries the rationale;
