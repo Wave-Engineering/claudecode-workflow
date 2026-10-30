@@ -331,13 +331,13 @@ class TestGenerateDashboard:
         html_file = generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        assert html_file == tmp_path / ".status-panel.html"
+        assert html_file == tmp_path / ".claude" / "status" / "dashboard.html"
 
     def test_html_starts_with_doctype(self, tmp_path: Path) -> None:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert content.startswith("<!DOCTYPE html>")
 
     def test_html_is_self_contained_no_external_css(self, tmp_path: Path) -> None:
@@ -345,7 +345,7 @@ class TestGenerateDashboard:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert '<link rel="stylesheet"' not in content
 
     def test_html_is_self_contained_no_external_js(self, tmp_path: Path) -> None:
@@ -353,14 +353,14 @@ class TestGenerateDashboard:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert '<script src=' not in content
 
     def test_has_inline_css(self, tmp_path: Path) -> None:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert "<style>" in content
         assert "</style>" in content
 
@@ -368,7 +368,7 @@ class TestGenerateDashboard:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert "<script>" in content
         assert "</script>" in content
 
@@ -379,7 +379,7 @@ class TestGenerateDashboard:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
 
         # Find positions of key markers
         header_pos = content.find('class="header"')
@@ -420,14 +420,14 @@ class TestGenerateDashboard:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert "action-inflight" in content
 
     def test_no_action_banner_when_current_action_none(self, tmp_path: Path) -> None:
         state = _minimal_state()
         state["current_action"] = None
         generate_dashboard(tmp_path, _minimal_phases(), state, _minimal_flights())
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         # The polling script references data-action-banner as a selector string,
         # but the actual banner div should not be rendered.
         assert 'class="action-banner' not in content
@@ -436,7 +436,7 @@ class TestGenerateDashboard:
         state = _minimal_state()
         del state["current_action"]
         generate_dashboard(tmp_path, _minimal_phases(), state, _minimal_flights())
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         # The polling script references data-action-banner as a selector string,
         # but the actual banner div should not be rendered.
         assert 'class="action-banner' not in content
@@ -447,15 +447,24 @@ class TestGenerateDashboard:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert "Test Project" in content
 
     def test_header_shows_wave(self, tmp_path: Path) -> None:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert "wave-1" in content
+
+    def test_header_omits_wave_when_campaign_complete(self, tmp_path: Path) -> None:
+        """complete() sets current_wave to None after the last wave (#1362)."""
+        generate_dashboard(
+            tmp_path, _minimal_phases(), {**_minimal_state(), "current_wave": None},
+            _minimal_flights(),
+        )
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
+        assert "Wave: None" not in content
 
     # --- Atomic write [R-33] ---
 
@@ -472,7 +481,7 @@ class TestGenerateDashboard:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert len(content) > 100
 
     def test_overwrites_existing_file(self, tmp_path: Path) -> None:
@@ -480,7 +489,7 @@ class TestGenerateDashboard:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        first_content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        first_content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
 
         # Change state and regenerate
         state = _minimal_state()
@@ -490,7 +499,7 @@ class TestGenerateDashboard:
             "detail": "",
         }
         generate_dashboard(tmp_path, _minimal_phases(), state, _minimal_flights())
-        second_content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        second_content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
 
         assert "action-idle" in second_content
         assert first_content != second_content
@@ -501,53 +510,53 @@ class TestGenerateDashboard:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert "progress-rail" in content
 
     def test_contains_gauge_cards(self, tmp_path: Path) -> None:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert "gauge-grid" in content
 
     def test_contains_execution_grid(self, tmp_path: Path) -> None:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert "execution-grid" in content
 
     def test_contains_pending_deferrals(self, tmp_path: Path) -> None:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert "Pending Deferrals" in content
 
     def test_contains_accepted_deferrals(self, tmp_path: Path) -> None:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert "Accepted Deferrals" in content
 
     def test_contains_polling_script(self, tmp_path: Path) -> None:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert "setInterval" in content
 
     def test_legacy_layout_uses_relative_state_path(self, tmp_path: Path) -> None:
-        """No .sdlc/ → HTML at root, state at .claude/status/ → STATE_URL must
-        be the relative path from project root to state.json (cc-workflow#444).
+        """No .sdlc/ → HTML and state both under .claude/status/ → STATE_URL is
+        the relative path to its sibling state.json (cc-workflow#444, #1362).
         """
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
-        assert 'var STATE_URL = ".claude/status/state.json";' in content
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
+        assert 'var STATE_URL = "state.json";' in content
         # And the bare-literal regression must not slip back in
         assert 'fetch("state.json")' not in content
 
@@ -564,7 +573,7 @@ class TestGenerateDashboard:
         generate_dashboard(
             tmp_path, _minimal_phases(), _minimal_state(), _minimal_flights()
         )
-        content = (tmp_path / ".status-panel.html").read_text(encoding="utf-8")
+        content = (tmp_path / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert "Generated:" in content
 
     # --- Complex scenario ---

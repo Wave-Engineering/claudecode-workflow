@@ -35,7 +35,9 @@ def _render_header(phases_data: dict, state_data: dict) -> str:
     ``base_branch`` and ``master_issue`` are deferred to Wave 4.
     """
     project = _html.escape(str(phases_data.get("project", "Unknown Project")))
-    current_wave = _html.escape(str(state_data.get("current_wave", "")))
+    # `or`, not a default: a finished campaign has current_wave None, and
+    # str(None) would render "Wave: None" (cc-workflow#1362).
+    current_wave = _html.escape(str(state_data.get("current_wave") or ""))
 
     meta_parts: list[str] = []
     if current_wave:

@@ -28,6 +28,7 @@ from wave_status.dashboard.generator import generate_dashboard
 from wave_status.state import (
     append_trajectory,
     awaiting_verdict,
+    add_issue,
     close_issue,
     complete,
     extend_state,
@@ -296,6 +297,14 @@ def _cmd_close_issue(args: argparse.Namespace) -> None:
     """Handle ``close-issue <N>``."""
     root = get_project_root()
     result = close_issue(args.n, root)
+    _safe_regenerate_dashboard(root)
+    _print_envelope(result)
+
+
+def _cmd_add_issue(args: argparse.Namespace) -> None:
+    """Handle ``add-issue <wave_id> <N> [--title T]``."""
+    root = get_project_root()
+    result = add_issue(args.wave_id, args.n, root, title=args.title)
     _safe_regenerate_dashboard(root)
     _print_envelope(result)
 
@@ -768,6 +777,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Issue number (e.g. 13) or qualified ref (e.g. owner/repo#13)",
     )
     p_ci.set_defaults(func=_cmd_close_issue)
+
+    # add-issue
+    p_ai = sub.add_parser(
+        "add-issue",
+        help="Add an issue to an existing wave's plan (e.g. a HOLD fix re-driven with the wave)",
+    )
+    p_ai.add_argument("wave_id", help="The wave to add the issue to (e.g. wave-1)")
+    p_ai.add_argument(
+        "n",
+        type=str,
+        help="Issue number (e.g. 13) or qualified ref (e.g. owner/repo#13)",
+    )
+    p_ai.add_argument("--title", default=None, help="The issue's title in the plan (default: its ref)")
+    p_ai.set_defaults(func=_cmd_add_issue)
 
     # record-mr
     p_mr = sub.add_parser("record-mr", help="Record an MR/PR for an issue")

@@ -60,10 +60,10 @@ class TestStatusDirMigration:
 class TestHtmlPathMigration:
     """Tests for html_path() fallback behavior."""
 
-    def test_returns_status_panel_when_no_sdlc(self, tmp_path: Path) -> None:
-        """Without .sdlc/, returns .status-panel.html."""
+    def test_html_path_fallback(self, tmp_path: Path) -> None:
+        """Without .sdlc/, returns .claude/status/dashboard.html (#1362)."""
         result = html_path(tmp_path)
-        assert result == tmp_path / ".status-panel.html"
+        assert result == tmp_path / ".claude" / "status" / "dashboard.html"
 
     def test_returns_sdlc_dashboard_when_sdlc_exists(self, tmp_path: Path) -> None:
         """With .sdlc/ present, returns .sdlc/waves/dashboard.html."""

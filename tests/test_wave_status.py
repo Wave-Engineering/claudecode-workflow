@@ -377,15 +377,33 @@ class TestErrorOutputFormat:
 class TestDashboardGeneration:
     """Verify dashboard HTML is created/updated by subcommands."""
 
+    def test_init_does_not_write_repo_root(self, temp_git_repo: Path, run_cli) -> None:
+        """With no .sdlc/, init writes nothing at the repo root (#1362): the
+        dashboard sits beside the state files, which consumers already ignore."""
+        repo = temp_git_repo
+        _write_plan(repo)
+
+        rc, _, err = run_cli(["init", "plan.json"], repo)
+        assert rc == 0, err
+
+        assert not (repo / ".status-panel.html").exists()
+        porcelain = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=str(repo), capture_output=True, text=True, check=True,
+        ).stdout.splitlines()
+        # plan.json is this test's own input, written at the root by _write_plan.
+        stray = [line for line in porcelain if line[3:] != "plan.json" and not line[3:].startswith(".claude/")]
+        assert stray == [], f"init wrote outside .claude/: {stray}"
+
     def test_init_creates_dashboard(self, temp_git_repo: Path, run_cli) -> None:
-        """After init, ``.status-panel.html`` exists."""
+        """After init, ``.claude/status/dashboard.html`` exists."""
         repo = temp_git_repo
         _write_plan(repo)
 
         rc, _, _ = run_cli(["init", "plan.json"], repo)
         assert rc == 0
 
-        html = repo / ".status-panel.html"
+        html = repo / ".claude" / "status" / "dashboard.html"
         assert html.exists(), "Dashboard HTML was not created by init"
         content = html.read_text(encoding="utf-8")
         assert "<!DOCTYPE html>" in content
@@ -396,7 +414,7 @@ class TestDashboardGeneration:
         """After state changes, dashboard is regenerated (mtime check)."""
         repo = temp_git_repo
         _write_plan(repo)
-        html = repo / ".status-panel.html"
+        html = repo / ".claude" / "status" / "dashboard.html"
 
         run_cli(["init", "plan.json"], repo)
         assert html.exists()
@@ -427,7 +445,7 @@ class TestDashboardGeneration:
         run_cli(["init", "plan.json"], repo)
 
         # Remove the dashboard
-        html = repo / ".status-panel.html"
+        html = repo / ".claude" / "status" / "dashboard.html"
         html.unlink()
         assert not html.exists()
 
@@ -442,7 +460,7 @@ class TestDashboardGeneration:
         """``show`` does not touch the dashboard when it exists."""
         repo = temp_git_repo
         _write_plan(repo)
-        html = repo / ".status-panel.html"
+        html = repo / ".claude" / "status" / "dashboard.html"
 
         run_cli(["init", "plan.json"], repo)
         assert html.exists()
@@ -524,7 +542,7 @@ class TestSetCurrent:
         repo = temp_git_repo
         _write_plan(repo)
         run_cli(["init", "plan.json"], repo)
-        html = repo / ".status-panel.html"
+        html = repo / ".claude" / "status" / "dashboard.html"
         assert html.exists()
         mtime_before = html.stat().st_mtime_ns
 
@@ -595,7 +613,7 @@ class TestSetKahunaBranch:
         repo = temp_git_repo
         _write_plan(repo)
         run_cli(["init", "plan.json"], repo)
-        html = repo / ".status-panel.html"
+        html = repo / ".claude" / "status" / "dashboard.html"
         assert html.exists()
         mtime_before = html.stat().st_mtime_ns
 
@@ -1446,7 +1464,7 @@ class TestShowKahuna:
         run_cli(["flight-plan", "flights.json"], repo)
         run_cli(["set-kahuna-branch", "kahuna/42-foo"], repo)
 
-        html = (repo / ".status-panel.html").read_text(encoding="utf-8")
+        html = (repo / ".claude" / "status" / "dashboard.html").read_text(encoding="utf-8")
         assert 'class="kahuna-section"' in html
         assert "kahuna/42-foo" in html
 

@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from wave_status.state import (
     CURRENT_SCHEMA_VERSION,
+    add_issue,
     awaiting_verdict,
     close_issue,
     complete,
@@ -171,7 +172,7 @@ class TestPathHelpers:
         assert status_dir(tmp_path) == tmp_path / ".claude" / "status"
 
     def test_html_path(self, tmp_path: Path) -> None:
-        assert html_path(tmp_path) == tmp_path / ".status-panel.html"
+        assert html_path(tmp_path) == tmp_path / ".claude" / "status" / "dashboard.html"
 
     def test_ensure_status_dir_creates_directory(self, tmp_path: Path) -> None:
         """[R-35] Creates .claude/status/ if absent."""
@@ -1307,6 +1308,105 @@ class TestCloseIssue:
         close_issue("13", project_root)
         state = load_json(status_dir(project_root) / "state.json")
         assert state["issues"]["13"]["status"] == "closed"
+
+
+# ---------------------------------------------------------------------------
+# add_issue (cc-workflow#1362)
+# ---------------------------------------------------------------------------
+
+def _wave_issues(root: Path, wave_id: str) -> list[dict]:
+    plan = load_json(status_dir(root) / "phases-waves.json")
+    for phase in plan["phases"]:
+        for wave in phase["waves"]:
+            if wave["id"] == wave_id:
+                return wave["issues"]
+    raise AssertionError(f"no wave {wave_id}")
+
+
+def _state_bytes(root: Path) -> tuple[bytes, bytes]:
+    d = status_dir(root)
+    return (d / "phases-waves.json").read_bytes(), (d / "state.json").read_bytes()
+
+
+class TestAddIssue:
+    def test_adds_bare_issue_to_wave(self, project_root: Path) -> None:
+        result = add_issue("wave-1", "59", project_root)
+        assert _wave_issues(project_root, "wave-1")[-1] == {
+            "number": 59, "title": "#59", "depends_on": []
+        }
+        assert result["issues"]["59"] == {"status": "open"}
+        state = load_json(status_dir(project_root) / "state.json")
+        assert state["issues"]["59"] == {"status": "open"}
+
+    def test_bare_issue_takes_the_plan_repo(self, tmp_path: Path) -> None:
+        init_state({**SAMPLE_PLAN, "repo": "org/main"}, tmp_path)
+        result = add_issue("wave-1", 59, tmp_path)
+        assert result["issues"]["org/main#59"] == {"status": "open"}
+
+    def test_adds_qualified_ref(self, project_root: Path) -> None:
+        result = add_issue("wave-2", "org/other#7", project_root)
+        entry = _wave_issues(project_root, "wave-2")[-1]
+        assert entry["ref"] == "org/other#7"
+        assert entry["number"] == 7 and entry["title"] == "org/other#7"
+        assert result["issues"]["org/other#7"] == {"status": "open"}
+
+    def test_title_is_stored(self, project_root: Path) -> None:
+        add_issue("wave-1", "59", project_root, title="Fix X")
+        assert _wave_issues(project_root, "wave-1")[-1]["title"] == "Fix X"
+
+    def test_idempotent_same_wave(self, project_root: Path) -> None:
+        add_issue("wave-1", "59", project_root)
+        before = _state_bytes(project_root)
+        add_issue("wave-1", "59", project_root)
+        assert _state_bytes(project_root) == before
+
+    def test_idempotent_for_an_original_issue(self, project_root: Path) -> None:
+        before = _state_bytes(project_root)
+        add_issue("wave-1", 13, project_root)
+        assert _state_bytes(project_root) == before
+
+    def test_refuses_issue_in_other_wave(self, project_root: Path) -> None:
+        before = _state_bytes(project_root)
+        with pytest.raises(ValueError, match=r"Error: issue 13 is already in wave 'wave-1'"):
+            add_issue("wave-2", 13, project_root)
+        assert _state_bytes(project_root) == before
+
+    def test_refuses_unknown_wave(self, project_root: Path) -> None:
+        before = _state_bytes(project_root)
+        with pytest.raises(ValueError, match=r"Error: wave 'wave-9' is not in the plan\."):
+            add_issue("wave-9", 59, project_root)
+        assert _state_bytes(project_root) == before
+
+    def test_refuses_completed_wave(self, project_root: Path) -> None:
+        state_path = status_dir(project_root) / "state.json"
+        state = load_json(state_path)
+        state["waves"]["wave-1"]["status"] = "completed"
+        save_json(state_path, state)
+        before = _state_bytes(project_root)
+        with pytest.raises(ValueError, match=r"Error: wave 'wave-1' is completed"):
+            add_issue("wave-1", 59, project_root)
+        assert _state_bytes(project_root) == before
+
+    def test_refuses_unparseable_ref(self, project_root: Path) -> None:
+        before = _state_bytes(project_root)
+        for bad in ("abc", "org/x#y"):
+            with pytest.raises(ValueError, match=r"is not an issue number or owner/repo#N ref"):
+                add_issue("wave-1", bad, project_root)
+        assert _state_bytes(project_root) == before
+
+    def test_work_item_counts_include_added(self, project_root: Path) -> None:
+        before = resolve_campaign_head_detail(project_root)
+        add_issue("wave-1", 59, project_root)
+        after = resolve_campaign_head_detail(project_root)
+        assert after["waveWorkItems"]["wave-1"] == before["waveWorkItems"]["wave-1"] + 1
+        assert after["workItemsTotal"] == before["workItemsTotal"] + 1
+
+    def test_close_issue_after_add(self, project_root: Path) -> None:
+        with pytest.raises(ValueError, match="does not exist"):
+            close_issue(59, project_root)
+        add_issue("wave-1", 59, project_root)
+        result = close_issue(59, project_root)
+        assert result["issues"]["59"]["status"] == "closed"
 
 
 # ---------------------------------------------------------------------------
