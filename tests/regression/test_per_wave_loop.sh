@@ -20,7 +20,7 @@ if ! command -v node &>/dev/null; then
 	exit 1
 fi
 
-node --check "$REPO_DIR/skills/nextwave/per-wave-workflow.bundled.js"
-echo "  [PASS] per-wave-workflow.bundled.js syntax (node --check)"
+node "$REPO_DIR/scripts/ci/wf-syntax-check.mjs" "$REPO_DIR/skills/nextwave/per-wave-workflow.bundled.js"
+echo "  [PASS] per-wave-workflow.bundled.js syntax (wf-syntax-check)"
 
 exec node "$REPO_DIR/tests/regression/per_wave_loop.mjs"
