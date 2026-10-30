@@ -33,6 +33,20 @@ so bump it with this release.
   merge that landed without a proven pin is reported `landedUnproven` with its merge commit, never
   as not landed. A new legal exit, `pinned-merge-unproven`, holds the wave on any unproven
   reconcile merge.
+- **Only a release reaches `:stable`, and a GHCR version tag never moves (#1359).**
+  - **Promotion checks the label.** `promote-oakandwave-image.sh` now refuses a digest whose
+    `org.opencontainers.image.version` label is not `X.Y.Z`, using the same rule as the Docker
+    Hub mirror (both call the new `scripts/ci/read-oci-version.sh`). Before, a
+    `workflow_dispatch` candidate (label `8.14.0-3-gabc`) could reach GHCR `:stable`, which the
+    mirror then refused, leaving the two registries' `:stable` on different digests. The
+    refusal also shows in a dry run.
+  - **Version tags are written once.** The image build now pushes only `:edge`. A tag build's
+    `:vX.Y.Z` is written by `oaw-mirror-image`, under a `v`-prefixed regex, and refused if it
+    already names another digest. Before, re-running the build job on a `v*` tag silently moved
+    it.
+  - **The runbook's promote commands now run.** The ops runbook's §3 named a gate-signals
+    script that never existed, set `PROMOTE_ACK` instead of `OPERATOR_ACK`, and never set
+    `DIGEST_REF`. It now shows the declared-absent invocation the wrapper reads.
 
 ### Added
 - **A mechanical AC gate, and no post-merge criteria (#1365).** `/precheck` used to tick

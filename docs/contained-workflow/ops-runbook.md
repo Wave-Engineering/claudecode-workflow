@@ -167,31 +167,45 @@ field-run (MV-04/MV-06); the mapping + accrual are hermetically unit-tested.**
 ## 3. Promote (`:edge → :stable`) — §4.4
 
 Promotion is a **mechanical conjunction** the operator can only *confirm*, never
-override (PC-6, R-07). The gate is green only when **all four** are true:
+override (PC-6, R-07). The gate is green only when **all three** are true:
 
 - throwaway-CI E2E-01 **pass** on the candidate digest,
-- dogfood **soak met**,
 - **zero** quarantines,
 - **zero** open Sev-1.
 
-The decision lives in `promotion_gate.py`; the wrapper gathers the four signals
-(FlightDeck telemetry + the CI result) and, on green **and** an operator ACK,
-retags the **exact digest E2E-01 tested** `:edge → :stable` — no rebuild, same
-bytes (R-23).
+Soak was removed from the gate in #1106. The candidate must also be a release: its
+`org.opencontainers.image.version` label is `X.Y.Z` (#1359), the rule the Docker Hub
+mirror applies too, so the two registries' `:stable` never name different digests.
+
+The decision lives in `promotion_gate.py`; the wrapper gathers the signals and, on
+green **and** an operator ACK, retags the **exact digest E2E-01 tested**
+`:edge → :stable` — no rebuild, same bytes (R-23). `<digest>` below is the
+`digest_ref` the tag build's `build` job emitted.
 
 ```bash
 # 1) PLAN (default): evaluate the gate, print the verdict + the retag it WOULD do.
 PROMOTE_DRY_RUN=true \
-  IMAGE=ghcr.io/wave-engineering/oakandwave-workflow \
-  GATE_SIGNALS_CMD='scripts/flightdeck/query-gate-signals.sh' \
+  DIGEST_REF='ghcr.io/wave-engineering/oakandwave-workflow@sha256:<digest>' \
+  THROWAWAY_CI_PASSED=true \
+  QUARANTINE_TELEMETRY_ABSENT=true \
+  SEV1_TELEMETRY_ABSENT=true \
   scripts/ci/promote-oakandwave-image.sh
 
 # 2) APPLY (only after the plan shows GREEN — the ACK confirms, never substitutes):
-PROMOTE_DRY_RUN=false PROMOTE_ACK=true \
-  IMAGE=ghcr.io/wave-engineering/oakandwave-workflow \
-  GATE_SIGNALS_CMD='scripts/flightdeck/query-gate-signals.sh' \
+PROMOTE_DRY_RUN=false OPERATOR_ACK=true \
+  DIGEST_REF='ghcr.io/wave-engineering/oakandwave-workflow@sha256:<digest>' \
+  THROWAWAY_CI_PASSED=true \
+  QUARANTINE_TELEMETRY_ABSENT=true \
+  SEV1_TELEMETRY_ABSENT=true \
   scripts/ci/promote-oakandwave-image.sh
 ```
+
+- Set `THROWAWAY_CI_PASSED=true` only when that tag build's `smoke` job passed for
+  that exact digest.
+- The two `*_TELEMETRY_ABSENT=true` flags are the explicit #1106 declaration that
+  FlightDeck telemetry is not deployed. Once FlightDeck is functional,
+  `GATE_SIGNALS_CMD` (a command that prints `KEY=VALUE` lines) replaces them. No
+  such command ships today.
 
 **Fail-closed:** any signal missing, unknown, or malformed is **RED**. A red gate
 — or a green gate with no ACK — exits non-zero and retags nothing. The ACK is a
@@ -324,8 +338,8 @@ transparent.
 | Cut the team onto `:edge` (apply) | `DOGFOOD_CUTOVER_APPLY=true scripts/ci/dogfood-cutover.sh` |
 | Watch the dogfood ring | `python3 scripts/flight-surgeon/surgeon.py --live` |
 | Accrue dogfood soak (bridge) | `scripts/ci/soak-accrual-bridge.sh` |
-| Evaluate the promotion gate | `PROMOTE_DRY_RUN=true scripts/ci/promote-oakandwave-image.sh` |
-| Promote (green + ACK) | `PROMOTE_DRY_RUN=false PROMOTE_ACK=true scripts/ci/promote-oakandwave-image.sh` |
+| Evaluate the promotion gate | `PROMOTE_DRY_RUN=true DIGEST_REF=… THROWAWAY_CI_PASSED=true QUARANTINE_TELEMETRY_ABSENT=true SEV1_TELEMETRY_ABSENT=true scripts/ci/promote-oakandwave-image.sh` |
+| Promote (green + ACK) | `PROMOTE_DRY_RUN=false OPERATOR_ACK=true DIGEST_REF=… THROWAWAY_CI_PASSED=true QUARANTINE_TELEMETRY_ABSENT=true SEV1_TELEMETRY_ABSENT=true scripts/ci/promote-oakandwave-image.sh` |
 | Adopt `:stable` at recreate | `ADOPT_DRY_RUN=false scripts/ci/adopt-stable.sh` |
 | Quarantine a broken container | `CONTAINER_ID=… SHOULD_QUARANTINE=true scripts/ci/quarantine-container.sh` |
 | Roll back a bad `:stable` | `docker tag <prior-digest> …:stable && docker push …:stable` |

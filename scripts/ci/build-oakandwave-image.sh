@@ -22,6 +22,11 @@
 #                locally (for a no-push PR validation lane).
 #   Plus every input honored by oakandwave-oci-labels.sh (OAKANDWAVE_VERSION,
 #   GITHUB_SHA, GITHUB_REPOSITORY, OAKANDWAVE_CREATED, …).
+#
+# The build pushes only the moving tag. A release's version tag is applied afterwards,
+# on this build's digest, by the oaw-mirror-image action, which refuses to move a
+# version tag that already names another digest (#1359). There is deliberately no
+# input for extra tags: a second `-t` on this push is how a rerun used to move one.
 
 set -euo pipefail
 
@@ -36,22 +41,6 @@ IMAGE="${IMAGE,,}"
 TAG="${TAG:-edge}"
 PUSH="${PUSH:-true}"
 REF="${IMAGE}:${TAG}"
-
-# EXTRA_TAGS: additional tags applied in the SAME push, space-separated, bare
-# names (e.g. "v8.2.0"). A release used to leave no trace in the registry — only
-# `:edge` was ever pushed — so v8.1.1's image was indistinguishable from any
-# intermediate build, retention had no anchor, and rollback meant reading OCI
-# labels off candidate digests one at a time (#1122).
-#
-# Applied as extra `-t` flags on the one build rather than a retag afterwards, so
-# every tag names the SAME digest by construction. Retagging as a second step
-# would leave a window where they disagree, and would give a second thing to get
-# wrong. R-23: the digest tested is the digest promoted.
-extra_tag_args=()
-for _t in ${EXTRA_TAGS:-}; do
-	[[ -n "$_t" ]] || continue
-	extra_tag_args+=(-t "${IMAGE}:${_t}")
-done
 
 # --- Assemble the OCI provenance labels (single source of truth) --------------
 label_args=()
@@ -74,13 +63,12 @@ trap 'rm -f "$metadata_file"' EXIT
 output_flag="--load"
 [[ "$PUSH" == "true" ]] && output_flag="--push"
 
-echo "==> docker buildx build $output_flag -t $REF${extra_tag_args:+ (+${#extra_tag_args[@]} extra tag args)} (${#label_args[@]} labels)"
+echo "==> docker buildx build $output_flag -t $REF (${#label_args[@]} labels)"
 docker buildx build \
 	"$output_flag" \
 	--metadata-file "$metadata_file" \
 	-f "$DOCKERFILE" \
 	-t "$REF" \
-	"${extra_tag_args[@]+"${extra_tag_args[@]}"}" \
 	"${label_args[@]}" \
 	"${build_args[@]}" \
 	"$REPO_DIR"

@@ -260,10 +260,97 @@ def test_promote_script_delegates_the_decision_to_the_gate() -> None:
     assert "buildx build" not in text, "wrapper must NOT build (R-23)"
 
 
+# A docker stub for the wrapper's two calls: `{{json .Image}}` answers STUB_IMAGE_JSON,
+# and `imagetools create` logs its argv. A gh stub logs any call, which fails the test:
+# the wrapper must never touch a release (#1359).
+_DOCKER_STUB = r"""#!/usr/bin/env bash
+if [[ "$*" == *"imagetools create"* ]]; then
+  printf '%s\n' "$*" >> "$STUB_CREATE_LOG"
+  exit 0
+fi
+if [[ "$*" == *"{{json .Image}}"* ]]; then
+  printf '%s\n' "$STUB_IMAGE_JSON"
+  exit 0
+fi
+echo "unexpected docker call: $*" >&2
+exit 1
+"""
+
+
+def _stub_path(tmp_path: Path, version: str | None) -> dict:
+    """Env entries putting a stub docker (whose image carries ``version``) and a
+    logging gh first on PATH."""
+    import json
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    docker = bindir / "docker"
+    docker.write_text(_DOCKER_STUB)
+    docker.chmod(0o755)
+    gh = bindir / "gh"
+    gh.write_text(f'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "{tmp_path / "gh.log"}"\nexit 0\n')
+    gh.chmod(0o755)
+    labels = {"org.opencontainers.image.title": "oakandwave-workflow"}
+    if version is not None:
+        labels["org.opencontainers.image.version"] = version
+    return {
+        "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "STUB_IMAGE_JSON": json.dumps({"config": {"Labels": labels}}),
+        "STUB_CREATE_LOG": str(tmp_path / "create.log"),
+    }
+
+
+def _green_ack_env(tmp_path: Path, version: str | None, dry_run: bool) -> dict:
+    env = {k: v for k, v in os.environ.items() if k not in ("GATE_SIGNALS_CMD", "OAW_SOAK_LEDGER",
+                                                           "OAW_QUARANTINE_LEDGER")}
+    env.update(
+        DIGEST_REF=DIGEST_A,
+        THROWAWAY_CI_PASSED="true",
+        QUARANTINE_TELEMETRY_ABSENT="true",
+        SEV1_TELEMETRY_ABSENT="true",
+        OPERATOR_ACK="true",
+        PROMOTE_DRY_RUN="true" if dry_run else "false",
+    )
+    env.update(_stub_path(tmp_path, version))
+    return env
+
+
+def _promote(tmp_path: Path, env: dict) -> tuple[subprocess.CompletedProcess, list[str]]:
+    proc = subprocess.run(["bash", str(PROMOTE_SCRIPT)], capture_output=True, text=True, env=env,
+                          timeout=60)
+    assert not (tmp_path / "gh.log").exists(), "the wrapper called gh"
+    log = tmp_path / "create.log"
+    return proc, log.read_text().splitlines() if log.exists() else []
+
+
+def test_promote_refuses_a_non_release_label(tmp_path: Path) -> None:
+    proc, creates = _promote(tmp_path, _green_ack_env(tmp_path, "8.14.0-3-gabc", dry_run=False))
+    assert proc.returncode != 0, "a git-describe label was promoted"
+    assert "version label is not X.Y.Z" in proc.stderr, proc.stderr
+    assert creates == [], f"retagged a non-release digest: {creates}"
+
+
+def test_promote_dry_run_reports_the_label_refusal(tmp_path: Path) -> None:
+    proc, creates = _promote(tmp_path, _green_ack_env(tmp_path, "8.14.0-3-gabc", dry_run=True))
+    assert proc.returncode != 0, "a dry run planned a non-release promotion"
+    assert "would retag" not in proc.stdout
+    assert creates == []
+
+
+def test_promote_retags_a_release_label(tmp_path: Path) -> None:
+    proc, creates = _promote(tmp_path, _green_ack_env(tmp_path, "8.15.0", dry_run=False))
+    assert proc.returncode == 0, proc.stderr
+    assert "version label: 8.15.0" in proc.stdout
+    assert creates == [
+        f"buildx imagetools create --tag ghcr.io/wave-engineering/oakandwave-workflow:stable {DIGEST_A}"
+    ], creates
+
+
 def test_promote_script_dry_run_requires_green_and_ack(tmp_path) -> None:
-    """End-to-end through the wrapper (dry-run, no docker): a red or un-ACK'd
+    """End-to-end through the wrapper (dry-run, stub docker): a red or un-ACK'd
     gate retags nothing; green + ACK prints the exact-digest retag."""
     env = dict(os.environ)
+    env.update(_stub_path(tmp_path, "8.15.0"))
     env.update(
         DIGEST_REF=DIGEST_A,
         THROWAWAY_CI_PASSED="true",

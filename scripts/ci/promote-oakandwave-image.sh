@@ -9,6 +9,8 @@
 #      Soak was removed in #1106 — see the gate_args block below.
 #   2. The operator ACK confirms the green gate; promotion then retags the EXACT
 #      digest E2E-01 tested `:edge → :stable` — no rebuild, same bytes (R-23).
+#   3. org.opencontainers.image.version must be X.Y.Z: only a release is promoted
+#      (read-oci-version.sh, the rule the Docker Hub mirror applies too; #1359).
 #
 # The DECISION lives in the unit-tested gate module
 # (containers/oakandwave-workflow/promotion_gate.py): this wrapper only *gathers*
@@ -129,6 +131,21 @@ if [[ "$promoted_digest" != "$DIGEST_REF" ]]; then
 	exit 1
 fi
 
+command -v docker >/dev/null 2>&1 || {
+	echo "  [!] docker not found — needed to read the version label and retag the digest" >&2
+	exit 1
+}
+
+# Only a release reaches :stable (#1359). A workflow_dispatch candidate carries a
+# `git describe` label (8.14.0-3-gabc); promoting it put a digest on GHCR :stable that
+# the Docker Hub mirror then refused, so the two :stable tags named different digests.
+# Checked before the dry-run branch so a plan reports the refusal too. No override.
+version="$(bash "$HERE/read-oci-version.sh" "$promoted_digest")" || {
+	echo "  [!] refusing to promote $promoted_digest: its version label is not X.Y.Z" >&2
+	exit 1
+}
+echo "==> version label: $version"
+
 # --- Retag the EXACT digest :edge → :stable — no rebuild (R-07/R-23) -----------
 # `docker buildx imagetools create --tag <repo>:stable <repo>@sha256:…` points the
 # moving :stable tag at the *same manifest digest*. Because the digest is
@@ -142,11 +159,6 @@ if [[ "${PROMOTE_DRY_RUN:-false}" == "true" ]]; then
 	echo "==> [dry-run] would retag $promoted_digest → $stable_ref"
 	exit 0
 fi
-
-command -v docker >/dev/null 2>&1 || {
-	echo "  [!] docker not found — needed to retag the digest to :stable" >&2
-	exit 1
-}
 
 echo "==> promote: retag $promoted_digest → $stable_ref (exact digest, no rebuild)"
 docker buildx imagetools create --tag "$stable_ref" "$promoted_digest"

@@ -165,8 +165,9 @@ worse, be "fixed" by removing it). Retention stays a host-side operator step unt
 releases carry registry tags.
 
 **Releases now carry `:vX.Y.Z` (#1122), and that is the anchor.** A tag-triggered
-build publishes the version tag alongside `:edge` at the same digest;
-`workflow_dispatch` gets `:edge` only, because a manual build is a candidate, not
+build pushes `:edge`, then `oaw-mirror-image` writes `:vX.Y.Z` on that exact digest,
+and refuses if the tag already names another digest (#1359), so a rerun can never
+move a release tag. `workflow_dispatch` gets `:edge` only, because a manual build is a candidate, not
 a release. `scripts/ci/backfill-release-tags.sh` gave the already-published
 releases their tags, reading the version from each image's own
 `org.opencontainers.image.version` label rather than a hand-typed list.
