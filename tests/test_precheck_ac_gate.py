@@ -240,6 +240,16 @@ def test_waived_post_merge_line_passes_the_lint(tmp_path):
     assert "[waived]" in r.stdout
 
 
+def test_waiver_outside_ac_is_still_listed_in_pr_mode(world):
+    """#1373 review: a waived DoD line in a closing issue is not graded, but its waiver
+    still reaches the checklist, because the script checks only its form."""
+    body = _ac("- [x] a") + f"\n## Definition of Done\n\n- [ ] All story PRs merged clean — {WAIVER}\n"
+    r = _pr(world, {"5": body})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "  [waived] Owner/Repo#5:7 BJ 2026-10-24 https://example.invalid/i/1#c-2" in r.stdout
+    assert "boxes=1 checked=1 waived=0" in r.stdout, "the DoD box is listed, not graded"
+
+
 def test_lint_reads_every_box_not_only_ac(tmp_path):
     r = _run("lint", _file(tmp_path, "## Definition of Done\n\n- [ ] Kahuna→main MR merged clean\n"))
     assert r.returncode == 2, r.stdout

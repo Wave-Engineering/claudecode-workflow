@@ -22,7 +22,7 @@ Operators reference this doc when:
 
 ## Body Template
 
-The body shape below is reproduced verbatim from [§5.1.2 of the Dev Spec](./phase-epic-taxonomy-devspec.md). If the two ever disagree, the Dev Spec wins.
+The body shape below is reproduced verbatim from [§5.1.2 of the Dev Spec](./phase-epic-taxonomy-devspec.md), with one exception: the campaign→main DoD line. §5.1.2 still reads "Kahuna→main MR merged clean", a criterion only a merge can assess, which BJ ruled out on 2026-10-24 (#1365). §5.1.2 is frozen after approval, so it stays as written. On that line this template wins. On anything else, if the two ever disagree, the Dev Spec wins.
 
 ```markdown
 # Plan: <Name>

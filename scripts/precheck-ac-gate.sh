@@ -125,7 +125,9 @@ def grade(ref, body, mode, lint):
                 post += 1
                 out.append(f"  [post-merge] {ref}:{n} {hit}: {text}")
                 code = 2
-        elif lint and w and mode == "none":
+        elif lint and w and not (mode == "all" or in_ac):
+            # Every waiver reaches the checklist, graded box or not: the script checks its
+            # form only, so BJ must see each one at the merge call.
             out.append(f"  [waived] {ref}:{n} BJ {w[0]} {w[1]}")
     if mode == "section" and total == 0:
         out.append(f"  [no-ac] {ref} no AC checkbox under ## Acceptance Criteria")
@@ -192,7 +194,7 @@ elif cmd == "pr":
             items = gh_bodies(slug, *sys.argv[6:8], issue_n)
         else:
             items = gl_bodies(slug, *sys.argv[6:9], issue_n)
-    except (ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
+    except (ValueError, KeyError, TypeError, AttributeError, json.JSONDecodeError) as e:
         print(f"ac-gate: cannot read the PR/MR and its issues: {e}", file=sys.stderr)
         print("VERDICT: FAIL")
         sys.exit(4)

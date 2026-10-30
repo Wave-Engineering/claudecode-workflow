@@ -304,6 +304,9 @@ class TestDiscordNotificationAlwaysFires:
         assert "**No `#precheck` post and no `vox`**" in flat
         assert "with `@<dev>` as its first token, still with no `vox`" in flat
         assert "[WARNING: lead field malformed: <its stderr>]" in flat
+        # #1373 review: the no-@ rule names the lead fallback as its one exception.
+        notice = " ".join(_section_body(skill_text, "The Notification (Discord + vox, or the lead)").split())
+        assert "**The one exception is the lead fallback** (Step 4)" in notice
         assert "precheck-notify-target.sh" in skill_text
         assert "BJ approved routing to a named lead (claudecode-workflow:triage #15)." in skill_text
         rules = " ".join(_section_body(skill_text, "Rules").split())
