@@ -446,7 +446,26 @@ These handle interaction with external systems: Discord, voice, and file viewers
 
 ---
 
-### `/disc` -- Discord Integration
+### `/owtx` and `/owrx` -- Chat (OaW Mattermost by default)
+
+`/owtx` sends and `/owrx` reads. With no route, both go to the agent's default backend: for every OaW org, the OaW Mattermost server. There are no verbs: `#<channel>` is a channel, `@<user>` is a DM, and no target is a roll-call check-in. A last token pair of `> discord` (or `> <server_id>`) routes one message elsewhere, and only that exact last pair, after the closing quote, counts. On a host without crewchat, both fall back to Discord and say so. The rules are in [chat-tools.md](chat-tools.md).
+
+```
+/owtx                                  # Check in to #roll-call
+/owtx #general "build is green"        # Post to a channel on OaW Mattermost
+/owtx @bakerb "need your eyes on #12"  # A direct message
+/owtx #general "deployed v2" > discord # The same post, to Discord
+/owrx                                  # The last 20 messages in #general
+/owrx #precheck                        # Another channel
+/owrx thread <post_id>                 # A whole thread
+/owrx list > discord                   # Discord's channel list
+```
+
+---
+
+### `/disc` -- Discord Integration (deprecated)
+
+**Deprecated (#1348):** use `/owtx` and `/owrx`. `/disc` still works, still means Discord, and opens each response with a one-line deprecation notice. Removing it is a later major release.
 
 Unified Discord integration for the Oak and Wave server. Handles sending messages, reading channels, creating channels/threads, listing channels, and check-in -- all routed by natural language intent.
 
@@ -473,7 +492,7 @@ Every intent is a `disc-server` MCP tool call, or a crewchat `chat_*` call by th
 /disc doorbell                           # Arm the doorbell: crewchat-doorbell on a crewchat host
 ```
 
-All messages are signed with the agent's Dev-Name, Dev-Avatar, and Dev-Team. On a host running the crewchat daemon, send and read go through the `chat_*` tools instead (the dual-mode rule in `/disc`; reference: [chat-tools.md](chat-tools.md)). Channel names are resolved via `mcp__disc-server__disc_resolve`. Configuration is read from `~/.claude/discord.json` (see [Discord Configuration](discord-config.md)).
+All messages are signed with the agent's Dev-Name, Dev-Avatar, and Dev-Team. On a host running the crewchat daemon, send and read go through the `chat_*` tools with `backend: "discord"` instead (the dual-mode rule in [chat-tools.md](chat-tools.md)). Channel names are resolved via `mcp__disc-server__disc_resolve`. Configuration is read from `~/.claude/discord.json` (see [Discord Configuration](discord-config.md)).
 
 ---
 

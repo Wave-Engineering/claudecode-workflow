@@ -209,7 +209,7 @@ annotated `serialize` and never reaches the executor as `fan`.
    improvement. `released` is a separate, campaign-level fact that only the release node asserts.
 5. **Report.** Surface a human-readable summary: groups run, issues merged, any HOLD
    reason, collected concerns/deferrals. Post wave status to `#wave-status` if running
-   under a campaign.
+   under a campaign (`/owtx #wave-status "<summary>"`: by channel name, no `backend`).
 
 ## What is REAL vs SEAM in the Workflow
 

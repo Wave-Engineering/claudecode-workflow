@@ -56,13 +56,13 @@ Report the current session identity, or pick one if not yet established.
 5. **Announce** — Always respond with:
    > I'm **\<Dev-Name\>** \<Dev-Avatar\> from team `<Dev-Team>`.
 
-6. **Check in via Discord** — announce yourself in `#roll-call`, by the dual-mode rule in `/disc` ("Transport: `chat_*` or `disc_*`"):
+6. **Check in on `#roll-call`**, by the dual-mode rule in `docs/chat-tools.md` ("Transport: `chat_*` or `disc_*`"). With crewchat it lands on your default backend, the OaW Mattermost server for every OaW org:
 
    ```
-   # chat_send in your tool list (crewchat daemon on this host):
-   chat_send({ to: "roll-call", text: "<formatted message — see below>", backend: "discord" })
+   # chat_send in your tool list (crewchat daemon on this host): no backend
+   chat_send({ to: "roll-call", text: "<formatted message — see below>" })
 
-   # otherwise:
+   # otherwise (no crewchat: this goes to Discord, so say so once):
    mcp__disc-server__disc_send({
      channel_id: "roll-call",
      message: "<formatted message — see below>"

@@ -19,6 +19,55 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Upgrading
+- **`/disc` still posts to Discord. Use `/owtx` for OaW Mattermost.** Nothing that worked stops
+  working: every `/disc` intent goes where it went, and only gains a one-line deprecation notice.
+
+### Added
+- **`/owtx` and `/owrx`: chat on the OaW Mattermost server by default (#1348).** They replace
+  `/disc`'s send and read sides with no verbs: `#<channel>` is a channel, `@<user>` a DM, and a
+  bare `/owtx` a roll-call check-in. With no route, neither passes `backend`, so the default
+  applies (`home_backend`, then `chat-defaults.json`, which maps every OaW org to
+  `mattermost:oaw-dev`, then ask-once). A last token pair of `> discord` or `> <server_id>`
+  routes one message elsewhere; it counts only after the closing quote and only for a known
+  name, so `"x > y"` stays text. New commands, not a new meaning for `/disc`: a changed default
+  would have sent every habitual `/disc send` somewhere new without a word.
+
+### Changed
+- **The kit's own notifications go to the default backend (#1348).** `/precheck`'s `#precheck`
+  post, `/name`'s roll-call and the wave skills' `#wave-status` announcements name the channel
+  and pass no `backend`. Discord channel IDs survive only in each skill's no-crewchat fallback,
+  and a test keeps it that way.
+- **Pages go through `crewchat-send` first (#1348).** `notify-bj.sh` posts to `#call-4-bj` with
+  `crewchat-send` (mattermost-crew #146), as the checkout's agent (`NOTIFY_BJ_REPO_ROOT`), and
+  falls back to Discord when it is missing or exits non-zero. It logs which path delivered, and
+  exits non-zero only when both fail, so a page never goes quiet. `reseed-kick.sh` passes its
+  project root, and godspeed's checkpoint notify now goes through `notify-bj.sh` instead of its
+  own copy of the Discord poster. `discord-status-post` stays on Discord: it edits one rich
+  embed per project in place, and crewchat has no edit op.
+- **The dual-mode rule and the doorbell moved to `docs/chat-tools.md` (#1348).** They are
+  cross-skill rules, not `/disc`'s, and the doc is installed to `~/.claude/docs`. It also holds
+  the `> <route>` grammar. Every skill that pointed at `/disc` for them points at the doc.
+- **crewchat is pinned to v0.2.6 (#1348):** Mattermost channel names resolve (mattermost-crew
+  #145), and `crewchat-send` exists (#146).
+- **`/disc` arms `crewchat-doorbell` with no timeout (#1346).** The arm line was
+  `CREWCHAT_DOORBELL_TIMEOUT=1800`. Every exit 3 woke the agent for a turn with nothing in it,
+  about 48 a day per agent. Since mattermost-crew v0.2.4 the doorbell's failures exit by
+  themselves, 2 when the session isn't registered and 4 when the daemon is down, so the timeout
+  bought no liveness. Running agents keep the old line until they pick up this release.
+- **`install-crewchat.sh` pins mattermost-crew v0.2.4 (#1342).** A v0.2.2 client sends no
+  project key, so the daemon can't apply a server's per-project allowlist, and agents in partner
+  repos get no account there. Its doorbell also exited 4 on every daemon restart, sending each
+  agent back to the one-shots. v0.2.4's doorbell waits 60 s through a restart, and its shim pings
+  the daemon every 15 s and registers again by itself, so an idle session's doorbell re-arms
+  with no tool call. `/disc`'s and `docs/chat-tools.md`'s exit tables now give exits 2 and 4 that
+  60 s grace, and say which causes still exit 4 at once (no permission, a connect timeout, a bad
+  reply). The shim's own re-register needs a daemon with `ping`. A v0.2.4 client works against an older daemon: its `ping` gets `unsupported`, and the
+  shim falls back to registering on the next tool call. Agents pick it up at their next restart.
+
+### Deprecated
+- **`/disc` (#1348).** Use `/owtx` and `/owrx`. Removing it is a later major release.
+
 ### Removed
 - **discord-watcher is retired from the kit (#1344).** `crewchat-doorbell` has been the doorbell
   since kit 8.17.0, carrying Discord, Mattermost and squawk answers in one stream on any host that
@@ -35,22 +84,6 @@ are worth keeping apart:
 
   **Consequence:** a host without the crewchat daemon, including the contained-workflow image,
   has no Discord doorbell from the kit. `disc-server` still sends and reads there.
-
-### Changed
-- **`/disc` arms `crewchat-doorbell` with no timeout (#1346).** The arm line was
-  `CREWCHAT_DOORBELL_TIMEOUT=1800`. Every exit 3 woke the agent for a turn with nothing in it,
-  about 48 a day per agent. Since mattermost-crew v0.2.4 the doorbell's failures exit by
-  themselves, 2 when the session isn't registered and 4 when the daemon is down, so the timeout
-  bought no liveness. Running agents keep the old line until they pick up this release.
-- **`install-crewchat.sh` pins mattermost-crew v0.2.4 (#1342).** A v0.2.2 client sends no
-  project key, so the daemon can't apply a server's per-project allowlist, and agents in partner
-  repos get no account there. Its doorbell also exited 4 on every daemon restart, sending each
-  agent back to the one-shots. v0.2.4's doorbell waits 60 s through a restart, and its shim pings
-  the daemon every 15 s and registers again by itself, so an idle session's doorbell re-arms
-  with no tool call. `/disc`'s and `docs/chat-tools.md`'s exit tables now give exits 2 and 4 that
-  60 s grace, and say which causes still exit 4 at once (no permission, a connect timeout, a bad
-  reply). The shim's own re-register needs a daemon with `ping`. A v0.2.4 client works against an older daemon: its `ping` gets `unsupported`, and the
-  shim falls back to registering on the next tool call. Agents pick it up at their next restart.
 
 ## [8.18.0] - 2026-10-26
 

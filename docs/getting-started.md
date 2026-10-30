@@ -208,7 +208,9 @@ The full skill reference is in [Skill Reference](skill-reference.md) with detail
 | `/issue` | Create structured issues with proper templates and labels from natural language |
 | `/nerf` | Context budget management -- check usage, adjust limits, launch scope monitor |
 | `/ibm` | Quick reminder of the Issue-Branch-PR/MR workflow when you need to reset your mental model |
-| `/disc` | Send and read Discord messages, check in to `#roll-call`, manage channels |
+| `/owtx` | Send chat (OaW Mattermost by default): `/owtx #general "msg"`, `/owtx @user "msg"`, or bare `/owtx` to check in to `#roll-call` |
+| `/owrx` | Read chat (OaW Mattermost by default): `/owrx #general`, `/owrx thread <post_id>` |
+| `/disc` | **Deprecated** (use `/owtx` and `/owrx`): send and read Discord messages, manage channels |
 | `/vox` | Text-to-speech announcements ("Hey, the build passed") — run `vox --setup` first to pick a provider |
 | `/jfail` | Fetch and analyze a failed CI job or workflow run |
 
