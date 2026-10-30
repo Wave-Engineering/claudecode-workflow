@@ -168,7 +168,7 @@ class TestNodeCoverage:
     @pytest.mark.parametrize("anchor", [
         "const seed = await teeAgent(",                         # rehydrate
         "const plan = await teeAgent(primePlanPrompt(",         # plan
-        "const rec = await teeAgent(primeReconcilePrompt(",     # reconcile
+        ": await teeAgent(primeReconcilePrompt(proceeding,",    # reconcile (#1356: skipped with no green flight)
         "const prOpen = await teeAgent(",                       # gate open-pr
         "const promo = await teeAgent(",                        # promote
     ])

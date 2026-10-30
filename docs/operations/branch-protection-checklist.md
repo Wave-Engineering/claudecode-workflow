@@ -37,7 +37,11 @@ Every repo is born with this and keeps it for its whole life — no lifecycle to
 That is what lets one config serve both wave campaigns (merge-commit promote) and normal maintenance
 (squash) for the whole life of the repo, with nothing to toggle.
 
-Wave campaigns need no special repo configuration. Flights land on the `kahuna/*` integration branch,
+Wave campaigns need one thing from the repo's CI: **it must run on pull requests into `kahuna/*`**,
+as well as into the protected branch (GitHub: `on: pull_request: branches: [main, "kahuna/**"]`). The
+wave engine grades each flight's PR into the kahuna on its own CI run before merging it (#1356), and a
+flight with no run is held, so CI that triggers only on PRs into `main` halts every wave
+`flight-ci-blocked` ("No CI run found"). Nothing else needs special configuration. Flights land on the `kahuna/*` integration branch,
 never on the protected branch; the engine reconciles them with `flight_partition` / `flight_overlap`
 and `commutativity_verify`, merging in dependency order. `kahuna→main` is then a single serialized,
 trust-gated promotion. **Nothing ever merges to the protected branch concurrently**, so the protected

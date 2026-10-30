@@ -29,6 +29,56 @@ class TestWorkflowModule:
         assert _WF.exists(), f"per-wave-workflow.js not found at {_WF}"
 
 
+class TestFlightCiBeforeReconcile:
+    """#1356 (triage #39): reconcile merged flight PRs into kahuna/* on red CI. Each flight is
+    now graded on its own head first, and reconcile merges only the green ones, pinned."""
+
+    def _reconcile_prompt(self) -> str:
+        src = _wf_src()
+        start = src.index("function primeReconcilePrompt(")
+        return src[start:src.index("\n}\n", start)]
+
+    def test_reconcile_prompt_pins_head_and_opens_no_pr(self) -> None:
+        p = self._reconcile_prompt()
+        assert 'pr_merge(number=<its PR>, expected_head_sha="<its graded head>")' in p, (
+            "reconcile must merge each flight PR pinned to its graded head"
+        )
+        assert "pr_create" not in p, "reconcile must not open PRs: the flight CI node does"
+        assert "Merge ONLY the PRs listed above" in p
+
+    def test_flight_ci_node_runs_before_reconcile(self) -> None:
+        src = _wf_src()
+        assert src.index("label: `flight-ci:#${w.issue}`") < src.index("primeReconcilePrompt(proceeding,"), (
+            "the flight CI node must run before reconcile, and reconcile gets only the proceed set"
+        )
+        assert "flightCiVerdict(flightCi[i] ?? null" in src, "a null flight-CI result must grade as blocked"
+        assert "ciBlocked.length && `flight-ci-blocked:" in src, "a blocked flight must halt the wave after persisting"
+
+    def test_reconcile_never_skips_a_merge(self) -> None:
+        """#1356 review: flight-CI step 0 grades an already-integrated flight, so the old "already
+        in kahuna, SKIP it" rule could only let reconcile report merged without calling pr_merge."""
+        p = self._reconcile_prompt()
+        assert "SKIP it" not in p, "reconcile must not skip a merge it was handed"
+        assert "{issue, merged, merge_commit_sha, pinned_head_sha}" in p, "reconcile must report each merge's proof"
+        assert "no echo means no pin" in p, "the prompt must name why the echo is required"
+        assert "needs_rework ONLY (never in merged or merges" in p, "an undone merge must not also be reported merged"
+
+    def test_pinned_merge_unproven_is_a_legal_exit(self) -> None:
+        skill = (_WF.parent / "SKILL.md").read_text(encoding="utf-8")
+        assert "| pinned-merge-unproven |" in skill, "the halt must be in the closed legal-exits table"
+        assert "halts.join('; also: ')" in _wf_src(), "every halt that fired is reported, the unproven merge first"
+
+    def test_merges_count_only_on_the_pin_echo(self) -> None:
+        src = _wf_src()
+        assert "const pinned = reconciledMerges(rec, proceeding)" in src
+        assert "[...integrated, ...pinned.merged]" in src, "only proven merges (and resumes) count as merged"
+        assert "rec.merged || []).filter((n) => handed.has" not in src, "reconcile's merged claim alone must not count"
+        assert "pinned.refused.length && `pinned-merge-unproven:" in src, "an unproven merge must halt the wave"
+        assert "const promoted = !!(promo && promo.promoted) && pin.landed" in src, (
+            "promote counts only when pr_merge echoed the graded head"
+        )
+
+
 class TestFourSignalFanout:
     """The gate weighs exactly four signals, run in parallel (§3.4) — relocated
     from the skill's 'gate lists all four signals / signals run concurrently'."""

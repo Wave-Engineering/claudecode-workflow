@@ -81,7 +81,8 @@ wave-status and returns the loop blob; worktree setup/cleanup are idempotent fil
 > The worker's `status: "already-present"` return is the worker-side half of #686
 > idempotency: a worker whose branch already carries the implementation returns
 > `already-present` and does no work, so a killed run resumes exactly where it died.
-> The reconcile's "if a branch is already in kahuna, SKIP it" is the reconcile-side half.
+> The reconcile-side half is the flight CI node's step 0 (#1356): a flight whose head is already
+> in the kahuna grades `integrated` and never reaches reconcile, which no longer skips anything.
 > A **rework** dispatch is the exception (#1213): the branch usually still holds the
 > implementation reconcile rejected, which the resume check would accept, so the worker is not
 > offered `already-present`. It is given the reason and the rejected head, and either commits a
@@ -169,9 +170,26 @@ Inside the (real) prompts, replace the `// TODO(#687 gate wiring)` lines with re
 - **worker:** `spec_get`, `spec_acceptance_criteria`. Implements + commits in the handed
   worktree. Returns `WORK` (incl. the §3.2 `concerns`/`deferrals` fields). Inherits the
   sdlc-server MCP + deterministic hooks; preload skills via the agent's `skills:`.
-- **reconcile:** `commutativity_verify`, `pr_create`/`pr_merge` to kahuna. Returns `RECONCILE`
-  (`merged`, `needs_rework:[{issue,reason}]`, `conflicts_resolved`, `concerns`). Persistence
-  folds in here (see #688).
+- **flight CI (#1356):** first checks whether the flight head's content is already in the kahuna
+  (`merge-tree --write-tree` leaves the kahuna's tree unchanged, which also holds after a squash merge;
+  the §3.3 resume case), then pushes the flight branch, `pr_create` (flight→kahuna),
+  `ci_wait_run(require_merge_result)` and, on a red, `ci_failed_jobs`; on GitLab, the merge commit of a
+  green run whose sha is not the head; and last, the kahuna tip (`target_sha`). Returns `FLIGHT_CI_EVIDENCE`,
+  graded in code by `flightCiVerdict` (`proceed` / `needs_rework` / `blocked` / `integrated`). A green run
+  binds to the flight head directly (GitHub) or, as `mergeResultVerdict` binds it, through a merge commit
+  with parents exactly [kahuna tip, flight head] (GitLab merged results). Only
+  `proceed` flights reach reconcile, and an `integrated` one (an `already-present` flight, or a rework
+  flight at its new head, whose content is in the kahuna) counts as merged. The target repo's CI must run on PRs into `kahuna/*`, or every
+  flight is `blocked` with "No CI run found".
+- **reconcile:** `commutativity_verify`, `pr_merge(expected_head_sha)` to kahuna, with no `pr_create`. Returns `RECONCILE`
+  (`merged`, `merges:[{issue,merged,merge_commit_sha,pinned_head_sha}]`, `needs_rework:[{issue,reason}]`,
+  `conflicts_resolved`, `concerns`). `merged` is a claim: `reconciledMerges` counts a flight only when it
+  is in `merged` AND has a `merges` entry with `merged:true`, its merge commit and a `pinned_head_sha`
+  equal to its graded head. A flight in `needs_rework` is neither merged nor refused (an undone merge
+  goes there only). Any other claim halts the wave `pinned-merge-unproven`, ahead of every other halt
+  that fired. pr_merge's schema strips unknown keys, so an sdlc server before v5.1.0 drops
+  `expected_head_sha` silently, and v5.1.x pins but does not echo: no echo means no pin, so the host
+  needs sdlc v5.2.0. Persistence folds in here (see #688).
 
 ### Promotion (the success-exit terminal step)
 
@@ -179,7 +197,11 @@ Inside the (real) prompts, replace the `// TODO(#687 gate wiring)` lines with re
 the gate's PR-OPEN node** and its merge-result CI already validated by the CI signal — so the
 `MODE === 'auto'` PASS branch (`promotePrompt`) no longer opens a PR. It **marks that same draft
 PR ready** (`gh pr ready`) and `pr_merge` lands it on all-green, then confirms the merge is
-actually observable on the integration base (`pr_merge_wait`) before reporting `promoted`;
+actually observable on the integration base (`pr_merge_wait`) before reporting `promoted`, which
+the workflow counts only when `pinnedMergeVerdict` finds pr_merge's `pinned_head_sha` equal to the
+graded head (#1356 review). A merge that landed without that proof is reported `landedUnproven`
+with its `merge_commit_sha` (durable disposition `held`, detail `landed-unproven: … — verify or
+revert`), never as "did not land";
 then deletes the kahuna branch and records disposition. It never opens a second PR. `interactive`
 mode never promotes — it returns the verdict (the return IS the human gate, §5), leaving the
 draft PR as the human's review artifact.

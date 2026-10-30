@@ -17,7 +17,7 @@
 // on PASS+integrated+continue, ends on a HOLD/flag" procedures are deterministic unit tests, not
 // integration runs. No LLM in the loop CONTROL FLOW ⇒ it provably cannot stall (#736 dissolves).
 
-import { directMergeReadSteps, headReadLines, isMergeSha } from './merge-result.js'
+import { directMergeReadSteps, headReadLines, targetReadLines, isMergeSha } from './merge-result.js'
 
 // ── args intake (same contract as per-wave-workflow.js #1/#3: the runtime global is `args`,
 //    which may arrive as an object OR a JSON string from tool-call quoting) ──────────────────
@@ -416,7 +416,7 @@ export function releaseCiPrompt({ planId, targetRepo, campaignBranch, protectedB
     `   proves nothing about the merge) and the explicit timeout (#1035 — the default idle bleeds`,
     `   ~30-57 min/run). timeout_sec is 1800 here, not 420: this is a whole-campaign diff, and its`,
     `   pipeline is legitimately longer than a single wave's.`,
-    `   Report its answer as wait, copied as returned (ok, final_status, reason, error). Do not`,
+    `   Report its answer as wait, copied as returned (ok, final_status, reason, error, sha, run_id, url). Do not`,
     `   interpret it: a red merge-result on the release is exactly the signal the whole`,
     `   no-interim-merge-back shape exists to be able to act on, while trunk is still clean.`,
     ``,
@@ -425,9 +425,11 @@ export function releaseCiPrompt({ planId, targetRepo, campaignBranch, protectedB
     `4. LAST, after step 2 and (if you ran it) step 3: the head again. If it moved, what was graded may`,
     `   be the previous head's pipeline, and the release HOLDs; do not re-run anything to chase it.`,
     ...head('head_sha_final'),
+    ...targetReadLines({ targetRepo, branch: protectedBranch, field: 'target_sha' }).map((l) => `   ${l}`),
     ``,
-    `Return: pr_number, pr_ref, head_sha (step 1), wait (step 2), and, ONLY if you ran step 3,`,
-    `merge_pipelines and merge_commit; head_sha_final (step 4); notes (1-2 sentences). Report what you`,
+    `Return: pr_number, pr_ref, head_sha (step 1), wait (step 2); merge_commit whenever step 3 had you`,
+    `read one (a GitLab green on a sha that is not the head, or the direct read); merge_pipelines ONLY if`,
+    `you ran the direct read; head_sha_final and target_sha (step 4); notes (1-2 sentences). Report what you`,
     `READ. A missing fact holds the release; it never passes it.`,
   ].join('\n')
 }
@@ -466,8 +468,9 @@ export function releaseMergePrompt({ planId, targetRepo, campaignBranch, protect
     `   GitHub: gh -R ${targetRepo} pr ready ${n}, then gh -R ${targetRepo} pr merge ${n} --match-head-commit ${sha}.`,
     `   GitLab: glab mr update ${n} --ready -R ${targetRepo} (GitLab refuses to merge a draft), then the merge`,
     `   API's sha parameter, glab api -X PUT "projects/<url-encoded ${targetRepo}>/merge_requests/${n}/merge?sha=${sha}".`,
-    `   If the head moved since the gate graded it, the merge refuses. Then STOP and return`,
-    `   released=false: code CI never saw must not land, and a re-run of the release re-grades it.`,
+    `   If the merge fails for ANY reason (a head that moved since the gate graded it is one; gh does not`,
+    `   always say which), STOP and return released=false with the error in notes. Never retry it without`,
+    `   the pin: code CI never saw must not land, and a re-run of the release re-grades it.`,
     `   Then CONFIRM IT LANDED before reporting released — poll until state=MERGED with a merge commit`,
     `   (pr_merge_wait, or gh -R ${targetRepo} pr view ${n} --json state,mergeCommit). Never treat a pending merge as done.`,
     `   The merge METHOD does not matter here (squash is fine): nothing continues from ${campaignBranch}`,

@@ -33,8 +33,9 @@ export const MERGE_RESULT_EVIDENCE = {
     pr_ref: { type: 'string' },
     head_sha: { type: 'string' }, // the PR/MR's head, read BEFORE ci_wait_run
     head_sha_final: { type: 'string' }, // the PR/MR's head, read again AFTER the last read
+    target_sha: { type: 'string' }, // #1356: the target branch's tip, read last; a merge commit must be built on it
     wait: {
-      // ci_wait_run's answer, copied as returned. Only ok and final_status are routed on.
+      // ci_wait_run's answer, copied as returned. ok, final_status and (on success) sha are routed on.
       type: 'object',
       additionalProperties: true,
       properties: {
@@ -42,6 +43,8 @@ export const MERGE_RESULT_EVIDENCE = {
         final_status: { type: 'string' },
         reason: { type: 'string' },
         error: { type: 'string' },
+        sha: { type: 'string' }, // the graded run's commit: the PR head (GitHub), or the merge commit (GitLab)
+        run_id: { type: 'integer' },
       },
     },
     merge_pipelines: {
@@ -83,13 +86,19 @@ const MERGE_DEFINITIVE_RED = new Set(['failure', 'cancelled', 'failed', 'cancele
 
 // The rule. A graded red is final. Any pass needs the head read twice, equal (see THE HEAD IS
 // READ TWICE above), and a pass returns that head, so the merge binds to the head that was graded.
-// ci_wait_run is the primary path. When it gives NO verdict, the direct read decides, under four
-// rules, all applied here:
+// ci_wait_run is the primary path. Its success binds through the run's own sha: the sha IS the
+// head, or it is a merge commit whose parents are [target tip, head]. When it gives NO verdict,
+// the direct read decides, under four rules, all applied here:
 //   1. only a refs/merge-requests/<n>/merge pipeline counts (never a branch or detached /head run);
 //   2. the newest of those wins (a green older run must not hide a red newer one);
 //   3. it must be green;
 //   4. it must be bound to the head: its sha IS the head, or its merge commit has two parents and
-//      the second is the head (the evidence carries no target tip, so the first is not checked).
+//      the second is the head.
+// THE TARGET TIP (#1356): wherever the evidence has a merge commit, its FIRST parent must be the
+// target branch's tip as read last. A green /merge pipeline built before the target moved tested a
+// diff that no longer exists (a reused release PR is the case), so it HOLDs as stale. The limit,
+// kept on purpose: GitHub's run API reports a pull_request run's head_sha as the PR head and never
+// exposes the test-merge commit it built, so on GitHub a pass binds to the head only, as before.
 // No verdict means empty, ok=false with no final_status ("No CI run found", the sdlc#585
 // signature), timed_out, not_merge_result, or anything unrecognised. Every gap HOLDs.
 export function mergeResultVerdict(ev) {
@@ -109,7 +118,26 @@ export function mergeResultVerdict(ev) {
   if (ev.head_sha_final !== head) {
     return hold('none', `the head moved during grading (${head.slice(0, 8)} → ${ev.head_sha_final.slice(0, 8)}), so what was graded may be the previous head's pipeline`)
   }
+  const target = ev.target_sha
+  if (!isMergeSha(target)) {
+    return hold('none', 'the target tip was not read, so the merge result cannot be bound to it')
+  }
+  // A merge commit binds when it has exactly [target tip, head] as parents. `bound` is the head
+  // half; `stale` names a commit that merges the head into a target tip that has since moved.
+  const parents = (c, sha) => (c?.sha === sha && Array.isArray(c.parent_ids) && c.parent_ids.length === 2 ? c.parent_ids : null)
+  const stale = (path, p0) => hold(path, `STALE: the merge-result pipeline was built on target ${p0.slice(0, 8)}, and the target is now ${target.slice(0, 8)}. Re-run the MR pipeline to re-grade it`)
   if (ev.wait?.ok === true && fs === 'success') {
+    const ws = ev.wait.sha
+    if (!isMergeSha(ws)) {
+      return hold('ci_wait_run', "ci_wait_run's success names no run sha, so the graded run cannot be bound to the head")
+    }
+    if (ws !== head) {
+      const p = parents(ev.merge_commit, ws)
+      if (!p || p[1] !== head) {
+        return hold('ci_wait_run', `ci_wait_run's green run ${ws.slice(0, 8)} is not the head ${head.slice(0, 8)}, and no merge commit read for it has the head as its second parent`)
+      }
+      if (p[0] !== target) return stale('ci_wait_run', p[0])
+    }
     return { pass: true, path: 'ci_wait_run', head, reason: `ci_wait_run: the merge-result pipeline is green on the head ${head.slice(0, 8)}` }
   }
   const err = ev.wait?.error ? `: ${String(ev.wait.error).slice(0, 160)}` : ''
@@ -132,12 +160,11 @@ export function mergeResultVerdict(ev) {
   if (!isMergeSha(newest.sha)) {
     return hold('direct', `${label} is green, but its sha is missing or malformed, so it cannot be bound to the head`)
   }
-  const c = ev.merge_commit
-  const merges =
-    c?.sha === newest.sha && Array.isArray(c.parent_ids) && c.parent_ids.length === 2 && c.parent_ids[1] === head
-  if (newest.sha !== head && !merges) {
+  const p = parents(ev.merge_commit, newest.sha)
+  if (newest.sha !== head && (!p || p[1] !== head)) {
     return hold('direct', `${label} is green but not bound to the head ${head.slice(0, 8)}: its sha is not the head, and its merge commit's second parent is not the head. It is a stale run`)
   }
+  if (newest.sha !== head && p[0] !== target) return stale('direct', p[0])
   return {
     pass: true,
     path: 'direct',
@@ -157,16 +184,30 @@ export function headReadLines({ targetRepo, prNumber, field }) {
   ]
 }
 
+// The target-tip read (#1356), phrased once. Both gates ask for it last, after the final head read,
+// so a merge commit built on an older tip is caught. `field` names the evidence property it fills.
+export function targetReadLines({ targetRepo, branch, field }) {
+  return [
+    `Read the TARGET branch ${branch}'s tip NOW and report it as ${field}, exactly as read:`,
+    `  GitHub: gh api repos/${targetRepo}/branches/${branch} --jq .commit.sha`,
+    `  GitLab: glab api "projects/<url-encoded ${targetRepo}>/repository/branches/<url-encoded ${branch}>" | jq -r .commit.id`,
+  ]
+}
+
 // The direct-read steps, phrased once so every gate that gathers this evidence asks for the same
 // facts in the same shape.
 export function directMergeReadSteps({ targetRepo, prNumber, windowSec = 600 }) {
   const n = prNumber != null ? prNumber : '<n>'
   const enc = `<url-encoded ${targetRepo}>`
   return [
+    `MERGE COMMIT OF A GRADED GREEN (#1356, GitLab only). Whenever ci_wait_run returned success with a`,
+    `sha that is not the head, read that sha's commit and report it as merge_commit:`,
+    `      glab api "projects/${enc}/repository/commits/<that sha>" | jq '{sha: .id, parent_ids}'`,
     `DIRECT READ (#1211, GitLab only). Do this ONLY when ci_wait_run gave NO verdict: ok=false with no`,
     `final_status (e.g. "No CI run found", the sdlc#585 signature), or final_status timed_out or`,
-    `not_merge_result (GitLab's head_pipeline lags, or names the detached /head pipeline). Skip it when`,
-    `ci_wait_run returned success, failure or cancelled: a graded result is final. On GitHub, skip it.`,
+    `not_merge_result (GitLab's head_pipeline lags, or names the detached /head pipeline). Skip the`,
+    `direct read (not the merge-commit read above) when ci_wait_run returned success, failure or`,
+    `cancelled: a graded result is final. On GitHub, skip both.`,
     `  • List EVERY pipeline the MR has, unfiltered, and report them as merge_pipelines:`,
     `      glab api "projects/${enc}/merge_requests/${n}/pipelines?per_page=100" | jq '[.[] | {id, ref, status, sha}]'`,
     `  • Take the NEWEST (highest id) whose ref is "refs/merge-requests/${n}/merge". If it is still`,

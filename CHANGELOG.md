@@ -19,6 +19,21 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+**Needs sdlc v5.2.0 on the host before any auto wave runs.** The per-wave engine now counts a
+pinned merge only on pr_merge's `pinned_head_sha` echo, which first ships in mcp-server-sdlc
+v5.2.0. Before v5.1.0 the server drops the pin; v5.1.x pins but does not echo. On either, every
+auto wave halts `pinned-merge-unproven` after its first group. The kit image bakes sdlc v5.0.4,
+so bump it with this release.
+
+### Fixed
+- **The wave gate binds to graded evidence (#1356).** Each flight is graded on its own head in
+  code (`flightCiVerdict`) before reconcile, and only green flights reach it. Reconcile and promote
+  merge pinned to the graded head (`expected_head_sha`), and a merge counts only when pr_merge
+  reports `merged:true` and echoes that head. The trivy scan must be of the head CI graded. A
+  merge that landed without a proven pin is reported `landedUnproven` with its merge commit, never
+  as not landed. A new legal exit, `pinned-merge-unproven`, holds the wave on any unproven
+  reconcile merge.
+
 ## [8.19.0] - 2026-10-30
 
 crewchat-doorbell is now the kit's only doorbell: discord-watcher is retired, and the doorbell

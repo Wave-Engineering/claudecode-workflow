@@ -127,6 +127,14 @@ class TestPromotionLifecycle:
             "promotion must delete the disposable per-wave kahuna after landing"
         )
 
+    def test_promote_without_graded_head_is_stop(self) -> None:
+        # #1356 (triage #6): the promote merge is pinned to the head CI graded. With no graded
+        # head there is nothing to pin, so the prompt is a STOP, never an unpinned pr_merge.
+        src = _gate_src()
+        assert "if (!isMergeSha(headSha)) {" in src, "promotePrompt must fail closed on a missing graded head"
+        assert "No graded head SHA was handed to" in src, "the fail-closed branch must be the STOP prompt"
+        assert 'expected_head_sha="${headSha}"' in src, "the pinned merge must pass expected_head_sha"
+
     def test_promoted_true_only_if_merge_landed(self) -> None:
         # promoted must reflect actually-landed, never merge-requested-but-pending.
         # Promoted = delivered: confirm the merge is observable on the protected branch.
@@ -200,8 +208,12 @@ class TestCiSignal:
             "the unsatisfiable #1035 rule must not come back into the prompt"
         )
         mr = _merge_result_src()
-        assert "c.parent_ids[1] === head" in mr, (
+        assert "p[1] !== head" in mr, (
             "a green /merge pipeline must be bound to the head through its merge commit's parents"
+        )
+        # #1356 (triage #7): and its first parent must be the target tip, read last.
+        assert "p[0] !== target" in mr and "isMergeSha(target)" in mr, (
+            "a merge commit must be built on the current target tip"
         )
         # #1211 review I-1: the head is read before the wait AND after the last read, and a pass
         # needs both equal, so a head that moved while it was graded can never pass.
