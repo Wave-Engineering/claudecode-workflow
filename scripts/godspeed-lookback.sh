@@ -815,7 +815,7 @@ godspeed_decision() {
 # ---------------------------------------------------------------------------
 # _godspeed_notify <kind> [d] [N]
 #
-# Notifies BJ via vox + Discord. Best-effort; never fails.
+# Notifies BJ via notify-bj.sh (vox + #call-4-bj). Best-effort; never fails.
 #
 # $1 (kind) is accepted for call-site signature stability but no longer read:
 # only ASK reaches here now, since the gated-action path deliberately does NOT
@@ -861,53 +861,18 @@ _godspeed_notify() {
 	vox_msg="Hey BJ, godspeed mandate checkpoint — the agent has a question. Check the terminal."
 	discord_msg="⚠️ **Godspeed checkpoint** — mandate at d=${d}/N=${N}. Agent naming its uncertainty.${identity_suffix}"
 
-	# vox (best-effort).
-	if command -v vox &>/dev/null; then
-		vox "$vox_msg" 2>/dev/null || true
+	# vox and the post both go through notify-bj.sh beside this script (#1348):
+	# crewchat-send to #call-4-bj first, Discord as the fallback, with its token
+	# discipline. Its stderr is kept only when neither path took the post: silence
+	# here would be indistinguishable from a delivered message.
+	local notify err
+	notify="$(dirname "${BASH_SOURCE[0]}")/notify-bj.sh"
+	if [[ ! -x "$notify" ]]; then
+		echo "godspeed: $notify not found — skipping the notify" >&2
+		return 0
 	fi
-
-	# Discord via stdlib python3 (no external deps).
-	# ~/.secrets is canonical (#1061); the undotted ~/secrets is deprecating and is
-	# not mounted into the contained workflow. Env wins, then canonical, then legacy.
-	# An EXPLICIT DISCORD_TOKEN_PATH is honored as given — never silently swapped
-	# for the deprecated path, which would hide a bad pointer behind a stale token.
-	local token_file
-	if [[ -n "${DISCORD_TOKEN_PATH:-}" ]]; then
-		token_file="$DISCORD_TOKEN_PATH"
-	else
-		token_file="$HOME/.secrets/discord-bot-token"
-		[[ -f "$token_file" ]] || token_file="$HOME/secrets/discord-bot-token"
-	fi
-	if [[ -n "${DISCORD_BOT_TOKEN:-}" ]] || [[ -f "$token_file" ]]; then
-		local token
-		# Env wins and must NOT fall through to a file read — the file may not exist
-		# at all in that case (it does not in a container, by design).
-		if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
-			token=$(tr -d '[:space:]' <<<"$DISCORD_BOT_TOKEN")
-		else
-			token=$(tr -d '[:space:]' <"$token_file")
-		fi
-		# Token arrives on STDIN, never argv. /proc/<pid>/cmdline is world-readable
-		# (0444) while /proc/<pid>/environ is owner-only (0400) — so an argv-passed
-		# secret is MORE exposed than the env-passing this design already rejects.
-		# The message stays in argv: it is not a credential.
-		printf '%s' "$token" | python3 -c "
-import urllib.request, json, sys
-token = sys.stdin.read().strip()
-channel_id, msg = '1518536836673310800', sys.argv[1]
-req = urllib.request.Request(
-    f'https://discord.com/api/v10/channels/{channel_id}/messages',
-    data=json.dumps({'content': msg}).encode(),
-    headers={'Authorization': f'Bot {token}', 'Content-Type': 'application/json'},
-    method='POST'
-)
-urllib.request.urlopen(req, timeout=5)
-" "$discord_msg" 2>/dev/null || true
-	else
-		# Not a silent skip: with no token source the Discord half of this notify
-		# simply does not happen, and silence here is indistinguishable from a
-		# delivered message. One line, stderr, no secret material.
-		echo "godspeed: no Discord token source (\$DISCORD_BOT_TOKEN unset, $token_file absent) — skipping Discord notify" >&2
+	if ! err=$(NOTIFY_BJ_REPO_ROOT="${CLAUDE_PROJECT_DIR:-}" "$notify" "$vox_msg" "$discord_msg" 2>&1 >/dev/null); then
+		echo "godspeed: notify failed: ${err//$'\n'/; }" >&2
 	fi
 }
 

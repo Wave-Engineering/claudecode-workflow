@@ -91,7 +91,8 @@ ACK="$root/.claude/reseed-ack"
 START="$(date -u +%Y-%m-%dT%H:%M:%S)"
 
 page_bj() { # <reason>
-	"$NOTIFY" \
+	# The page posts as this checkout's agent (crewchat-send reads its identity).
+	NOTIFY_BJ_REPO_ROOT="$root" "$NOTIFY" \
 		"Reseed auto-revive failed in tmux pane $pane. Type slash reseed revive there." \
 		"⚠️ **Reseed auto-revive FAILED** — tmux pane \`$pane\`, project \`$root\`: $1. Type \`/reseed revive\` in that pane." \
 		>/dev/null 2>&1 || log "notify failed — BJ was NOT paged"

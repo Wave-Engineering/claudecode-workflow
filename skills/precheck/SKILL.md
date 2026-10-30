@@ -38,7 +38,7 @@ Precheck is **the gate into a release branch** (#1233, #1235). Commits and pushe
 - `mcp__sdlc-server__work_item_update` — tick the AC boxes you verified (Step 3.5)
 - `precheck-notify-target.sh` — who gets the notice: BJ, or the lead named in `.claude/agent-identity.json`
 - `SendMessage` — the notice to a named lead, instead of `#precheck` and `vox`
-- `mcp__disc-server__disc_send`, or `chat_send` with `backend: "discord"` on a crewchat host (the dual-mode rule in `/disc`) — post the merge-call request to `#precheck` (channel `1491195025198157834`)
+- `chat_send(to: "precheck", text)` with no `backend` on a crewchat host, else `mcp__disc-server__disc_send` to Discord `#precheck` (`1491195025198157834`) — the dual-mode rule in `docs/chat-tools.md` — post the merge-call request
 
 ## Procedure
 
@@ -544,7 +544,7 @@ Collect results from all four jobs, run Job E, and assemble the checklist (see b
 2. **Short of a pass:** post nothing and leave the PR/MR a draft. Present the checklist with what failed; the STOP below is then for rework. If BJ looks at the exceptions and says to go anyway, that go is what posts the status, with `exceptions approved by BJ: <which>` in the description, and then marks it ready.
 
 Then **notify**. First read the Job E log (`<marker_dir>/ac-gate.log`): **any `[waived]` or `[override]` line → the `bj` route below, whatever `$NOTIFY` prints.** A waiver needs BJ at the merge call (Step 5), so the notice cannot tell a lead the PR is ready for its call. Otherwise run `"$NOTIFY" <repo_root> <your Dev-Name>` and route by what it prints (the Notification section below has the body):
-- `bj` → post to `#precheck` (`disc_send`, or `chat_send` by the dual-mode rule in `/disc`), **then `vox`**. Do both, always. If the post fails (MCP unavailable, network), still do `vox`.
+- `bj` → post to `#precheck` (`chat_send`, or `disc_send` without crewchat, by the dual-mode rule in `docs/chat-tools.md`), **then `vox`**. Do both, always. If the post fails (MCP unavailable, network), still do `vox`.
 - `lead <session> <dev>` → `SendMessage` to `<session>` with the exact `#precheck` body. **No `#precheck` post and no `vox`**: under a lead, the lead makes the merge call, not BJ. If `SendMessage` errors, or `<session>` is not in `ListAgents`, post that body to `#precheck` with `@<dev>` as its first token, still with no `vox`.
   **Not on the kahuna sandbox path.** When the base matches `^kahuna/[0-9]+-`, the merge runs with no human, so BJ keeps his view of it: notify as for `bj` (`#precheck`, then `vox`), exactly as CLAUDE.md's kahuna condition 2 requires. The `SendMessage` to the lead goes in addition, never instead.
 - Exit 3 (a malformed `lead` field) → notify BJ as for `bj`, and put `[WARNING: lead field malformed: <its stderr>]` on the checklist.
@@ -609,16 +609,16 @@ Job C in the parallel batch: the orchestrator runs `dependency-scan.sh` (or the 
 
 **Summary:** `[codebase]` `[docs]` `[tests]` `[config]`. **Findings:** `[fixed]` / `[deferred]` / "(none)".
 
-## The Notification (Discord + vox, or the lead)
+## The Notification (#precheck + vox, or the lead)
 BJ approved routing to a named lead (claudecode-workflow:triage #15).
 
 **Who gets it:** `precheck-notify-target.sh <repo_root> <your Dev-Name>` reads the optional `lead` field of `.claude/agent-identity.json` (`{"session": …, "dev_name": …}`, written by `/grunt` step 5). It prints `bj` when there is no file, no `lead`, or the lead is you (a lead running its own precheck in a grunt's worktree). It prints `lead <session> <dev_name>` for a valid lead naming someone else, and `bj` with exit 3 for a malformed one. Step 4 routes by it. Below, "the post" is the `#precheck` post to BJ, or the same body sent by `SendMessage` to the lead.
 
-Resolve identity from `<project_root>/.claude/agent-identity.json`; fall back to `/tmp/claude-agent-<md5>.json` if absent (transition window). Use it for both the Discord post and the vox announcement.
+Resolve identity from `<project_root>/.claude/agent-identity.json`; fall back to `/tmp/claude-agent-<md5>.json` if absent (transition window). Use it for both the `#precheck` post and the vox announcement.
 
 **Important:** Do NOT prefix the post to BJ with `@all`, `@<Dev-Team>`, or any `@`-mention. That post is for BJ only (human-facing). The doorbell delivers by `@`-addressing, so an `@`-prefix would fan the precheck gate notice out to every listening agent in the fleet. Unaddressed is intentional. **The one exception is the lead fallback** (Step 4): when `SendMessage` to the lead fails, the `#precheck` post starts with exactly one `@<dev>`, the lead's Dev-Name, which reaches only that agent. Never a group or broadcast mention.
 
-**Post to `#precheck` (`1491195025198157834`) — `disc_send(channel_id, message)`, or on a crewchat host `chat_send(to, text, backend: "discord")` (dual-mode rule in `/disc`) — exact body shape:**
+**Post to `#precheck` — on a crewchat host `chat_send(to: "precheck", text)` with no `backend` (it lands on the default, OaW Mattermost); without crewchat, `disc_send("1491195025198157834", message)` to Discord (dual-mode rule in `docs/chat-tools.md`) — exact body shape:**
 ```
 ⚠️ **Precheck passed — PR/MR ready for your merge call**   (or: ⚠️ **Precheck failed — rework**)
 

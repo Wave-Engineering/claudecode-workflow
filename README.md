@@ -72,7 +72,7 @@ Key features:
 | ccfold | `/ccfold` | Merge upstream CLAUDE.md template updates into local project |
 | ccwork | `/ccwork` | Onboarding hub — tour the kit, run labs, configure integrations |
 | ddd | `/ddd` | Domain-Driven Design facilitation — event storming, domain modeling, concept handoff (extends `/muse`'s sketchbook) |
-| disc | `/disc` | Discord integration — check-in, send, read, list, resolve channels |
+| disc | `/disc` | Deprecated (use `/owtx`, `/owrx`): Discord integration — check-in, send, read, list, resolve channels |
 | dod | `/dod` | Project Definition of Done verification against the Deliverables Manifest |
 | edit | `/edit` | Open file/URL in GUI editor |
 | engage | `/engage` | Load CLAUDE.md, confirm rules of engagement |
@@ -87,6 +87,8 @@ Key features:
 | name | `/name` | Report or pick agent session identity |
 | nerf | `/nerf` | Context budget system — soft limits, doom modes, scope monitor |
 | nextwave | `/nextwave` | Execute spec-driven sub-agents per wave; reads each wave's `dispatch` hint to fan or serialize |
+| owrx | `/owrx` | Read chat — a channel, a thread, or Discord's channel list; OaW Mattermost by default, `> discord` for Discord |
+| owtx | `/owtx` | Send chat — a channel, a DM, or a roll-call check-in; OaW Mattermost by default, `> discord` for Discord |
 | onboard | `/onboard` | Bring a fresh agent up to speed in a repo: `/engage`, `/name`, seed check, bounded reading, open issues, then hold for tag-up |
 | devspec | `/devspec` | Interactive Dev Spec creation with Deliverables Manifest and finalization checklist |
 | precheck | `/precheck` | MR gate — review the pushed commits, read CI, post the `precheck` status, mark the PR/MR ready, stop for the merge call |

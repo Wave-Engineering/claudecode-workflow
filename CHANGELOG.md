@@ -25,6 +25,10 @@ v5.2.0. Before v5.1.0 the server drops the pin; v5.1.x pins but does not echo. O
 auto wave halts `pinned-merge-unproven` after its first group. The kit image bakes sdlc v5.0.4,
 so bump it with this release.
 
+### Upgrading
+- **`/disc` still posts to Discord. Use `/owtx` for OaW Mattermost.** Nothing that worked stops
+  working: every `/disc` intent goes where it went, and only gains a one-line deprecation notice.
+
 ### Fixed
 - **The wave gate binds to graded evidence (#1356).** Each flight is graded on its own head in
   code (`flightCiVerdict`) before reconcile, and only green flights reach it. Reconcile and promote
@@ -47,6 +51,35 @@ so bump it with this release.
   `.claude/agent-identity.json` (written by `/grunt`; `/name` now merges the file rather than
   rewriting it) routes `/precheck`'s notice to that lead by `SendMessage`, with no `#precheck` post
   and no `vox`. With no `lead`, the notice goes to BJ as before (`scripts/precheck-notify-target.sh`).
+- **`/owtx` and `/owrx`: chat on the OaW Mattermost server by default (#1348).** They replace
+  `/disc`'s send and read sides with no verbs: `#<channel>` is a channel, `@<user>` a DM, and a
+  bare `/owtx` a roll-call check-in. With no route, neither passes `backend`, so the default
+  applies (`home_backend`, then `chat-defaults.json`, which maps every OaW org to
+  `mattermost:oaw-dev`, then ask-once). A last token pair of `> discord` or `> <server_id>`
+  routes one message elsewhere; it counts only after the closing quote and only for a known
+  name, so `"x > y"` stays text. New commands, not a new meaning for `/disc`: a changed default
+  would have sent every habitual `/disc send` somewhere new without a word.
+
+### Changed
+- **The kit's own notifications go to the default backend (#1348).** `/precheck`'s `#precheck`
+  post, `/name`'s roll-call and the wave skills' `#wave-status` announcements name the channel
+  and pass no `backend`. Discord channel IDs survive only in each skill's no-crewchat fallback,
+  and a test keeps it that way.
+- **Pages go through `crewchat-send` first (#1348).** `notify-bj.sh` posts to `#call-4-bj` with
+  `crewchat-send` (mattermost-crew #146), as the checkout's agent (`NOTIFY_BJ_REPO_ROOT`), and
+  falls back to Discord when it is missing or exits non-zero. It logs which path delivered, and
+  exits non-zero only when both fail, so a page never goes quiet. `reseed-kick.sh` passes its
+  project root, and godspeed's checkpoint notify now goes through `notify-bj.sh` instead of its
+  own copy of the Discord poster. `discord-status-post` stays on Discord: it edits one rich
+  embed per project in place, and crewchat has no edit op.
+- **The dual-mode rule and the doorbell moved to `docs/chat-tools.md` (#1348).** They are
+  cross-skill rules, not `/disc`'s, and the doc is installed to `~/.claude/docs`. It also holds
+  the `> <route>` grammar. Every skill that pointed at `/disc` for them points at the doc.
+- **crewchat is pinned to v0.2.6 (#1348):** Mattermost channel names resolve (mattermost-crew
+  #145), and `crewchat-send` exists (#146).
+
+### Deprecated
+- **`/disc` (#1348).** Use `/owtx` and `/owrx`. Removing it is a later major release.
 
 ## [8.19.0] - 2026-10-30
 
