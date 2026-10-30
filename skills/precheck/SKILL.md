@@ -34,6 +34,10 @@ Precheck is **the gate into a release branch** (#1233, #1235). Commits and pushe
 - `mcp__sdlc-server__ci_wait_run` — CI's verdict for the pushed HEAD (`expected_sha`)
 - the Bash tool — Job B-local's lanes and Job C's `dependency-scan.sh`, each run as `<cmd> > <log> 2>&1; echo "exit=$?"`, so the exit code read is the instrument's own
 - `precheck-status.sh` — post and read the `precheck` commit status
+- `precheck-ac-gate.sh` — Job E, the mechanical AC gate: every box checked or waived by BJ, and no post-merge criterion (#1365)
+- `mcp__sdlc-server__work_item_update` — tick the AC boxes you verified (Step 3.5)
+- `precheck-notify-target.sh` — who gets the notice: BJ, or the lead named in `.claude/agent-identity.json`
+- `SendMessage` — the notice to a named lead, instead of `#precheck` and `vox`
 - `mcp__disc-server__disc_send`, or `chat_send` with `backend: "discord"` on a crewchat host (the dual-mode rule in `/disc`) — post the merge-call request to `#precheck` (channel `1491195025198157834`)
 
 ## Procedure
@@ -43,7 +47,7 @@ Precheck is **the gate into a release branch** (#1233, #1235). Commits and pushe
 Before Step 1, resolve `precheck-review-scope.sh` and `precheck-status.sh` once and reuse those paths for every later call. Step 0.5 already invokes the first, so probing later is too late.
 
 ```bash
-SCOPE="" STATUS="" CISRC=""
+SCOPE="" STATUS="" CISRC="" ACGATE="" NOTIFY=""
 for cand in \
   "$(command -v precheck-review-scope.sh 2>/dev/null)" \
   "<repo_root>/.claude/bin/precheck-review-scope.sh" \
@@ -62,9 +66,21 @@ for cand in \
   "<repo_root>/scripts/precheck-ci-source.sh"; do
   [[ -n "$cand" && -x "$cand" ]] && { CISRC="$cand"; break; }
 done
+for cand in \
+  "$(command -v precheck-ac-gate.sh 2>/dev/null)" \
+  "<repo_root>/.claude/bin/precheck-ac-gate.sh" \
+  "<repo_root>/scripts/precheck-ac-gate.sh"; do
+  [[ -n "$cand" && -x "$cand" ]] && { ACGATE="$cand"; break; }
+done
+for cand in \
+  "$(command -v precheck-notify-target.sh 2>/dev/null)" \
+  "<repo_root>/.claude/bin/precheck-notify-target.sh" \
+  "<repo_root>/scripts/precheck-notify-target.sh"; do
+  [[ -n "$cand" && -x "$cand" ]] && { NOTIFY="$cand"; break; }
+done
 ```
 
-`PATH` covers a normal install; `.claude/bin` covers `install --local` (which is deliberately NOT on `PATH`); `scripts/` covers a cc-workflow checkout. If `SCOPE` misses on all three, the kit is genuinely absent: take the fallback documented in the Job D section and say so on the checklist. **If `STATUS` misses, STOP.** Without it a pass can't be recorded and the PR/MR can't be marked ready, and there's no fallback. Do not improvise. If `CISRC` misses, Job B goes straight to Job B-ci's `ci_wait_run`, as it did before #1268, and the checklist says so.
+`PATH` covers a normal install; `.claude/bin` covers `install --local` (which is deliberately NOT on `PATH`); `scripts/` covers a cc-workflow checkout. If `SCOPE` misses on all three, the kit is genuinely absent: take the fallback documented in the Job D section and say so on the checklist. **If `STATUS` or `ACGATE` misses, STOP.** Without `STATUS` a pass can't be recorded and the PR/MR can't be marked ready. Without `ACGATE` the AC can't be graded, and Job E is part of every pass. Both ship in the same kit as this text, so a miss means a broken install, and there's no fallback. Do not improvise. If `NOTIFY` misses, notify BJ as the Notification section says, and put `[WARNING: precheck-notify-target.sh not found]` on the checklist. If `CISRC` misses, Job B goes straight to Job B-ci's `ci_wait_run`, as it did before #1268, and the checklist says so.
 
 ### Step 0.5 — The pushed commits, and a draft PR/MR (serial, hard stop)
 
@@ -494,16 +510,43 @@ Wait for all four jobs to finish: Job D's Agent to return, and each of A, B and 
 
 **A fix is a commit (#1235).** Fix, then commit and push it (`/scp`), then re-run `ready`; its new SHA is the new `HEAD_SHA`. The pushed fix starts a new CI run, so Job B-ci runs again for the new SHA, and Job D re-runs as the delta `resolve` names. Reviewing an uncommitted fix and then pushing it is the defect this ordering prevents: the pass would describe a tree that is not the commit it gets posted on.
 
-### Step 4 — Assemble the checklist; on a pass, post the status and mark ready
-Collect results from all four jobs and assemble the checklist (see below). Then:
+### Step 3.5 — Tick the AC (serial)
+For each acceptance criterion you verified by reading the codebase and the evidence, set its box to `[x]` on the issue, then read the issue back:
 
-1. **A pass** is the mechanical definition Step 5 also uses: every checklist item verified, zero unresolved critical/important findings from the latest Job D pass, every Job B `LANE … | exit=` line `exit=0` (at least one), Job C exit 0. On a pass:
+```
+mcp__sdlc-server__work_item_update({ issue_ref: "<owner>/<repo>#<N>",
+  patch: { body_section: { heading: "Acceptance Criteria", content: "<the section, with the boxes you verified ticked>" } } })
+```
+
+**An item you cannot verify stays `[ ]`. Never tick what you did not verify.** An item BJ already waived keeps its `WAIVED by BJ <YYYY-MM-DD>: <reason> (<url>)` tail exactly as written; you never add one yourself. Do the same for the PR/MR body's boxes. Write the new body to `<file>` with the Write tool, then:
+- GitHub: `gh api -X PATCH repos/<slug>/pulls/<PR_NUMBER> -F body=@<file>`. Not `gh pr edit`, which fails on some hosts on a GraphQL field the edit does not touch.
+- GitLab: `glab api --hostname <host> -X PUT projects/<enc>/merge_requests/<PR_NUMBER> -F description=@<file>`. Never `glab mr update`, which rewrites the title, and on GitLab the title carries the draft state.
+
+Every issue the PR/MR closes is graded, not only `<N>`, so tick each one's verified boxes the same way.
+
+**Job E — The AC gate** (instrument: `precheck-ac-gate.sh`; run in Step 4, before the pass is judged)
+
+Run it yourself, never through a sub-agent (#1275):
+
+```bash
+"$ACGATE" pr <repo_root> <PR_NUMBER> <N> > <marker_dir>/ac-gate.log 2>&1; echo "exit=$?"
+```
+
+The item's value is that `exit=`. `0` pass. `1` an unchecked box with no valid waiver, or a closing issue with no AC box at all. `2` a post-merge criterion (BJ, 2026-10-24: no AC or DoD line may need a merge to assess). `3` usage. `4` a fetch or API error, which is never a pass. Put the log's `ac-gate:` lines, and every `[waived]` and `[override]` line verbatim, on the checklist. The script checks a waiver's form, not where it came from, so the waivers are in front of BJ at the merge call. On exit 1, either verify and tick the box (Step 3.5) or leave it and fail. On exit 2, rewrite the criterion as something checkable on the PR/MR head, with BJ's agreement since it changes the issue.
+
+### Step 4 — Assemble the checklist; on a pass, post the status and mark ready
+Collect results from all four jobs, run Job E, and assemble the checklist (see below). Then:
+
+1. **A pass** is the mechanical definition Step 5 also uses: every checklist item verified, zero unresolved critical/important findings from the latest Job D pass, every Job B `LANE … | exit=` line `exit=0` (at least one), Job C exit 0, Job E exit 0. On a pass:
    1. Re-run `"$SCOPE" ready`. It must still print `ready <HEAD_SHA>`; a push since the review means review again, not post.
    2. Post the status: `"$STATUS" post <repo_root> <HEAD_SHA> "#<N> review <passes, e.g. full+delta> clean; lanes <ci|local>; trivy <0|skipped>"`. It reads the status back and exits non-zero if the status isn't there. A failure → STOP and report it; never mark ready without it.
    3. Mark the PR/MR ready: `"$STATUS" mark-ready <repo_root> <PR_NUMBER>` → `ready <N> <sha>`. It refuses (exit 4) unless the PR/MR's head carries the pass, then reads the PR/MR back. On GitHub it uses the GraphQL `markPullRequestReadyForReview` mutation; on GitLab it rewrites the title without the draft prefix. **Never use `gh pr ready` or `glab mr update` for this.** glab rewrites the title on most update flags, and on GitLab the draft state *is* the title, which is why the kit stopped relying on glab's porcelain here. From the mcp-server-sdlc release that carries #592, its `pr_ready` is the MCP equivalent. Any non-zero exit → STOP, and the PR/MR stays a draft.
 2. **Short of a pass:** post nothing and leave the PR/MR a draft. Present the checklist with what failed; the STOP below is then for rework. If BJ looks at the exceptions and says to go anyway, that go is what posts the status, with `exceptions approved by BJ: <which>` in the description, and then marks it ready.
 
-Then **notify BJ**: post to `#precheck` (`disc_send`, or `chat_send` by the dual-mode rule in `/disc`), **then `vox`**. **ALWAYS do both.** If the post fails (MCP unavailable, network), still do `vox`.
+Then **notify**. Run `"$NOTIFY" <repo_root> <your Dev-Name>` and route by what it prints (the Notification section below has the body):
+- `bj` → post to `#precheck` (`disc_send`, or `chat_send` by the dual-mode rule in `/disc`), **then `vox`**. Do both, always. If the post fails (MCP unavailable, network), still do `vox`.
+- `lead <session> <dev>` → `SendMessage` to `<session>` with the exact `#precheck` body. **No `#precheck` post and no `vox`**: under a lead, the lead makes the merge call, not BJ. If `SendMessage` errors, or `<session>` is not in `ListAgents`, post that body to `#precheck` with `@<dev>` as its first token, still with no `vox`.
+- Exit 3 (a malformed `lead` field) → notify BJ as for `bj`, and put `[WARNING: lead field malformed: <its stderr>]` on the checklist.
 
 ### Step 5 — Sandbox detection + the merge gate
 Precheck has already done everything up to the merge. What remains is the merge call, and that is all an exception skips.
@@ -514,7 +557,8 @@ Otherwise, check for an **approved autochain** (CLAUDE.md "Exception: Approved A
 - every checklist item verified;
 - zero unresolved critical/important findings from the latest Job D pass;
 - **every** `LANE … | exit=` line you wrote for Job B, from the instrument's own JSON or `$?`, reads `exit=0`, and there is at least one. A missing lane line, a lane still running, or a bare PASS with no lane lines is not a pass;
-- Job C exit 0.
+- Job C exit 0;
+- Job E exit 0.
 
 Then put the gate's two output lines (`approved … armed_at=…` and `approval: …`) on the checklist, so the approval being relied on is visible at the moment it is used, emit `[AUTO-APPROVED: autochain #<epic>]`, and invoke `/mmr`. A gate that cannot be found, a `not-approved` (including an expired approval), or any item short of a pass → STOP below. The gate fails closed; so does this step.
 
@@ -539,8 +583,8 @@ The full precheck runs on the exact commit the PR/MR opens ready with. **After t
 
 1. `"$SCOPE" ready` → `HEAD_SHA` (STOP on `not-ready`). Then `"$STATUS" pr-head <repo_root> <PR_NUMBER>` and **STOP unless its SHA equals `HEAD_SHA`.** Rearm reviews the local checkout, so the local checkout must be the PR/MR's head. Otherwise the status would land on another branch's commit while the PR/MR being merged was never reviewed.
 2. `git -C <repo_root> fetch -q origin <base>`, then `"$STATUS" last-success <repo_root> <base>` → `PREV`. It reads `origin/<base>`, so the fetch is what keeps a commit that another PR already landed from lending this branch its pass. On `none` (no commit on the branch carries a pass), there is nothing to rearm from: run the **full** precheck above. **Any non-zero exit → STOP**: 3 is an API error and 2 is a base it can't resolve. Never treat either as `none` or as a pass.
-3. `"$SCOPE" gather <repo_root> <marker_dir> <PREV>`, then Job D-delta (below) with that diff and one more instruction: *"Also answer, first line of your reply: `BEHAVIOUR-CHANGE: yes|no — <one sentence>`. Yes means this delta changes what the MR does: new or removed behaviour, scope, interface or acceptance criteria, as opposed to fixes and adjustments inside what was already reviewed."* Then run Job B yourself for `HEAD_SHA`, by the same source rule as the full gate: B-ci when a CI run exists for `HEAD_SHA`; B-local when B-ci finds `NO-RUN` or the repo has no CI. Otherwise a repo without CI could never rearm clean.
-4. **Clean:** no critical or important findings, `BEHAVIOUR-CHANGE: no`, and every lane `exit=0`. Post the status on `HEAD_SHA` with the description `#<N> rearm from <PREV7>: delta clean; lanes <ci|local>`. Make no announcement and no STOP. If BJ's merge go was already given, it still stands: continue to `/mmr`. Re-request platform approvals the push reset (GitLab MR approvals), and say so.
+3. `"$SCOPE" gather <repo_root> <marker_dir> <PREV>`, then Job D-delta (below) with that diff and one more instruction: *"Also answer, first line of your reply: `BEHAVIOUR-CHANGE: yes|no — <one sentence>`. Yes means this delta changes what the MR does: new or removed behaviour, scope, interface or acceptance criteria, as opposed to fixes and adjustments inside what was already reviewed."* Then run Job B yourself for `HEAD_SHA`, by the same source rule as the full gate: B-ci when a CI run exists for `HEAD_SHA`; B-local when B-ci finds `NO-RUN` or the repo has no CI. Otherwise a repo without CI could never rearm clean. Then run Job E yourself at `HEAD_SHA`: an edit to the issue or the PR/MR body since the last pass is graded too.
+4. **Clean:** no critical or important findings, `BEHAVIOUR-CHANGE: no`, every lane `exit=0`, and Job E exit 0. Post the status on `HEAD_SHA` with the description `#<N> rearm from <PREV7>: delta clean; lanes <ci|local>`. Make no announcement and no STOP. If BJ's merge go was already given, it still stands: continue to `/mmr`. Re-request platform approvals the push reset (GitLab MR approvals), and say so.
 5. **Not clean:** fix it as in Step 3 and rearm again. **`BEHAVIOUR-CHANGE: yes`**, or a reviewer that does not answer the question → run the **full** precheck from Step 0.5, including its checklist, notification and STOP.
 
 The last reviewed SHA comes from the commit status, not from the session marker, so rearm survives a `/clear`, a reseed and a different session.
@@ -555,14 +599,18 @@ Job C in the parallel batch: the orchestrator runs `dependency-scan.sh` (or the 
 
 ## The Checklist (full every time; a checkmark means VERIFIED by reading the codebase)
 **Context:** Project | Issue #N — title | Branch `feature/N-...` → `<base>` | PR/MR #<PR_NUMBER> @ `<HEAD_SHA7>`
-- [ ] Implementation (AC verified) — [ ] TODOs (searched+addressed) — [ ] Docs (reviewed+updated) — [ ] Validation (CI run `<id>` @ `<sha7>`, or local lanes — actually ran)
+- [ ] AC gate (precheck-ac-gate.sh exit=<n>: <C>/<T> checked, <W> waived, <P> post-merge) — [ ] TODOs (searched+addressed) — [ ] Docs (reviewed+updated) — [ ] Validation (CI run `<id>` @ `<sha7>`, or local lanes — actually ran)
 - [ ] New tests (cover new code) — [ ] All tests pass (entire suite) — [ ] Scripts executed (linting is NOT testing) — [ ] Code review (high+ fixed)
 - [ ] Dependencies (trivy: 0 HIGH/CRITICAL, or exceptions documented, or [SKIPPED])
 - [ ] `precheck` status posted on `<HEAD_SHA7>` and read back — [ ] PR/MR marked ready (or: not posted, still a draft, because <what failed>)
 
 **Summary:** `[codebase]` `[docs]` `[tests]` `[config]`. **Findings:** `[fixed]` / `[deferred]` / "(none)".
 
-## The Notification (Discord + vox)
+## The Notification (Discord + vox, or the lead)
+BJ approved routing to a named lead (claudecode-workflow:triage #15).
+
+**Who gets it:** `precheck-notify-target.sh <repo_root> <your Dev-Name>` reads the optional `lead` field of `.claude/agent-identity.json` (`{"session": …, "dev_name": …}`, written by `/grunt` step 5). It prints `bj` when there is no file, no `lead`, or the lead is you (a lead running its own precheck in a grunt's worktree). It prints `lead <session> <dev_name>` for a valid lead naming someone else, and `bj` with exit 3 for a malformed one. Step 4 routes by it. Below, "the post" is the `#precheck` post to BJ, or the same body sent by `SendMessage` to the lead.
+
 Resolve identity from `<project_root>/.claude/agent-identity.json`; fall back to `/tmp/claude-agent-<md5>.json` if absent (transition window). Use it for both the Discord post and the vox announcement.
 
 **Important:** Do NOT prefix the Discord post with `@all`, `@<Dev-Team>`, or any `@`-mention. This post is for BJ only (human-facing). The doorbell delivers by `@`-addressing, so an `@`-prefix would fan the precheck gate notice out to every listening agent in the fleet. Unaddressed is intentional.
@@ -621,7 +669,7 @@ an earlier draft of this paragraph got it wrong.
 
 **Workflow flights do not run `/precheck`.** A flight run by the per-wave Workflow (`/nextwave`, `/wavemachine`) commits in its handed worktree and returns. It never pushes and never runs `/precheck`, `/scp*` or `/mmr`. Prime(reconcile) lands it on `kahuna/*`, and the wave trust gate's review signal is its review. The sdlc server exempts any PR/MR whose base is `kahuna/*` from the `precheck` status (`docs/precheck-status.md`). This section, despite its heading, applies to an agent that opens a PR/MR into `kahuna/*` by hand, for example to repair a held wave (#1209).
 
-Work landing in a KAHUNA sandbox merges into a per-wave integration branch (`kahuna/<N>-<slug>`), not into `main`. In that context the human merge call is a redundant pause — the wave already runs autonomously, and its trust gate reviews the composed `kahuna→base` diff before anything leaves the sandbox. The full checklist (validation, code-reviewer, trivy), the `precheck` status and the Discord/`vox` notifications still run; only the STOP-and-wait for the merge call is bypassed.
+Work landing in a KAHUNA sandbox merges into a per-wave integration branch (`kahuna/<N>-<slug>`), not into `main`. In that context the human merge call is a redundant pause — the wave already runs autonomously, and its trust gate reviews the composed `kahuna→base` diff before anything leaves the sandbox. The full checklist (validation, code-reviewer, trivy, the AC gate), the `precheck` status and the notification (Discord and `vox`, or the named lead) still run; only the STOP-and-wait for the merge call is bypassed.
 
 **Why this exists (narrative).** The wave's contract with the human is "I will surface the *wave* result, not every change that lands in it." A hand repair into a held wave's integration branch should not re-serialise that wave on a human: the agent landing it completes the full checklist and then auto-progresses. It never bypasses quality, only the human pause; the wave's trust gate reviews the result when the held wave is resumed. Outside the sandbox — i.e. an agent operating directly against `main` — the original rule applies in full and the STOP is non-negotiable, unless one of Step 5's other exceptions applies: an approved autochain, a standing merge grant or a lead-agent grant, each with its own conditions, described in Step 5 rather than here. See Dev Spec §5.2.1 for the authoritative statement; the mechanical detection (regex `^kahuna/[0-9]+-`, sentinel `[AUTO-APPROVED: kahuna sandbox]`) lives below and in the procedure summary above.
 
@@ -655,7 +703,7 @@ The detection regex is `^kahuna/[0-9]+-`. Resolve `base_branch` from the PR/MR t
 - `sandbox_context == false` (default — feature branch targeting `main`): present checklist, notify, **STOP** and wait for BJ's merge call (`/mmr` / `/scpmmr` / affirmative); the PR/MR is already ready. This is the IT-09 negative case. The three exceptions are an approved autochain, a standing merge grant and a lead-agent grant. Step 5 checks each separately, and none changes this matrix entry.
 - `sandbox_context == true` (PR/MR into a kahuna sandbox): full checklist runs, full notifications fire, then emit the sentinel line **`[AUTO-APPROVED: kahuna sandbox]`** on stdout, then invoke `/mmr` with no wait. The sentinel makes the auto-approval grep-able in transcripts and Discord scrollback.
 
-**Non-bypassable items:** validation, code-reviewer (high+ findings still block), trivy scan, Discord `#precheck` post, `vox` announcement, **and `/mmr`'s CI gate**. These run in full regardless of `sandbox_context`. Only the human merge-call STOP is replaced by the sentinel + auto-`/mmr`.
+**Non-bypassable items:** validation, code-reviewer (high+ findings still block), trivy scan, the AC gate (Job E), the notification (to BJ: `#precheck` + `vox`; to a named lead: `SendMessage`), **and `/mmr`'s CI gate**. These run in full regardless of `sandbox_context`. Only the human merge-call STOP is replaced by the sentinel + auto-`/mmr`.
 
 The CI gate is listed explicitly because **the kahuna sandbox is not the only path that merges without a human.** Autonomous merging also occurs under **`/wavemachine` in `auto` mode** — its promote node performs the kahuna→protected merge with no human halt (interactive mode routes that same merge *to* a human, so the exposure is mode-specific, not skill-wide) — and under an **armed `godspeed` mandate**, whose gated-action list covers force-push, push-to-protected, terraform/kubectl/helm/docker/systemctl and prod-shaped writes but **not merges**, so an armed agent carries straight through one. **An approved `/autochain` run** is the third (#1224): its merges land on the *protected* branch directly, one per issue, with no human between them — which is why `/autochain plan` refuses a chain unless `wave_ci_trust_level` reports `pre_merge_authoritative`. **A standing merge grant** is the fourth (#1235): `/precheck` invokes `/mmr` itself for a PR inside the grant's scope. **A lead-agent grant** is the fifth: the named lead self-approves on any clean precheck. In all five, once the human approval is gone, the CI gate is the *last* thing between a red build and the protected branch.
 
@@ -666,7 +714,7 @@ That gate was **inert on GitHub** until cc-workflow#925: it blocked only on `has
 `/mmr` step 3 is now default-deny. Do not weaken it back to a blocklist without re-reading that issue, and treat any *new* autonomous merge path as inheriting this dependency: **removing the human raises the CI gate from a second opinion to the only opinion.**
 
 ## Rules
-No pasted diff. No merge from this skill (that is `/mmr`, after the STOP or an exception). No skipping code-reviewer. No `precheck` status on a commit that was not the one reviewed. Honesty over speed — no checking items you haven't verified. **Linting is not testing** — passing lint/typecheck does not mean code works. **`vox` is ALWAYS called** — it is NOT a fallback for disc_send failure. Both notifications happen every time.
+No pasted diff. No merge from this skill (that is `/mmr`, after the STOP or an exception). No skipping code-reviewer. No `precheck` status on a commit that was not the one reviewed. Honesty over speed — no checking items you haven't verified. **Linting is not testing** — passing lint/typecheck does not mean code works. **The notification is ALWAYS sent** (to BJ: `#precheck` + `vox`; to a named lead: `SendMessage`). To BJ, `vox` is NOT a fallback for disc_send failure: both happen every time.
 
 ## New-Repo Onboarding (Branch-Protection End-to-End Dry-Run)
 

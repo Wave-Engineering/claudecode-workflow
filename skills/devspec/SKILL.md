@@ -453,6 +453,16 @@ Ask the user (or read from conversation context if previously established) for t
 
 Call `devspec_parse_section_8(path)` — returns `{ ok, phases: [{ name, dod, waves: [{ name, stories: [{ id, title, summary, implementation_steps, test_procedures, acceptance_criteria, wave, depends_on }] }] }] }`. Each Story carries an `id` (stable identifier from §8, e.g. `3.4`), a `wave` label (e.g. `P3W2`), and a `depends_on` array of Story IDs (may be empty `[]`).
 
+### Step 3.5: Pre-merge lint (before any issue is created)
+
+BJ ruled on 2026-10-24 that no AC or DoD line may need a merge to assess (#1365). Upshift creates Stories and writes `phases-waves.json` without going through `/prepwaves`, so it runs the same lint itself, before the `work_item` loop in Step 4. Write each Story's body, exactly as Step 4 will hand it to its sub-agent, to its own file with the Write tool. Write each Phase's `dod` lines to one more file. Fetch the Plan issue body to a file (`gh api repos/<slug>/issues/<plan_id> --jq .body`, or `glab api projects/<enc>/issues/<plan_id> --jq .description`). Resolve `precheck-ac-gate.sh` with the `PATH`, `.claude/bin`, `scripts/` ladder `/precheck` Step 0 uses, then run:
+
+```bash
+"$ACGATE" lint <story files> <dod file> <plan file>; echo "exit=$?"
+```
+
+**Any exit 2 → STOP.** Name each flagged Story (its §8 `id` and title) or the Plan, and the line and pattern id. Create no issues. The fix is in the Dev Spec's §8 (or the Plan issue): rewrite the line as something checkable on the PR/MR head, or carry a BJ waiver (`WAIVED by BJ <YYYY-MM-DD>: <reason> (<url>)`). Then re-run upshift. Exit 0 → Step 4.
+
 ### Step 4: Create Story Issues (parallel batch)
 
 Launch all Stories as **parallel Sonnet sub-agents in a single message** — they have no creation-time dependencies on each other. Do NOT loop serially.

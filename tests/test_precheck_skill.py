@@ -18,7 +18,9 @@ behaviors that IT-09 will exercise are present in the skill doc.
 
 from __future__ import annotations
 
+import os
 import re
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -290,12 +292,24 @@ class TestDiscordNotificationAlwaysFires:
             "they still fire"
         )
 
-    def test_procedure_keeps_always_do_both_invariant(self, skill_text: str) -> None:
-        """The 'ALWAYS do both' invariant for disc_send + vox is
-        preserved — this guards the rule that notification is not a
-        casualty of the auto-approval."""
-        proc = _section_body(skill_text, "Procedure")
-        assert "ALWAYS do both" in proc
+    def test_precheck_notification_routes_to_lead(self, skill_text: str) -> None:
+        """#1365 (triage #15): the notice goes to BJ (#precheck + vox, both) or, under
+        a named lead, to that lead by SendMessage with no #precheck post and no vox.
+        The notification itself is still never skipped."""
+        assert "ALWAYS do both" not in skill_text
+        flat = " ".join(_section_body(skill_text, "Procedure").split())
+        assert '"$NOTIFY" <repo_root> <your Dev-Name>' in flat
+        assert "`bj` → post to `#precheck`" in flat and "Do both, always." in flat
+        assert "`lead <session> <dev>` → `SendMessage` to `<session>`" in flat
+        assert "**No `#precheck` post and no `vox`**" in flat
+        assert "with `@<dev>` as its first token, still with no `vox`" in flat
+        assert "[WARNING: lead field malformed: <its stderr>]" in flat
+        assert "precheck-notify-target.sh" in skill_text
+        assert "BJ approved routing to a named lead (claudecode-workflow:triage #15)." in skill_text
+        rules = " ".join(_section_body(skill_text, "Rules").split())
+        assert "**The notification is ALWAYS sent** (to BJ: `#precheck` + `vox`; to a named lead: `SendMessage`)" in rules
+        tools = _section_body(skill_text, "Tools Used")
+        assert "`SendMessage`" in tools
 
 
 # ---------------------------------------------------------------------------
@@ -595,3 +609,77 @@ def test_precheck_job_c_waits_for_local_lanes() -> None:
     assert "When Job B's source is B-local, start Job C after the last lane has printed `exit=`, not in the batch" in flat
     assert "When the source is B-ci, start Job C in the batch as now." in flat
     assert "Run the main scan and each per-file scan below one at a time, never in parallel" in flat
+
+
+def test_precheck_job_e_gates_the_pass() -> None:
+    """#1365: the AC gate is an instrument the orchestrator runs itself, and every
+    pass definition requires its exit 0."""
+    text = SKILL_PATH.read_text()
+    flat = " ".join(text.split())
+    step0 = flat.split("### Step 0.5")[0]
+    assert "precheck-ac-gate.sh" in step0 and 'ACGATE="$cand"' in step0
+    assert "**If `STATUS` or `ACGATE` misses, STOP.**" in step0
+    assert "### Step 3.5 — Tick the AC" in text
+    assert "Never tick what you did not verify." in flat
+    assert '"$ACGATE" pr <repo_root> <PR_NUMBER> <N> > <marker_dir>/ac-gate.log 2>&1; echo "exit=$?"' in flat
+    assert text.index("### Step 3.5") < text.index("**Job E — The AC gate**") < text.index("### Step 4")
+    step4 = flat.split("### Step 4")[1].split("### Step 5")[0]
+    assert "Job C exit 0, Job E exit 0. On a pass:" in step4
+    step5 = flat.split("### Step 5")[1].split("### `/precheck rearm`")[0]
+    assert "- Job C exit 0; - Job E exit 0." in step5
+    rearm = flat.split("### `/precheck rearm`")[1].split("## Dependency Vulnerability Scan")[0]
+    assert "Then run Job E yourself at `HEAD_SHA`" in rearm
+    assert "every lane `exit=0`, and Job E exit 0." in rearm
+    assert "AC gate (precheck-ac-gate.sh exit=<n>: <C>/<T> checked, <W> waived, <P> post-merge)" in flat
+    assert "Implementation (AC verified)" not in flat
+
+
+def _bash_block_after(text: str, marker: str) -> str:
+    rest = text[text.index(marker):]
+    m = re.search(r"```bash\n(.*?)```", rest, re.DOTALL)
+    assert m, f"no bash block after {marker!r}"
+    return textwrap.dedent(m.group(1))
+
+
+def test_name_preserves_unknown_identity_keys(tmp_path: Path) -> None:
+    """#1365: /name merges the identity file, so a `lead` written by /grunt survives."""
+    import json
+    import subprocess
+
+    text = (_ROOT / "skills" / "name" / "SKILL.md").read_text()
+    assert "cat > \"$agent_file\"" not in text and "<< 'EOF'" not in text
+    block = _bash_block_after(text, "Persist to the resolved identity file")
+    assert "jq " in block
+    # Run the documented write up to the move; the /tmp mirror is not this test's business.
+    script = block.split("# Also keep /tmp copy fresh")[0]
+    script = script.replace("<Dev-Team>", "oaw").replace("<name>", "sorting-hat").replace("<emoji>", "🎩")
+    ident = tmp_path / ".claude" / "agent-identity.json"
+    ident.parent.mkdir()
+    ident.write_text(json.dumps({"dev_name": "old", "lead": {"session": "babelfish", "dev_name": "babelfish"}}))
+    r = subprocess.run(["bash", "-c", script], env={"PATH": os.environ["PATH"], "project_root": str(tmp_path)},
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    got = json.loads(ident.read_text())
+    assert got == {"dev_name": "sorting-hat", "dev_team": "oaw", "dev_avatar": "🎩",
+                   "lead": {"session": "babelfish", "dev_name": "babelfish"}}
+    # No file at all: the merge creates one.
+    ident.unlink()
+    r = subprocess.run(["bash", "-c", script], env={"PATH": os.environ["PATH"], "project_root": str(tmp_path)},
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(ident.read_text())["dev_name"] == "sorting-hat"
+
+
+def test_grunt_writes_lead_field() -> None:
+    """#1365: /grunt step 5 names the lead in the grunt's identity, and the charter no
+    longer asks the grunt to send its own ready line (its /precheck does)."""
+    grunt = (_ROOT / "skills" / "grunt" / "SKILL.md").read_text()
+    step5 = grunt[grunt.index("5. **Stand her up in her OWN worktree.**"):grunt.index("6. **Report + step out")]
+    block = _bash_block_after(step5, "Then name yourself as her lead")
+    assert "jq --arg s \"<lead>\" --arg d \"<lead-dev-name>\" '.lead = {session: $s, dev_name: $d}'" in block
+    assert 'mv "$f.tmp" "$f"' in block
+    assert "writes the same field in each report's checkout" in " ".join(step5.split())
+    charter = (_ROOT / "skills" / "grunt" / "seed-mission.template.md").read_text()
+    flat = " ".join(charter.split())
+    assert "ready: <PR/MR url>" not in charter
+    assert "Your `/precheck` sends the ready notice to your lead itself (the `lead` field in your identity); send no second one, then idle." in flat

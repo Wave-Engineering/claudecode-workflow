@@ -42,7 +42,7 @@ The body shape below is reproduced verbatim from [§5.1.2 of the Dev Spec](./pha
 - [ ] Phase 1 DoD satisfied
 - [ ] Phase 2 DoD satisfied
 - [ ] (... one line per Phase)
-- [ ] Kahuna→main MR merged clean
+- [ ] The campaign→main PR is open with CI green on its merge result
 - [ ] VRTM complete
 - [ ] (... cross-cutting conditions)
 
@@ -183,7 +183,7 @@ Decouple Phase from Epic in the wave-pattern pipeline taxonomy. Rename "epic" to
 - [ ] Phase 1 DoD satisfied
 - [ ] Phase 2 DoD satisfied
 - [ ] Phase 3 DoD satisfied
-- [ ] Kahuna→main MR merged clean on `kahuna/499-phase-epic-taxonomy`
+- [ ] The campaign→main PR from `kahuna/499-phase-epic-taxonomy` is open with CI green on its merge result
 - [ ] Memory files present: `decision_plan_phase_epic_taxonomy.md`, `principle_user_attention_is_the_cost.md`
 - [ ] VRTM complete
 

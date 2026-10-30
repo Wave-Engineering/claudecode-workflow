@@ -80,6 +80,22 @@ shared fragments — under isolation, yours is the only backstop there.
    per-mission branch off
    `origin/<default-branch>` inside that worktree — shared `.git`, independent HEAD, zero collision
    with the main agent.
+
+   **Then name yourself as her lead, in her checkout (#1365).** Her `/precheck` reads the `lead`
+   field of her `.claude/agent-identity.json` and sends its ready notice to you by `SendMessage`,
+   with no `#precheck` post and no `vox`: under a lead, you make the merge call, not BJ. Write it
+   right after `aoe add`, with a `jq` merge so her own keys survive (her `/name` merges too):
+   ```bash
+   wt="<her worktree path>"   # `git -C <grunt-repo-path> worktree list` shows it
+   f="$wt/.claude/agent-identity.json"
+   mkdir -p "$wt/.claude"
+   [[ -s "$f" ]] || echo '{}' >"$f"
+   jq --arg s "<lead>" --arg d "<lead-dev-name>" '.lead = {session: $s, dev_name: $d}' "$f" >"$f.tmp" &&
+     mv "$f.tmp" "$f"
+   ```
+   Both values must match `^[A-Za-z0-9._-]+$`, or her `/precheck` treats the field as malformed
+   and notifies BJ with a warning. A lead whose reports are not grunts (an agent leading a team
+   of peers) writes the same field in each report's checkout.
 6. **Report + step out of her missions.** Tell the operator: grunt `grunt-<slug>` is up in the
    `grunts` group; dispatch with `SendMessage` or `aoe send grunt-<slug> "<task>"`; she parks and
    messages you at any wall. You stay her escalation point: answer her parks, and take to the

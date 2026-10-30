@@ -136,7 +136,7 @@ Extract three things:
 
 Use the prompt (or conversation context) to fill in the appropriate template below. The agent should flesh out the template sections intelligently — don't just echo the prompt back. Think about what a spec-driven implementing agent would need.
 
-**Quality standard:** Every issue should be detailed enough that a spec-driven agent can execute without making design decisions. Implementation steps should read like paint-by-numbers. Acceptance criteria should be evaluable before PR/MR merge.
+**Quality standard:** Every issue should be detailed enough that a spec-driven agent can execute without making design decisions. Implementation steps should read like paint-by-numbers. Acceptance criteria and DoD lines must be checkable before the PR/MR merges. `precheck-ac-gate.sh lint` refuses one that is not.
 
 ### Plan Template
 
@@ -182,7 +182,7 @@ When `/issue plan <prompt>` is invoked:
 - [ ] Phase 1 DoD satisfied
 - [ ] Phase 2 DoD satisfied
 - [ ] (... one line per Phase)
-- [ ] Kahuna→main MR merged clean
+- [ ] The campaign→main PR is open with CI green on its merge result
 - [ ] VRTM complete
 - [ ] (... cross-cutting conditions)
 
@@ -457,6 +457,25 @@ Epic issues created by this skill do NOT receive a `Wave Map` section; wave
 planning belongs to the Plan's `/devspec` → `/prepwaves` pipeline, not to the
 PM-layer Epic. If human users want a thematic grouping with a wave map, they
 can add one by hand after creation.
+
+## Step 2.5: Pre-merge lint
+
+BJ ruled on 2026-10-24 that no AC or DoD line may need a merge to assess (#1365). Before creating anything, write the drafted body to a file with the Write tool, then run the lint on it:
+
+```bash
+ACGATE=""
+for cand in \
+  "$(command -v precheck-ac-gate.sh 2>/dev/null)" \
+  "<repo_root>/.claude/bin/precheck-ac-gate.sh" \
+  "<repo_root>/scripts/precheck-ac-gate.sh"; do
+  [[ -n "$cand" && -x "$cand" ]] && { ACGATE="$cand"; break; }
+done
+"$ACGATE" lint <file>; echo "exit=$?"
+```
+
+- **Exit 2** names each flagged line and its pattern id (`P1`–`P6`: post-merge, after the release, merged, CI green on main, released/tagged/deployed, in prod or on the fleet). Rewrite each one as something checkable on the PR/MR head: a hermetic test, a read of the diff, or CI on the merge result. Then lint again. **Never create an issue with a flagged line.**
+- A criterion that names one of those words while being checkable before merge (e.g. "the merged-results pipeline is read") ends with the literal `<!-- ac-gate: pre-merge -->`. `/precheck` lists every such override at the merge call, so use it only for a real false positive.
+- **Exit 0** → continue to Step 3. If the script can't be found, the kit is broken: say so and stop.
 
 ## Step 3: Determine Labels
 

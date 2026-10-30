@@ -242,6 +242,8 @@ async function main() {
   // The DoD node must ANSWER, never act — a node that could merge would make routeRelease advisory.
   ok(!/pr_merge\b/.test(dodP) && !/gh pr merge/.test(dodP), 'dod prompt: NEVER merges — it answers; routing is the pure predicate\'s job')
   ok(DOD_VERDICT.required.includes('met') && DOD_VERDICT.additionalProperties === false, 'DOD_VERDICT schema requires met, no extra props')
+  // #1365: a BJ-waived DoD line (e.g. a post-merge criterion) is waived, never unmet.
+  ok(dodP.includes('WAIVED by BJ <date>: <reason> (<url>)') && /never count it as unmet/.test(dodP), 'dod prompt: a BJ-waived DoD line is listed as waived, never counted as unmet')
 
   const relArgs = { planId: '56', targetRepo: 'o/r', campaignBranch: 'campaign/56-x', protectedBranch: 'main', wavesIntegrated: ['w1', 'w2'] }
   const ciP = releaseCiPrompt(relArgs)
