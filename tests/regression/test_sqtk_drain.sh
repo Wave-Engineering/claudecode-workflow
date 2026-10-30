@@ -267,18 +267,20 @@ c=$(ctx "$(run)")
 [[ "$c" == *"✓ confirmed"* ]] && pass "after --pending, the hook still reports it" || fail "post-pending report (ctx='$c')"
 
 # 20. An arrow in the author's own text is never an answer (#1363). A fresh squawk with a
-#     prose arrow (triage #22's shape) is silent, and the drain takes its baseline.
+#     prose arrow (triage #22's shape) is silent, and the drain takes its baseline: the
+#     original text.
 base_of() { jq -r --arg i "$1" '.[$i] // empty' "$BASELINE" 2>/dev/null; }
 mine '[{"list":"cc:triage","seq":5,"id":81,"created_at":"t"}]'
 reset
 body '{"name":"cc:triage","squawks":[{"id":81,"seq":5,"state":"open","text":"issue #23 → 2979849633","created_at":"t1","updated_at":"t1"}]}'
 out=$(run)
-[[ -z "$out" && "$(base_of 81)" == 1 ]] && pass "fresh prose-arrow squawk: silent, baseline recorded" ||
+[[ -z "$out" && "$(base_of 81)" == "issue #23 → 2979849633" ]] && pass "fresh prose-arrow squawk: silent, baseline recorded" ||
 	fail "fresh prose-arrow squawk (out='$out' baseline=$(cat "$BASELINE" 2>/dev/null))"
 git -C "$REPO" check-ignore -q "$BASELINE" && pass "baseline file is under the sqtk-*.json exclude" ||
 	fail "baseline file not excluded"
 
-# 20b. Once baselined, an edit to the prose with no new arrow is still silent.
+# 20b. Once baselined, an edit to the last segment of the prose, with no new arrow, is still
+#      silent.
 body '{"name":"cc:triage","squawks":[{"id":81,"seq":5,"state":"open","text":"issue #23 → 2979849633 (edited)","created_at":"t1","updated_at":"t2"}]}'
 out=$(run)
 [[ -z "$out" ]] && pass "baselined prose edit: silent" || fail "baselined prose edit (out='$out')"
@@ -290,13 +292,27 @@ c=$(ctx "$(run)")
 [[ "$c" == *'answered "yes"'* && "$c" == *"— issue #23 → 2979849633"* ]] &&
 	pass "baselined appended answer: reported" || fail "baselined appended answer (ctx='$c')"
 
+# 20c2. An edit left of an author arrow is the one accepted false positive: the text after
+#       the last arrow reads as an answer.
+body '{"name":"cc:triage","squawks":[{"id":81,"seq":5,"state":"open","text":"issue #24 → 2979849633","created_at":"t1","updated_at":"t4"}]}'
+c=$(ctx "$(run)")
+[[ "$c" == *'answered "2979849633"'* ]] && pass "baselined earlier-segment edit: read by the last arrow" ||
+	fail "baselined earlier-segment edit (ctx='$c')"
+
 # 20d. A baseline is never overwritten.
 reset
-printf '{"81":5}\n' >"$BASELINE"
+printf '{"81":"x → y"}\n' >"$BASELINE"
 body '{"name":"cc:triage","squawks":[{"id":81,"seq":5,"state":"open","text":"a → b","created_at":"t1","updated_at":"t1"}]}'
 run >/dev/null
-[[ "$(base_of 81)" == 5 ]] && pass "existing baseline not overwritten" ||
+[[ "$(base_of 81)" == "x → y" ]] && pass "existing baseline not overwritten" ||
 	fail "baseline overwritten ($(cat "$BASELINE" 2>/dev/null))"
+
+# 20e. A numeric baseline (an older shape) is unknown: the last-arrow rule.
+reset
+printf '{"81":1}\n' >"$BASELINE"
+body '{"name":"cc:triage","squawks":[{"id":81,"seq":5,"state":"open","text":"x→y → #12","created_at":"t1","updated_at":"t2"}]}'
+c=$(ctx "$(run)")
+[[ "$c" == *'answered "#12"'* ]] && pass "numeric baseline: last-arrow rule" || fail "numeric baseline (ctx='$c')"
 
 # 21. The mine entry's own .text is the baseline, with no baseline file.
 mine '[{"list":"cc:triage","seq":6,"id":82,"created_at":"t","text":"campaign→main fix"}]'
@@ -326,8 +342,23 @@ reset
 body '{"name":"cc:triage","squawks":[{"id":81,"seq":5,"state":"open","text":"campaign→main fix","created_at":"t1","updated_at":"t1"}]}'
 pending
 rc=$?
-[[ $rc -eq 1 && "$(base_of 81)" == 1 ]] && pass "--pending also records baselines" ||
+[[ $rc -eq 1 && "$(base_of 81)" == "campaign→main fix" ]] && pass "--pending also records baselines" ||
 	fail "--pending baseline (rc=$rc baseline=$(cat "$BASELINE" 2>/dev/null))"
+
+# 24. Without sqtk-answer.jq the drain fails loudly, in both modes: exit 3 and a stderr
+#     line, never the "nothing waiting" path (exit 0 silent, or --pending's exit 1).
+mkdir -p "$WORK/nolib"
+cp "$HOOK" "$WORK/nolib/sqtk-drain.sh"
+body '{"name":"cc:triage","squawks":[{"id":81,"seq":5,"state":"confirmed","text":"campaign→main fix"}]}'
+reset
+out=$(jq -cn --arg c "$REPO" '{cwd: $c, prompt: "x"}' | PATH="$WORK/bin:$PATH" bash "$WORK/nolib/sqtk-drain.sh" 2>"$WORK/nolib.err")
+rc=$?
+[[ $rc -eq 3 && -z "$out" ]] && grep -q 'cannot load sqtk-answer.jq' "$WORK/nolib.err" &&
+	pass "no module: hook mode exits 3, says so" || fail "no module, hook (rc=$rc out='$out' err=$(cat "$WORK/nolib.err"))"
+out=$(cd "$REPO" && PATH="$WORK/bin:$PATH" bash "$WORK/nolib/sqtk-drain.sh" --pending 2>"$WORK/nolib.err")
+rc=$?
+[[ $rc -eq 3 && -z "$out" ]] && grep -q 'cannot load sqtk-answer.jq' "$WORK/nolib.err" &&
+	pass "no module: --pending exits 3, says so" || fail "no module, --pending (rc=$rc out='$out' err=$(cat "$WORK/nolib.err"))"
 
 echo
 if [[ $FAILS -eq 0 ]]; then

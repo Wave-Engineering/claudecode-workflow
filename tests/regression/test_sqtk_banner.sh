@@ -85,6 +85,17 @@ out=$(SQUAWK_URL='' run)
 body '{"squawks":[{"seq":1,"state":"open","text":"x"}]}'
 [[ "$(run | jq -r 'has("decision")')" == false ]] && pass "never emits a decision" || fail "emitted a decision"
 
+# 6. Without sqtk-answer.jq: a one-line warning, still exit 0, still no decision, no fetch.
+mkdir -p "$WORK/nolib"
+cp "$HOOK" "$WORK/nolib/sqtk-banner.sh"
+rm -f "$CURL_LOG"
+out=$(PATH="$WORK/bin:$PATH" bash "$WORK/nolib/sqtk-banner.sh" </dev/null)
+rc=$?
+m=$(msg "$out")
+[[ $rc -eq 0 && "$m" == *"cannot load sqtk-answer.jq"* && "$m" != *$'\n'* && ! -e "$CURL_LOG" &&
+	"$(jq -r 'has("decision")' <<<"$out")" == false ]] && pass "no module: one-line warning, exit 0" ||
+	fail "no module (rc=$rc out='$out')"
+
 echo
 if [[ $FAILS -eq 0 ]]; then
 	echo "  All sqtk-banner checks passed."

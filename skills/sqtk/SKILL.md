@@ -22,9 +22,12 @@ list. It is never deleted: it changes state, and each state has a glyph:
 | `retired` | ◌ | let go, no verdict |
 | `recorded` | ↗ | it became tracked work (an issue) |
 
-A non-yes/no answer goes after the squawk's `→` slot. Arrows in your own text are never read
-as an answer: the answer is what comes after the first `→` added after your text. Keep ending
-each ask with ` →`, because it's the slot BJ answers in ("v65 → v66 broke the gate →").
+A non-yes/no answer goes after the squawk's `→` slot. Arrows in your own text are not read as
+an answer once the kit has seen the squawk unedited (from its first prompt after `add`): the
+answer is what comes after the first `→` added after your text. Before that, and for a
+squawk edited before the kit saw it, the answer is what follows the last `→`. The full fix,
+an answer field, is squawkie-talkie:triage #7. Keep ending each ask with ` →`, because it's
+the slot BJ answers in ("v65 → v66 broke the gate →").
 
 `SQUAWK_URL` must be set (BJ's shell sets it). There is no default, on purpose: a write to the
 wrong instance persists but never reaches the people watching.

@@ -152,7 +152,7 @@ stream "$(evt 31 open 'campaign→main' t1 t1)"
 run >/dev/null
 rc=$?
 [[ $rc -eq 4 ]] && pass "pristine prose arrow: no ring" || fail "pristine prose arrow rang (rc=$rc)"
-printf '%s\n' '{"31":1}' >"$REPO/.claude/sqtk-baseline.json"
+printf '%s\n' '{"31":"campaign→main fix"}' >"$REPO/.claude/sqtk-baseline.json"
 stream "$(evt 31 open 'campaign→main fixes' t1 t2)"
 run >/dev/null
 rc=$?
@@ -161,12 +161,18 @@ stream "$(evt 31 open 'campaign→main fix → go' t1 t3)"
 out=$(run)
 rc=$?
 [[ $rc -eq 0 && "$out" == *go* ]] && pass "baselined appended answer: rings" || fail "baselined answer (rc=$rc out='$out')"
+# A numeric baseline (an older shape) is unknown, so the last-arrow rule reads "main fixes".
+printf '%s\n' '{"31":1}' >"$REPO/.claude/sqtk-baseline.json"
+stream "$(evt 31 open 'campaign→main fixes' t1 t2)"
+run >/dev/null
+rc=$?
+[[ $rc -eq 0 ]] && pass "numeric baseline: last-arrow rule" || fail "numeric baseline (rc=$rc)"
 rm -f "$REPO/.claude/sqtk-baseline.json"
 
 # 9b. A squawk added this turn has no baseline at arming. The catch-up takes it, and the
 #     doorbell reads it before the stream: a prose edit after that does not ring.
 stream ": connected" "$(evt 31 open 'campaign→main fixes' t1 t2)"
-FAKE_TAKE_BASELINE='{"31":1}' run >/dev/null
+FAKE_TAKE_BASELINE='{"31":"campaign→main fix"}' run >/dev/null
 rc=$?
 [[ $rc -eq 4 ]] && pass "baseline taken by the catch-up: prose edit, no ring" ||
 	fail "catch-up baseline ignored (rc=$rc)"
@@ -183,6 +189,16 @@ run >/dev/null
 rc=$?
 [[ $rc -eq 0 ]] && pass "mine .text baseline: appended answer rings" || fail "mine .text answer (rc=$rc)"
 printf '%s\n' '[{"list":"bj:needs","seq":3,"id":31,"created_at":"t"}]' >"$REPO/.claude/sqtk-mine.json"
+
+# 11. Without sqtk-answer.jq it refuses to arm: exit 4 and a stderr line, before the stream.
+mkdir -p "$WORK/nolib"
+cp "$BELL" "$WORK/nolib/sqtk-doorbell.sh"
+stream ": connected" "$(ev squawk.updated 31 confirmed 'mine → yes')"
+rm -f "$DRAIN_LOG"
+(cd "$REPO" && PATH="$WORK/bin:$PATH" timeout 20 bash "$WORK/nolib/sqtk-doorbell.sh" >"$WORK/nolib.out" 2>"$WORK/nolib.err")
+rc=$?
+[[ $rc -eq 4 && ! -s "$WORK/nolib.out" && ! -e "$DRAIN_LOG" ]] && grep -q 'cannot load sqtk-answer.jq' "$WORK/nolib.err" &&
+	pass "no module: exit 4, says so, never arms" || fail "no module (rc=$rc err=$(cat "$WORK/nolib.err"))"
 
 echo
 if [[ $FAILS -eq 0 ]]; then
