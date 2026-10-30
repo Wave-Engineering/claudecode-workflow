@@ -182,7 +182,7 @@ When `/issue plan <prompt>` is invoked:
 - [ ] Phase 1 DoD satisfied
 - [ ] Phase 2 DoD satisfied
 - [ ] (... one line per Phase)
-- [ ] The campaign→main PR is open with CI green on its merge result
+- [ ] Every wave in the plan is integrated onto the campaign branch
 - [ ] VRTM complete
 - [ ] (... cross-cutting conditions)
 

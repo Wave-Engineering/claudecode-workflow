@@ -629,12 +629,35 @@ def test_precheck_job_e_gates_the_pass() -> None:
     step4 = flat.split("### Step 4")[1].split("### Step 5")[0]
     assert "Job C exit 0, Job E exit 0. On a pass:" in step4
     step5 = flat.split("### Step 5")[1].split("### `/precheck rearm`")[0]
-    assert "- Job C exit 0; - Job E exit 0." in step5
+    assert "- Job C exit 0; - Job E exit 0, with no `[waived]` or `[override]` line in its log." in step5
     rearm = flat.split("### `/precheck rearm`")[1].split("## Dependency Vulnerability Scan")[0]
     assert "Then run Job E yourself at `HEAD_SHA`" in rearm
     assert "every lane `exit=0`, and Job E exit 0." in rearm
     assert "AC gate (precheck-ac-gate.sh exit=<n>: <C>/<T> checked, <W> waived, <P> post-merge)" in flat
     assert "Implementation (AC verified)" not in flat
+
+
+def test_precheck_waiver_forces_human_stop() -> None:
+    """#1365: the gate checks a waiver's form, not its author, so on every path where
+    BJ is not making the merge call a waiver line forces the STOP, routed to BJ."""
+    flat = " ".join(SKILL_PATH.read_text().split())
+    step5 = flat.split("### Step 5")[1].split("### `/precheck rearm`")[0]
+    rule = "if the Job E log (`<marker_dir>/ac-gate.log`) holds any `[waived]` or `[override]` line, none of these exceptions applies: STOP, and route the notice to BJ (`#precheck` + `vox`), never to a lead"
+    assert rule in step5
+    assert step5.index(rule) < step5.index("[AUTO-APPROVED: kahuna sandbox]")
+    # Each exception carries the condition beside its own terms.
+    assert "matches `^kahuna/[0-9]+-` and the Job E log holds no `[waived]` or `[override]` line" in step5
+    assert "the same mechanical pass as the autochain bullets above, so no `[waived]` or `[override]` line in the Job E log" in step5
+    assert "on this exact head, so no `[waived]` or `[override]` line in the Job E log. A waiver stops a lead's merge too, and goes to BJ." in step5
+
+
+def test_precheck_body_patch_resolves_repo_from_origin() -> None:
+    """#1365: the Step 3.5 body PATCH defines its placeholders from origin."""
+    flat = " ".join(SKILL_PATH.read_text().split())
+    tick = flat.split("### Step 3.5 — Tick the AC")[1].split("**Job E — The AC gate**")[0]
+    assert "from `git remote get-url origin`, never from the CLI's own repo resolution" in tick
+    assert "`<host>` is origin's host, and `<enc>` is that path URL-encoded" in tick
+    assert "repos/<owner>/<repo>/pulls/<PR_NUMBER>" in tick and "<slug>" not in tick
 
 
 def _bash_block_after(text: str, marker: str) -> str:

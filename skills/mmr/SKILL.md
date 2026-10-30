@@ -92,6 +92,13 @@ Determine target PR/MR: use `{{args}}` if provided (strip any `!` or `#` prefix)
    - Comprehensive enough that `git log` alone tells the full story without opening the PR
    - **A draft that goes into a block** (step 4's last case) is checked by the server. It must meet every `squash_message` rule in `/scpmr` step 2: a subject of 72 characters or fewer with one of the listed types, `Closes #N`, and the `Co-Authored-By: Name <email>` trailer. Otherwise the merge is refused just as the missing block was.
 6. **The approval is how you got here.** Since #1235 BJ's approval is the merge call itself. `/mmr` or `/scpmmr` typed after a precheck STOP, or an affirmative to it, IS the approval, and so is an exception path (`[AUTO-APPROVED: kahuna sandbox]`, `[AUTO-APPROVED: autochain #<epic>]`, a standing merge grant named on the checklist, or `[AUTO-APPROVED: lead-agent grant]` with the grant on the checklist). Show the PR/MR number, title, source→target branches and the squash message (the block, or the one drafted in step 5), and proceed. **Reached any other way** (an agent deciding on its own to merge, with no STOP answered and no exception), ask "May I merge this PR/MR?" and WAIT.
+6.5. **Re-grade the AC (#1365).** The precheck status pins the head, not the bodies, so an edit to the issue or the PR/MR body after the pass, with no push, would otherwise merge ungraded. Resolve `precheck-ac-gate.sh` as `/precheck` Step 0 does (as `ACGATE`), and just before step 7 run it against `<issue>`, the `issue_number` that `ibm()` returns for the head branch (the same one `/precheck` Step 1 grades):
+
+   ```bash
+   "$ACGATE" pr <repo_root> <N> <issue>; echo "exit=$?"
+   ```
+
+   `exit=0` → step 7. **Any non-zero exit → STOP**, and surface its `ac-gate:` lines. A script that cannot be found is a STOP too.
 7. `pr_merge(number)` for a gated PR/MR on a gated server (step 4's last case); otherwise `pr_merge(number, squash_message)`. It's a squash merge, and it returns `merge_method`, `merge_commit_sha` and `url`.
 8. **Post-merge**: switch to target branch, pull, delete local source branch if present. Optionally `ci_wait_run(ref: <PR/MR target from step 1>, expected_sha: <merge_commit_sha from step 7>, timeout_sec: 1800)` to confirm the target-branch pipeline lands clean — skip if the user wants to move on immediately.
 

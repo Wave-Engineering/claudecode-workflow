@@ -189,6 +189,16 @@ class TestAutonomousPathsDependOnThisGate:
             )
 
 
+class TestMmrRegradesTheAc:
+    def test_ac_gate_runs_just_before_pr_merge(self, mmr_text: str) -> None:
+        """#1365: the precheck status pins the head, not the bodies, so /mmr re-runs
+        the AC gate just before pr_merge and STOPs on any non-zero exit."""
+        flat = " ".join(mmr_text.split())
+        assert '"$ACGATE" pr <repo_root> <N> <issue>; echo "exit=$?"' in flat
+        assert "**Any non-zero exit → STOP**" in flat
+        assert flat.index("6.5. **Re-grade the AC (#1365).**") < flat.index("7. `pr_merge(number)`")
+
+
 class TestDefaultDenyDoesNotBecomeATotalBlock:
     """Default-deny must escalate to a working source, not refuse outright.
 

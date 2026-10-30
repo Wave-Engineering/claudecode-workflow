@@ -518,8 +518,8 @@ mcp__sdlc-server__work_item_update({ issue_ref: "<owner>/<repo>#<N>",
   patch: { body_section: { heading: "Acceptance Criteria", content: "<the section, with the boxes you verified ticked>" } } })
 ```
 
-**An item you cannot verify stays `[ ]`. Never tick what you did not verify.** An item BJ already waived keeps its `WAIVED by BJ <YYYY-MM-DD>: <reason> (<url>)` tail exactly as written; you never add one yourself. Do the same for the PR/MR body's boxes. Write the new body to `<file>` with the Write tool, then:
-- GitHub: `gh api -X PATCH repos/<slug>/pulls/<PR_NUMBER> -F body=@<file>`. Not `gh pr edit`, which fails on some hosts on a GraphQL field the edit does not touch.
+**An item you cannot verify stays `[ ]`. Never tick what you did not verify.** An item BJ already waived keeps its `WAIVED by BJ <YYYY-MM-DD>: <reason> (<url>)` tail exactly as written; you never add one yourself. Do the same for the PR/MR body's boxes. Write the new body to `<file>` with the Write tool. Take `<owner>/<repo>` (the full project path on GitLab) from `git remote get-url origin`, never from the CLI's own repo resolution, which can pick an upstream. `<host>` is origin's host, and `<enc>` is that path URL-encoded (`/` → `%2F`). Then:
+- GitHub: `gh api -X PATCH repos/<owner>/<repo>/pulls/<PR_NUMBER> -F body=@<file>`. Not `gh pr edit`, which fails on some hosts on a GraphQL field the edit does not touch.
 - GitLab: `glab api --hostname <host> -X PUT projects/<enc>/merge_requests/<PR_NUMBER> -F description=@<file>`. Never `glab mr update`, which rewrites the title, and on GitLab the title carries the draft state.
 
 Every issue the PR/MR closes is graded, not only `<N>`, so tick each one's verified boxes the same way.
@@ -532,7 +532,7 @@ Run it yourself, never through a sub-agent (#1275):
 "$ACGATE" pr <repo_root> <PR_NUMBER> <N> > <marker_dir>/ac-gate.log 2>&1; echo "exit=$?"
 ```
 
-The item's value is that `exit=`. `0` pass. `1` an unchecked box with no valid waiver, or a closing issue with no AC box at all. `2` a post-merge criterion (BJ, 2026-10-24: no AC or DoD line may need a merge to assess). `3` usage. `4` a fetch or API error, which is never a pass. Put the log's `ac-gate:` lines, and every `[waived]` and `[override]` line verbatim, on the checklist. The script checks a waiver's form, not where it came from, so the waivers are in front of BJ at the merge call. On exit 1, either verify and tick the box (Step 3.5) or leave it and fail. On exit 2, rewrite the criterion as something checkable on the PR/MR head, with BJ's agreement since it changes the issue.
+The item's value is that `exit=`. `0` pass. `1` an unchecked box with no valid waiver, or a closing issue with no AC box at all. `2` a post-merge criterion (BJ, 2026-10-24: no AC or DoD line may need a merge to assess). `3` usage. `4` a fetch or API error, which is never a pass. Put the log's `ac-gate:` lines, and every `[waived]` and `[override]` line verbatim, on the checklist. The script checks a waiver's form, not where it came from, so the waivers are in front of BJ at the merge call. That is also why any `[waived]` or `[override]` line forces the human STOP in Step 5, whichever exception would otherwise apply. On exit 1, either verify and tick the box (Step 3.5) or leave it and fail. On exit 2, rewrite the criterion as something checkable on the PR/MR head, with BJ's agreement since it changes the issue.
 
 ### Step 4 — Assemble the checklist; on a pass, post the status and mark ready
 Collect results from all four jobs, run Job E, and assemble the checklist (see below). Then:
@@ -551,24 +551,26 @@ Then **notify**. Run `"$NOTIFY" <repo_root> <your Dev-Name>` and route by what i
 ### Step 5 — Sandbox detection + the merge gate
 Precheck has already done everything up to the merge. What remains is the merge call, and that is all an exception skips.
 
-Run **sandbox-context detection** (see "Sandbox Auto-Approval" below): if the PR/MR's base ref matches `^kahuna/[0-9]+-`, emit the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invoke `/mmr` immediately with no wait.
+**A waiver needs BJ at the merge call.** `precheck-ac-gate.sh` checks a waiver's form, not who wrote it, so any agent can write `WAIVED by BJ <date>: …` or `<!-- ac-gate: pre-merge -->`. On every path below, BJ is not making the merge call. So if the Job E log (`<marker_dir>/ac-gate.log`) holds any `[waived]` or `[override]` line, none of these exceptions applies: STOP, and route the notice to BJ (`#precheck` + `vox`), never to a lead, even when Step 4 routes notices to one. BJ reads the waiver lines on the checklist and makes the merge call.
+
+Run **sandbox-context detection** (see "Sandbox Auto-Approval" below): if the PR/MR's base ref matches `^kahuna/[0-9]+-` and the Job E log holds no `[waived]` or `[override]` line, emit the sentinel line `[AUTO-APPROVED: kahuna sandbox]` and invoke `/mmr` immediately with no wait.
 
 Otherwise, check for an **approved autochain** (CLAUDE.md "Exception: Approved Autochain", #1224). Resolve `autochain-gate.sh` with the same ladder as Step 0 — `PATH`, then `<repo_root>/.claude/bin/`, then `<repo_root>/scripts/` — and run `autochain-gate.sh check <repo_root> <N>`, where `<N>` is the `issue_number` that `ibm()` returned in Step 1. Auto-approve **only** when it exits 0 printing `approved <epic> armed_at=<ts>` **and** this cycle meets the mechanical pass definition:
 - every checklist item verified;
 - zero unresolved critical/important findings from the latest Job D pass;
 - **every** `LANE … | exit=` line you wrote for Job B, from the instrument's own JSON or `$?`, reads `exit=0`, and there is at least one. A missing lane line, a lane still running, or a bare PASS with no lane lines is not a pass;
 - Job C exit 0;
-- Job E exit 0.
+- Job E exit 0, with no `[waived]` or `[override]` line in its log.
 
 Then put the gate's two output lines (`approved … armed_at=…` and `approval: …`) on the checklist, so the approval being relied on is visible at the moment it is used, emit `[AUTO-APPROVED: autochain #<epic>]`, and invoke `/mmr`. A gate that cannot be found, a `not-approved` (including an expired approval), or any item short of a pass → STOP below. The gate fails closed; so does this step.
 
-Otherwise, a **standing merge grant** (CLAUDE.md "Exception: Standing Merge Grant") also skips the STOP, under all of its conditions: BJ's own words, given directly and recorded in memory; a **bounded, named effort** (a grant for "all PRs", or an old grant that only skipped `/mmr`'s second ask, does not qualify) with this PR plainly inside it; the same mechanical pass as the autochain bullets above; and nothing the prod rule gates, nor any tag, release or install. Put the memory file, BJ's words verbatim, the scope, and one sentence on why this PR is inside it on the checklist, then invoke `/mmr`. This path is applied by you, not detected by a script, so a grant whose scope you have to stretch does not apply. When in doubt, STOP.
+Otherwise, a **standing merge grant** (CLAUDE.md "Exception: Standing Merge Grant") also skips the STOP, under all of its conditions: BJ's own words, given directly and recorded in memory; a **bounded, named effort** (a grant for "all PRs", or an old grant that only skipped `/mmr`'s second ask, does not qualify) with this PR plainly inside it; the same mechanical pass as the autochain bullets above, so no `[waived]` or `[override]` line in the Job E log; and nothing the prod rule gates, nor any tag, release or install. Put the memory file, BJ's words verbatim, the scope, and one sentence on why this PR is inside it on the checklist, then invoke `/mmr`. This path is applied by you, not detected by a script, so a grant whose scope you have to stretch does not apply. When in doubt, STOP.
 
 Otherwise, a **lead-agent grant** (CLAUDE.md "Exception: Lead-Agent Grant") skips the STOP too, but only in the session of the agent it names. It requires all of these:
 - BJ's own words, given directly to you and recorded in your memory.
 - The Dev-Name in `.claude/agent-identity.json` matches the name in the grant. The memory loads in every session in this checkout, so its presence proves nothing.
 - The repo's origin is in the grant's organization.
-- The same mechanical pass, on this exact head.
+- The same mechanical pass, on this exact head, so no `[waived]` or `[override]` line in the Job E log. A waiver stops a lead's merge too, and goes to BJ.
 - Nothing the prod rule gates.
 
 It is never relayed, so a grunt or peer you tasked never applies it. Their PR/MR stops at ready, and you merge it only on your own `/precheck` run on its head. Their precheck, and any `precheck` status it posted, is evidence, not the pass. Put on the checklist the memory file, BJ's words verbatim, the Dev-Name match, and one sentence on why this origin is inside the organization. Then emit `[AUTO-APPROVED: lead-agent grant]` and invoke `/mmr`. When in doubt, STOP.
