@@ -91,7 +91,9 @@ def _stubbed_env(home: Path, mcp_list: str = "") -> dict[str, str]:
     ``curl`` stub logs each URL to ``$STUB_CURL_LOG`` and serves a script that echoes its
     arguments. The ``claude`` stub logs its arguments to ``$STUB_CLAUDE_LOG``, prints
     ``mcp_list`` for ``mcp list``, exits 1 for ``mcp get`` and 0 for anything else. The
-    crewchat step points at a socket that does not exist, so it stays a no-op.
+    crewchat uninstall never checks its socket. The stubs and the sandboxed uv keep it a
+    no-op: the ``claude`` stub's ``mcp get`` reports nothing registered, and uv looks only
+    in the sandbox's tool dir.
     """
     stubs = home.parent / "stubs"
     stubs.mkdir(exist_ok=True)
@@ -780,6 +782,18 @@ class TestUninstallMcpRegistration:
         assert fetched == [mcps["sdlc-server"]["install_url"]]
         assert out.count("stub-remote --uninstall") == 1
         assert "Not registered: wtf-server" in out
+
+    def test_a_longer_name_is_not_a_registration(self, sandbox_home: Path) -> None:
+        # The name must head its line: `sdlc-server-dev` is not `sdlc-server`, and a name
+        # in another server's command is not a registration either.
+        rc, out, err = run_uninstall(
+            ["--mcps"],
+            sandbox_home,
+            mcp_list="sdlc-server-dev: /opt/sdlc-server --dev - ✓ Connected\n",
+        )
+        assert _install_ok(rc, out, err), f"uninstall --mcps failed (rc={rc}):\n{out}\n{err}"
+        assert not (sandbox_home.parent / "curl.log").exists()
+        assert "Not registered: sdlc-server" in out
 
     def test_unreadable_registrations_skip_removal(self, sandbox_home: Path) -> None:
         env = _stubbed_env(sandbox_home)

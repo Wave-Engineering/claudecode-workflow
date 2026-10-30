@@ -218,7 +218,7 @@ if [[ "$REMOVE_MCPS" == true ]]; then
 	elif [[ -f "$REPO_DIR/mcps.json" ]] && command -v jq &>/dev/null; then
 		for mcp_name in $(jq -r '.mcps | keys[]' "$REPO_DIR/mcps.json"); do
 			install_url=$(jq -r ".mcps[\"$mcp_name\"].install_url" "$REPO_DIR/mcps.json")
-			if ! echo "$mcp_list" | grep -qw "$mcp_name"; then
+			if ! echo "$mcp_list" | grep -q "^${mcp_name}:"; then
 				echo "  [-] Not registered: $mcp_name"
 			elif [[ "$DRY_RUN" == true ]]; then
 				echo "  [+] (dry-run) Would uninstall MCP server: $mcp_name"

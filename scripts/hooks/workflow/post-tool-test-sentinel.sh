@@ -28,7 +28,7 @@
 #   (b) no such line: some matching segment is followed only by `&&` (or is last), so the
 #       command line's 0 is its own exit, or a later `&&` step's, which ran only after it;
 #   (c) anything else is unknown, and writes nothing.
-# An interrupted run never counts.
+# An interrupted run never counts, nor does one in the background.
 set -uo pipefail
 
 INPUT=$(cat 2>/dev/null || true)
@@ -45,6 +45,11 @@ fi
 if [[ "$INTERRUPTED" == "true" ]]; then
 	exit 0
 fi
+
+# A background run returns at launch, before the test has a status. It may be backgrounded
+# up front (`run_in_background`) or mid-flight (a `backgroundTaskId` in the response).
+BG=$(printf '%s' "$INPUT" | jq -r '(.tool_input.run_in_background // false) or ((.tool_response.backgroundTaskId // "") != "")' 2>/dev/null || true)
+[[ "$BG" == true ]] && exit 0
 
 TEST_PATTERN='(pytest|python[0-9.]* -m pytest|npm test|npx vitest|make (test|lint|check)|\.\/scripts\/ci\/(validate|test)\.sh|ruff check|cargo test|go test|bun test|[/_-](lint|test|tests|validate)\.sh)'
 

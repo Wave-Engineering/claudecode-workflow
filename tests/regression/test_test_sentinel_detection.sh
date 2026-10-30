@@ -41,16 +41,18 @@ cat >"$WORK/repo/.claude-project.md" <<'MD'
 MD
 mkdir -p "$WORK/home/.claude/logs"
 
-# check <SENTINEL|NONE> <command> [stdout] [cwd] [interrupted]
+# check <SENTINEL|NONE> <command> [stdout] [cwd] [interrupted] [jq-filter]
 # The payload is the documented PostToolUse Bash shape (#1361): tool_response carries
-# stdout, stderr, interrupted and isImage, and no exit code.
+# stdout, stderr, interrupted and isImage, and no exit code. The optional jq filter
+# reshapes it, e.g. to mark the run as backgrounded.
 check() {
-	local want="$1" cmd="$2" out="${3:-}" cwd="${4:-$WORK/repo}" intr="${5:-false}" sid got
+	local want="$1" cmd="$2" out="${3:-}" cwd="${4:-$WORK/repo}" intr="${5:-false}" shape="${6:-.}" sid got
 	n=$((n + 1))
 	sid="test-1287-$$-$n"
 	jq -n --arg s "$sid" --arg c "$cmd" --arg o "$out" --arg d "$cwd" --argjson i "$intr" \
 		'{session_id: $s, cwd: $d, tool_input: {command: $c},
 		  tool_response: {stdout: $o, stderr: "", interrupted: $i, isImage: false}}' |
+		jq "$shape" |
 		HOME="$WORK/home" bash "$HOOK"
 	if [[ -f "/tmp/claude-tests-ran-$sid" ]]; then got=SENTINEL; else got=NONE; fi
 	if [[ "$got" == "$want" ]]; then
@@ -118,6 +120,11 @@ check SENTINEL "pytest &> out.log"
 check SENTINEL $'pytest\n' # a trailing newline is not a connector
 # An interrupted run never counts.
 check NONE "pytest" "" "$WORK/repo" true
+# A background run returns at launch, before the test has a status: launched that way, or
+# backgrounded mid-flight.
+check NONE "pytest" "" "$WORK/repo" false '.tool_input.run_in_background = true'
+check NONE "pytest" "" "$WORK/repo" false '.tool_response.backgroundTaskId = "b1x2"'
+check SENTINEL "pytest" "" "$WORK/repo" false '.tool_input.run_in_background = false'
 
 # Each SENTINEL case logs one metrics line, into the temp HOME, never the real one.
 if [[ ! -s "$WORK/home/.claude/logs/context-metrics.jsonl" ]]; then
