@@ -32,7 +32,7 @@
 // spuriously HOLDs an otherwise-clean wave. Lint/typecheck are NOT a fifth signal; they
 // ride INSIDE the CI signal (ci_wait_run runs the project's full gate on the merge result).
 
-import { mergeResultVerdict, directMergeReadSteps, headReadLines, targetReadLines, isMergeSha } from './merge-result.js'
+import { mergeResultVerdict, directMergeReadSteps, headReadLines, targetReadLines, isMergeSha, ciWaitRefLines, noRunProbeLines, noRunHold, PR_WAIT_CI_PROBE } from './merge-result.js'
 
 // ── Conservative-fail SIG (replaces the always-pass gateSignalStub) ──────────────────
 // SEAMS invariant 6: when #687 lands, the per-signal `.catch(() => gateSignalStub(...))`
@@ -270,7 +270,9 @@ export function ciSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRe
     `   The CI you report on is the pipeline produced by MERGING kahuna INTO ${integrationBase} (the merge`,
     `   result), not the branch's own latest push.`,
     ...head('head_sha'),
-    `2. Call sdlc-server ci_wait_run (repo=${targetRepo}) with require_merge_result=true, pr_number=${prNumber != null ? prNumber : '<the PR number>'},`,
+    ...noRunProbeLines({ targetRepo, prNumber }).map((l, i) => (i === 0 ? `2. ${l}` : `   ${l}`)),
+    `   Then call sdlc-server ci_wait_run (repo=${targetRepo}) with ref=<below>, require_merge_result=true, pr_number=${prNumber != null ? prNumber : '<the PR number>'},`,
+    ...ciWaitRefLines({ prNumber, headBranch: kahunaBranch }).map((l) => `   ${l}`),
     `   AND explicit timeout_sec=${waitSec} + poll_interval_sec=15 (#1035 — do NOT omit them). All are load-bearing:`,
     `     • require_merge_result makes the tool refuse to grade a BRANCH pipeline, a SKIPPED one, or a`,
     `       GitLab DETACHED (refs/merge-requests/N/head) pipeline — none of which validated the merge.`,
@@ -293,7 +295,7 @@ export function ciSignalPrompt({ waveId, kahunaBranch, integrationBase, targetRe
     ...head('head_sha_final'),
     ...targetReadLines({ targetRepo, branch: integrationBase, field: 'target_sha' }).map((l) => `   ${l}`),
     ``,
-    `Do NOT do any other work. Return: pr_number, pr_ref, head_sha (step 1), wait (step 2); merge_commit`,
+    `Do NOT do any other work. Return: pr_number, pr_ref, head_sha (step 1), probe and wait (step 2); merge_commit`,
     `whenever step 3 had you read one (a GitLab green on a sha that is not the head, or the direct read);`,
     `merge_pipelines ONLY if you ran the direct read; head_sha_final and target_sha (step 4); notes (1-2 sentences).`,
     `Report what you READ. A missing fact holds the wave; it never passes it.`,
@@ -371,6 +373,7 @@ export const FLIGHT_CI_EVIDENCE = {
     already_integrated: { type: 'boolean' }, // step 0: merging the flight head into the kahuna changes nothing
     integrated_head: { type: 'string' }, // step 0: the sha that was checked
     integrated_exit: { type: 'integer' }, // step 0: the content check's exit code, as printed
+    probe: PR_WAIT_CI_PROBE, // step 3: pr_wait_ci's no-run probe, copied as returned (#1357)
     notes: { type: 'string' },
   },
 }
@@ -396,8 +399,10 @@ export function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, 
     `2. Open the ${branch}→${kahunaBranch} PR with sdlc-server pr_create, NOT as a draft, or find the open`,
     `   one for that branch pair (idempotent: never open a second). Report its number as pr_number.`,
     ...head('head_sha'),
-    `3. Call sdlc-server ci_wait_run(repo=${targetRepo}, ref=<GitHub: "${branch}"; GitLab: "refs/merge-requests/<n>/merge">,`,
-    `   require_merge_result=true, pr_number=<n>, timeout_sec=${waitSec}, poll_interval_sec=15).`,
+    ...noRunProbeLines({ targetRepo }).map((l, i) => (i === 0 ? `3. ${l}` : `   ${l}`)),
+    `   Then call sdlc-server ci_wait_run(repo=${targetRepo}, ref=<below>, require_merge_result=true, pr_number=<n>,`,
+    `   timeout_sec=${waitSec}, poll_interval_sec=15).`,
+    ...ciWaitRefLines({ headBranch: branch }).map((l) => `   ${l}`),
     `   Report its answer as wait, copied as returned (ok, final_status, reason, error, sha, run_id, url).`,
     `   GitLab only: when wait is a success whose sha is not head_sha, that sha is the merged-results`,
     `   pipeline's ephemeral merge commit. Read it and report it as merge_commit, exactly as read:`,
@@ -411,15 +416,17 @@ export function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, 
     ``,
     `Do NOT merge, do NOT mark anything ready, do NOT judge: the engine grades this in code.`,
     `Return: issue (${issue}), already_integrated + integrated_head + integrated_exit (step 0), pr_number, pr_ref,`,
-    `head_sha, wait, merge_commit (step 3, GitLab only), failed_jobs (step 4 only), head_sha_final, target_sha,`,
+    `head_sha, probe and wait (step 3), merge_commit (step 3, GitLab only), failed_jobs (step 4 only), head_sha_final, target_sha,`,
     `blocked + block_reason (step 1 only), notes (1-2 sentences). Report what you READ.`,
   ].join('\n')
 }
 
 // Grades one flight's FLIGHT_CI_EVIDENCE. The rules, in order: no evidence, a rejected push, or a PR
 // head that is not the head the flight returned (read before and after the wait) is BLOCKED; green on
-// that head PROCEEDS; a red whose failed jobs all really ran is NEEDS_REWORK (the flight's own code);
-// everything else is BLOCKED. The asymmetry is deliberate: a misread code-red becomes a hold, never a
+// that head PROCEEDS, where the run's sha is the head itself (GitHub) or a merge commit with parents
+// exactly [kahuna tip, head] (a GitLab merged-results run, bound as mergeResultVerdict binds it); a
+// probe saying CI never started is BLOCKED with that reason (#1357); a red whose failed jobs all
+// really ran is NEEDS_REWORK (the flight's own code); everything else is BLOCKED. The asymmetry is deliberate: a misread code-red becomes a hold, never a
 // merge, so the safety property (never merge red) holds whichever way a job is classified.
 //
 // CODE-RED, exactly: final_status failure (or GitLab's failed), at least one job concluded failure,
@@ -471,6 +478,9 @@ export function flightCiVerdict(ev, issue, flightHead, status, rework = false) {
     if (bound.pass) return out('proceed', `CI green on head ${flightHead.slice(0, 8)} (merge commit ${w.sha.slice(0, 8)} onto the kahuna tip)`, flightHead)
     return out('blocked', `a green run not bound to the flight head ${flightHead.slice(0, 8)}: ${bound.reason}`)
   }
+  // #1357: CI never started for this head (a criss-cross base, a hard blocker): fail fast, naming why.
+  const nr = noRunHold(ev.probe, flightHead)
+  if (nr) return out('blocked', nr)
   const jobs = (Array.isArray(ev.failed_jobs) ? ev.failed_jobs : []).filter((j) => !FLIGHT_IGNORED_CONCLUSIONS.has(j?.conclusion))
   const ran = (j) => {
     const s = Date.parse(j?.started_at ?? '')

@@ -250,6 +250,10 @@ async function main() {
   // needs its OWN merge-result CI run against current trunk. A branch-CI signal is weaker.
   ok(/require_merge_result=true/.test(ciP) && /ci_wait_run/.test(ciP), 'release-CI prompt: gates on a MERGE-RESULT CI run (no per-wave pipeline tested this diff against current trunk)')
   ok(/timeout_sec=1800, poll_interval_sec=20/.test(ciP), 'release-CI prompt: the explicit bounded wait (#1035)')
+  // #1357: ci_wait_run's ref is required, and a GitLab merged-results pipeline is never under the branch.
+  ok(ciP.includes('GitLab: ref="refs/merge-requests/<n>/merge"') && ciP.includes('GitHub: ref="campaign/56-x"'),
+    'release CI prompt names refs/merge-requests/<n>/merge and the campaign branch')
+  ok(ciP.indexOf('pr_wait_ci(') >= 0 && ciP.indexOf('pr_wait_ci(') < ciP.indexOf('sdlc-server ci_wait_run('), 'release-CI prompt: the no-run probe precedes the wait (#1357)')
   // #1211: the release gate had no fallback, so a GitLab ci_wait_run that saw nothing (sdlc#585)
   // waited 1800s and could only hold. It now carries the shared direct read, verbatim.
   ok(ciP.includes(directMergeReadSteps({ targetRepo: 'o/r', windowSec: 600 })[0]), 'release-CI prompt: carries the shared direct /merge read (#1211)')

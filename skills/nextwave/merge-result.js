@@ -21,6 +21,21 @@
 // refuses as not_merge_result) would let the previous head's green /merge pipeline pass. Read only
 // after, a ci_wait_run success for the previous head would bind the merge to one CI never graded.
 
+// pr_wait_ci's answer to the no-run probe (#1357), copied as returned. Its schema is shared: the
+// merge-result evidence and the flight CI evidence both carry it.
+export const PR_WAIT_CI_PROBE = {
+  type: 'object',
+  additionalProperties: true,
+  properties: {
+    status: { type: 'string' }, // e.g. no_checks_yet, no_checks_configured, pending, success
+    final_state: { type: 'string' },
+    blocker: { type: ['string', 'null'] }, // e.g. draft, conflicts (mcp-server-sdlc#609)
+    mergeable: { type: ['string', 'boolean', 'null'] },
+    mergeable_state: { type: ['string', 'null'] }, // GitHub's, e.g. CONFLICTING/DIRTY
+    settled_sec: { type: 'number' },
+  },
+}
+
 // The evidence an agent returns about one PR/MR's merge-result pipeline. Facts only: what
 // ci_wait_run answered, and what a direct GitLab read showed when it gave no verdict. The agent
 // never filters or grades them; mergeResultVerdict() does.
@@ -70,6 +85,7 @@ export const MERGE_RESULT_EVIDENCE = {
         parent_ids: { type: 'array', items: { type: 'string' } },
       },
     },
+    probe: PR_WAIT_CI_PROBE,
     notes: { type: 'string' },
   },
 }
@@ -140,6 +156,10 @@ export function mergeResultVerdict(ev) {
     }
     return { pass: true, path: 'ci_wait_run', head, reason: `ci_wait_run: the merge-result pipeline is green on the head ${head.slice(0, 8)}` }
   }
+  // #1357: CI never started for this head, so no direct read will find a pipeline either. After a
+  // graded red and a graded green, so a stale probe never overrides what CI graded.
+  const nr = noRunHold(ev.probe, head)
+  if (nr) return hold('probe', nr)
   const err = ev.wait?.error ? `: ${String(ev.wait.error).slice(0, 160)}` : ''
   const why = !ev.wait ? 'no answer' : fs ? `final_status=${fs}` : `not found${err}`
   const want = `refs/merge-requests/${n}/merge`
@@ -171,6 +191,43 @@ export function mergeResultVerdict(ev) {
     head,
     reason: `ci_wait_run gave no verdict (${why}); ${label}, is green and ${newest.sha === head ? 'is' : 'merges'} the head ${head.slice(0, 8)}`,
   }
+}
+
+// THE NO-RUN PROBE (#1357, triage #42). A PR whose CI never starts (a criss-cross merge base left
+// Wave-Engineering/mattermost-crew#78 with no pull_request run for ~80 minutes) was waited on until
+// ci_wait_run's budget ran out. pr_wait_ci answers fast: since mcp-server-sdlc#609 its no_checks_yet
+// names a blocker and the mergeable state. A non-draft no-run answer is the reason, exactly:
+//   no run for head <head>; mergeable=<mergeable_state>[; blocker=<blocker>] (pr_wait_ci <status>)
+// A draft is never fail-fast, on either status: the gate and release PRs are drafts on purpose, and a
+// server before #609 reports a draft as no_checks_configured, so without the exemption every draft
+// gate PR would HOLD. Pure; null when the probe says nothing that holds.
+const NO_RUN_STATUSES = new Set(['no_checks_yet', 'no_checks_configured'])
+export function noRunHold(probe, head) {
+  if (!probe || typeof probe !== 'object' || !NO_RUN_STATUSES.has(probe.status)) return null
+  if (probe.blocker === 'draft') return null
+  const blocker = probe.blocker ? `; blocker=${probe.blocker}` : ''
+  return `no run for head ${isMergeSha(head) ? head : 'unread'}; mergeable=${probe.mergeable_state ?? 'unknown'}${blocker} (pr_wait_ci ${probe.status})`
+}
+
+// The probe step, phrased once for every wait that runs it.
+export function noRunProbeLines({ targetRepo, prNumber }) {
+  const n = prNumber != null ? prNumber : '<n>'
+  return [
+    `PROBE, before ci_wait_run: sdlc-server pr_wait_ci(number=${n}, repo="${targetRepo}", settle_window_sec=90, timeout_sec=30, poll_interval_sec=15).`,
+    `Report its answer as probe, copied as returned.`,
+    `If probe.status is no_checks_yet or no_checks_configured AND probe.blocker is not "draft", SKIP ci_wait_run and`,
+    `the direct read and go straight to the last head read: CI has not started for this head, and waiting will not start it.`,
+  ]
+}
+
+// The ref ci_wait_run filters on, per platform (#1357, triage #9). It is required, and a GitLab
+// merged-results pipeline is never listed under the branch, so a branch ref cannot grade there.
+export function ciWaitRefLines({ prNumber, headBranch }) {
+  const n = prNumber != null ? prNumber : '<n>'
+  return [
+    `  GitHub: ref="${headBranch}" (a pull_request run is listed under the PR's head branch).`,
+    `  GitLab: ref="refs/merge-requests/${n}/merge" (a merged-results pipeline is listed under that ref, never under the branch).`,
+  ]
 }
 
 // The head-SHA read, phrased once. Both gates ask for it twice: first, and again after the last

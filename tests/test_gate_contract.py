@@ -16,9 +16,11 @@ unit-level contract. cc-workflow#795.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
-_GATE_JS = Path(__file__).resolve().parent.parent / "skills" / "nextwave" / "gate.js"
+_REPO = Path(__file__).resolve().parent.parent
+_GATE_JS = _REPO / "skills" / "nextwave" / "gate.js"
 # #1211: the merge-result rule gate.js grades the CI signal with, shared with the release gate.
 _MERGE_RESULT_JS = _GATE_JS.with_name("merge-result.js")
 _WF_JS = _GATE_JS.with_name("per-wave-workflow.js")
@@ -231,6 +233,33 @@ class TestCiSignal:
         assert ".then((ev) => ciVerdict(ev, promotionPrNumber))" in wf, (
             "the gate:ci node must be graded by ciVerdict against the gate's own PR number"
         )
+
+    @staticmethod
+    def _ci_prompt() -> str:
+        # The prompt as rendered, not its source: the ref and probe lines come from merge-result.js helpers.
+        script = (
+            "import { ciSignalPrompt } from './skills/nextwave/gate.js';"
+            "process.stdout.write(ciSignalPrompt({ waveId: 'W-1', kahunaBranch: 'kahuna/9-x',"
+            " integrationBase: 'main', targetRepo: 'o/r', prNumber: 77, ciWaitSec: 420 }))"
+        )
+        return subprocess.run(
+            ["node", "--input-type=module", "-e", script], cwd=_REPO, check=True, capture_output=True, text=True
+        ).stdout
+
+    def test_ci_signal_names_the_ref_per_platform(self) -> None:
+        # #1357 (triage #9): ci_wait_run's ref is required, and a merged-results pipeline is never
+        # listed under the branch, so the prompt names it per platform.
+        p = self._ci_prompt()
+        assert 'GitLab: ref="refs/merge-requests/77/merge"' in p
+        assert 'GitHub: ref="kahuna/9-x"' in p
+        assert "with ref=<below>, require_merge_result=true" in p
+
+    def test_ci_signal_probes_pr_wait_ci_before_waiting(self) -> None:
+        # #1357 (triage #42): a PR whose CI never starts fails fast instead of riding the wait budget.
+        p = self._ci_prompt()
+        probe = p.index("PROBE, before ci_wait_run: sdlc-server pr_wait_ci(number=77")
+        assert probe < p.index("call sdlc-server ci_wait_run")
+        assert 'AND probe.blocker is not "draft"' in p, "the draft exemption must be stated"
 
 
 class TestTrivySignal:

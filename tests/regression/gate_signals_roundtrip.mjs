@@ -96,7 +96,13 @@ try {
   // #1211 review I-1: the head is read FIRST and again LAST. Read only before the wait, a head that
   // moved during it lets the previous head's green /merge pipeline pass.
   const at = (s) => { const i = ci.indexOf(s); assert.ok(i >= 0, `ci prompt must contain ${s}`); return i }
-  assert.ok(at('report it as head_sha,') < at('Call sdlc-server ci_wait_run'), 'the first head read comes before ci_wait_run')
+  assert.ok(at('report it as head_sha,') < at('call sdlc-server ci_wait_run'), 'the first head read comes before ci_wait_run')
+  // #1357: the no-run probe runs before the wait, with the draft exemption, and the ref is named.
+  assert.ok(at('PROBE, before ci_wait_run: sdlc-server pr_wait_ci(') < at('call sdlc-server ci_wait_run'), 'the probe precedes ci_wait_run')
+  assert.match(ci, /AND probe\.blocker is not "draft"/)
+  assert.ok(ci.includes(`GitLab: ref="refs/merge-requests/${PR}/merge"`), 'GitLab waits on the /merge ref')
+  assert.ok(ci.includes('GitHub: ref="kahuna/'), 'GitHub waits on the kahuna branch')
+  assert.match(ci, /probe and wait \(step 2\)/)
   assert.ok(at('report it as head_sha_final') > at('DIRECT READ'), 'the final head read comes after ci_wait_run AND the direct read')
   assert.match(ci, /return wait: \{\}/) // the schema requires wait, so "no wait" would be a schema error
   // #476: the gate must REQUIRE a merge-result pipeline. Without this flag the tool
@@ -672,6 +678,12 @@ try {
     assert.match(r.reason, re, what)
     assert.equal(r.head, null)
   }
+  // #1357: CI never started (Wave-Engineering/mattermost-crew#78's criss-cross base): fail fast with the named reason.
+  const never = v(ev({ wait: {}, probe: { status: 'no_checks_yet', blocker: 'conflicts', mergeable_state: 'CONFLICTING/DIRTY' } }))
+  assert.equal(never.outcome, 'blocked', 'flightCiVerdict: probe no_checks_yet is blocked')
+  assert.equal(never.reason, `no run for head ${FH}; mergeable=CONFLICTING/DIRTY; blocker=conflicts (pr_wait_ci no_checks_yet)`)
+  assert.equal(v(ev({ probe: { status: 'no_checks_yet', blocker: 'conflicts' } })).outcome, 'proceed', 'a graded green beats a stale no-run probe')
+  assert.match(v(ev({ wait: {}, probe: { status: 'no_checks_yet', blocker: 'draft' } })).reason, /^CI could not grade head/, 'a draft probe is not the no-run reason')
   assert.match(v(ev({ wait: { ok: false, error: 'No CI run found for ref x' } })).reason, /must run on PRs into kahuna\/\*/, 'no run names the CI trigger')
   assert.doesNotMatch(v(ev({ wait: { ok: false, error: 'rate limited' } })).reason, /kahuna\/\*/, 'other errors carry no trigger hint')
   ok('flightCiVerdict: green proceeds; ran-red reworks; billing/infra/no-verdict, moved or foreign heads, null evidence and a rejected push are blocked (#1356)')
@@ -704,7 +716,10 @@ try {
   const fp2 = flightCiPrompt({ waveId: 'W-7', issue: 7, branch: 'b', worktree: '/wt/7', kahunaBranch: 'kahuna/692-x', targetRepo: 'org/repo', ciWaitSec: 600, flightHead: FH })
   assert.ok(fp2.includes(`merge-tree --write-tree origin/kahuna/692-x ${FH})`), 'it checks the head the flight returned')
   assert.match(fp, /pr_create, NOT as a draft/)
-  assert.match(fp, /require_merge_result=true, pr_number=<n>, timeout_sec=600, poll_interval_sec=15/)
+  assert.match(fp, /require_merge_result=true, pr_number=<n>,\n {3}timeout_sec=600, poll_interval_sec=15/)
+  assert.ok(fp.includes('GitHub: ref="feature/7-W-7-x"') && fp.includes('GitLab: ref="refs/merge-requests/<n>/merge"'), 'the flight names its ref per platform')
+  assert.ok(fp.indexOf('pr_wait_ci(') < fp.indexOf('call sdlc-server ci_wait_run'), 'the flight probes before it waits')
+  assert.ok(FLIGHT_CI_EVIDENCE.properties.probe, 'the flight evidence carries the probe')
   assert.match(fp, /ci_failed_jobs\(run_id=<wait\.run_id>/)
   assert.match(fp, /report it as head_sha,/)
   assert.match(fp, /report it as head_sha_final,/)

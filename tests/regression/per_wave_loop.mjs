@@ -407,6 +407,18 @@ await check('flight CI: a blocked flight halts flight-ci-blocked after the green
   assert.deepEqual(run.result.reworkCount, {}, 'a blocked flight is not a rework cycle')
 })
 
+await check('loop: a flight whose CI never started halts flight-ci-blocked naming "no run for head" (#1357)', async () => {
+  const probe = { status: 'no_checks_yet', blocker: 'conflicts', mergeable_state: 'CONFLICTING/DIRTY' }
+  const run = await runPerWave({
+    args: FAN_ARGS,
+    responder: only({ 'flight-ci:#2': ciFor(2, { wait: {}, probe }) }),
+  })
+  assertHalted(run, 'flight-ci-blocked:#2')
+  assert.ok(run.result.haltReason.includes(`no run for head ${'2'.padStart(40, 'e')}; mergeable=CONFLICTING/DIRTY; blocker=conflicts`), run.result.haltReason)
+  assert.deepEqual(run.result.merged, [1], 'the green flight still merges')
+  assert.deepEqual(run.result.reworkCount, {}, 'a flight CI never graded is not a rework cycle')
+})
+
 await check('flight CI: reconcile\'s claim to merge a flight it was not handed is ignored', async () => {
   const run = await runPerWave({
     args: FAN_ARGS,
