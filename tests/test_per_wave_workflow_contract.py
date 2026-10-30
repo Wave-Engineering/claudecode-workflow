@@ -59,8 +59,14 @@ class TestFlightCiBeforeReconcile:
         in kahuna, SKIP it" rule could only let reconcile report merged without calling pr_merge."""
         p = self._reconcile_prompt()
         assert "SKIP it" not in p, "reconcile must not skip a merge it was handed"
-        assert "{issue, merge_commit_sha, pinned_head_sha}" in p, "reconcile must report each merge's proof"
+        assert "{issue, merged, merge_commit_sha, pinned_head_sha}" in p, "reconcile must report each merge's proof"
         assert "no echo means no pin" in p, "the prompt must name why the echo is required"
+        assert "needs_rework ONLY (never in merged or merges" in p, "an undone merge must not also be reported merged"
+
+    def test_pinned_merge_unproven_is_a_legal_exit(self) -> None:
+        skill = (_WF.parent / "SKILL.md").read_text(encoding="utf-8")
+        assert "| pinned-merge-unproven |" in skill, "the halt must be in the closed legal-exits table"
+        assert "halts.join('; also: ')" in _wf_src(), "every halt that fired is reported, the unproven merge first"
 
     def test_merges_count_only_on_the_pin_echo(self) -> None:
         src = _wf_src()

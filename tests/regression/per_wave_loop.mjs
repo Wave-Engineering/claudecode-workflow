@@ -504,26 +504,73 @@ await check('gate HOLDs when gate:trivy kahuna_sha differs from gate:ci head_sha
 })
 
 // ── #1356 review: a pinned merge counts only on pr_merge's echo of the pin (mocked v5.2.0 / older) ──
-for (const [what, promo] of [
-  ['an old server (no pinned_head_sha)', { promoted: true, mr_ref: '#99' }],
-  ['a pin echo that is not the graded head', { promoted: true, mr_ref: '#99', pinned_head_sha: 'c'.repeat(40) }],
+const MC = 'c'.repeat(40) // the merge commit the promote node reports
+for (const [what, promo, why] of [
+  ['an old server (no pinned_head_sha)', { promoted: true, mr_ref: '#99', merge_commit_sha: MC }, /pr_merge returned no pinned_head_sha/],
+  ['a pin echo that is not the graded head', { promoted: true, mr_ref: '#99', merge_commit_sha: MC, pinned_head_sha: 'e'.repeat(40) }, /pr_merge pinned eeeeeeee, not the graded head/],
 ]) {
-  await check(`promote: ${what} → not integrated, the reason is named`, async () => {
+  await check(`promote: ${what} → landed-unproven, not "did not land"`, async () => {
     const run = await runPerWave({ responder: only({ promote: promo }) })
     assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
     assert.equal(run.result.gate, 'PASS')
     assert.equal(run.result.integrated, false)
-    assert.match(run.result.reason, /merge not counted: pr_merge (returned no pinned_head_sha|pinned cccccccc, not the graded head)/)
+    assert.equal(run.result.landedUnproven, true)
+    assert.equal(run.result.merge_commit_sha, MC)
+    assert.match(run.result.reason, new RegExp(`^landed-unproven: merged on \\S+ as ${MC}; pin not proven against graded head aaaaaaaa`))
+    assert.match(run.result.reason, why)
+    assert.match(run.result.reason, /— verify or revert$/)
+    const terminal = run.calls.find((c) => c.label.startsWith('persist:') && c.prompt.includes('TERMINAL'))
+    assert.ok(terminal && terminal.prompt.includes('landed-unproven: merged on'), 'the durable record says it landed')
+    assert.ok(!terminal.prompt.includes('promotion did not land'), 'never "did not land" for a merge that landed')
   })
 }
 
+await check('promote that did not merge → "did not land", not landed-unproven', async () => {
+  const run = await runPerWave({ responder: only({ promote: { promoted: false, notes: 'head_moved' } }) })
+  assert.equal(run.result.landedUnproven, undefined)
+  assert.match(run.result.reason, /^promotion did not land: head_moved/)
+})
+
 await check('reconcile on an old server (merges without pinned_head_sha) → pinned-merge-unproven, nothing merged', async () => {
+  const proof = (issue) => ({ issue, merged: true, merge_commit_sha: 'd'.repeat(40) })
   const run = await runPerWave({
-    responder: only({ 'merge:1': { merged: [1, 2], merges: [{ issue: 1, merge_commit_sha: 'd'.repeat(40) }, { issue: 2, merge_commit_sha: 'd'.repeat(40) }], needs_rework: [] } }),
+    responder: only({ 'merge:1': { merged: [1, 2], merges: [proof(1), proof(2)], needs_rework: [] } }),
   })
   assertHalted(run, 'pinned-merge-unproven:#1 (pr_merge returned no pinned_head_sha')
   assert.deepEqual(run.result.merged, [], 'no unproven flight is counted merged')
   assert.deepEqual([...run.result.pending].sort(), [1, 2], 'both stay pending')
+})
+
+await check('an unproven merge beside a blocked flight leads the halt; the other reason is kept', async () => {
+  const run = await runPerWave({
+    args: FAN_ARGS,
+    responder: only({
+      'flight-ci:#2': ciFor(2, { wait: { ok: false, error: 'No CI run found' } }),
+      'merge:1': { merged: [1], merges: [{ issue: 1, merged: true, merge_commit_sha: 'd'.repeat(40) }], needs_rework: [] },
+    }),
+  })
+  assertHalted(run, 'pinned-merge-unproven:#1 (')
+  assert.match(run.result.haltReason, /; also: flight-ci-blocked:#2 \(/)
+})
+
+await check('an undone merge in needs_rework is not counted merged, even with a valid proof', async () => {
+  const run = await runPerWave({
+    args: FAN_ARGS,
+    responder: (label, prompt) => {
+      if (label === 'merge:1') {
+        const head = (n) => prompt.match(new RegExp(`issue #${n}:.*, graded head ([0-9a-f]{40})$`, 'm'))[1]
+        const proof = (n) => ({ issue: n, merged: true, merge_commit_sha: 'd'.repeat(40), pinned_head_sha: head(n) })
+        return { merged: [2], merges: [proof(1), proof(2)], needs_rework: [{ issue: 1, reason: 'interface break' }] }
+      }
+      return HARNESS_DEFAULT
+    },
+  })
+  const g1 = run.result.groupsRun[0]
+  assert.deepEqual(g1.merged, [2], 'only #2 merged in group 1')
+  assert.deepEqual(g1.needs_rework.map((r) => r.issue), [1])
+  const firstCleanup = run.calls.find((c) => c.label.startsWith('cleanup:'))
+  assert.ok(firstCleanup, 'round 1 cleans up its merged flight')
+  assert.deepEqual(firstCleanup.label.slice('cleanup:'.length).split(','), ['2'], 'the reworked flight #1 is not cleaned up in round 1')
 })
 
 await check('a passing trivy signal labelled "dependency-scan" is still bound (its label is forced)', async () => {

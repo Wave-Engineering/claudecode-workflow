@@ -1564,9 +1564,9 @@ function promotePrompt({ waveId, kahunaBranch, integrationBase, targetRepo, prNu
     `   classified, or anything else), STOP and return promoted=false with the error in notes. Never retry it`,
     `   without expected_head_sha, and never merge any other way: code CI never saw must not land on`,
     `   ${integrationBase}. Copy pr_merge's pinned_head_sha into your return exactly as it came back, or`,
-    `   leave it out if the response has none. An sdlc server older than v5.2.0 drops expected_head_sha`,
-    `   without a word and merges unpinned, so no echo means no pin, and the workflow counts the merge only`,
-    `   when pinned_head_sha is ${headSha}. Then CONFIRM it actually landed on ${integrationBase} before reporting`,
+    `   leave it out if the response has none. sdlc v5.1.x pins but does not echo, and anything before`,
+    `   v5.1.0 drops the pin without a word and merges unpinned, so no echo means no pin: the workflow`,
+    `   checks the echo itself. Then CONFIRM it actually landed on ${integrationBase} before reporting`,
     `   promoted: poll until the PR reads state=MERGED with a merge commit (pr_merge_wait, or`,
     `   gh -R ${targetRepo} pr view <number> --json state,mergeCommit). Never treat a pending merge as done.`,
     ...step4,
@@ -1578,33 +1578,45 @@ function promotePrompt({ waveId, kahunaBranch, integrationBase, targetRepo, prNu
 }
 
 // A PINNED MERGE COUNTS ONLY WHEN THE SERVER SAYS IT PINNED (#1356 review). pr_merge's schema strips
-// unknown keys, so an sdlc server older than v5.2.0 drops expected_head_sha without an error and
-// merges whatever the head is. v5.2.0 echoes the SHA it passed to --match-head-commit / --sha as
-// pinned_head_sha. No echo means no pin, and a different one is not the graded head, so both are
-// refused: never merged, whatever the node reports.
+// unknown keys, so an sdlc server before v5.1.0 drops expected_head_sha without an error and merges
+// whatever the head is; v5.1.x pins but does not echo. v5.2.0 echoes the SHA it pinned as
+// pinned_head_sha, and only when the head it re-reads after the call is that SHA. No echo means no
+// pin, and a different one is not the graded head, so both are refused. The echo alone is not a
+// merge either: v5.2.0 still echoes on a queue enrollment (merged:false), so `merged` must be true.
 function pinnedMergeVerdict(report, gradedHead) {
   const g8 = isMergeSha(gradedHead) ? gradedHead.slice(0, 8) : 'missing'
   if (!isMergeSha(gradedHead)) return { landed: false, reason: 'no graded head to pin the merge to' }
+  if (report?.merged !== true) return { landed: false, reason: `pr_merge did not report merged:true (enrolled or pending is not a merge; graded head ${g8})` }
   const p = report?.pinned_head_sha
   if (typeof p !== 'string' || !p) {
-    return { landed: false, reason: `pr_merge returned no pinned_head_sha: an sdlc server older than v5.2.0 drops expected_head_sha, so no echo means no pin (graded head ${g8})` }
+    return { landed: false, reason: `pr_merge returned no pinned_head_sha: sdlc v5.1.x pins but does not echo, and anything before v5.1.0 drops the pin, so no echo means no pin (graded head ${g8}); the host needs sdlc v5.2.0` }
   }
   if (p !== gradedHead) return { landed: false, reason: `pr_merge pinned ${p.slice(0, 8)}, not the graded head ${g8}` }
   return { landed: true, reason: `merge pinned to the graded head ${g8}` }
 }
 
-// Reconcile's merges, graded in code (#1356 review). A handed flight is merged only when reconcile
-// returns a merges entry for it with the merge commit and a pin echo equal to its graded head. Its
-// `merged` list is a claim: a flight named there with no such entry is refused, and the wave halts.
+// Reconcile's merges, graded in code (#1356 review). A handed flight is merged only when it is in BOTH
+// reconcile's `merged` list and its `merges` proof (the merge commit, merged:true, and a pin echo equal
+// to its graded head). A flight in needs_rework is neither merged nor refused, whatever else reconcile
+// lists for it: an undone merge must not be counted, or cleanupMerged deletes the worktree of a flight
+// about to be reworked and the issue can be closed with nothing landed. Anything else reconcile claims
+// merged without that proof is refused, and the wave halts.
 function reconciledMerges(rec, handed) {
   const merges = Array.isArray(rec?.merges) ? rec.merges : []
+  const claimed = new Set((rec?.merged || []).map(Number))
+  const reworked = new Set((rec?.needs_rework || []).map((r) => Number(r?.issue)))
   const merged = []
   const refused = []
   for (const w of handed) {
     const n = Number(w.issue)
+    if (reworked.has(n)) continue
     const m = merges.find((x) => Number(x?.issue) === n)
+    if (!claimed.has(n)) {
+      if (m) refused.push({ issue: n, reason: 'a merges entry with no merged claim and no needs_rework (its merge may be in the kahuna)' })
+      continue
+    }
     if (!m) {
-      if ((rec?.merged || []).map(Number).includes(n)) refused.push({ issue: n, reason: 'reported merged with no merges entry (merge_commit_sha, pinned_head_sha)' })
+      refused.push({ issue: n, reason: 'reported merged with no merges entry (merge_commit_sha, pinned_head_sha)' })
       continue
     }
     if (!isMergeSha(m.merge_commit_sha)) { refused.push({ issue: n, reason: 'no merge_commit_sha for its merge' }); continue }
@@ -1624,6 +1636,7 @@ const PROMOTE_RESULT = {
     promoted: { type: 'boolean' }, // true ONLY if the merge actually landed on the integration base
     mr_ref: { type: 'string' },
     pinned_head_sha: { type: 'string' }, // pr_merge's echo of the pin (sdlc >= v5.2.0); absent = no pin
+    merged: { type: 'boolean' }, // pr_merge's merged, as returned (an echo on an enrollment is not a merge)
     merge_commit_sha: { type: 'string' },
     notes: { type: 'string' },
   },
@@ -1931,7 +1944,7 @@ const RECONCILE = {
         type: 'object',
         additionalProperties: false,
         required: ['issue'],
-        properties: { issue: { type: 'integer' }, merge_commit_sha: { type: 'string' }, pinned_head_sha: { type: 'string' } },
+        properties: { issue: { type: 'integer' }, merged: { type: 'boolean' }, merge_commit_sha: { type: 'string' }, pinned_head_sha: { type: 'string' } },
       },
     },
     needs_rework: {
@@ -2400,13 +2413,13 @@ function primeReconcilePrompt(built, merged) {
     `   "pinned merge refused: <the error>". Never retry it without expected_head_sha, and never merge it any other way.`,
     `   A flight is merged ONLY when pr_merge reports it merged; ok=true with merged=false (enrolled, queued,`,
     `   pending) is not a merge: leave that flight out of merged and report it in needs_rework the same way.`,
-    `   For each merge, put {issue, merge_commit_sha, pinned_head_sha} in merges, copied from pr_merge's`,
-    `   response as returned; leave pinned_head_sha out if the response has none. An sdlc server older than`,
-    `   v5.2.0 drops expected_head_sha without a word and merges unpinned, so no echo means no pin: the`,
-    `   workflow counts a flight merged only when its merges entry has the merge commit and a pinned_head_sha`,
-    `   equal to its graded head.`,
+    `   For each flight you list in merged, put {issue, merged, merge_commit_sha, pinned_head_sha} in merges,`,
+    `   copied from pr_merge's response as returned; leave pinned_head_sha out if the response has none.`,
+    `   sdlc v5.1.x pins but does not echo, and anything before v5.1.0 drops the pin without a word and`,
+    `   merges unpinned, so no echo means no pin: the workflow checks each echo itself.`,
     `4. If a flight's code BREAKS another's interface (signature mismatch surfaced at integration): UNDO just that`,
-    `   flight's merge (keep integration green) and report it in needs_rework with the precise reason — the loop`,
+    `   flight's merge (keep integration green) and report it in needs_rework ONLY (never in merged or merges`,
+    `   too) with the precise reason — the loop`,
     `   re-opens it as a surfaced dependency and re-schedules it next group (§3.1 dynamic re-plan).`,
     `   // #688 wave-status persistence is FILLED as a standalone step the LOOP runs right after you return`,
     `   //   (persistIteration → wave_record_mr + wave_close_issue per newly-merged issue, then the durable`,
@@ -2417,8 +2430,8 @@ function primeReconcilePrompt(built, merged) {
     `   strands the wave off origin and produces a degenerate ${KAHUNA_BRANCH}→release MR that can never promote.`,
     `   A blocked push HOLDs the wave with a clear cause — the loop never promotes work that never reached origin.`,
     ``,
-    `Return: merged (issues now green in ${KAHUNA_BRANCH} this round), merges (list of {issue, merge_commit_sha,`,
-    `pinned_head_sha}, one per merge, step 3), needs_rework (list of {issue, reason} you`,
+    `Return: merged (issues now green in ${KAHUNA_BRANCH} this round), merges (list of {issue, merged,`,
+    `merge_commit_sha, pinned_head_sha}, one per flight in merged, step 3), needs_rework (list of {issue, reason} you`,
     `reset), conflicts_resolved (files + 1-line how), reconcile_applied_fix (list of {issue, summary}, usually`,
     `empty), concerns (array), suite_summary (final test line),`,
     `blocked (true ONLY if a push to origin was rejected — see step 5) + block_reason, notes.`,
@@ -2719,9 +2732,16 @@ while (true) {
   // SEAM #688 — newlyMerged are the issues that need their MR recorded + issue closed THIS
   // iteration; merged/pending/etc. are the full loop blob (the rehydrate substrate, §3.3).
   await persistIteration({ merged, pending, reworkCount, reworkContext: reworkCtx, idleRounds, groupsRun: groupsRunBase + groupsRun.length, newlyMerged: newlyMerged.filter((n) => merged.has(n)) }) // defensive: drop any newlyMerged that the rework loop re-opened
-  if (!halt && noops.length) halt = `rework-noop:${noops.map((w) => `#${w.issue} (${noopWhy(w)})`).join(', ')}` // #1213
-  if (!halt && ciBlocked.length) halt = `flight-ci-blocked:${ciBlocked.map((b) => `#${b.issue} (${b.reason})`).join(', ')}` // #1356
-  if (!halt && pinned.refused.length) halt = `pinned-merge-unproven:${pinned.refused.map((r) => `#${r.issue} (${r.reason})`).join(', ')}` // #1356 review
+  // Every halt that fired is reported, the first leading. An unproven merge leads (#1356 review): it may
+  // already be in the kahuna, where a resume counts it through flight-CI step 0 with no pin proof, so it
+  // must never sit behind another reason in logs alone.
+  const halts = [
+    pinned.refused.length && `pinned-merge-unproven:${pinned.refused.map((r) => `#${r.issue} (${r.reason})`).join(', ')}`, // #1356 review
+    halt, // the per-issue breaker, set inside the rework loop
+    noops.length && `rework-noop:${noops.map((w) => `#${w.issue} (${noopWhy(w)})`).join(', ')}`, // #1213
+    ciBlocked.length && `flight-ci-blocked:${ciBlocked.map((b) => `#${b.issue} (${b.reason})`).join(', ')}`, // #1356
+  ].filter(Boolean)
+  if (halts.length) halt = halts.join('; also: ')
   if (halt) break // breaker tripped inside the for-loop → leave the while with pending still non-empty
 }
 
@@ -2867,22 +2887,34 @@ if (gate.verdict === 'PASS') {
       log(`[#687] promote soft-fail — wave HELD for manual promotion: ${e?.message || e}`)
       return { promoted: false, notes: `promote error: ${e?.message || e}` }
     })
-    // #1356 review: promoted counts only when pr_merge echoed the pin as the graded head.
-    const pin = pinnedMergeVerdict(promo, gate.gradedHead)
-    if (promo?.promoted && !pin.landed) promo.notes = `merge not counted: ${pin.reason}${promo.notes ? `; ${promo.notes}` : ''}`
+    // #1356 review: promoted counts only when pr_merge echoed the pin as the graded head. The node
+    // confirmed the merge by polling, so its `promoted` is pr_merge's merged.
+    const pin = pinnedMergeVerdict({ ...promo, merged: promo?.promoted === true }, gate.gradedHead)
     const promoted = !!(promo && promo.promoted) && pin.landed
+    // A merge that LANDED with no proven pin is not "did not land": the code is on the base and the
+    // kahuna is likely gone. The durable disposition stays `held` (a closed, persisted vocabulary), and
+    // the detail and the result say what happened.
+    const landedUnproven = promo?.promoted === true && !pin.landed
+    const g8 = typeof gate.gradedHead === 'string' ? gate.gradedHead.slice(0, 8) : 'missing'
+    const unprovenWhy = landedUnproven
+      ? `landed-unproven: merged on ${INTEGRATION_BASE} as ${promo.merge_commit_sha || '<no merge_commit_sha reported>'}; pin not proven against graded head ${g8} (${pin.reason}) — verify or revert`
+      : null
     await persistTerminal(promoted ? 'promoted' : 'held',
       promoted
         ? `gate PASS, promoted ${KAHUNA_BRANCH}→${INTEGRATION_BASE}${promo.mr_ref ? ` (${promo.mr_ref})` : ''}`
-        : `gate PASS, promotion did not land — ${promo?.notes || 'see promote node'}; HELD for manual promotion`) // SEAM #688
+        : landedUnproven
+          ? `gate PASS, ${unprovenWhy}`
+          : `gate PASS, promotion did not land — ${promo?.notes || 'see promote node'}; HELD for manual promotion`) // SEAM #688
     // #1052: report BOTH fields. `integrated` is what the campaign loop routes and prunes on;
     // `promoted` is kept for the pre-#1052 campaign engine and any consumer still reading it, and
     // is the SAME boolean — this merge landed on the integration base, which is the only merge a
     // wave ever performs. `released` is deliberately absent: only the campaign's release node can
     // assert that, and a wave claiming it would be the exact conflation #1052 exists to remove.
     result = promoted
-      ? { gate: 'PASS', integrated: true, promoted: true, wave: WAVE_ID, integrationBase: INTEGRATION_BASE, mr_ref: promo.mr_ref }
-      : { gate: 'PASS', integrated: false, promoted: false, wave: WAVE_ID, integrationBase: INTEGRATION_BASE, reason: `promotion did not land: ${promo?.notes || 'see promote node'}` }
+      ? { gate: 'PASS', integrated: true, promoted: true, wave: WAVE_ID, integrationBase: INTEGRATION_BASE, mr_ref: promo.mr_ref, merge_commit_sha: promo.merge_commit_sha ?? null }
+      : landedUnproven
+        ? { gate: 'PASS', integrated: false, promoted: false, landedUnproven: true, wave: WAVE_ID, integrationBase: INTEGRATION_BASE, mr_ref: promo.mr_ref, merge_commit_sha: promo.merge_commit_sha ?? null, reason: unprovenWhy }
+        : { gate: 'PASS', integrated: false, promoted: false, wave: WAVE_ID, integrationBase: INTEGRATION_BASE, reason: `promotion did not land: ${promo?.notes || 'see promote node'}` }
   } else {
     // INTERACTIVE: do NOT promote — return the verdict; the campaign driver surfaces it + the human routes.
     await persistTerminal('held', 'gate PASS, interactive — awaiting human promotion') // SEAM #688

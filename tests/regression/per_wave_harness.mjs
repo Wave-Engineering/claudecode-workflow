@@ -119,7 +119,7 @@ export async function runPerWave({ args = DEFAULT_ARGS, responder = () => HARNES
     // pin (#1356 review). A test of an older server sets `merges` itself.
     if (label.startsWith('merge:') && res && typeof res === 'object' && Array.isArray(res.merged) && !('merges' in res)) {
       const heads = Object.fromEntries([...String(prompt).matchAll(/^ {3}- issue #(\d+):.*, graded head ([0-9a-f]{40})$/gm)].map((m) => [Number(m[1]), m[2]]))
-      res = { ...res, merges: res.merged.filter((n) => heads[n]).map((n) => ({ issue: n, merge_commit_sha: 'd'.repeat(40), pinned_head_sha: heads[n] })) }
+      res = { ...res, merges: res.merged.filter((n) => heads[n]).map((n) => ({ issue: n, merged: true, merge_commit_sha: 'd'.repeat(40), pinned_head_sha: heads[n] })) }
     }
     if (label.startsWith('flight:#') && res && typeof res === 'object') flightHeads[Number(label.slice('flight:#'.length))] = res.head_sha
     return res

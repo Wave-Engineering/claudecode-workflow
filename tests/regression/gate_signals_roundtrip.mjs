@@ -496,45 +496,61 @@ try {
 } catch (e) { bad('promote with no graded head (#1356)', e) }
 
 // ── 3d. #1356 review: a pinned merge counts only on the server's echo of the pin ───────────────
-// pr_merge's response is mocked: sdlc v5.2.0 returns pinned_head_sha; an older server returns none.
+// pr_merge's response is mocked: sdlc v5.2.0 returns pinned_head_sha; v5.1.x and older return none.
 try {
   const H = 'a'.repeat(40)
-  const old = { ok: true, merged: true, merge_commit_sha: 'b'.repeat(40) } // < v5.2.0: pin dropped
+  const old = { ok: true, merged: true, merge_commit_sha: 'b'.repeat(40) } // < v5.2.0: no echo
   const echoed = { ...old, pinned_head_sha: H }
   const other = { ...old, pinned_head_sha: 'c'.repeat(40) }
   assert.equal(pinnedMergeVerdict(old, H).landed, false, 'no echo (old server) is refused')
-  assert.match(pinnedMergeVerdict(old, H).reason, /older than v5\.2\.0 drops expected_head_sha, so no echo means no pin/)
+  assert.match(pinnedMergeVerdict(old, H).reason, /v5\.1\.x pins but does not echo, and anything before v5\.1\.0 drops the pin, so no echo means no pin/)
   assert.equal(pinnedMergeVerdict(other, H).landed, false, 'a mismatched echo is refused')
   assert.equal(pinnedMergeVerdict(other, H).reason, 'pr_merge pinned cccccccc, not the graded head aaaaaaaa')
   assert.equal(pinnedMergeVerdict(echoed, H).landed, true, 'an echo of the graded head is merged')
   assert.equal(pinnedMergeVerdict(echoed, null).landed, false, 'no graded head: nothing was pinned to it')
   assert.equal(pinnedMergeVerdict(null, H).landed, false, 'no report is refused')
+  // v5.2.0 still echoes on a queue enrollment: the echo alone is not a merge.
+  for (const merged of [false, undefined]) {
+    const v = pinnedMergeVerdict({ ...echoed, merged, enrolled: true }, H)
+    assert.equal(v.landed, false, `an echo with merged:${merged} is not a merge`)
+    assert.match(v.reason, /did not report merged:true/)
+  }
 
   const p = promotePrompt({ ...A, prNumber: PR, headSha: GRADED })
-  assert.match(p, /older than v5\.2\.0 drops expected_head_sha[\s\S]*no echo means no pin/, 'the prompt names the reason')
+  assert.match(p, /v5\.1\.x pins but does not echo, and anything before\s+v5\.1\.0 drops the pin[\s\S]*no echo means no pin/, 'the prompt names the reason')
   assert.match(p, /pinned_head_sha \(pr_merge's, as returned\)/)
+  assert.ok(!p.includes(`pinned_head_sha is ${GRADED}`), 'the prompt must not name the passing value to the node relaying the echo')
   for (const k of ['pinned_head_sha', 'merge_commit_sha']) assert.equal(PROMOTE_RESULT.properties[k].type, 'string')
 
-  // Reconcile: merged counts only a merges entry with its merge commit and the graded head echoed.
-  const handed = [{ issue: 7, head: H }, { issue: 8, head: H }, { issue: 9, head: H }, { issue: 10, head: H }]
+  // Reconcile: a flight counts only when it is in merged AND has a proven merges entry.
+  const proof = (issue, over = {}) => ({ issue, merged: true, merge_commit_sha: 'b'.repeat(40), pinned_head_sha: H, ...over })
+  const handed = [7, 8, 9, 10, 12, 13, 14].map((issue) => ({ issue, head: H }))
   const rec = {
-    merged: [7, 8, 9, 10, 11],
+    merged: [7, 8, 9, 10, 11, 13],
     merges: [
-      { issue: 7, merge_commit_sha: 'b'.repeat(40), pinned_head_sha: H }, // proven
-      { issue: 8, merge_commit_sha: 'b'.repeat(40) }, // old server: no echo
-      { issue: 9, merge_commit_sha: 'b'.repeat(40), pinned_head_sha: 'c'.repeat(40) }, // mismatch
-      { issue: 11, merge_commit_sha: 'b'.repeat(40), pinned_head_sha: H }, // not handed: ignored
+      proof(7), // proven
+      proof(8, { pinned_head_sha: undefined }), // old server: no echo
+      proof(9, { pinned_head_sha: 'c'.repeat(40) }), // mismatch
+      proof(11), // not handed: ignored
+      proof(12), // a proof with no merged claim and no rework
+      proof(13, { merged: false }), // enrolled, not merged
+      proof(14), // undone: in needs_rework too
     ],
-    needs_rework: [],
+    needs_rework: [{ issue: 14, reason: 'interface break' }],
   }
   const r = reconciledMerges(rec, handed)
   assert.deepEqual(r.merged, [7], 'only the proven merge counts')
-  assert.deepEqual(r.refused.map((x) => x.issue), [8, 9, 10])
-  assert.match(r.refused[0].reason, /no echo means no pin/)
-  assert.match(r.refused[1].reason, /not the graded head/)
-  assert.match(r.refused[2].reason, /reported merged with no merges entry/)
-  const noCommit = reconciledMerges({ merged: [7], merges: [{ issue: 7, pinned_head_sha: H }] }, [handed[0]])
+  assert.deepEqual(r.refused.map((x) => x.issue), [8, 9, 10, 12, 13], 'needs_rework #14 is neither merged nor refused')
+  const why = Object.fromEntries(r.refused.map((x) => [x.issue, x.reason]))
+  assert.match(why[8], /no echo means no pin/)
+  assert.match(why[9], /not the graded head/)
+  assert.match(why[10], /reported merged with no merges entry/)
+  assert.match(why[12], /no merged claim and no needs_rework/)
+  assert.match(why[13], /did not report merged:true/)
+  const noCommit = reconciledMerges({ merged: [7], merges: [proof(7, { merge_commit_sha: undefined })] }, [handed[0]])
   assert.deepEqual(noCommit, { merged: [], refused: [{ issue: 7, reason: 'no merge_commit_sha for its merge' }] })
+  // babelfish's N1 case: a valid proof plus the same issue in needs_rework.
+  assert.deepEqual(reconciledMerges({ merged: [7], merges: [proof(7)], needs_rework: [{ issue: 7, reason: 'x' }] }, [handed[0]]), { merged: [], refused: [] }, 'an undone merge is neither merged nor refused')
   assert.deepEqual(reconciledMerges({ merged: [], needs_rework: [{ issue: 7, reason: 'x' }] }, [handed[0]]), { merged: [], refused: [] }, 'a reworked flight is neither merged nor refused')
   ok('pinnedMergeVerdict/reconciledMerges: no echo (old server) or a mismatch is refused; the graded head echoed is merged (#1356 review)')
 } catch (e) { bad('pinned merge echo (#1356 review)', e) }

@@ -776,9 +776,9 @@ export function promotePrompt({ waveId, kahunaBranch, integrationBase, targetRep
     `   classified, or anything else), STOP and return promoted=false with the error in notes. Never retry it`,
     `   without expected_head_sha, and never merge any other way: code CI never saw must not land on`,
     `   ${integrationBase}. Copy pr_merge's pinned_head_sha into your return exactly as it came back, or`,
-    `   leave it out if the response has none. An sdlc server older than v5.2.0 drops expected_head_sha`,
-    `   without a word and merges unpinned, so no echo means no pin, and the workflow counts the merge only`,
-    `   when pinned_head_sha is ${headSha}. Then CONFIRM it actually landed on ${integrationBase} before reporting`,
+    `   leave it out if the response has none. sdlc v5.1.x pins but does not echo, and anything before`,
+    `   v5.1.0 drops the pin without a word and merges unpinned, so no echo means no pin: the workflow`,
+    `   checks the echo itself. Then CONFIRM it actually landed on ${integrationBase} before reporting`,
     `   promoted: poll until the PR reads state=MERGED with a merge commit (pr_merge_wait, or`,
     `   gh -R ${targetRepo} pr view <number> --json state,mergeCommit). Never treat a pending merge as done.`,
     ...step4,
@@ -790,33 +790,45 @@ export function promotePrompt({ waveId, kahunaBranch, integrationBase, targetRep
 }
 
 // A PINNED MERGE COUNTS ONLY WHEN THE SERVER SAYS IT PINNED (#1356 review). pr_merge's schema strips
-// unknown keys, so an sdlc server older than v5.2.0 drops expected_head_sha without an error and
-// merges whatever the head is. v5.2.0 echoes the SHA it passed to --match-head-commit / --sha as
-// pinned_head_sha. No echo means no pin, and a different one is not the graded head, so both are
-// refused: never merged, whatever the node reports.
+// unknown keys, so an sdlc server before v5.1.0 drops expected_head_sha without an error and merges
+// whatever the head is; v5.1.x pins but does not echo. v5.2.0 echoes the SHA it pinned as
+// pinned_head_sha, and only when the head it re-reads after the call is that SHA. No echo means no
+// pin, and a different one is not the graded head, so both are refused. The echo alone is not a
+// merge either: v5.2.0 still echoes on a queue enrollment (merged:false), so `merged` must be true.
 export function pinnedMergeVerdict(report, gradedHead) {
   const g8 = isMergeSha(gradedHead) ? gradedHead.slice(0, 8) : 'missing'
   if (!isMergeSha(gradedHead)) return { landed: false, reason: 'no graded head to pin the merge to' }
+  if (report?.merged !== true) return { landed: false, reason: `pr_merge did not report merged:true (enrolled or pending is not a merge; graded head ${g8})` }
   const p = report?.pinned_head_sha
   if (typeof p !== 'string' || !p) {
-    return { landed: false, reason: `pr_merge returned no pinned_head_sha: an sdlc server older than v5.2.0 drops expected_head_sha, so no echo means no pin (graded head ${g8})` }
+    return { landed: false, reason: `pr_merge returned no pinned_head_sha: sdlc v5.1.x pins but does not echo, and anything before v5.1.0 drops the pin, so no echo means no pin (graded head ${g8}); the host needs sdlc v5.2.0` }
   }
   if (p !== gradedHead) return { landed: false, reason: `pr_merge pinned ${p.slice(0, 8)}, not the graded head ${g8}` }
   return { landed: true, reason: `merge pinned to the graded head ${g8}` }
 }
 
-// Reconcile's merges, graded in code (#1356 review). A handed flight is merged only when reconcile
-// returns a merges entry for it with the merge commit and a pin echo equal to its graded head. Its
-// `merged` list is a claim: a flight named there with no such entry is refused, and the wave halts.
+// Reconcile's merges, graded in code (#1356 review). A handed flight is merged only when it is in BOTH
+// reconcile's `merged` list and its `merges` proof (the merge commit, merged:true, and a pin echo equal
+// to its graded head). A flight in needs_rework is neither merged nor refused, whatever else reconcile
+// lists for it: an undone merge must not be counted, or cleanupMerged deletes the worktree of a flight
+// about to be reworked and the issue can be closed with nothing landed. Anything else reconcile claims
+// merged without that proof is refused, and the wave halts.
 export function reconciledMerges(rec, handed) {
   const merges = Array.isArray(rec?.merges) ? rec.merges : []
+  const claimed = new Set((rec?.merged || []).map(Number))
+  const reworked = new Set((rec?.needs_rework || []).map((r) => Number(r?.issue)))
   const merged = []
   const refused = []
   for (const w of handed) {
     const n = Number(w.issue)
+    if (reworked.has(n)) continue
     const m = merges.find((x) => Number(x?.issue) === n)
+    if (!claimed.has(n)) {
+      if (m) refused.push({ issue: n, reason: 'a merges entry with no merged claim and no needs_rework (its merge may be in the kahuna)' })
+      continue
+    }
     if (!m) {
-      if ((rec?.merged || []).map(Number).includes(n)) refused.push({ issue: n, reason: 'reported merged with no merges entry (merge_commit_sha, pinned_head_sha)' })
+      refused.push({ issue: n, reason: 'reported merged with no merges entry (merge_commit_sha, pinned_head_sha)' })
       continue
     }
     if (!isMergeSha(m.merge_commit_sha)) { refused.push({ issue: n, reason: 'no merge_commit_sha for its merge' }); continue }
@@ -836,6 +848,7 @@ export const PROMOTE_RESULT = {
     promoted: { type: 'boolean' }, // true ONLY if the merge actually landed on the integration base
     mr_ref: { type: 'string' },
     pinned_head_sha: { type: 'string' }, // pr_merge's echo of the pin (sdlc >= v5.2.0); absent = no pin
+    merged: { type: 'boolean' }, // pr_merge's merged, as returned (an echo on an enrollment is not a merge)
     merge_commit_sha: { type: 'string' },
     notes: { type: 'string' },
   },
