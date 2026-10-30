@@ -41,19 +41,22 @@ cat >"$WORK/repo/.claude-project.md" <<'MD'
 MD
 mkdir -p "$WORK/home/.claude/logs"
 
-# check <SENTINEL|NONE> <command> [exit_code] [cwd]
+# check <SENTINEL|NONE> <command> [stdout] [cwd] [interrupted]
+# The payload is the documented PostToolUse Bash shape (#1361): tool_response carries
+# stdout, stderr, interrupted and isImage, and no exit code.
 check() {
-	local want="$1" cmd="$2" code="${3:-0}" cwd="${4:-$WORK/repo}" sid got
+	local want="$1" cmd="$2" out="${3:-}" cwd="${4:-$WORK/repo}" intr="${5:-false}" sid got
 	n=$((n + 1))
 	sid="test-1287-$$-$n"
-	jq -n --arg s "$sid" --arg c "$cmd" --arg e "$code" --arg d "$cwd" \
-		'{session_id: $s, cwd: $d, tool_input: {command: $c}, tool_result: {exit_code: ($e | tonumber)}}' |
+	jq -n --arg s "$sid" --arg c "$cmd" --arg o "$out" --arg d "$cwd" --argjson i "$intr" \
+		'{session_id: $s, cwd: $d, tool_input: {command: $c},
+		  tool_response: {stdout: $o, stderr: "", interrupted: $i, isImage: false}}' |
 		HOME="$WORK/home" bash "$HOOK"
 	if [[ -f "/tmp/claude-tests-ran-$sid" ]]; then got=SENTINEL; else got=NONE; fi
 	if [[ "$got" == "$want" ]]; then
-		printf '  ok    %-8s %s (exit %s)\n' "$got" "$cmd" "$code"
+		printf '  ok    %-8s %s (stdout %q)\n' "$got" "$cmd" "$out"
 	else
-		printf '  WRONG %-8s (want %s) %s (exit %s)\n' "$got" "$want" "$cmd" "$code"
+		printf '  WRONG %-8s (want %s) %s (stdout %q)\n' "$got" "$want" "$cmd" "$out"
 		fail=1
 	fi
 }
@@ -77,14 +80,35 @@ check NONE "echo ./tools/check-all.sh"
 check NONE "grep fast ./tools/check-all.sh"
 # Not counted.
 check NONE "./tools/other.sh"
-check NONE "./tools/check-all.sh" 1
 check NONE "ls -la"              # `ls` is declared, but a span under 4 characters is ignored
 check NONE "./tools/build-it.sh" # Build is not a test line
 check NONE "echo hello"
-check NONE "./tools/check-all.sh" 0 "$WORK" # cwd outside any repo: nothing declared
+check NONE "./tools/check-all.sh" "" "$WORK" # cwd outside any repo: nothing declared
 # The kit's existing list still works.
 check SENTINEL "./scripts/ci/validate.sh"
 check SENTINEL "python3 -m pytest tests/"
+
+# #1361: the sentinel counts only a test whose own exit status is known to be 0.
+# The precheck lane form always exits 0 (the echo does), so its exit= line is the status.
+check NONE './tools/check-all.sh > l 2>&1; echo "exit=$?"' "exit=1"
+check SENTINEL './tools/check-all.sh > l 2>&1; echo "exit=$?"' "exit=0"
+check NONE 'pytest > a 2>&1; echo "exit=$?"; pytest > b 2>&1; echo "exit=$?"' $'exit=0\nexit=2'
+check SENTINEL 'pytest > a 2>&1; echo "exit=$?"; pytest > b 2>&1; echo "exit=$?"' $'exit=0\nexit=0'
+check NONE 'ls; echo "exit=$?"' "exit=0" # a status line with no test segment is not a test
+# No status line: a connector after the test masks its exit, so the status is unknown.
+check NONE "pytest -q | tail -5"
+check NONE "pytest; echo done"
+check NONE "pytest || true"
+check NONE "pytest & wait"
+check NONE $'pytest\necho done'
+# && chains keep the status: a later step runs only after the test succeeded.
+check SENTINEL "cd engine && ./tools/check-all.sh && echo ok"
+check SENTINEL "pytest && echo ok"
+check SENTINEL "pytest 2>&1 && echo ok" # `>&` is a redirect, not a connector
+check SENTINEL "pytest &> out.log"
+check SENTINEL $'pytest\n' # a trailing newline is not a connector
+# An interrupted run never counts.
+check NONE "pytest" "" "$WORK/repo" true
 
 # Each SENTINEL case logs one metrics line, into the temp HOME, never the real one.
 if [[ ! -s "$WORK/home/.claude/logs/context-metrics.jsonl" ]]; then

@@ -211,6 +211,6 @@ source "$(dirname "$0")/metrics.sh"
 log_metric "$SESSION_ID" "hook_block" "hook=pre-push-test-gate" "command=git push"
 
 cat <<'JSON'
-{"decision":"block","reason":"Cannot push untested code. Run the project's test/lint/validate tooling first (e.g. pytest, make test, ./scripts/ci/validate.sh). The push will be allowed after tests pass. A plain `git push <remote> <branch>` to your own feature/, fix/, chore/ or doc/ branch needs no tests. (This gate matches the text `git push` anywhere in a command, quoted or not. If this command only mentions it, e.g. a grep or a commit message, run the tests first or reword it.)"}
+{"decision":"block","reason":"Cannot push untested code. Run the project's test/lint/validate tooling first (e.g. pytest, make test, ./scripts/ci/validate.sh). The push will be allowed after tests pass. A test run piped to `tail`/`head`, or followed by `;` or `||`, does not count unless the command ends with `; echo \"exit=$?\"`. A plain `git push <remote> <branch>` to your own feature/, fix/, chore/ or doc/ branch needs no tests. (This gate matches the text `git push` anywhere in a command, quoted or not. If this command only mentions it, e.g. a grep or a commit message, run the tests first or reword it.)"}
 JSON
 exit 0

@@ -14,6 +14,8 @@
 #   ./uninstall.sh --local      Remove a project-scoped install from <cwd>/.claude/
 #                                  (mirror of ./install --local). Never touches
 #                                  $HOME. Composable with --skills/--scripts/--config.
+#                                  --mcps does nothing under --local: MCP
+#                                  registration is user-scope (#815).
 #
 # What full uninstall removes:
 #   Skills      → ~/.claude/skills/<name>/
@@ -92,6 +94,9 @@ if [[ "$LOCAL_MODE" == true ]]; then
 	SCRIPTS_DIR="$LOCAL_ROOT/.claude/bin"
 	CELLAR_DIR="$LOCAL_ROOT/.claude/scripts"
 	CLAUDE_DIR="$LOCAL_ROOT/.claude"
+	# MCP registration is user-scope (global), so --local never touches it. Mirrors
+	# install --local, which sets INSTALL_MCPS=false (#815).
+	REMOVE_MCPS=false
 else
 	SKILLS_DIR="$HOME/.claude/skills"
 	SCRIPTS_DIR="$HOME/.local/bin"
@@ -201,10 +206,21 @@ if [[ "$REMOVE_MCPS" == true ]]; then
 	echo ""
 	echo "Removing MCP servers"
 	echo "──────────────────────────────────────────"
-	if [[ -f "$REPO_DIR/mcps.json" ]] && command -v jq &>/dev/null; then
+	# Only a registered server's remote uninstaller runs (#1361). Without a readable
+	# registration list there is nothing known to remove: guessing ran remote code for
+	# servers that were never installed.
+	mcp_list_ok=false
+	if command -v claude &>/dev/null && mcp_list=$(claude mcp list 2>/dev/null); then
+		mcp_list_ok=true
+	fi
+	if [[ "$mcp_list_ok" != true ]]; then
+		echo "  [!] cannot read MCP registrations (claude mcp list failed) — skipping MCP removal"
+	elif [[ -f "$REPO_DIR/mcps.json" ]] && command -v jq &>/dev/null; then
 		for mcp_name in $(jq -r '.mcps | keys[]' "$REPO_DIR/mcps.json"); do
 			install_url=$(jq -r ".mcps[\"$mcp_name\"].install_url" "$REPO_DIR/mcps.json")
-			if [[ "$DRY_RUN" == true ]]; then
+			if ! echo "$mcp_list" | grep -qw "$mcp_name"; then
+				echo "  [-] Not registered: $mcp_name"
+			elif [[ "$DRY_RUN" == true ]]; then
 				echo "  [+] (dry-run) Would uninstall MCP server: $mcp_name"
 			else
 				info "Uninstalling $mcp_name..."
