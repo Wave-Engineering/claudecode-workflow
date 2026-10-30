@@ -15,8 +15,9 @@
 # answer. The answer is hooks/workflow/sqtk-answer.jq's (#1363): an arrow in the author's own
 # text never counts. Each squawk's baseline comes from its mine entry's `.text`, else from
 # <repo>/.claude/sqtk-baseline.json (the drain hook's). Ids the drain hook has already
-# reported in a terminal state (<repo>/.claude/sqtk-seen.json) are left out. The id set and
-# baselines are read once at arming time, so re-arm after adding new squawks.
+# reported in a terminal state (<repo>/.claude/sqtk-seen.json) are left out. The id set is
+# read once at arming time, so re-arm after adding new squawks. Baselines are read at arming
+# and again after the catch-up below, which may take one.
 #
 # An answer can land between the drain hook's run at the start of a turn and the arming of
 # this doorbell at its end. So once the stream is live (squawkie writes `: connected` on
