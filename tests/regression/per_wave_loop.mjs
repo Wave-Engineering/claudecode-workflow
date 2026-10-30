@@ -437,6 +437,24 @@ await check('flight CI: a resumed already-present flight already in the kahuna c
   assert.ok(run.logs.some((l) => l.includes('flight #2 is already in')), 'the resume is logged')
 })
 
+await check('flight CI: a resumed rework flight already in the kahuna at its new head counts as merged', async () => {
+  let ci2 = 0
+  let flights2 = 0
+  const run = await runPerWave({
+    args: FAN_ARGS,
+    responder: (label) => {
+      if (label === 'flight-ci:#2' && ++ci2 === 1) return ciFor(2, { wait: { ok: true, final_status: 'failure', run_id: 7 }, failed_jobs: [ranJob] })
+      if (label === 'flight:#2' && ++flights2 === 2) return { issue: 2, status: 'implemented', head_sha: H2 }
+      if (label === 'flight-ci:#2') return { issue: 2, already_integrated: true, integrated_head: H2, integrated_exit: 0 }
+      return HARNESS_DEFAULT
+    },
+  })
+  assert.equal(run.error, null, `the run threw: ${run.error?.stack || run.error}`)
+  assert.ok(!run.calls.some((c) => c.label === 'merge:2'), 'nothing left to reconcile in round 2')
+  assert.deepEqual([...run.result.merged].sort(), [1, 2])
+  assert.equal(run.result.integrated, true)
+})
+
 await check('flight CI: an implemented flight whose head is already in the kahuna is blocked, not merged', async () => {
   const run = await runPerWave({
     args: FAN_ARGS,

@@ -356,9 +356,9 @@ export const FLIGHT_CI_EVIDENCE = {
     },
     blocked: { type: 'boolean' }, // the push of the flight branch was rejected
     block_reason: { type: 'string' },
-    already_integrated: { type: 'boolean' }, // step 0: the flight head is already an ancestor of the kahuna
+    already_integrated: { type: 'boolean' }, // step 0: merging the flight head into the kahuna changes nothing
     integrated_head: { type: 'string' }, // step 0: the sha that was checked
-    integrated_exit: { type: 'integer' }, // step 0: merge-base --is-ancestor's exit code, as printed
+    integrated_exit: { type: 'integer' }, // step 0: the content check's exit code, as printed
     notes: { type: 'string' },
   },
 }
@@ -373,7 +373,8 @@ export function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, 
     `engine grades them in code.`,
     ``,
     `0. FIRST, is this flight already in ${kahunaBranch}? (A resumed wave whose flight merged before the run died.)`,
-    `     git -C ${worktree} fetch -q origin ${kahunaBranch}; git -C ${worktree} merge-base --is-ancestor ${fh} origin/${kahunaBranch}; echo "exit=$?"`,
+    `   This tests CONTENT, not ancestry, because a squash merge leaves the flight head out of the kahuna's history:`,
+    `     git -C ${worktree} fetch -q origin ${kahunaBranch}; t=$(git -C ${worktree} merge-tree --write-tree origin/${kahunaBranch} ${fh}) && test "$t" = "$(git -C ${worktree} rev-parse origin/${kahunaBranch}^{tree})"; echo "exit=$?"`,
     `   Report the sha you checked as integrated_head and the printed exit code as integrated_exit. If it`,
     `   is 0, set already_integrated=true and STOP: push nothing, open nothing. Otherwise set`,
     `   already_integrated=false and go on.`,
@@ -411,23 +412,27 @@ export function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, 
 // started, or ended at the instant it started, is the billing/runner-refusal signature (no steps ran):
 // it holds the wave, because re-dispatching the flight cannot fix the account.
 //
-// INTEGRATED (§3.3 resume): a flight whose worker said already-present and whose own head is already
-// an ancestor of the kahuna merged in an earlier run that died before persisting. It counts as merged
-// without a PR (there is none left to grade). A flight that said implemented with a head already in
-// the kahuna committed nothing new, so it is blocked, never counted.
+// INTEGRATED (§3.3 resume): a flight whose head's content is already in the kahuna (merging it changes
+// the kahuna's tree not at all, which holds after a squash merge too) merged in an earlier run that died
+// before persisting. It counts as merged without a PR, because there is none left to grade. That needs
+// a flight that says so: an already-present first flight, or a rework flight, which only reaches here at
+// a new head (isNoopRework holds the rest). As before #1356, an already-present flight that committed
+// nothing at all also reads as merged: §3.3 trusts the worker's resume check. A first flight that said
+// implemented with nothing new for the kahuna committed nothing, so it is blocked, never counted.
 const FLIGHT_IGNORED_CONCLUSIONS = new Set(['skipped', 'neutral'])
 // A flight PR into kahuna/* gets no run at all when the repo's CI triggers only on PRs into main.
 const noRunHint = (error) => (/^No CI run found/i.test(String(error))
   ? '; the repo\'s CI must run on PRs into kahuna/* (docs/operations/branch-protection-checklist.md)'
   : '')
-export function flightCiVerdict(ev, issue, flightHead, status) {
+export function flightCiVerdict(ev, issue, flightHead, status, rework = false) {
   const out = (outcome, reason, head = null) => ({ issue, outcome, head, reason })
   if (!ev || typeof ev !== 'object' || ev.issue !== issue) return out('blocked', `no CI evidence for #${issue}`)
   if (ev.already_integrated === true) {
-    if (status === 'already-present' && isMergeSha(flightHead) && ev.integrated_head === flightHead && ev.integrated_exit === 0) {
+    const resumed = status === 'already-present' || (rework === true && status === 'implemented')
+    if (resumed && isMergeSha(flightHead) && ev.integrated_head === flightHead && ev.integrated_exit === 0) {
       return out('integrated', `head ${flightHead.slice(0, 8)} is already in the kahuna (a resumed flight)`, flightHead)
     }
-    return out('blocked', 'the flight head is already in the kahuna, but the flight did not report already-present at that head: it committed nothing new')
+    return out('blocked', 'the flight head is already in the kahuna, but the flight did not report a resume at that head: it committed nothing new')
   }
   if (ev.blocked === true) return out('blocked', `push rejected: ${ev.block_reason || 'no reason given'}`)
   if (!isMergeSha(flightHead) || ev.head_sha !== flightHead || ev.head_sha_final !== flightHead) {

@@ -967,7 +967,7 @@ while (true) {
       schema: FLIGHT_CI_EVIDENCE,
       agentType: 'general-purpose',
     }).catch(() => null)))
-  const graded = implemented.map((w, i) => ({ w, ev: flightCi[i] ?? null, v: flightCiVerdict(flightCi[i] ?? null, Number(w.issue), w.head_sha, w.status) }))
+  const graded = implemented.map((w, i) => ({ w, ev: flightCi[i] ?? null, v: flightCiVerdict(flightCi[i] ?? null, Number(w.issue), w.head_sha, w.status, Boolean(reworkCtx[Number(w.issue)])) }))
   // §3.3 resume: a flight already in the kahuna merged in a run that died before persisting. It is
   // counted as merged here, as reconcile's "already in kahuna, SKIP it" rule used to report it.
   const integrated = graded.filter((g) => g.v.outcome === 'integrated').map(({ v }) => v.issue)
