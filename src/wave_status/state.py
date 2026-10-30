@@ -1691,15 +1691,15 @@ def add_issue(
             break
     if target is None:
         raise ValueError(f"Error: wave '{wave_id}' is not in the plan.")
-    if state_data.get("waves", {}).get(wave_id, {}).get("status") == "completed":
-        raise ValueError(
-            f"Error: wave '{wave_id}' is completed; an issue cannot be added to a finished wave."
-        )
 
     entry: dict = {"number": ref_num, "title": title or display, "depends_on": []}
     if ref_repo:
         entry["ref"] = f"{ref_repo}#{ref_num}"
     key = _compose_issue_key(ref_num, _issue_repo(plan_data, entry))
+    issues = state_data.setdefault("issues", {})
+    # Dedup against the bare form too, as extend_state does, so a pre-v3
+    # state doesn't grow a duplicate entry.
+    needs_state = key not in issues and str(ref_num) not in issues
 
     # The same key shape _all_issue_refs gives every issue already planned, per
     # wave, so a re-drive retry is a no-op and a second wave is refused.
@@ -1708,20 +1708,27 @@ def add_issue(
             for issue in wave.get("issues", []):
                 if _compose_issue_key(issue["number"], _issue_repo(plan_data, issue)) != key:
                     continue
-                if wave.get("id") == wave_id:
-                    return state_data
-                raise ValueError(
-                    f"Error: issue {key} is already in wave '{wave.get('id')}'; "
-                    "each issue belongs to exactly one wave."
-                )
+                if wave.get("id") != wave_id:
+                    raise ValueError(
+                        f"Error: issue {key} is already in wave '{wave.get('id')}'; "
+                        "each issue belongs to exactly one wave."
+                    )
+                # Already planned here. A run that died between the two writes
+                # left the plan entry without its state entry: finish it.
+                if needs_state:
+                    issues[key] = {"status": "open"}
+                    state_data["last_updated"] = _now_iso()
+                    save_json(state_path, state_data)
+                return state_data
+
+    if state_data.get("waves", {}).get(wave_id, {}).get("status") == "completed":
+        raise ValueError(
+            f"Error: wave '{wave_id}' is completed; an issue cannot be added to a finished wave."
+        )
 
     target.setdefault("issues", []).append(entry)
     save_json(phases_path, plan_data)
-
-    # Dedup against the bare form too, as extend_state does, so a pre-v3
-    # state doesn't grow a duplicate entry.
-    issues = state_data.setdefault("issues", {})
-    if key not in issues and str(ref_num) not in issues:
+    if needs_state:
         issues[key] = {"status": "open"}
     state_data["last_updated"] = _now_iso()
     save_json(state_path, state_data)

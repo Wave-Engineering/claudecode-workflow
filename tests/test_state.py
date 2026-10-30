@@ -1365,6 +1365,28 @@ class TestAddIssue:
         add_issue("wave-1", 13, project_root)
         assert _state_bytes(project_root) == before
 
+    def test_retry_finishes_a_half_written_add(self, project_root: Path) -> None:
+        """A run that died after saving the plan, before the state: the retry
+        adds the missing state entry instead of returning early."""
+        add_issue("wave-1", 59, project_root)
+        state_path = status_dir(project_root) / "state.json"
+        state = load_json(state_path)
+        del state["issues"]["59"]
+        save_json(state_path, state)
+        result = add_issue("wave-1", 59, project_root)
+        assert result["issues"]["59"] == {"status": "open"}
+        assert load_json(state_path)["issues"]["59"] == {"status": "open"}
+        assert [i["number"] for i in _wave_issues(project_root, "wave-1")].count(59) == 1
+
+    def test_idempotent_on_a_completed_wave(self, project_root: Path) -> None:
+        state_path = status_dir(project_root) / "state.json"
+        state = load_json(state_path)
+        state["waves"]["wave-1"]["status"] = "completed"
+        save_json(state_path, state)
+        before = _state_bytes(project_root)
+        add_issue("wave-1", 13, project_root)
+        assert _state_bytes(project_root) == before
+
     def test_refuses_issue_in_other_wave(self, project_root: Path) -> None:
         before = _state_bytes(project_root)
         with pytest.raises(ValueError, match=r"Error: issue 13 is already in wave 'wave-1'"):
