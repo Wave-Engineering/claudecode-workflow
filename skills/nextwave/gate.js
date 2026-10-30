@@ -419,6 +419,9 @@ export function flightCiPrompt({ waveId, issue, branch, worktree, kahunaBranch, 
 // a new head (isNoopRework holds the rest). As before #1356, an already-present flight that committed
 // nothing at all also reads as merged: §3.3 trusts the worker's resume check. A first flight that said
 // implemented with nothing new for the kahuna committed nothing, so it is blocked, never counted.
+// Known risk, kept: a new head is not new content, so a rework flight whose "fix" reverts its own
+// commit reads as merged too. A net-change guard would refuse the real resume after cleanupMerged has
+// removed the merged flight's branch (its recreated worktree carries no net change), so the trust stays.
 const FLIGHT_IGNORED_CONCLUSIONS = new Set(['skipped', 'neutral'])
 // A flight PR into kahuna/* gets no run at all when the repo's CI triggers only on PRs into main.
 const noRunHint = (error) => (/^No CI run found/i.test(String(error))
