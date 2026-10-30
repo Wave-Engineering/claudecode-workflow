@@ -24,14 +24,21 @@ fail=0
 echo "test_push_gate_working_branches"
 echo "──────────────────────────────────────────"
 
+# The repo every push runs in (the hook's cwd): hermetic, with one tag, `foo`, so a
+# delete of a tag is refused however it is named (#1364 review).
+RREPO=$(mktemp -d)
+GIT_CONFIG_GLOBAL=/dev/null git -C "$RREPO" init -q
+GIT_CONFIG_GLOBAL=/dev/null git -C "$RREPO" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m init
+GIT_CONFIG_GLOBAL=/dev/null git -C "$RREPO" tag foo
+
 cleanup() { rm -f "$SENTINEL"; }
-trap cleanup EXIT
+trap 'cleanup; rm -rf "$RREPO"' EXIT
 cleanup # no sentinel: every PASS below is the exemption (or not a push), not a test run
 
 # check <PASS|BLOCK> <command> [extra-branch-regex]
 check() {
 	local want="$1" cmd="$2" extra="${3:-}" out got
-	out=$(jq -n --arg s "$SID" --arg c "$cmd" '{session_id: $s, tool_input: {command: $c}}' |
+	out=$(jq -n --arg s "$SID" --arg c "$cmd" --arg d "$RREPO" '{session_id: $s, cwd: $d, tool_input: {command: $c}}' |
 		env -u WAVE_FLIGHT_ID PUSH_GATE_EXTRA_BRANCH_RE="$extra" bash "$GATE")
 	if printf '%s' "$out" | grep -q '"decision":"block"'; then got=BLOCK; else got=PASS; fi
 	if [[ "$got" == "$want" ]]; then
@@ -46,7 +53,7 @@ check() {
 check_reason() {
 	local cmd="$1" out want
 	shift
-	out=$(jq -n --arg s "$SID" --arg c "$cmd" '{session_id: $s, tool_input: {command: $c}}' |
+	out=$(jq -n --arg s "$SID" --arg c "$cmd" --arg d "$RREPO" '{session_id: $s, cwd: $d, tool_input: {command: $c}}' |
 		env -u WAVE_FLIGHT_ID PUSH_GATE_EXTRA_BRANCH_RE= bash "$GATE")
 	for want in "$@"; do
 		if ! printf '%s' "$out" | jq -e --arg w "$want" '.decision == "block" and (.reason | contains($w))' >/dev/null; then
@@ -192,7 +199,9 @@ check PASS "git push lanebox :scratch-run-3"
 check PASS "git push -d origin chore/x"
 check PASS "git push --delete origin scratch-1"
 check PASS "git push origin --delete refs/heads/scratch-1"
-check PASS "git -C /tmp/x push lanebox :scratch-1"
+check PASS "git -C $RREPO push lanebox :scratch-1"
+check BLOCK "git -C $RREPO push lanebox :foo"                  # foo is a tag in the -C repo
+check BLOCK "git -C /nonexistent-1364 push lanebox :scratch-1" # the tag lookup cannot run: fail closed
 check PASS "git push origin --delete scratch-1 2>&1 | tail -3"
 check PASS "git push -q origin --delete kahuna/4-campaign"
 # protected, release, qualified and revision targets stay refused
@@ -210,6 +219,18 @@ check BLOCK "git push origin --delete a b"
 check BLOCK "git push origin :scratch-1 :scratch-2"
 check BLOCK "git push origin :scratch-1 feature/2-x"
 check BLOCK "git push origin -d --delete scratch-1"
+# #1364 review: a bare name resolves against every remote ref, tags included
+check BLOCK "git push origin --delete 1.2.3"
+check BLOCK "git push origin :release"
+check BLOCK "git push origin --delete release-2.x"
+check BLOCK "git push origin --delete release_3"
+check BLOCK "git push origin :stable"
+check BLOCK "git push origin --delete production"
+check BLOCK "git push origin --delete prod"
+check BLOCK "git push origin :gh-pages"
+check BLOCK "git push origin --delete foo" # a local tag
+check PASS "git push origin --delete foo-bar"
+check PASS "git push origin --delete releases-notes"
 # malformed deletes and disallowed flags
 check BLOCK "git push origin --delete"
 check BLOCK "git push --delete origin"
@@ -245,6 +266,14 @@ touch "$SENTINEL"
 check PASS "git push origin main"
 check PASS "git commit -m x && git push origin feature/1-a"
 check PASS "cd /tmp && git push origin --delete scratch-1"
+check PASS "cd /tmp && git push origin --delete scratch-1 2>&1 | tail -3"
+# #1364 review: a delete naming a protected ref is refused in any shape, test run or not
+check BLOCK "git push origin --delete main --no-progress"
+check BLOCK "cd . && git push origin :main"
+check BLOCK "true && git push origin --delete main"
+check BLOCK "git push origin --delete main 2>/tmp/x"
+check BLOCK "git push origin --delete 1.2.3"
+check BLOCK "git push origin --delete foo"
 # #1364: except a plain delete of a protected ref, which a test run does not license
 check BLOCK "git push origin --delete main"
 check BLOCK "git push origin :release/1.0"

@@ -43,9 +43,11 @@ git_invokes() {
 }
 
 # Refs an agent never pushes to or deletes without the user: protected and release
-# branches, tags (v*), and any qualified name (heads/…, tags/…, refs/…).
-# shellcheck disable=SC2034 # read by the gates that source this file
-GIT_PROTECTED_REF_RE='^(main|master|develop|trunk|HEAD|release/.*|v[0-9].*|(heads|tags|remotes|refs)/.*)$'
+# branches (release, release-*, release_*, release/*, stable, production, prod,
+# gh-pages), version tags (1.2.3, v1.2.3), and any qualified name (heads/…, tags/…,
+# refs/…). A bare-name delete resolves against every remote ref, tags included, so
+# git_push_delete_protected also refuses any name that is a local tag (#1364 review).
+GIT_PROTECTED_REF_RE='^(main|master|develop|trunk|HEAD|release|release[-_/].*|stable|production|prod|gh-pages|v?[0-9].*|(heads|tags|remotes|refs)/.*)$'
 # What a plain push may carry after it: one `| tail -N` / `| head -N`, then redirections.
 GIT_PUSH_TAIL_RE='[[:space:]]*\|[[:space:]]*(tail|head)([[:space:]]+-n)?([[:space:]]+-?[0-9]+)?[[:space:]]*$'
 GIT_PUSH_REDIR_RE='[[:space:]]+(2>&1|[12]?>[[:space:]]*/dev/null|&>[[:space:]]*/dev/null)[[:space:]]*$'
@@ -102,4 +104,25 @@ git_push_delete_target() {
 	# A letter or digit first: `@`, `+x` and the like are revisions or force pushes.
 	[[ "$ref" =~ ^[A-Za-z0-9][A-Za-z0-9._/@-]*$ ]] || return 1
 	printf '%s\n' "$ref"
+}
+
+# git_push_delete_protected <cwd> <command> <target> succeeds when the target that
+# git_push_delete_target printed must not be deleted: it matches GIT_PROTECTED_REF_RE,
+# or it is a tag in the repository the push runs in (<cwd>, then the command's own
+# `-C <path>`). Tags are fetched by default, so a local tag stands for the remote's. A
+# lookup that errors for any reason other than "no such tag" counts as protected.
+git_push_delete_protected() {
+	local cwd="$1" target="$3" dir rc
+	local -a toks
+	[[ "$target" =~ $GIT_PROTECTED_REF_RE ]] && return 0
+	read -ra toks <<<"$2"
+	dir="$cwd"
+	if [[ "${toks[1]:-}" == "-C" ]]; then
+		dir="${toks[2]:-}"
+		[[ "$dir" == \~ || "$dir" == \~/* ]] && dir="$HOME${dir#\~}"
+		[[ "$dir" == /* ]] || dir="$cwd/$dir"
+	fi
+	git -C "$dir" rev-parse -q --verify "refs/tags/$target" >/dev/null 2>&1
+	rc=$?
+	[[ $rc -ne 1 ]] # 0: a tag; 1: no such tag; anything else: unreadable, so protected
 }
