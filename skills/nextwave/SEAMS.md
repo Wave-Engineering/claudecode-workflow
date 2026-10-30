@@ -169,7 +169,10 @@ Inside the (real) prompts, replace the `// TODO(#687 gate wiring)` lines with re
 - **worker:** `spec_get`, `spec_acceptance_criteria`. Implements + commits in the handed
   worktree. Returns `WORK` (incl. the §3.2 `concerns`/`deferrals` fields). Inherits the
   sdlc-server MCP + deterministic hooks; preload skills via the agent's `skills:`.
-- **reconcile:** `commutativity_verify`, `pr_create`/`pr_merge` to kahuna. Returns `RECONCILE`
+- **flight CI (#1356):** pushes the flight branch, `pr_create` (flight→kahuna), `ci_wait_run(require_merge_result)`
+  and, on a red, `ci_failed_jobs`. Returns `FLIGHT_CI_EVIDENCE`, graded in code by `flightCiVerdict`
+  (`proceed` / `needs_rework` / `blocked`); only `proceed` flights reach reconcile.
+- **reconcile:** `commutativity_verify`, `pr_merge(expected_head_sha)` to kahuna, with no `pr_create`. Returns `RECONCILE`
   (`merged`, `needs_rework:[{issue,reason}]`, `conflicts_resolved`, `concerns`). Persistence
   folds in here (see #688).
 

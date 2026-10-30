@@ -39,7 +39,7 @@ That script IS the §3 spine:
 ```
 rehydrate (durable resume)
    → flight loop  [ serial groups; parallel issues; dynamic re-plan; CLOSED legal exits ]
-       per group:  plan(Prime) → parallel issue-workers → merge+reconcile(Prime)
+       per group:  plan(Prime) → parallel issue-workers → flight CI (code-graded) → merge+reconcile(Prime)
    → trust gate   [ 4 signals in parallel → one more legal exit ]
    → integrate (kahuna→integration base)  OR  hold-for-review
 ```
@@ -254,6 +254,7 @@ closed**: the only ways the per-wave Workflow stops are the script's coded exits
 | reconcile-failed | the reconcile agent returned null, threw, or returned a result without `merged`/`needs_rework` | `haltReason` `reconcile agent failed: <reason>` → gate SKIPPED, wave held; that round is not recorded, so the durable blob keeps the last persisted state for a fresh run (#1210) |
 | per-issue breaker | issue reworked > `MAX_REWORK` | one issue keeps breaking → human |
 | rework-noop | a rework flight returned `already-present` or `rework_not_applied`, or the head reconcile rejected | `haltReason` `rework-noop:#N (<why>)`, where `<why>` is `[<status>, ]head <sha> unchanged`, `<status> at head <sha>`, `<status> with no new head`, or the `not_applied_reason` → gate SKIPPED, wave held. The no-op is never sent to reconcile, anything reconcile reports about it is ignored, and it never counts as progress or as another rework cycle; the rest of its group still merges. The flight was given the reason, so re-dispatching it tends to repeat the refusal (#1213) |
+| flight-ci-blocked | a flight's CI could not grade its head: no run, cancelled, timed out, failed jobs that never ran (an infra or billing failure), a rejected push, or a head that moved | `haltReason` `flight-ci-blocked:#N (<reason>)` → gate SKIPPED, wave held; the group's green flights still merge. A code-red flight (its failed jobs really ran) is not this exit: it goes back to the flight as rework with the failed job names (#1356) |
 | reconcile-blocked | reconcile returns `blocked` | a push to origin was rejected (pre-push gate / permissions / protected ref) → HOLD with the reason; reconcile never substitutes local merges (#724) |
 | gate HOLD | a trust signal failed | post-success gate fired → human review |
 

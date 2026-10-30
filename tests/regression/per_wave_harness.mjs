@@ -70,29 +70,35 @@ const WorkflowMath = Object.create(Math, { random: { value: forbidden('Math.rand
 export async function runPerWave({ args = DEFAULT_ARGS, responder = () => HARNESS_DEFAULT, exhaustBudgetAt = null, source = null } = {}) {
   const calls = []
   const logs = []
-  let flightsSinceMerge = [] // issues the flights since the last reconcile implemented
+  const flightHeads = {} // issue → the head_sha its latest flight returned (default or responder)
   let budgetSpent = false
 
-  const defaultFor = (label) => {
+  const defaultFor = (label, prompt) => {
     if (label === 'rehydrate') return { merged: [], pending: [...args.issues], reworkCount: {}, idleRounds: 0, groupsRun: 0 }
     if (label.startsWith('kahuna-bootstrap:')) return { ready: true, created: true, head_sha: HEAD.slice(0, 12) }
     if (label.startsWith('plan:')) return { done: false, group: [...args.issues] }
     if (label.startsWith('worktrees:')) return { worktrees: {} }
     if (label.startsWith('flight:#')) {
       const issue = Number(label.slice('flight:#'.length))
-      flightsSinceMerge.push(issue)
-      return { issue, status: 'implemented' }
+      // A full SHA unique to the issue, and unlike the 'N'.repeat(40) heads the rework cases use.
+      return { issue, status: 'implemented', head_sha: issue.toString(16).padStart(40, 'e') }
     }
+    // #1356: the flight CI node defaults to green on the head its flight returned.
+    if (label.startsWith('flight-ci:#')) {
+      const issue = Number(label.slice('flight-ci:#'.length))
+      const head_sha = flightHeads[issue]
+      return { issue, pr_number: 100 + issue, head_sha, head_sha_final: head_sha, wait: { ok: true, final_status: 'success', sha: head_sha } }
+    }
+    // Reconcile merges every flight its prompt lists (#1356: only the CI-green ones are listed).
     if (label.startsWith('merge:')) {
-      const merged = flightsSinceMerge
-      flightsSinceMerge = []
+      const merged = [...String(prompt).matchAll(/^ {3}- issue #(\d+):/gm)].map((m) => Number(m[1]))
       return { merged, needs_rework: [], suite_summary: 'harness: green' }
     }
     if (label.startsWith('persist:')) return { persisted: true }
     if (label.startsWith('cleanup:')) return { cleaned: true }
     if (label === 'gate:open-pr') return { opened: true, pr_number: 99, pr_ref: '#99' }
     if (label === 'gate:commutativity') return { signal: 'commutativity', passed: true, detail: 'harness: commutes' }
-    if (label === 'gate:ci') return { pr_number: 99, head_sha: HEAD, head_sha_final: HEAD, wait: { ok: true, final_status: 'success' } }
+    if (label === 'gate:ci') return { pr_number: 99, head_sha: HEAD, head_sha_final: HEAD, target_sha: 'b'.repeat(40), wait: { ok: true, final_status: 'success', sha: HEAD } }
     if (label === 'gate:review:stage') return { staged: true, workspaceDir: '/nonexistent/ws', changedFiles: ['a.js'] }
     if (label === 'gate:review') return { signal: 'review', passed: true, detail: 'harness: clean' }
     if (label === 'gate:trivy') return { signal: 'trivy', passed: true, found: 1, ingested: 1, unscanned: [], declared: false, scanned_sha: HEAD, kahuna_sha: HEAD }
@@ -106,7 +112,9 @@ export async function runPerWave({ args = DEFAULT_ARGS, responder = () => HARNES
     if (exhaustBudgetAt !== null && label.startsWith(exhaustBudgetAt)) budgetSpent = true
     if (budgetSpent) throw new Error('budget exhausted: the turn token target is spent')
     const got = await responder(label, prompt)
-    return got === HARNESS_DEFAULT || got === undefined ? defaultFor(label) : got
+    const res = got === HARNESS_DEFAULT || got === undefined ? defaultFor(label, prompt) : got
+    if (label.startsWith('flight:#') && res && typeof res === 'object') flightHeads[Number(label.slice('flight:#'.length))] = res.head_sha
+    return res
   }
   const parallel = (thunks) => Promise.all(thunks.map((t) => Promise.resolve().then(t).catch(() => null)))
   const log = (m) => { logs.push(String(m)) }

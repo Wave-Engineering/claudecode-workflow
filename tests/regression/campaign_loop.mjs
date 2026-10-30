@@ -263,6 +263,11 @@ async function main() {
   const last = ciP.indexOf('report it as head_sha_final')
   ok(first >= 0 && first < ciP.indexOf('sdlc-server ci_wait_run('), 'release-CI prompt: the first head read comes before ci_wait_run')
   ok(last > ciP.indexOf('DIRECT READ'), 'release-CI prompt: the final head read comes after ci_wait_run AND the direct read')
+  // #1356 (triage #7): the target tip is read last, against the PROTECTED branch, so a /merge pipeline
+  // built before trunk moved is held as stale; and the run's sha is copied, so the success path binds.
+  const tip = ciP.indexOf("Read the TARGET branch main's tip NOW and report it as target_sha")
+  ok(tip > last && ciP.includes('gh api repos/o/r/branches/main --jq .commit.sha'), 'release CI prompt asks for target_sha against the protected branch, after the final head read')
+  ok(/head_sha_final and target_sha \(step 4\)/.test(ciP) && /copied as returned \(ok, final_status, reason, error, sha, run_id, url\)/.test(ciP), 'release CI prompt returns target_sha and copies the run sha')
 
   const relP = releaseMergePrompt({ ...relArgs, prNumber: 77, headSha: 'f'.repeat(40), ciReason: 'graded-green-reason' })
   ok(/campaign\/56-x/.test(relP) && /main/.test(relP), 'release prompt: names both refs (campaign → protected)')

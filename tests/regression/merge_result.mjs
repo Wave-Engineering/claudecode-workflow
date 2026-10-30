@@ -9,6 +9,7 @@ import {
   mergeResultVerdict,
   directMergeReadSteps,
   headReadLines,
+  targetReadLines,
   isMergeSha,
   MERGE_RESULT_EVIDENCE,
 } from '../../skills/nextwave/merge-result.js'
@@ -42,6 +43,7 @@ const greenMerge = (over = {}) => ({
   pr_number: N,
   head_sha: HEAD,
   head_sha_final: HEAD, // read again after the last read, unmoved
+  target_sha: TARGET, // #1356: the target tip, read last
   wait: NOT_FOUND,
   merge_pipelines: [{ id: 900, ref: REF, status: 'success', sha: MERGE }],
   merge_commit: { sha: MERGE, parent_ids: [TARGET, HEAD] },
@@ -50,9 +52,36 @@ const greenMerge = (over = {}) => ({
 
 // ── the primary path ────────────────────────────────────────────────────────────────────────
 {
-  const v = mergeResultVerdict({ pr_number: N, head_sha: HEAD, head_sha_final: HEAD, wait: { ok: true, final_status: 'success' } })
+  const v = mergeResultVerdict({ pr_number: N, head_sha: HEAD, head_sha_final: HEAD, target_sha: TARGET, wait: { ok: true, final_status: 'success', sha: HEAD } })
   ok(v.pass === true && v.path === 'ci_wait_run', 'ci_wait_run success passes on the primary path')
   ok(v.head === HEAD, 'a primary pass names the head it graded, for the merge to bind to')
+}
+
+// ── the target tip (#1356, triage #7) ───────────────────────────────────────────────────────
+{
+  const NEWTIP = '8'.repeat(40) // the target after trunk moved past the pipeline's merge commit
+  const gl = (over = {}) => ({ pr_number: N, head_sha: HEAD, head_sha_final: HEAD, target_sha: TARGET, wait: { ok: true, final_status: 'success', sha: MERGE }, merge_commit: { sha: MERGE, parent_ids: [TARGET, HEAD] }, ...over })
+  ok(mergeResultVerdict(gl()).pass === true, 'GitLab ci_wait_run success on a merge commit with parents [target tip, head] passes')
+  const staleP = mergeResultVerdict(gl({ target_sha: NEWTIP }))
+  ok(staleP.pass === false && staleP.path === 'ci_wait_run' && /STALE: .*built on target 22222222, and the target is now 88888888/.test(staleP.reason), 'GitLab ci_wait_run success on a merge commit whose parent[0] is not the target tip HOLDs STALE')
+  const staleD = mergeResultVerdict(greenMerge({ target_sha: NEWTIP }))
+  ok(staleD.pass === false && staleD.path === 'direct' && /STALE/.test(staleD.reason), 'direct-path merge commit with stale parent[0] HOLDs STALE')
+  const unread = mergeResultVerdict(gl({ merge_commit: undefined }))
+  ok(unread.pass === false && /no merge commit read/.test(unread.reason), 'a ci_wait_run success on a non-head sha with no merge commit read HOLDs')
+  for (const target_sha of [undefined, '', 'main', 'AB'.repeat(20)]) {
+    ok(mergeResultVerdict(gl({ target_sha })).pass === false && mergeResultVerdict(greenMerge({ target_sha })).pass === false, `a missing or malformed target tip (${JSON.stringify(target_sha)}) HOLDs on both paths`)
+  }
+  const noSha = mergeResultVerdict({ pr_number: N, head_sha: HEAD, head_sha_final: HEAD, target_sha: TARGET, wait: { ok: true, final_status: 'success' } })
+  ok(noSha.pass === false && /names no run sha/.test(noSha.reason), 'a ci_wait_run success without wait.sha HOLDs')
+  const gh = mergeResultVerdict({ pr_number: N, head_sha: HEAD, head_sha_final: HEAD, target_sha: NEWTIP, wait: { ok: true, final_status: 'success', sha: HEAD } })
+  ok(gh.pass === true && gh.head === HEAD, 'GitHub success with wait.sha == head passes (the documented limit: no merge commit to check)')
+  const ff = mergeResultVerdict(greenMerge({ target_sha: NEWTIP, merge_pipelines: [{ id: 900, ref: REF, status: 'success', sha: HEAD }], merge_commit: undefined }))
+  ok(ff.pass === true, 'a direct-path pipeline whose sha IS the head has no merge commit, so the tip rule does not apply')
+  const steps = directMergeReadSteps({ targetRepo: 'grp/sub/proj', prNumber: N }).join('\n')
+  ok(/Whenever ci_wait_run returned success with a\s+sha that is not the head/.test(steps), 'the direct-read steps ask for the merge commit of a graded green on a non-head sha')
+  const tip = targetReadLines({ targetRepo: 'grp/sub/proj', branch: 'main', field: 'target_sha' }).join('\n')
+  ok(/report it as target_sha/.test(tip) && tip.includes('gh api repos/grp/sub/proj/branches/main --jq .commit.sha') && /repository\/branches\/<url-encoded main>" \| jq -r \.commit\.id/.test(tip), 'the target read names its field and covers GitHub and GitLab')
+  ok(MERGE_RESULT_EVIDENCE.properties.target_sha?.type === 'string' && MERGE_RESULT_EVIDENCE.properties.wait.properties.sha?.type === 'string', 'MERGE_RESULT_EVIDENCE carries target_sha and wait.sha')
 }
 
 // ── babelfish's four, and the no-answer pair ────────────────────────────────────────────────

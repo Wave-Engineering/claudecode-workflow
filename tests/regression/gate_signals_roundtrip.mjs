@@ -29,6 +29,10 @@ import {
   TRIVY_SIG,
   trivyCoverage,
   trivyTreeBound,
+  bindScanToGradedHead,
+  FLIGHT_CI_EVIDENCE,
+  flightCiPrompt,
+  flightCiVerdict,
   promotePrompt,
   PROMOTE_RESULT,
 } from '../../skills/nextwave/gate.js'
@@ -371,16 +375,21 @@ try {
     pr_number: PR,
     head_sha: HEAD,
     head_sha_final: HEAD, // the head read again after the last read, unmoved
+    target_sha: TARGET, // #1356: the integration base's tip, read last
     wait: NOT_FOUND,
     merge_pipelines: [{ id: 9, ref: REF, status: 'success', sha: MERGE }],
     merge_commit: { sha: MERGE, parent_ids: [TARGET, HEAD] },
     ...over,
   })
 
-  const primary = ciVerdict({ pr_number: PR, head_sha: HEAD, head_sha_final: HEAD, wait: { ok: true, final_status: 'success' } }, PR)
+  const primary = ciVerdict({ pr_number: PR, head_sha: HEAD, head_sha_final: HEAD, target_sha: TARGET, wait: { ok: true, final_status: 'success', sha: HEAD } }, PR)
   assert.equal(primary.signal, 'ci')
   assert.equal(primary.passed, true, 'a ci_wait_run success passes on the primary path')
   assert.match(primary.detail, /^PASS \(ci_wait_run\)/)
+  // #1356: a pass keeps the head it graded; a HOLD carries none.
+  assert.equal(primary.head, HEAD, 'a CI pass carries the graded head')
+  assert.equal(ciVerdict(direct({ merge_pipelines: [] }), PR).head, undefined, 'a CI HOLD carries no head')
+  ok('ciVerdict: a pass carries head; a HOLD does not (#1356)')
 
   // The case #1035's step 2b could never pass: its sha is the merge commit, never the head.
   const green = ciVerdict(direct(), PR)
@@ -435,8 +444,11 @@ try {
 // ── 3. promotion is CODE: mark-ready → pr_merge → delete-branch (#5) ──────────────────
 // #5: promotion no longer OPENS a PR (the gate's PR-OPEN node already did) — it marks the
 // existing draft PR ready and merges it. It must reference the PR number, never wave_finalize.
+const GRADED = '9'.repeat(40) // the head the CI signal graded (#1356)
 try {
-  const p = promotePrompt({ ...A, prNumber: PR })
+  const p = promotePrompt({ ...A, prNumber: PR, headSha: GRADED })
+  assert.match(p, new RegExp(`pr_merge\\(number=<the PR number>, expected_head_sha="${GRADED}"\\)`), '#1356: the merge is pinned to the graded head')
+  assert.match(p, /head\s+moved \(head_moved.*STOP and return promoted=false/s, '#1356: a moved head stops the promote')
   assert.doesNotMatch(p, /wave_finalize/) // #5: promote does NOT open a PR anymore
   assert.match(p, new RegExp(`PR #${PR}`)) // merges the gate-opened draft PR by number
   assert.match(p, /already open/i) // the PR is already open (the gate opened it)
@@ -458,16 +470,114 @@ try {
 // ── 3b. #722: preserveKahuna gates the branch-delete (per-plan persistent vs per-wave disposable) ──
 try {
   // default (omitted) and explicit false → per-wave disposable: the prompt DELETES the branch.
-  assert.match(promotePrompt({ ...A, prNumber: PR }), /delete/i)
-  assert.match(promotePrompt({ ...A, prNumber: PR, preserveKahuna: false }), /delete/i)
+  assert.match(promotePrompt({ ...A, prNumber: PR, headSha: GRADED }), /delete/i)
+  assert.match(promotePrompt({ ...A, prNumber: PR, headSha: GRADED, preserveKahuna: false }), /delete/i)
   // preserveKahuna:true → persistent per-plan kahuna: the prompt must NOT delete it, and must say so.
-  const kept = promotePrompt({ ...A, prNumber: PR, preserveKahuna: true })
+  const kept = promotePrompt({ ...A, prNumber: PR, headSha: GRADED, preserveKahuna: true })
   assert.doesNotMatch(kept, /--delete/) // no git/gh branch-delete instruction
   assert.doesNotMatch(kept, /disposable/) // not framed as disposable
   assert.match(kept, /do not delete/i)
   assert.match(kept, /#722|persistent per-plan/i)
   ok('promote prompt: preserveKahuna=true keeps the branch; default/false deletes it (#722)')
 } catch (e) { bad('promote preserveKahuna gating (#722)', e) }
+
+// ── 3c. #1356 (triage #6): no graded head → the promote prompt is a STOP ─────────────────────
+try {
+  for (const headSha of [undefined, null, '', 'abc1234', 'AB'.repeat(20)]) {
+    const p = promotePrompt({ ...A, prNumber: PR, headSha })
+    assert.match(p, /No graded head SHA was handed to\s+you/, `headSha ${JSON.stringify(headSha)} must STOP`)
+    assert.match(p, /STOP\. Do NOT mark the PR ready and do NOT\s+merge/)
+    assert.doesNotMatch(p, /pr_merge\(/, 'a STOP prompt never names a pr_merge call')
+  }
+  ok('promotePrompt: no graded head → STOP, no pr_merge (#1356)')
+} catch (e) { bad('promote with no graded head (#1356)', e) }
+
+// ── 4. #1356 (triage #25): the trivy scan binds to the head CI graded ───────────────────────
+try {
+  const G = '9'.repeat(40)
+  const ci = { signal: 'ci', passed: true, detail: 'PASS', head: G }
+  const trivy = { signal: 'trivy', passed: true, detail: 'clean', found: 1, ingested: 1, unscanned: [], declared: false, scanned_sha: G, kahuna_sha: G }
+  const others = [{ signal: 'commutativity', passed: true }, { signal: 'review', passed: true }]
+  const same = [others[0], ci, others[1], trivy]
+  assert.deepEqual(bindScanToGradedHead(same), same, 'equal SHAs pass through unchanged')
+  const older = { ...trivy, scanned_sha: 'c'.repeat(40), kahuna_sha: 'c'.repeat(40) }
+  const held = bindScanToGradedHead([others[0], ci, others[1], older])
+  assert.equal(held[3].passed, false, 'trivy kahuna_sha != ci head HOLDs trivy')
+  assert.match(held[3].detail, /^SCAN NOT OF THE GRADED HEAD \(HOLD\): CI graded 99999999, trivy scanned cccccccc\. clean$/)
+  assert.equal(held[1], ci, 'the CI signal itself is untouched')
+  const headless = bindScanToGradedHead([others[0], { ...ci, head: undefined }, others[1], trivy])
+  assert.equal(headless[1].passed, false, 'a CI pass with no graded head HOLDs')
+  assert.match(headless[1].detail, /CI pass carries no graded head/)
+  // never turns a failing signal into a passing one
+  const failingTrivy = { ...older, passed: false, detail: 'HIGH found' }
+  assert.equal(bindScanToGradedHead([ci, failingTrivy])[1].passed, false)
+  const failingCi = { signal: 'ci', passed: false, detail: 'HOLD' }
+  const r = bindScanToGradedHead([failingCi, older])
+  assert.equal(r[0], failingCi, 'a failing CI is left as it is')
+  assert.equal(r[1], older, 'with no graded head to compare to, trivy is left as it is (CI already HOLDs the gate)')
+  ok('bindScanToGradedHead: trivy kahuna_sha != ci head HOLDs trivy; equal SHAs pass through; a headless CI pass HOLDs; never turns a fail into a pass (#1356)')
+} catch (e) { bad('bindScanToGradedHead (#1356)', e) }
+
+// ── 5. #1356 (triage #39): a flight's CI is graded in code ─────────────────────────────────────
+try {
+  const FH = 'f'.repeat(40) // the head the flight returned
+  const job = (over = {}) => ({ name: 'test', conclusion: 'failure', started_at: '2026-10-25T04:30:00Z', finished_at: '2026-10-25T04:34:10Z', url: 'https://ci/j/1', ...over })
+  const ev = (over = {}) => ({ issue: 7, pr_number: 107, head_sha: FH, head_sha_final: FH, wait: { ok: true, final_status: 'success', sha: FH }, ...over })
+  const v = (e, head = FH) => flightCiVerdict(e, 7, head)
+
+  const green = v(ev())
+  assert.deepEqual(green, { issue: 7, outcome: 'proceed', head: FH, reason: 'CI green on head ffffffff' }, 'green on the flight head proceeds')
+
+  const red = v(ev({ wait: { ok: true, final_status: 'failure', run_id: 5, url: 'https://ci/r/5' }, failed_jobs: [job(), job({ name: 'deploy', conclusion: 'skipped', started_at: null, finished_at: null })] }))
+  assert.equal(red.outcome, 'needs_rework', 'failed jobs that ran are needs_rework')
+  assert.equal(red.reason, 'CI red on head ffffffff: failed jobs test (https://ci/r/5)', 'the reason names the failed jobs and the run url; skipped jobs are ignored')
+  assert.equal(v(ev({ wait: { ok: false, final_status: 'failed' }, failed_jobs: [job()] })).outcome, 'needs_rework', "GitLab's failed spelling is red too")
+
+  // The Wave-Engineering/mattermost-crew#72 shape: every job failed at the instant it started (billing).
+  const billing = [job({ name: 'a', started_at: '2026-10-25T04:39:00Z', finished_at: '2026-10-25T04:39:00Z' }), job({ name: 'b', started_at: null, finished_at: null })]
+  const b = v(ev({ wait: { ok: true, final_status: 'failure' }, failed_jobs: billing }))
+  assert.equal(b.outcome, 'blocked', 'failed jobs with started_at == finished_at (billing) are blocked, never reworked')
+  assert.match(b.reason, /failed jobs never ran/)
+  assert.equal(v(ev({ wait: { ok: true, final_status: 'failure' }, failed_jobs: [job(), billing[0]] })).outcome, 'blocked', 'one job that never ran holds the whole flight')
+  assert.equal(v(ev({ wait: { ok: true, final_status: 'failure' }, failed_jobs: [job(), job({ conclusion: 'timed_out' })] })).outcome, 'blocked', 'an infra conclusion beside a real failure holds')
+  assert.match(v(ev({ wait: { ok: true, final_status: 'failure' }, failed_jobs: [] })).reason, /failure with no failed jobs listed/)
+
+  for (const wait of [{ ok: true, final_status: 'cancelled' }, { ok: true, final_status: 'timed_out' }, { ok: false, final_status: 'not_merge_result' }, { ok: false, error: 'No CI run found for ref x' }, {}, undefined]) {
+    assert.equal(v(ev({ wait })).outcome, 'blocked', `${JSON.stringify(wait ?? 'absent')} is blocked`)
+  }
+  assert.match(v(ev({ wait: { ok: false, error: 'No CI run found for ref x' } })).reason, /no verdict: No CI run found/)
+
+  for (const [what, e, head] of [
+    ['a PR head that is not the flight head', ev({ head_sha: 'e'.repeat(40), head_sha_final: 'e'.repeat(40) }), FH],
+    ['a head that moved between the reads', ev({ head_sha_final: 'e'.repeat(40) }), FH],
+    ['an abbreviated flight head', ev({ head_sha: FH.slice(0, 12), head_sha_final: FH.slice(0, 12) }), FH.slice(0, 12)],
+    ['no flight head', ev(), null],
+  ]) {
+    const r = v(e, head)
+    assert.equal(r.outcome, 'blocked', `${what} is blocked`)
+    assert.match(r.reason, /not the head the flight returned/)
+  }
+  assert.equal(v(null).outcome, 'blocked', 'null evidence is blocked')
+  assert.match(v(null).reason, /no CI evidence for #7/)
+  assert.equal(v(ev({ issue: 8 })).outcome, 'blocked', 'evidence about another issue is blocked')
+  const pushed = v(ev({ blocked: true, block_reason: 'pre-push gate refused' }))
+  assert.equal(pushed.outcome, 'blocked')
+  assert.match(pushed.reason, /push rejected: pre-push gate refused/)
+  for (const r of [red, b, pushed]) assert.equal(r.head, null, 'only proceed carries a head')
+  ok('flightCiVerdict: green proceeds; ran-red reworks; billing/infra/no-verdict, moved or foreign heads, null evidence and a rejected push are blocked (#1356)')
+
+  const fp = flightCiPrompt({ waveId: 'W-7', issue: 7, branch: 'feature/7-W-7-x', worktree: '/wt/7', kahunaBranch: 'kahuna/692-x', targetRepo: 'org/repo', ciWaitSec: 600 })
+  assert.match(fp, /git -C \/wt\/7 push origin feature\/7-W-7-x/)
+  assert.match(fp, /pr_create, NOT as a draft/)
+  assert.match(fp, /require_merge_result=true, pr_number=<n>, timeout_sec=600, poll_interval_sec=15/)
+  assert.match(fp, /ci_failed_jobs\(run_id=<wait\.run_id>/)
+  assert.match(fp, /report it as head_sha,/)
+  assert.match(fp, /report it as head_sha_final,/)
+  assert.match(fp, /Do NOT merge, do NOT mark anything ready, do NOT judge/)
+  assert.equal(FLIGHT_CI_EVIDENCE.additionalProperties, false)
+  assert.deepEqual(FLIGHT_CI_EVIDENCE.required, ['issue'])
+  ok('flightCiPrompt gathers push, PR, ci_wait_run, ci_failed_jobs and both head reads, and never merges (#1356)')
+} catch (e) { bad('flight CI (#1356)', e) }
 
 console.log('')
 if (failures) { console.log(`  ${failures} assertion group(s) failed`); process.exit(1) }
