@@ -33,7 +33,7 @@ so bump it with this release.
   merge that landed without a proven pin is reported `landedUnproven` with its merge commit, never
   as not landed. A new legal exit, `pinned-merge-unproven`, holds the wave on any unproven
   reconcile merge.
-- **A release install now gets the same settings merge and files as `./install` (#1360).**
+- **A release install now gets the same settings merge and `scripts/` tree as `./install` (#1360).**
   `install-remote.sh` carried its own copy of the merge, forked before the kit-owned union, the
   old-path migration and the duplicate collapse. The release tarball also shipped only top-level
   `scripts/` files, so every template hook pointed at a missing file. Now the merge lives once in

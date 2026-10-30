@@ -90,6 +90,24 @@ def test_stale_non_executable_links_are_reaped(tmp_path: Path) -> None:
     assert foreign.is_symlink() and foreign.resolve() == (tmp_path / "elsewhere.js").resolve()
 
 
+def test_upgrade_drops_an_old_exec_bit_and_reaps_its_link(tmp_path: Path) -> None:
+    """An older install made every Cellar helper +x. `--skills` skips the Cellar wipe, so
+    the copy must not keep that mode, or the reap would skip the stale link."""
+    repo = _repo(tmp_path, {"nextwave": _REPO / "skills" / "nextwave"})
+    home = _home(tmp_path)
+    old = home / ".claude" / "scripts" / "skills" / "nextwave" / "gate.js"
+    old.parent.mkdir(parents=True)
+    old.write_text("// an older gate.js\n")
+    os.chmod(old, 0o755)
+    link = home / ".local" / "bin" / "gate.js"
+    link.symlink_to(old)
+    r = _install(repo, home)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert old.read_bytes() == (_REPO / "skills" / "nextwave" / "gate.js").read_bytes()
+    assert not os.access(old, os.X_OK), "the Cellar gate.js kept the old install's exec bit"
+    assert not link.is_symlink(), "the old gate.js PATH link survived an upgrade"
+
+
 def test_executable_helper_collision_is_fatal(tmp_path: Path) -> None:
     exe = ("#!/usr/bin/env bash\necho {}\n", 0o755)
     repo = _repo(tmp_path, {"aaa": {"dup.sh": (exe[0].format("a"), exe[1])},

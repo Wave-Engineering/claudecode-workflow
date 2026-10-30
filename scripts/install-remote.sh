@@ -188,6 +188,9 @@ cellar_install_skill_helper() {
 		return 0
 	fi
 	mkdir -p "$(dirname "$dest")"
+	# cp onto an existing file keeps the file's old mode, and an older install made
+	# every helper +x. A fresh file takes the source's mode.
+	rm -f "$dest"
 	cp "$src" "$dest"
 	if [[ -x "$src" ]]; then
 		chmod +x "$dest"
