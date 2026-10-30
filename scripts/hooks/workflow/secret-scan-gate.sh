@@ -19,6 +19,9 @@
 #            whose name appears as a word in the command (every branch for --all or
 #            --mirror, every tag for --tags), minus everything already on a remote. A
 #            commit already on a remote is published, so it needs no scan.
+#   delete → a plain delete-only push of one branch (git_push_delete_target) is not
+#            scanned: it publishes no commits. git's all-zero SHA for a delete never
+#            reaches this hook, which runs before git and never reads pre-push stdin.
 #
 # Both are supersets on purpose: the hook never parses a refspec or a pathspec, so there
 # is nothing in the command to get wrong (the lesson of #1232). It does NOT scan every
@@ -61,6 +64,11 @@ scan_push=0
 git_invokes "$COMMAND" commit && scan_commit=1
 git_invokes "$COMMAND" push && scan_push=1
 if [[ $scan_commit -eq 0 && $scan_push -eq 0 ]]; then
+	exit 0
+fi
+# A plain delete of one branch publishes no commits: nothing to scan, and no gitleaks
+# needed (#1364). A command that also commits, or any other delete shape, is scanned.
+if [[ $scan_commit -eq 0 ]] && git_push_delete_target "$COMMAND" >/dev/null; then
 	exit 0
 fi
 

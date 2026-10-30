@@ -14,7 +14,7 @@ description: Stage, commit, push to your working branch — free; gated only by 
 Commit and push your own working branch (`feature/`, `fix/`, `chore/`, `doc/`). **This is free** (#1233, #1235): it needs no `/precheck` and no approval. Back up work, test it in another sandbox, pair on one branch. Two gates apply, and both are hooks, not this skill:
 
 - **commit:** `secret-scan-gate.sh` scans what is staged.
-- **push:** `secret-scan-gate.sh` scans every commit being pushed. `pre-push-test-gate.sh` refuses protected and release refs and tags, and lets a plain working-branch push through.
+- **push:** `secret-scan-gate.sh` scans every commit being pushed. `pre-push-test-gate.sh` refuses protected and release refs and tags, and lets a plain working-branch push through. A plain delete of one non-protected branch (`git push <remote> --delete <b>` or `:<b>`) passes both gates with no test run and no scan.
 
 The gate into a release branch is the **PR/MR**. That's `/precheck` (`/scpmr` runs it), and BJ's approval is at the **merge** (`/mmr`).
 
