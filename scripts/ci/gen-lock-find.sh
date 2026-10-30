@@ -85,7 +85,7 @@ rc=$?
 ((rc == 0)) || exit "$rc"
 
 # The bundle inlines gate.js, so it follows it.
-if ((!check)); then
+if ((check == 0)); then
 	node "$ROOT/skills/nextwave/bundle.mjs" >/dev/null || {
 		echo "gen-lock-find: bundle.mjs failed" >&2
 		exit 2
