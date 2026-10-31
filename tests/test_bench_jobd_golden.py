@@ -200,11 +200,55 @@ def test_judge_env_points_upstream_at_the_shim_and_makes_its_package_importable(
     assert env["PYTHONPATH"].split(":") == [str(jg.OFFLINE), "/elsewhere"]
 
 
-def _review(run: Path, url: str, model: str, text: str) -> None:
+def test_review_records_the_effort_in_the_record_its_file_and_the_ledger(tmp_path, monkeypatch):
+    def fake_run(argv, **kw):
+        out = {"result": "No findings", "total_cost_usd": 0.5, "usage": {}, "num_turns": 3}
+        return jg.subprocess.CompletedProcess(argv, 0, stdout=json.dumps(out), stderr="")
+
+    d = tmp_path / "prs" / "o__r__1"
+    (d / "tree").mkdir(parents=True)
+    (d / "pr.json").write_text(json.dumps({"diff_lines": 1, "diff_parts": [str(d / "p.diff")],
+                                           "head_sha": "b" * 40}))
+    monkeypatch.setattr(jg, "PRS", tmp_path / "prs")
+    monkeypatch.setattr(jg, "agent_system_prompt", lambda: ("body", "/a.md", "0" * 64))
+    monkeypatch.setattr(jg.subprocess, "run", fake_run)
+    run = tmp_path / "run"
+    rec = jg.review("https://github.com/o/r/pull/1", "claude-sonnet-5-5", run, "high")
+    assert rec["effort"] == "high" and rec["tool"] == "jobd-claude-sonnet-5-5.high"
+    saved = json.loads((run / "reviews" / "o__r__1__jobd-claude-sonnet-5-5.high.json").read_text())
+    assert saved["effort"] == "high"
+    ledger = json.loads((run / "ledger.jsonl").read_text())
+    assert ledger["effort"] == "high" and "review" not in ledger
+
+
+def test_review_cli_requires_an_effort(tmp_path):
+    with pytest.raises(SystemExit) as e:
+        jg.main(["review", "https://github.com/o/r/pull/1", "--model", "claude-opus-5-5",
+                 "--run", str(tmp_path)])
+    assert e.value.code == 2  # argparse's usage error, before any spawn
+
+
+def test_plan_cli_prints_one_tab_separated_pass_per_line(capsys):
+    assert jg.main(["plan", "--design", "round-robin", "--models", "a,b",
+                    "https://github.com/o/r/pull/1"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        f"https://github.com/o/r/pull/1\ta\t{jg.EFFORTS[0]}",
+        f"https://github.com/o/r/pull/1\tb\t{jg.EFFORTS[0]}"]
+
+
+@pytest.mark.parametrize("models", ["a,", "a,,b", ",a", "a,a"])
+def test_plan_cli_refuses_an_empty_or_repeated_model(models):
+    with pytest.raises(SystemExit) as e:
+        jg.main(["plan", "--design", "rotate2", "--models", models, "https://github.com/o/r/pull/1"])
+    assert e.value.code == 2
+
+
+def _review(run: Path, url: str, model: str, text: str, effort: str | None = None) -> None:
     (run / "reviews").mkdir(parents=True, exist_ok=True)
-    rec = {"golden_url": url, "tool": jg.tool_name(model), "model": model, "review": text,
+    tool = jg.tool_name(jg.arm(model, effort) if effort else model)
+    rec = {"golden_url": url, "tool": tool, "model": model, "effort": effort, "review": text,
            "agent_sha256": "a" * 64, "total_cost_usd": 1.0, "wall_s": 60.0, "usage": {}}
-    (run / "reviews" / f"{jg.slug(url)}__{jg.tool_name(model)}.json").write_text(json.dumps(rec))
+    (run / "reviews" / f"{jg.slug(url)}__{tool}.json").write_text(json.dumps(rec))
 
 
 def test_assemble_keeps_only_the_reviewed_prs_and_this_runs_arms(tmp_path):
@@ -252,6 +296,24 @@ def test_report_totals_each_arm_and_splits_recall_by_golden_severity(tmp_path):
                                   "High": {"tp": 1, "fn": 1, "recall": 0.5}}
     assert arm["cost_usd_per_pass"] == 1.0 and out["judge_cost_usd"] == 0.75
     assert out["judge_model"] == "claude-sonnet-5-5"
+
+
+def test_report_keeps_one_models_efforts_as_separate_arms(tmp_path):
+    run = tmp_path / "run"
+    url = "https://github.com/o/r/pull/1"
+    _review(run, url, "claude-opus-5-5", "x", "medium")
+    _review(run, url, "claude-opus-5-5", "y", "xhigh")
+    med, xhi = jg.tool_name("claude-opus-5-5.medium"), jg.tool_name("claude-opus-5-5.xhigh")
+    edir = run / "results" / "claude-sonnet-5-5"
+    edir.mkdir(parents=True)
+    (edir / "evaluations.json").write_text(json.dumps(
+        {url: {med: {"tp": 1, "fp": 0, "fn": 1}, xhi: {"tp": 2, "fp": 1, "fn": 0}}}))
+    (run / "judge-ledger.jsonl").write_text("")
+    arms = jg.report(run, "claude-sonnet-5-5")["arms"]
+    assert sorted(arms) == sorted([med, xhi])
+    assert (arms[med]["effort"], arms[med]["tp"]) == ("medium", 1)
+    assert (arms[xhi]["effort"], arms[xhi]["tp"]) == ("xhigh", 2)
+    assert arms[med]["model"] == arms[xhi]["model"] == "claude-opus-5-5"
 
 
 def test_report_refuses_a_review_the_judge_never_evaluated(tmp_path):

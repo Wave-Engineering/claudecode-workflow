@@ -367,6 +367,15 @@ def report(run: Path, judge_model: str) -> dict[str, Any]:
             "agent_sha256": agent_shas, "tools": REVIEW_TOOLS, "arms": arms}
 
 
+def models_arg(value: str) -> list[str]:
+    """`plan --models`: an empty entry would plan a pass that fails at `claude -p`, and a
+    repeated one would run every pass of that arm twice."""
+    models = value.split(",")
+    if any(not m.strip() for m in models) or len(set(models)) != len(models):
+        raise argparse.ArgumentTypeError(f"want distinct, non-empty models: {value!r}")
+    return models
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -379,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
     sr.add_argument("--run", required=True, type=Path)
     spl = sub.add_parser("plan")
     spl.add_argument("--design", required=True, choices=("rotate2", "round-robin"))
-    spl.add_argument("--models", required=True, help="comma-separated")
+    spl.add_argument("--models", required=True, type=models_arg, help="comma-separated")
     spl.add_argument("urls", nargs="+")
     sa = sub.add_parser("assemble")
     sa.add_argument("--run", required=True, type=Path)
@@ -397,7 +406,7 @@ def main(argv: list[str] | None = None) -> int:
         rec = review(a.golden_url, a.model, a.run, a.effort)
         print(json.dumps({k: rec[k] for k in ("tool", "wall_s", "total_cost_usd", "num_turns")}))
     elif a.cmd == "plan":
-        for url, model, effort in plan(a.urls, a.models.split(","), a.design):
+        for url, model, effort in plan(a.urls, a.models, a.design):
             print(f"{url}\t{model}\t{effort}")
     elif a.cmd == "assemble":
         print(assemble(a.run))

@@ -152,16 +152,23 @@ The judge made 155 calls for the six passes, at $0.705.
 - Recall is 2 or 3 of 4 in every arm, a one-golden spread on a single PR, so it says nothing
   about effort.
 
+Every ratio comes from one PR at one pass per cell. The same arm on the same PR moved by about
+9% between the two pilots: sonnet at `medium` went from $0.227 to $0.208, and opus from $0.656
+to $0.683. So sonnet's "flat to `high`" and opus's 1.18× are inside run-to-run noise. Only the
+2–2.6× at `xhigh` is clearly outside it.
+
 ## Sweep budget (projected from both pilots)
 
 The basis is the first pilot's mean per pass at `medium` ($0.171 sonnet, $0.492 opus, over 2
 PRs), scaled by the mini-pilot's per-level ratios. That gives these projections per pass:
 
-- sonnet: $0.171 at `medium`, $0.169 at `high`, $0.444 at `xhigh`
+- sonnet: $0.171 at `medium`, $0.169 at `high`, $0.445 at `xhigh`
 - opus: $0.492 at `medium`, $0.579 at `high`, $1.015 at `xhigh`
 
 The judge is $0.146 per pass, the higher of the two pilots ($0.117 here). Every design runs
-both models on every (PR, level), so the model comparison stays paired throughout.
+both models on every (PR, level), so the model comparison stays paired throughout. The review
+column assumes each level appears equally often. The plan's real split (17/17/16 pairs at 50
+PRs, 9/8/8 at 25) moves it by less than $0.6.
 
 | design | passes | reviews | judge | **total** | serial wall |
 |---|---|---|---|---|---|
