@@ -23,8 +23,8 @@ are worth keeping apart:
 
 A wave is now held, fail-closed, on its entry conditions and on cross-plan dependencies,
 on the kit's side as well as the sdlc server's. A reseed's auto-revive no longer counts a
-peer's turn as the revive. The Job D bench gains effort as an arm, paired comparisons and a
-false-positive sampler.
+peer's turn as the revive. A new bench runs `/precheck`'s Job D on a public golden-comment set,
+with effort as a recorded arm, paired comparisons and a false-positive sampler.
 
 ### Added
 - **`wave-status` holds a wave on its entry conditions, fail-closed (#1393).** This is the
@@ -123,10 +123,11 @@ false-positive sampler.
   (`identity-collision-warn.sh`) warns the newer one, and `/name` refuses to read or write the
   file for it. A worktree has its own cwd, so it is never a claimant.
 - **A reseed's auto-revive is no longer acked by a peer's turn (#1400).** `reseed-kick.sh`
-  counted a bare read of the seed as the revive. When a peer's message landed the same second
-  as `/clear`, the turn it woke read the seed, answered the peer and stopped, and the kicker
-  logged `acked (seed read)` with nothing revived. Now only `/reseed revive` through the Skill
-  tool counts, or a seed read followed by `/engage reload`.
+  counted a bare read of the seed as the revive. When a peer's message landed right after
+  `/clear`, the turn it woke read the seed, answered the peer and stopped, and the kicker
+  logged `acked (seed read)` with nothing revived. In the transcript, only a Skill call to
+  `/reseed revive`, or a seed read followed by `/engage reload`, now counts. A typed
+  `/reseed revive` still acks through the `reseed-ack` nonce, as before.
 - **The EC hold messages say how to post a state line that counts (#1402).** Both
   `wave-status` refusals showed `[ec-state EC-n] met` in backticks, and sdlc's `wave_ec_sync`
   counts a `met` only as a bare line in a comment of its own. An agent that copied the hint
