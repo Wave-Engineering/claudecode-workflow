@@ -190,5 +190,71 @@ drives turns, the full set averages 2.7 goldens per PR against the pilots' 4, an
 plus judging at 4 workers (about 40 s per pass). Any design needs a cerberus admission, and
 the throwaway-request step comes first.
 
-**Status:** waiting on BJ's choice of design (`bj:needs` #130, which replaces #123). Nothing
-past the mini-pilot has run.
+**Status:** BJ chose `rotate2` at 50 PRs (`bj:needs` #130). It is running as Sweep A, below.
+
+## Sweep A, 2026-10-31
+
+`rotate2` over all 50 PRs × {`claude-sonnet-5-5`, `claude-opus-5-5`}: 200 passes, run serially
+under `nice -n 10` on malory (admission a-7d33be). Every PR ran at two of the three levels, with
+both models at each. Per level pair that is 17 PRs for `medium`/`high`, 17 for `medium`/`xhigh`
+and 16 for `high`/`xhigh`. The harness was #1396's tree (`cc80d7a`), the judge
+`claude-sonnet-5-5`, and the persona sha256 `e79b6f21…c1551`. A throwaway request under each
+pass's `precheck_variant` label went first (`prime.py`), as in the mini-pilot. Every number below
+comes from `report`, `compare` and `fp-sample` (#1398) over the run directory, never from an
+estimate.
+
+**Status:** reviews running; the judge has not run. The tables are empty until it does.
+
+### Per arm (`report`)
+
+| arm | passes | TP | FP | FN | recall | USD / pass | wall / pass |
+|---|---|---|---|---|---|---|---|
+| sonnet.medium | | | | | | | |
+| sonnet.high | | | | | | | |
+| sonnet.xhigh | | | | | | | |
+| opus.medium | | | | | | | |
+| opus.high | | | | | | | |
+| opus.xhigh | | | | | | | |
+
+Per-arm sums mix PRs of different difficulty. The paired tables below answer the questions.
+
+### Model: sonnet vs opus on the same (PR, level) (`compare` → `model`)
+
+| level | pairs | opus TP | sonnet TP | sonnet wins / ties / losses | sign p | cost ratio (geomean, median) |
+|---|---|---|---|---|---|---|
+| medium | | | | | | |
+| high | | | | | | |
+| xhigh | | | | | | |
+| pooled | | | | | | |
+
+### Effort: the higher level against the lower, same PR and model (`compare` → `effort`)
+
+| levels | model | pairs | lower TP | higher TP | higher wins / ties / losses | sign p | cost ratio (geomean, median) |
+|---|---|---|---|---|---|---|---|
+| high vs medium | opus | | | | | | |
+| high vs medium | sonnet | | | | | | |
+| xhigh vs medium | opus | | | | | | |
+| xhigh vs medium | sonnet | | | | | | |
+| xhigh vs high | opus | | | | | | |
+| xhigh vs high | sonnet | | | | | | |
+
+TP wins and losses are counted per pair. The sign test is exact and two-sided, with ties
+dropped. With 16 or 17 pairs in a cell, a p under 0.05 needs a lopsided split (for example 13 to
+3, with no ties). A null result here means "no effect large enough to see", not "no effect".
+
+### False positives, spot-checked by hand (`fp-sample`)
+
+Precision is a floor until a sample is checked, because the goldens aren't exhaustive. The
+sample is split evenly between the models, drawn with a recorded seed, and blinded: the
+worksheet's table hides the arm, and its key is opened only after every verdict is in.
+
+| model | FPs | sampled | real | not real | unsure | corrected precision |
+|---|---|---|---|---|---|---|
+| opus | | | | | | |
+| sonnet | | | | | | |
+
+Seed: — . Worksheet: — .
+
+### What it shows
+
+Written once the tables are full.

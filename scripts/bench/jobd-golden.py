@@ -24,6 +24,10 @@ Steps, each its own subcommand:
                                              the PRs and arms this run reviewed
   judge    --run DIR --judge-model J         upstream steps 2, 2.5 and 3, through the shim
   report   --run DIR --judge-model J         per-arm precision, recall and cost, as JSON
+  compare  --run DIR --judge-model J         paired model and effort comparisons, as JSON
+  fp-sample --run DIR --judge-model J --n N --seed S
+                                             a blinded worksheet of N false positives to check
+                                             by hand, as Markdown
 
 Upstream runs unmodified, from DIR: its paths are relative to the working directory.
 """
@@ -32,9 +36,13 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import itertools
 import json
+import math
 import os
+import random
 import re
+import statistics
 import shutil
 import subprocess
 import sys
@@ -331,16 +339,22 @@ def rec_missing(evals: dict[str, Any], url: str, tool: str) -> bool:
     return not isinstance(evals.get(url, {}).get(tool), dict)
 
 
-def report(run: Path, judge_model: str) -> dict[str, Any]:
+def judged(run: Path, judge_model: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """The judge's evaluations and the run's reviews, refusing any review left unjudged."""
     evals = json.loads((run / "results" / judge_model.replace("/", "_") / "evaluations.json").read_text())
     reviews = [json.loads(f.read_text()) for f in sorted((run / "reviews").glob("*.json"))]
-    judge_cost = sum((json.loads(x).get("total_cost_usd") or 0)
-                     for x in (run / "judge-ledger.jsonl").read_text().splitlines() if x.strip())
-    arms: dict[str, Any] = {}
     unjudged = [f"{r['golden_url']} {r['tool']}" for r in reviews
                 if rec_missing(evals, r["golden_url"], r["tool"])]
     if unjudged:  # a partial judge run would otherwise read as zero TP, with the pass's cost counted
         raise SystemExit("jobd-golden: no evaluation for: " + "; ".join(unjudged))
+    return evals, reviews
+
+
+def report(run: Path, judge_model: str) -> dict[str, Any]:
+    evals, reviews = judged(run, judge_model)
+    judge_cost = sum((json.loads(x).get("total_cost_usd") or 0)
+                     for x in (run / "judge-ledger.jsonl").read_text().splitlines() if x.strip())
+    arms: dict[str, Any] = {}
     for rec in reviews:
         e = evals[rec["golden_url"]][rec["tool"]]
         a = arms.setdefault(rec["tool"], {"model": rec["model"], "effort": rec.get("effort"),
@@ -365,6 +379,113 @@ def report(run: Path, judge_model: str) -> dict[str, Any]:
     agent_shas = sorted({r["agent_sha256"] for r in reviews})
     return {"judge_model": judge_model, "judge_cost_usd": round(judge_cost, 4),
             "agent_sha256": agent_shas, "tools": REVIEW_TOOLS, "arms": arms}
+
+
+def passes(run: Path, judge_model: str) -> list[dict[str, Any]]:
+    """One record per judged review: the unit `compare` pairs and `fp-sample` draws from."""
+    evals, reviews = judged(run, judge_model)
+    out = []
+    for rec in reviews:
+        e = evals[rec["golden_url"]][rec["tool"]]
+        out.append({"url": rec["golden_url"], "tool": rec["tool"], "model": rec["model"],
+                    "effort": rec.get("effort"), "cost_usd": rec.get("total_cost_usd") or 0.0,
+                    "wall_s": rec.get("wall_s"), "turns": rec.get("num_turns"),
+                    "false_positives": [f.get("candidate", "") for f in e.get("false_positives") or []],
+                    **{k: int(e.get(k) or e.get(k.upper()) or 0) for k in ("tp", "fp", "fn")}})
+    return out
+
+
+def sign_test(wins: int, losses: int) -> float:
+    """Two-sided exact sign test p, ties already dropped. Exact because the sweep's pairs per
+    cell (about 17 to 50) are too few for a normal approximation."""
+    n = wins + losses
+    if n == 0:
+        return 1.0
+    return min(1.0, 2 * sum(math.comb(n, i) for i in range(min(wins, losses) + 1)) / 2 ** n)
+
+
+def paired(pairs: list[tuple[dict[str, Any], dict[str, Any]]]) -> dict[str, Any]:
+    """B against A over passes on the same PR. TP wins and losses are per pair, so a PR's
+    difficulty cancels out; cost is compared as a ratio, since PR size spreads it 2× or more."""
+    def side(ps: list[dict[str, Any]]) -> dict[str, Any]:
+        tp, fp, fn = (sum(p[k] for p in ps) for k in ("tp", "fp", "fn"))
+        return {"tp": tp, "fp": fp, "fn": fn, "recall": tp / (tp + fn) if tp + fn else None,
+                "cost_usd": round(sum(p["cost_usd"] for p in ps), 4)}
+    wins = sum(b["tp"] > a["tp"] for a, b in pairs)
+    losses = sum(b["tp"] < a["tp"] for a, b in pairs)
+    ratios = [b["cost_usd"] / a["cost_usd"] for a, b in pairs if a["cost_usd"] > 0 and b["cost_usd"] > 0]
+    return {"n": len(pairs), "a": side([a for a, _ in pairs]), "b": side([b for _, b in pairs]),
+            "tp_wins": wins, "tp_ties": len(pairs) - wins - losses, "tp_losses": losses,
+            "sign_p": round(sign_test(wins, losses), 4),
+            "cost_ratio_geomean": round(math.exp(statistics.fmean(map(math.log, ratios))), 3) if ratios else None,
+            "cost_ratio_median": round(statistics.median(ratios), 3) if ratios else None}
+
+
+def compare(run: Path, judge_model: str) -> dict[str, Any]:
+    """The sweep's two questions, each answered on pairs that share a PR (#1398).
+
+    model:  "<B> vs <A>" (names in order), per effort level and pooled, over the (PR, level)
+            cells that ran both models.
+    effort: "<higher> vs <lower>" for each level pair, per model and pooled, over the
+            (PR, model) cells that ran both levels. Under rotate2 that is a third of the PRs.
+    """
+    by = {(p["url"], p["model"], p["effort"]): p for p in passes(run, judge_model)}
+    urls = sorted({u for u, _, _ in by})
+    models = sorted({m for _, m, _ in by})
+    levels = sorted({e for _, _, e in by}, key=lambda e: EFFORTS.index(e) if e in EFFORTS else len(EFFORTS))
+    out: dict[str, Any] = {"models": models, "model": {}, "effort": {}}
+    for a, b in itertools.combinations(models, 2):
+        cells = {str(e): [(by[u, a, e], by[u, b, e]) for u in urls if (u, a, e) in by and (u, b, e) in by]
+                 for e in levels}
+        cells["pooled"] = [pair for ps in cells.values() for pair in ps]
+        out["model"][f"{b} vs {a}"] = {k: paired(v) for k, v in cells.items() if v}
+    for lo, hi in EFFORT_PAIRS:
+        cells = {m: [(by[u, m, lo], by[u, m, hi]) for u in urls if (u, m, lo) in by and (u, m, hi) in by]
+                 for m in models}
+        cells["pooled"] = [pair for ps in cells.values() for pair in ps]
+        if cells["pooled"]:
+            out["effort"][f"{hi} vs {lo}"] = {k: paired(v) for k, v in cells.items() if v}
+    return out
+
+
+def _cell(text: str) -> str:
+    return text.replace("|", "\\|").replace("\r", "").replace("\n", "<br>")
+
+
+def fp_sample(run: Path, judge_model: str, n: int, seed: int) -> str:
+    """N false positives to check by hand, as a Markdown worksheet (#1398).
+
+    The goldens are not exhaustive, so some "false positives" are real defects, and precision
+    is a floor until a sample is checked. The draw is split evenly across models (a remainder
+    goes to the first models by name; a model with too few gives its shortfall to the rest), so
+    each model's precision gets its own correction. The rows are shuffled and the arm is held in
+    a key after the table: whoever fills in `verdict` doesn't see which model wrote the finding.
+    """
+    pool: dict[str, list[tuple[str, str, str]]] = {}
+    for p in passes(run, judge_model):
+        for text in p["false_positives"]:
+            pool.setdefault(p["model"], []).append((p["tool"], p["url"], text))
+    models = sorted(pool)
+    quota = {m: min(len(pool[m]), n // len(models) + (i < n % len(models))) for i, m in enumerate(models)} if models else {}
+    spare = n - sum(quota.values())
+    while spare > 0 and any(quota[m] < len(pool[m]) for m in models):
+        for m in models:
+            if spare and quota[m] < len(pool[m]):
+                quota[m] += 1
+                spare -= 1
+    rng = random.Random(seed)
+    rows = [row for m in models for row in rng.sample(pool[m], quota[m])]
+    rng.shuffle(rows)
+    total = sum(len(v) for v in pool.values())
+    lines = [f"# FP spot-check: {run.name}, judge {judge_model}, seed {seed}",
+             "", f"{len(rows)} of {total} false positives. For each, `verdict` is `real` (a defect the "
+             "goldens miss), `not-real`, or `unsure`. Read the PR before you decide; the key is below "
+             "the table so the arm can't sway the call.", "",
+             "| # | PR | candidate | verdict |", "|---|---|---|---|"]
+    lines += [f"| {i} | {url} | {_cell(text)} |  |" for i, (_, url, text) in enumerate(rows, 1)]
+    lines += ["", "## Key", "", "| # | arm |", "|---|---|"]
+    lines += [f"| {i} | {tool} |" for i, (tool, _, _) in enumerate(rows, 1)]
+    return "\n".join(lines) + "\n"
 
 
 def models_arg(value: str) -> list[str]:
@@ -399,6 +520,14 @@ def main(argv: list[str] | None = None) -> int:
     so = sub.add_parser("report")
     so.add_argument("--run", required=True, type=Path)
     so.add_argument("--judge-model", required=True)
+    sc = sub.add_parser("compare")
+    sc.add_argument("--run", required=True, type=Path)
+    sc.add_argument("--judge-model", required=True)
+    sf = sub.add_parser("fp-sample")
+    sf.add_argument("--run", required=True, type=Path)
+    sf.add_argument("--judge-model", required=True)
+    sf.add_argument("--n", required=True, type=int)
+    sf.add_argument("--seed", required=True, type=int)
     a = p.parse_args(argv)
     if a.cmd == "prepare":
         print(prepare(a.golden_url))
@@ -412,6 +541,10 @@ def main(argv: list[str] | None = None) -> int:
         print(assemble(a.run))
     elif a.cmd == "judge":
         judge(a.run, a.judge_model, a.workers)
+    elif a.cmd == "compare":
+        print(json.dumps(compare(a.run, a.judge_model), indent=1))
+    elif a.cmd == "fp-sample":
+        print(fp_sample(a.run, a.judge_model, a.n, a.seed), end="")
     else:
         print(json.dumps(report(a.run, a.judge_model), indent=1))
     return 0

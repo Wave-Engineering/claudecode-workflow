@@ -338,3 +338,101 @@ def test_assemble_refuses_a_pr_outside_the_benchmark(tmp_path):
     _review(run, "https://github.com/o/r/pull/9", "claude-opus-5-5", "x")
     with pytest.raises(SystemExit):
         jg.assemble(run, upstream)
+
+
+SONNET, OPUS = "claude-sonnet-5-5", "claude-opus-5-5"
+
+
+def _judged_run(tmp_path: Path, cells: dict[tuple[int, str, str], tuple[int, int, float]]) -> Path:
+    """A judged run: (pr, model, effort) -> (tp, fp, cost). Each pass misses one golden. Its
+    false positives are numbered by PR and level, never named by model, so a test can tell
+    whether a worksheet's table leaks the arm."""
+    run = tmp_path / "run"
+    evals: dict = {}
+    for (pr, model, effort), (tp, fp, cost) in cells.items():
+        url = f"https://github.com/o/r/pull/{pr}"
+        _review(run, url, model, "x", effort)
+        tool = jg.tool_name(jg.arm(model, effort))
+        f = run / "reviews" / f"{jg.slug(url)}__{tool}.json"
+        f.write_text(json.dumps(json.loads(f.read_text()) | {"total_cost_usd": cost, "num_turns": 3}))
+        evals.setdefault(url, {})[tool] = {
+            "tp": tp, "fp": fp, "fn": 1,
+            "false_positives": [{"candidate": f"finding {pr}.{effort}.{len(model)}.{i}"} for i in range(fp)]}
+    edir = run / "results" / SONNET
+    edir.mkdir(parents=True)
+    (edir / "evaluations.json").write_text(json.dumps(evals))
+    (run / "judge-ledger.jsonl").write_text("")
+    return run
+
+
+def test_passes_one_record_per_review(tmp_path):
+    run = _judged_run(tmp_path, {(1, SONNET, "medium"): (2, 1, 0.2), (1, OPUS, "high"): (3, 0, 0.8)})
+    ps = sorted(jg.passes(run, SONNET), key=lambda p: p["model"])
+    assert [(p["model"], p["effort"], p["tp"], p["fp"], p["fn"], p["cost_usd"], p["turns"]) for p in ps] == [
+        (OPUS, "high", 3, 0, 1, 0.8, 3), (SONNET, "medium", 2, 1, 1, 0.2, 3)]
+    assert ps[1]["false_positives"] == [f"finding 1.medium.{len(SONNET)}.0"]
+    _review(run, "https://github.com/o/r/pull/9", SONNET, "x", "xhigh")
+    with pytest.raises(SystemExit):
+        jg.passes(run, SONNET)
+
+
+def test_compare_model_pairs_by_pr_and_effort(tmp_path):
+    run = _judged_run(tmp_path, {
+        (1, OPUS, "medium"): (2, 0, 0.5), (1, SONNET, "medium"): (3, 0, 0.1),  # sonnet wins
+        (2, OPUS, "medium"): (2, 0, 0.4), (2, SONNET, "medium"): (2, 0, 0.2),  # tie
+        (3, OPUS, "medium"): (3, 0, 0.8), (3, SONNET, "medium"): (1, 0, 0.4),  # sonnet loses
+        (4, OPUS, "medium"): (1, 0, 0.5),  # no sonnet pass on PR 4: not a pair
+    })
+    out = jg.compare(run, SONNET)
+    cell = out["model"][f"{SONNET} vs {OPUS}"]["medium"]
+    assert (cell["n"], cell["tp_wins"], cell["tp_ties"], cell["tp_losses"]) == (3, 1, 1, 1)
+    assert (cell["a"]["tp"], cell["b"]["tp"]) == (7, 6)
+    assert cell["a"]["recall"] == 7 / 10 and cell["sign_p"] == 1.0
+    assert out["model"][f"{SONNET} vs {OPUS}"]["pooled"]["n"] == 3
+    assert out["effort"] == {}
+
+
+def test_compare_effort_pairs_within_pr(tmp_path):
+    cells = {}
+    for pr, url_levels in enumerate(jg.EFFORT_PAIRS, 1):  # rotate2: PR i at the i-th level pair
+        for e in url_levels:
+            cells[(pr, OPUS, e)] = (1 + jg.EFFORTS.index(e), 0, 1.0 + jg.EFFORTS.index(e))
+    out = jg.compare(run := _judged_run(tmp_path, cells), SONNET)
+    assert run.exists() and sorted(out["effort"]) == ["high vs medium", "xhigh vs high", "xhigh vs medium"]
+    for key, (lo, hi) in (("high vs medium", ("medium", "high")), ("xhigh vs medium", ("medium", "xhigh")),
+                          ("xhigh vs high", ("high", "xhigh"))):
+        cell = out["effort"][key][OPUS]
+        assert cell["n"] == 1 and cell["tp_wins"] == 1  # the higher level is B, and it caught more
+        assert cell["a"]["tp"] == 1 + jg.EFFORTS.index(lo) and cell["b"]["tp"] == 1 + jg.EFFORTS.index(hi)
+        assert out["effort"][key]["pooled"]["n"] == 1
+
+
+@pytest.mark.parametrize("wins,losses,p", [(0, 0, 1.0), (5, 0, 0.0625), (1, 4, 0.375), (3, 3, 1.0)])
+def test_sign_test_exact(wins, losses, p):
+    assert jg.sign_test(wins, losses) == pytest.approx(p)
+
+
+def test_cost_ratio_geomean_and_median(tmp_path):
+    run = _judged_run(tmp_path, {
+        (1, OPUS, "medium"): (1, 0, 1.0), (1, SONNET, "medium"): (1, 0, 0.5),
+        (2, OPUS, "medium"): (1, 0, 1.0), (2, SONNET, "medium"): (1, 0, 2.0),
+        (3, OPUS, "medium"): (1, 0, 1.0), (3, SONNET, "medium"): (1, 0, 4.0),
+    })
+    cell = jg.compare(run, SONNET)["model"][f"{SONNET} vs {OPUS}"]["medium"]
+    assert cell["cost_ratio_geomean"] == pytest.approx(1.587, abs=1e-3)  # (0.5 * 2 * 4) ** (1/3)
+    assert cell["cost_ratio_median"] == 2.0
+
+
+def test_fp_sample_deterministic_and_stratified(tmp_path):
+    run = _judged_run(tmp_path, {(1, OPUS, "medium"): (0, 6, 1.0), (1, SONNET, "medium"): (0, 2, 1.0),
+                                 (2, SONNET, "high"): (0, 4, 1.0)})
+    a, b = jg.fp_sample(run, SONNET, 6, 1), jg.fp_sample(run, SONNET, 6, 1)
+    assert a == b and jg.fp_sample(run, SONNET, 6, 2) != a
+    key = a.split("## Key", 1)[1]
+    assert key.count(OPUS) == 3 and key.count(SONNET) == 3  # split evenly across models
+    table = a.split("## Key", 1)[0]
+    assert table.count("| finding ") == 6 and "jobd-" not in table  # blinded: the arm is only in the key
+    every = jg.fp_sample(run, SONNET, 99, 1)
+    assert "12 of 12 false positives" in every and every.split("## Key", 1)[1].count("| jobd-") == 12
+    lopsided = jg.fp_sample(run, SONNET, 10, 1)  # opus has 6: sonnet's quota of 5 plus the spare
+    assert lopsided.split("## Key", 1)[1].count(OPUS) == 5 and lopsided.count("10 of 12") == 1
