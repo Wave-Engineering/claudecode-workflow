@@ -437,24 +437,26 @@ else
 fi
 
 # The session goes live DURING the final wait (after all 4 sends): it must enter
-# the live wait, not page "no ack after 4 send(s)". The entry is written by the
-# 4th send itself (a fake tmux that appends it on its 4th call), and a send only
-# follows a check, so the entry lands after the 4th check by construction, in the
-# final wait. No timer: a timed write missed that window on a loaded box (#1410).
+# the live wait, not page "no ack after 4 send(s)". A fake `sleep` writes the entry
+# on its 5th call: the kicker sleeps once per schedule step (4) and then once more
+# for the final wait, so the entry lands inside the final wait by construction. A
+# kicker that read the state before that wait would see a fresh session and page
+# "no ack". No timer: a timed write missed that window on a loaded box (#1410).
 C="$WORK/latelive"
 mkdir -p "$C/root" "$C/shim"
-cat >"$C/shim/tmux" <<'SH'
+cat >"$C/shim/sleep" <<'SH'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"$TMUX_CALLS"
-if [[ "$(wc -l <"$TMUX_CALLS")" -eq 4 ]]; then
+printf 'x\n' >>"$SLEEP_CALLS"
+if [[ "$(wc -l <"$SLEEP_CALLS")" -eq 5 ]]; then
 	jq -cn --arg t "$LIVE_TS" '{type: "api-request-shape", timestamp: $t, shape: "x"}' >>"$LIVE_T"
 fi
-exit 0
+exec /bin/sleep "$@"
 SH
-chmod +x "$C/shim/tmux"
+chmod +x "$C/shim/sleep"
 : >"$C/calls"
+: >"$C/sleeps"
 : >"$C/t.jsonl"
-env PATH="$C/shim:$SHIM:$PATH" TMUX_CALLS="$C/calls" LIVE_T="$C/t.jsonl" LIVE_TS="$LATER" \
+env PATH="$C/shim:$SHIM:$PATH" TMUX_CALLS="$C/calls" SLEEP_CALLS="$C/sleeps" LIVE_T="$C/t.jsonl" LIVE_TS="$LATER" \
 	ACK_ON_CALL="" ACK_ROOT="$C/root" NOTIFIED="$C/notified" RESEED_KICK_BACKOFF="0 0.1 0.1 0.1" \
 	RESEED_KICK_LIVE_WAIT=2 RESEED_KICK_POLL=1 \
 	RESEED_KICK_LOG="$C/kick.log" RESEED_KICK_NOTIFY="$SHIM/notify" \

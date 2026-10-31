@@ -32,7 +32,7 @@ are worth keeping apart:
   averages around 23. They now order on events: the kicker logs
   `session live after <N> send(s); waiting up to <N>s for the revive` on entering the live
   wait, and "live then read" appends its revive on that line. "late live" has its entry
-  written by the fake tmux's 4th send.
+  written by a fake `sleep` on its 5th call, the final wait.
 
 ## [8.22.0] - 2026-10-31
 
