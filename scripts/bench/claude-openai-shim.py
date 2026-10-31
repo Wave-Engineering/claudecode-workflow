@@ -175,9 +175,17 @@ def make_handler(model: str, workers: threading.BoundedSemaphore, ledger: str | 
             except (json.JSONDecodeError, subprocess.TimeoutExpired) as e:
                 self._send(400 if isinstance(e, json.JSONDecodeError) else 504, {"error": {"message": str(e)}})
                 return
+            except OSError as e:  # e.g. no `claude` on PATH: answer 502, never drop the connection
+                print(f"claude-openai-shim: 502 {e}", file=sys.stderr)
+                self._send(502, {"error": {"message": f"could not run claude -p: {e}"}})
+                return
             if ledger:
-                with lock, open(ledger, "a") as f:
-                    f.write(json.dumps(record) + "\n")
+                try:
+                    with lock, open(ledger, "a") as f:
+                        f.write(json.dumps(record) + "\n")
+                except OSError as e:  # the answer is paid for, so send it; the lost cost line is loud
+                    print(f"claude-openai-shim: LEDGER WRITE FAILED, judge cost understated: {e}",
+                          file=sys.stderr)
             self._send(200, body)
 
     return Handler

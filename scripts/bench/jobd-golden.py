@@ -299,14 +299,22 @@ def judge(run: Path, judge_model: str, workers: int) -> None:
         shim.wait(timeout=30)
 
 
+def rec_missing(evals: dict[str, Any], url: str, tool: str) -> bool:
+    return not isinstance(evals.get(url, {}).get(tool), dict)
+
+
 def report(run: Path, judge_model: str) -> dict[str, Any]:
     evals = json.loads((run / "results" / judge_model.replace("/", "_") / "evaluations.json").read_text())
     reviews = [json.loads(f.read_text()) for f in sorted((run / "reviews").glob("*.json"))]
     judge_cost = sum((json.loads(x).get("total_cost_usd") or 0)
                      for x in (run / "judge-ledger.jsonl").read_text().splitlines() if x.strip())
     arms: dict[str, Any] = {}
+    unjudged = [f"{r['golden_url']} {r['tool']}" for r in reviews
+                if rec_missing(evals, r["golden_url"], r["tool"])]
+    if unjudged:  # a partial judge run would otherwise read as zero TP, with the pass's cost counted
+        raise SystemExit("jobd-golden: no evaluation for: " + "; ".join(unjudged))
     for rec in reviews:
-        e = evals.get(rec["golden_url"], {}).get(rec["tool"], {})
+        e = evals[rec["golden_url"]][rec["tool"]]
         a = arms.setdefault(rec["tool"], {"model": rec["model"], "passes": [], "tp": 0, "fp": 0, "fn": 0,
                                           "by_severity": {}})
         for key, hits in (("tp", e.get("true_positives") or []), ("fn", e.get("false_negatives") or [])):

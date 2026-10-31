@@ -221,6 +221,21 @@ def test_report_totals_each_arm_and_splits_recall_by_golden_severity(tmp_path):
     assert out["judge_model"] == "claude-sonnet-5-5"
 
 
+def test_report_refuses_a_review_the_judge_never_evaluated(tmp_path):
+    run = tmp_path / "run"
+    url = "https://github.com/o/r/pull/1"
+    _review(run, url, "claude-sonnet-5-5", "x")
+    _review(run, url, "claude-opus-5-5", "y")
+    edir = run / "results" / "claude-sonnet-5-5"
+    edir.mkdir(parents=True)
+    (edir / "evaluations.json").write_text(json.dumps(
+        {url: {jg.tool_name("claude-sonnet-5-5"): {"tp": 0, "fp": 0, "fn": 1}}}))
+    (run / "judge-ledger.jsonl").write_text("")
+    with pytest.raises(SystemExit) as e:
+        jg.report(run, "claude-sonnet-5-5")
+    assert "jobd-claude-opus-5-5" in str(e.value)
+
+
 def test_assemble_refuses_a_pr_outside_the_benchmark(tmp_path):
     upstream = tmp_path / "benchmark_data.json"
     upstream.write_text("{}")

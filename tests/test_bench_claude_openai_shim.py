@@ -119,6 +119,30 @@ def test_bad_messages_are_refused(messages):
     assert e.value.status == 400
 
 
+def test_a_claude_that_cannot_start_is_a_502_not_a_dropped_connection(monkeypatch):
+    """The handler, over loopback, with completion patched: no `claude` process is started."""
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    def no_claude(req, model, run=None):
+        raise FileNotFoundError("claude")
+
+    monkeypatch.setattr(shim, "completion", no_claude)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), shim.make_handler(MODEL, threading.BoundedSemaphore(1), None))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+                                     data=json.dumps(REQ).encode(), method="POST")
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(req, timeout=10)
+        assert e.value.code == 502
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 @pytest.mark.parametrize("run", [
     FakeRun(returncode=1, stderr="auth failed"),
     FakeRun(stdout="not json"),
