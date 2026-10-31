@@ -20,6 +20,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from wave_status.entry_conditions import (  # noqa: E402
+    EC_RECORD_HINT,
     MALFORMED_EC,
     ec_summary,
     evaluate_wave_gate,
@@ -343,6 +344,20 @@ class TestComplete:
         state = load_json(status_dir(tmp_path) / "state.json")
         assert state["waves"]["wave-1"]["status"] == "held"
         assert state["current_wave"] == "wave-1"
+
+    def test_refusals_say_post_the_line_as_plain_text(self, tmp_path: Path) -> None:
+        """Both holds say how to post the line so sdlc's parser counts it: no code span."""
+        init_state(_plan("unmet"), tmp_path)
+        messages = []
+        for step in (lambda: preflight(tmp_path), lambda: complete(tmp_path, wave_id="wave-1")):
+            with pytest.raises(ValueError) as exc:
+                step()
+            messages.append(str(exc.value))
+        for msg in messages:
+            assert msg.endswith(EC_RECORD_HINT)
+            assert "alone in its own comment" in msg
+            assert "no backticks" in msg
+            assert "`" not in EC_RECORD_HINT
 
     def test_met_wave_completes(self, tmp_path: Path) -> None:
         init_state(_plan("met"), tmp_path)

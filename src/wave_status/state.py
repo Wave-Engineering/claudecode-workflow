@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from wave_status.entry_conditions import (
+    EC_RECORD_HINT,
     describe_holds,
     ec_summary,
     evaluate_wave_gate,
@@ -985,10 +986,7 @@ def enforce_start_gate(root: Path, step: str) -> None:
         root, "step", wave=wave_id, action="ec-hold",
         label="wave held by entry conditions", detail=reason,
     )
-    raise ValueError(
-        f"Error: {reason}. Refusing {step}. Record each EC on the Plan issue "
-        "as `[ec-state EC-n] met`, run wave_ec_sync, then retry."
-    )
+    raise ValueError(f"Error: {reason}. Refusing {step}. {EC_RECORD_HINT}")
 
 
 def preflight(root: Path) -> dict:
@@ -1604,10 +1602,7 @@ def complete(root: Path, wave_id: str | None = None) -> dict:
         holds = gate["start"] + gate["delivery"]
         if holds or gate["depends_on"]:
             reason = describe_holds(target, holds, gate["depends_on"], verb="held from completion")
-            raise ValueError(
-                f"Error: {reason}. Refusing complete. Record each EC on the Plan "
-                "issue as `[ec-state EC-n] met`, run wave_ec_sync, then retry."
-            )
+            raise ValueError(f"Error: {reason}. Refusing complete. {EC_RECORD_HINT}")
 
     # Mark the target (the run's actual) wave as completed.
     if target in state_data.get("waves", {}):

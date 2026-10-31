@@ -192,6 +192,16 @@ def _issue_list(issues: list) -> str:
     return ", ".join(f"#{n}" for n in issues)
 
 
+# How to record an EC, for a refusal's error message. sdlc's wave_ec_sync counts
+# a `met` only as a bare line in a comment of its own, so the example carries no
+# backticks: an agent that copies it into a code span posts a line that is ignored.
+EC_RECORD_HINT = (
+    "Post each EC's state line on the Plan issue as plain text, alone in its own "
+    "comment, with no backticks or other formatting: [ec-state EC-<n>] met, followed "
+    "by its evidence. Then run wave_ec_sync and retry."
+)
+
+
 def describe_holds(wave_id: str, holds: list[dict], deps: list[dict], *, verb: str = "held") -> str:
     """One line naming every hold, for a refusal's error message."""
     parts = [
