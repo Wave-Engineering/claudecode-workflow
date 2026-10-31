@@ -220,7 +220,8 @@ async def main():
     (Path.cwd() / "dedup_groups.json").write_text("{{}}")
     await {cls}().{method}()
     client = AsyncOpenAI(api_key="unused")
-    print(json.dumps([globals().get("LLM_CALL_TIMEOUT"), client, sys.argv[1:]]))
+    print(json.dumps([globals().get("LLM_CALL_TIMEOUT"), client, sys.argv[1:],
+                      globals().get("REVIEW_TIMEOUT", "absent")]))
 """
 
 
@@ -242,10 +243,18 @@ def test_step_runner_sets_both_deadlines_to_queueing_plus_one_call(tmp_path, dea
                                                                    upstream_deadline):
     out = _run_step(tmp_path, deadline=deadline)
     assert out.returncode == 0, out.stderr
-    upstream, client, argv = json.loads(out.stdout)
+    upstream, client, argv, review = json.loads(out.stdout)
     assert upstream == upstream_deadline
     assert client == {"api_key": "unused", "timeout": 3000, "max_retries": 0}
     assert argv == ["--dedup-groups", "g.json"]
+    assert review == "absent"  # a step without the judge's review cap gets none added
+
+
+def test_step_runner_switches_off_the_judges_cap_on_a_whole_review(tmp_path):
+    # 1800 s is under one call's worst case; a cancelled review is skipped and the step exits 0
+    out = _run_step(tmp_path, deadline="LLM_CALL_TIMEOUT = 30\nREVIEW_TIMEOUT = 1800")
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout)[3] is None
 
 
 @pytest.mark.parametrize("cls, method, result", [

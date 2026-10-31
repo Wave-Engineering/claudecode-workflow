@@ -9,7 +9,8 @@ Upstream runs unmodified but for two things, both set here before the step's mai
 Deadlines. Each step sends BATCH_SIZE calls at once, and the shim serves only <workers> of them,
 so a call can wait ceil(BATCH_SIZE / workers) - 1 rounds before its own. Both client-side
 deadlines are set to that worst case plus the call itself: upstream's LLM_CALL_TIMEOUT, where the
-step has one, and the openai SDK's own (600 s by default). The SDK's retries are switched off. A
+step has one, and the openai SDK's own (600 s by default). The judge's cap on a whole review is
+switched off, since each call in it is bounded. The SDK's retries are switched off. A
 request the SDK drops stays queued in the shim, which cannot see the hang-up, so a retry would
 queue behind its own orphan. Upstream's own loops already retry three times.
 
@@ -83,6 +84,11 @@ def main(argv: list[str]) -> int:
     limit = deadline(m.BATCH_SIZE, workers, call_timeout)
     if hasattr(m, "LLM_CALL_TIMEOUT"):
         m.LLM_CALL_TIMEOUT = limit
+    if hasattr(m, "REVIEW_TIMEOUT"):
+        # The judge also caps a whole review (1800 s), under one call's worst case. Its cancel
+        # drops the calls in flight, which the shim still runs, and step 3 skips the review and
+        # exits 0. Every call inside is already bounded, so the cap is switched off.
+        m.REVIEW_TIMEOUT = None
     # Upstream constructs the client by its module-level name, so this reaches every instance.
     m.AsyncOpenAI = functools.partial(m.AsyncOpenAI, timeout=limit, max_retries=0)
     failures = count_failures(m)
