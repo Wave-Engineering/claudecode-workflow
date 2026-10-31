@@ -59,7 +59,8 @@ if tool == "glab":
     if endpoint == p + "merge_requests/7":
         print(json.dumps({"iid": 7, "project_id": 11, "description": pr_body})); sys.exit(0)
     if endpoint == p + "merge_requests/7/closes_issues":
-        print(json.dumps([{"iid": c["number"], "project_id": c.get("project_id", 11), "description": c["body"]} for c in closing])); sys.exit(0)
+        print(json.dumps([{"iid": c["number"], "project_id": c.get("project_id", 11), "description": c["body"],
+                           **({"references": {"full": c["full"]}} if "full" in c else {})} for c in closing])); sys.exit(0)
     m = re.fullmatch(re.escape(p) + r"issues/([0-9]+)", endpoint)
     if m and m.group(1) in issues:
         print(json.dumps({"iid": int(m.group(1)), "project_id": 11, "description": issues[m.group(1)]})); sys.exit(0)
@@ -322,3 +323,112 @@ def test_gitlab_closes_issues_path(world):
 @pytest.mark.parametrize("args", [[], ["lint"], ["boxes", "x"], ["pr", "r", "x", "5"], ["nope"]])
 def test_usage_is_exit_3(args):
     assert _run(*args).returncode == 3
+
+
+# --- the closing set (#1397, #1407; design fork resolved by babelfish 2026-10-31: A) ---------
+
+# An epic: a DoD the lint flags, and no AC box at all. Graded, it fails with exit 2.
+EPIC = "## Summary\n\nan epic\n\n## Definition of Done\n\n- [ ] all story PRs merged into main\n"
+GL = "git@gitlab.example.com:group/proj.git"
+GH = "git@github.com:Owner/Repo.git"
+
+
+def _gate(world, origin: str, issue_n: str, issues: dict, closing: list, pr: str = "7"):
+    repo, env, tmp = world
+    _origin(repo, origin)
+    e = {**env, "FAKE_ISSUES": json.dumps(issues), "FAKE_CLOSING": json.dumps(closing)}
+    r = _run("pr", str(repo), pr, issue_n, env=e)
+    calls = [json.loads(line) for line in (tmp / "calls.log").read_text().splitlines()]
+    return r, calls
+
+
+def _fetched(calls: list, suffix: str) -> bool:
+    return any(c[-1].endswith(suffix) for c in calls)
+
+
+@pytest.mark.parametrize("origin,story,branch_ref", [
+    (GH, {"number": 12, "body": ISSUE_DONE, "repo": "Owner/Other"}, "Owner/Repo#5"),
+    (GL, {"number": 12, "body": ISSUE_DONE, "project_id": 22, "full": "group/other#12"}, "group/proj#5"),
+])
+def test_branch_epic_not_in_closing_set_is_info_only(world, origin, story, branch_ref):
+    # #1397's layout: the branch names the epic, and the MR closes a story in another project.
+    r, calls = _gate(world, origin, "5", {"5": EPIC}, [story])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert f"ac-gate: [info] {branch_ref} is not among the closing issues; not graded" in r.stdout
+    assert "#12 | boxes=2 checked=2 waived=0 unchecked=0 post-merge=0" in r.stdout
+    assert "[post-merge]" not in r.stdout and "[no-ac]" not in r.stdout
+    assert not _fetched(calls, "issues/5"), calls  # never read, so a 404 there can't fail it
+    assert r.stdout.rstrip().endswith("VERDICT: PASS")
+
+
+@pytest.mark.parametrize("origin,ref", [(GH, "Owner/Repo#5"), (GL, "group/proj#5")])
+def test_empty_closing_set_grades_issue_n(world, origin, ref):
+    # The fallback that keeps a PR/MR with no Closes from passing on its body alone.
+    r, calls = _gate(world, origin, "5", {"5": _ac("- [x] one", "- [ ] two is open")}, [])
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert f"  [unchecked] {ref}:4 two is open" in r.stdout
+    assert "[info]" not in r.stdout
+    assert _fetched(calls, "issues/5"), calls
+
+
+@pytest.mark.parametrize("origin,closing,ref", [
+    (GH, [{"number": 5, "body": ISSUE_DONE}], "Owner/Repo#5"),
+    (GL, [{"number": 5, "body": ISSUE_DONE}], "group/proj#5"),
+    (GL, [{"number": 5, "body": ISSUE_DONE, "full": "group/proj#5"}], "group/proj#5"),
+])
+def test_issue_n_in_closing_set_graded_once(world, origin, closing, ref):
+    r, calls = _gate(world, origin, "5", {"5": ISSUE_DONE}, closing)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.count(f"ac-gate: {ref} |") == 1
+    assert "[info]" not in r.stdout
+    assert not _fetched(calls, "issues/5"), "graded from the closing set, not fetched again"
+
+
+def test_gitlab_foreign_closing_issue_skips_local_same_number(world):
+    # #1407's steps: the MR closes group/other#12, and group/proj#12 also exists, unfinished.
+    local = _ac("- [ ] open locally", "- [x] the change is merged")
+    foreign = {"number": 12, "project_id": 22, "full": "group/other#12",
+               "body": _ac("- [x] a", "- [x] b", "- [x] c", "- [x] d")}
+    r, calls = _gate(world, GL, "12", {"12": local}, [foreign])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "ac-gate: group/other#12 | boxes=4 checked=4 waived=0 unchecked=0 post-merge=0" in r.stdout
+    assert "ac-gate: [info] group/proj#12 is not among the closing issues; not graded" in r.stdout
+    assert "open locally" not in r.stdout
+    assert not _fetched(calls, "group%2Fproj/issues/12"), calls
+
+
+@pytest.mark.parametrize("issue_n,info", [
+    ("group/other#12", None),
+    ("GROUP/Other#12", None),  # paths compare case-insensitively
+    ("group/third#12", "group/third#12"),
+    ("group/proj#12", "group/proj#12"),
+])
+def test_issue_n_accepts_path_form(world, issue_n, info):
+    foreign = {"number": 12, "project_id": 22, "full": "group/other#12", "body": ISSUE_DONE}
+    r, _ = _gate(world, GL, issue_n, {"12": _ac("- [ ] open locally")}, [foreign])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.count("ac-gate: group/other#12 |") == 1
+    if info:
+        assert f"ac-gate: [info] {info} is not among the closing issues; not graded" in r.stdout
+    else:
+        assert "[info]" not in r.stdout
+
+
+def test_path_form_with_empty_closing_set_reads_that_repo(world):
+    r, calls = _gate(world, GH, "Owner/Repo#5", {"5": ISSUE_DONE}, [])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "ac-gate: Owner/Repo#5 | boxes=2 checked=2" in r.stdout
+    assert _fetched(calls, "repos/Owner/Repo/issues/5"), calls
+
+
+@pytest.mark.parametrize("issue_n", ["group#12", "#12", "group/other#", "group/other#x", "a b/c#1"])
+def test_malformed_issue_ref_is_exit_3(world, issue_n):
+    repo, env, _ = world
+    _origin(repo, GL)
+    assert _run("pr", str(repo), "7", issue_n, env=env).returncode == 3
+
+
+def test_precheck_skill_lists_info_lines():
+    skill = (REPO_ROOT / "skills" / "precheck" / "SKILL.md").read_text(encoding="utf-8")
+    assert "ac-gate: [info] <ref> is not among the closing issues; not graded" in skill
+    assert "any `[info]` not-graded line verbatim" in skill

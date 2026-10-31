@@ -20,6 +20,13 @@ are worth keeping apart:
 ## [Unreleased]
 
 ### Fixed
+- **The AC gate grades what the PR/MR closes, not what the branch names (#1397, #1407).** A branch
+  named for an epic failed the gate on the epic's Definition of Done even though the PR closed only
+  a story, and on GitLab an MR closing `group/other#12` was graded against the local `#12` too. Now
+  `precheck-ac-gate.sh pr` grades the body plus the closing issues, each labelled by its full
+  reference. An `ISSUE_N` outside that set prints `ac-gate: [info] <ref> is not among the closing
+  issues; not graded`, which has no exit effect and causes no fetch. `ISSUE_N` is graded only when
+  nothing closes, and it accepts `<path>#<n>`. /precheck copies the `[info]` line to its checklist.
 - **The bench judge's deadline now covers the shim's queue (#1406).** Upstream's 30 s per-call
   client deadline ran out while calls waited behind the shim's 4 workers, so Sweep A's first
   judge run silently scored every candidate as a false positive. Each upstream step now runs

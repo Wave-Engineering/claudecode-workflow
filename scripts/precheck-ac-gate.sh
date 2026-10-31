@@ -17,8 +17,11 @@
 #       The checkbox rule over one body: the boxes under that H2 (default), or every box.
 #       Exit 0 or 1.
 #   precheck-ac-gate.sh pr <repo_root> <PR_NUMBER> <ISSUE_N>
-#       Fetch the PR/MR body, every issue it closes, and ISSUE_N; run `boxes` on each
-#       (the issues by section, the PR/MR body --all) and `lint` on all of them.
+#       Fetch the PR/MR body and every issue it closes; run `boxes` on each (the issues
+#       by section, the PR/MR body --all) and `lint` on all of them. ISSUE_N (`<n>`, or
+#       `<path>#<n>` for another repository's issue) is graded only when the PR/MR closes
+#       nothing. Otherwise it is graded as one of the closing issues, or listed as
+#       `ac-gate: [info] <ref> is not among the closing issues; not graded` (#1397, #1407).
 #       Exit with the worst code, 4 > 2 > 1 > 0.
 #
 # Exit: 0 pass; 1 an unchecked box with no valid waiver, or an issue with no AC box at all;
@@ -146,51 +149,86 @@ def grade(ref, body, mode, lint):
     return code, [head] + out
 
 
-def gh_bodies(slug, pr_path, issue_path, issue_n):
+def split_ref(slug, issue_ref):
+    """ISSUE_N as `<n>` (this repository) or `<path>#<n>`. Returns (path, n)."""
+    path, _, n = issue_ref.rpartition("#")
+    return (path or slug), int(n)
+
+
+# The gate grades what the merge will close: the PR/MR body and every closing issue (#1397,
+# #1407; design fork resolved by babelfish 2026-10-31, option A). ISSUE_N, the issue the
+# branch names, is graded only when the PR/MR closes nothing. Otherwise it is graded as one
+# of the closing issues, or reported `[info]` and left alone: an issue the merge doesn't
+# close isn't claimed done, and grading it (an epic, a same-numbered local issue) only
+# produced false blocks.
+def not_closed(ref):
+    return f"ac-gate: [info] {ref} is not among the closing issues; not graded"
+
+
+def gh_bodies(slug, pr_path, issue_path, issue_ref):
     pr = json.load(open(pr_path))
     node = (((pr.get("data") or {}).get("repository") or {}).get("pullRequest"))
     if not isinstance(node, dict):
         raise ValueError("the PR is not in the GraphQL answer")
-    issue = json.load(open(issue_path))
-    if not isinstance(issue, dict) or "number" not in issue:
-        raise ValueError(f"issue #{issue_n} is not in the answer")
-    items = [(f"PR {slug}#{pr_number}", node.get("body") or "", "all")]
-    seen = {(slug.lower(), int(issue_n))}
-    items.append((f"{slug}#{issue_n}", issue.get("body") or "", "section"))
-    for c in node["closingIssuesReferences"]["nodes"]:
+    path, n = split_ref(slug, issue_ref)
+    items, info, seen = [(f"PR {slug}#{pr_number}", node.get("body") or "", "all")], [], set()
+    closing = node["closingIssuesReferences"]["nodes"]
+    for c in closing:
         repo = c["repository"]["nameWithOwner"]
         key = (repo.lower(), int(c["number"]))
         if key not in seen:
             seen.add(key)
             items.append((f"{repo}#{c['number']}", c.get("body") or "", "section"))
-    return items
+    if not closing:
+        issue = json.load(open(issue_path))
+        if not isinstance(issue, dict) or "number" not in issue:
+            raise ValueError(f"issue {path}#{n} is not in the answer")
+        items.append((f"{path}#{n}", issue.get("body") or "", "section"))
+    elif (path.lower(), n) not in seen:
+        info.append(not_closed(f"{path}#{n}"))
+    return items, info
 
 
-def gl_bodies(slug, mr_path, closes_path, issue_path, issue_n):
+def gl_bodies(slug, mr_path, closes_path, issue_path, issue_ref):
     mr = json.load(open(mr_path))
     closes = json.load(open(closes_path))
-    issue = json.load(open(issue_path))
     if not isinstance(mr, dict) or "iid" not in mr:
         raise ValueError("the MR is not in the answer")
     if not isinstance(closes, list):
         raise ValueError("closes_issues is not a list")
-    if not isinstance(issue, dict) or "iid" not in issue:
-        raise ValueError(f"issue #{issue_n} is not in the answer")
     pid = mr.get("project_id")
-    items = [(f"MR {slug}!{pr_number}", mr.get("description") or "", "all")]
-    seen = {(pid, int(issue_n))}
-    items.append((f"{slug}#{issue_n}", issue.get("description") or "", "section"))
+    path, n = split_ref(slug, issue_ref)
+    items, info, seen, refs = [(f"MR {slug}!{pr_number}", mr.get("description") or "", "all")], [], set(), set()
     for c in closes:
         key = (c.get("project_id"), int(c["iid"]))
-        if key not in seen:
-            seen.add(key)
-            ref = f"{slug}#{c['iid']}" if c.get("project_id") == pid else f"project {c.get('project_id')}#{c['iid']}"
-            items.append((ref, c.get("description") or "", "section"))
-    return items
+        if key in seen:
+            continue
+        seen.add(key)
+        # Each closing issue is its own project's, keyed by project_id, never resolved in
+        # the MR's project (#1407). Its full reference names it when GitLab gives one.
+        full = (c.get("references") or {}).get("full")
+        if full:
+            ref = full
+        elif c.get("project_id") == pid:
+            ref = f"{slug}#{c['iid']}"
+        else:
+            ref = f"project {c.get('project_id')}#{c['iid']}"
+        refs.add(ref.lower())
+        if c.get("project_id") == pid:
+            refs.add(f"{slug}#{c['iid']}".lower())
+        items.append((ref, c.get("description") or "", "section"))
+    if not closes:
+        issue = json.load(open(issue_path))
+        if not isinstance(issue, dict) or "iid" not in issue:
+            raise ValueError(f"issue {path}#{n} is not in the answer")
+        items.append((f"{path}#{n}", issue.get("description") or "", "section"))
+    elif f"{path}#{n}".lower() not in refs:
+        info.append(not_closed(f"{path}#{n}"))
+    return items, info
 
 
 cmd = sys.argv[1]
-items, lint = [], True
+items, info, lint = [], [], True
 if cmd == "lint":
     items = [(p, open(p).read(), "none") for p in sys.argv[2:]]
 elif cmd == "boxes":
@@ -200,9 +238,9 @@ elif cmd == "pr":
     platform, slug, pr_number, issue_n = sys.argv[2:6]
     try:
         if platform == "github":
-            items = gh_bodies(slug, *sys.argv[6:8], issue_n)
+            items, info = gh_bodies(slug, *sys.argv[6:8], issue_n)
         else:
-            items = gl_bodies(slug, *sys.argv[6:9], issue_n)
+            items, info = gl_bodies(slug, *sys.argv[6:9], issue_n)
     except (ValueError, KeyError, TypeError, AttributeError, json.JSONDecodeError) as e:
         print(f"ac-gate: cannot read the PR/MR and its issues: {e}", file=sys.stderr)
         print("VERDICT: FAIL")
@@ -213,6 +251,8 @@ for ref, body, mode in items:
     code, lines = grade(ref, body, mode, lint)
     worst = max(worst, code)
     print("\n".join(lines))
+for line in info:
+    print(line)  # stdout, beside the ac-gate: lines, so /precheck's checklist carries it
 print("VERDICT: PASS" if worst == 0 else "VERDICT: FAIL")
 sys.exit(worst)
 PYEOF
@@ -254,7 +294,11 @@ esac
 # --- pr <repo_root> <PR_NUMBER> <ISSUE_N> -----------------------------------------------
 (($# == 4)) || usage
 repo="$2" pr_n="$3" issue_n="$4"
-[[ "$pr_n" =~ ^[0-9]+$ && "$issue_n" =~ ^[0-9]+$ ]] || usage
+[[ "$pr_n" =~ ^[0-9]+$ && "$issue_n" =~ ^([A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+#)?[0-9]+$ ]] || usage
+# ISSUE_N as `<path>#<n>` names another repository's issue; a bare `<n>` is origin's.
+issue_num="${issue_n##*#}"
+issue_path=""
+[[ "$issue_n" == *#* ]] && issue_path="${issue_n%#*}"
 
 fetch_fail() {
 	echo "precheck-ac-gate: ${platform:-?} API call failed: $*" >&2
@@ -303,13 +347,22 @@ github)
 	q='query($o: String!, $n: String!, $num: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $num) { body closingIssuesReferences(first: 50) { nodes { number body repository { nameWithOwner } } } } } }'
 	gh api graphql -f query="$q" -f o="${slug%%/*}" -f n="${slug#*/}" -F num="$pr_n" </dev/null >"$tmp/pr.json" 2>/dev/null ||
 		fetch_fail "read PR #$pr_n"
-	gh api "repos/$slug/issues/$issue_n" </dev/null >"$tmp/issue.json" 2>/dev/null || fetch_fail "read issue #$issue_n"
+	# ISSUE_N is read only when the PR closes nothing: otherwise it is never graded (#1397).
+	if jq -e '.data.repository.pullRequest.closingIssuesReferences.nodes | length == 0' "$tmp/pr.json" >/dev/null 2>&1; then
+		gh api "repos/${issue_path:-$slug}/issues/$issue_num" </dev/null >"$tmp/issue.json" 2>/dev/null ||
+			fetch_fail "read issue $issue_n"
+	fi
 	python3 -c "$PY" pr github "$slug" "$pr_n" "$issue_n" "$tmp/pr.json" "$tmp/issue.json"
 	;;
 gitlab)
 	gl_api "projects/$enc/merge_requests/$pr_n" >"$tmp/mr.json" || fetch_fail "read MR !$pr_n"
 	gl_api "projects/$enc/merge_requests/$pr_n/closes_issues" >"$tmp/closes.json" || fetch_fail "read the issues MR !$pr_n closes"
-	gl_api "projects/$enc/issues/$issue_n" >"$tmp/issue.json" || fetch_fail "read issue #$issue_n"
+	# Only when the MR closes nothing: a same-numbered local issue is not the closing one (#1407).
+	if jq -e 'length == 0' "$tmp/closes.json" >/dev/null 2>&1; then
+		ienc="$enc"
+		[[ -n "$issue_path" ]] && ienc="$(printf '%s' "$issue_path" | jq -sRr @uri)"
+		gl_api "projects/$ienc/issues/$issue_num" >"$tmp/issue.json" || fetch_fail "read issue $issue_n"
+	fi
 	python3 -c "$PY" pr gitlab "$slug" "$pr_n" "$issue_n" "$tmp/mr.json" "$tmp/closes.json" "$tmp/issue.json"
 	;;
 *)
