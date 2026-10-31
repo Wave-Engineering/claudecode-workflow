@@ -127,6 +127,14 @@ def test_no_after_compaction_row_maps_to_plain_engage():
     assert "| The same session, after a compaction | `/engage reload` |" in read(
         "skills/onboard/SKILL.md"
     )
+    # A Skill | When | What table has the skill first, which the row regex can't see.
+    assert "| `/engage` | Session start (`/engage reload` after compaction) |" in read(
+        "skills/ccwork/tours/foundations.md"
+    )
+    onboard_intro = read("skills/onboard/introduction.md")
+    assert "`/engage` alone is enough" not in onboard_intro
+    assert "after a compaction, run `/engage reload`" in onboard_intro
+    assert "or a revive: `/engage reload`" in read("docs/skill-reference.md")
 
 
 def test_engage_important_scoped_to_plain_engage():

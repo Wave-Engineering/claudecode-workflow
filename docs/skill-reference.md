@@ -53,13 +53,14 @@ Reads CLAUDE.md, confirms the mandatory development rules are loaded, restores a
 
 **When to use it:**
 - At the start of every new session
-- After context compaction (when Claude's context window fills up and gets summarized)
+- After context compaction (when Claude's context window fills up and gets summarized) or a revive: `/engage reload`
 - Whenever you are unsure whether Claude still has the project rules loaded
 
 **Examples:**
 
 ```
 /engage
+/engage reload
 ```
 
 No arguments -- it reads the environment and reports what it finds. Memory files are loaded automatically by the harness; `/engage` reads CLAUDE.md, summarizes the mandatory rules, surfaces any pending work, and ends with the current git branch and a prompt for direction. `/engage reload`, used after a compaction or a revive, does only the re-read and the plan load: no rules summary and no prompt, so the work carries on.
