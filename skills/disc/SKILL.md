@@ -52,3 +52,7 @@ The kit's chat rules live in `docs/chat-tools.md` (the repo root's, else `~/.cla
 ## Turn-taking on shared channels
 
 Before answering a team-addressed question when many agents are listening, follow the mic convention (claim the talking-stick or defer). Full convention: https://github.com/Wave-Engineering/claudecode-workflow/blob/main/docs/discord-mic-convention.md (in the cc-workflow repo at `docs/discord-mic-convention.md`; not deployed to the Cellar, so the bare relative path won't resolve from a non-repo session).
+
+## Reminding BJ: #call-4-bj
+
+A reminder of a question BJ hasn't answered goes to `#call-4-bj` through `/owtx`, in the same turn; `/sqtk` rule 14 sets the format, including the `⏰⏰⏰⏰` first line when you are blocked.

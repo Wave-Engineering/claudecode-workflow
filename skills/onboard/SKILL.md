@@ -17,10 +17,10 @@ Run this as a new session's first prompt. There are three entry points, one per 
 |---|---|
 | A fresh seed exists | `/reseed revive`: continue from it |
 | New to this repo, or a cold start | `/onboard` |
-| The same session, after a compaction | `/engage` |
+| The same session, after a compaction | `/engage reload` |
 
-`/onboard` sits beside `/engage`, not inside it: `/engage` is the light ritual that runs after
-every compaction, and this is the full one.
+`/onboard` sits beside `/engage`, not inside it: `/engage reload` is the light ritual that runs
+after every compaction (a re-read, with no rules confirmation), and this is the full one.
 
 Do the steps in order. **Do no other work until the tag-up in step 8.**
 

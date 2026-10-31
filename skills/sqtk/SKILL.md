@@ -127,6 +127,19 @@ From BJ's Stop-hook wait list (in daily use since 2026-09-28). Each rule cost a 
 13. **If BJ says "I already told you", take it as given.** Your own compaction may have lost the
     answer. Don't ask him to prove it.
 
+**Reminding him:**
+
+14. **A reminder goes to #call-4-bj, in the same turn.** When you remind BJ of a question he hasn't
+    answered, post its context to `#call-4-bj` in the same turn, with `/owtx #call-4-bj` and no
+    route. That is `chat_send(to: "call-4-bj", text)` with no `backend` when `chat_send` is in your
+    tool list (the dual-mode rule in `docs/chat-tools.md`), otherwise
+    `disc_send(channel_id: "call-4-bj", message)`. The post stands alone for someone reading it
+    cold: the question, what it is about and why it matters, your recommendation, the exact reply
+    you need, and its squawk (`bj:needs#<seq>`). **If you are blocked until he answers, the first
+    line is exactly `⏰⏰⏰⏰`** (four U+23F0 characters, not the `:alarm_clock:` shortcode),
+    followed by the question on the next line. If you are not blocked, there is no alarm line.
+    Sign it as `/owtx` says. The in-session reminder still happens; the post is in addition to it.
+
 ## Finding out when he answers
 
 When BJ settles a squawk, you find out mechanically:

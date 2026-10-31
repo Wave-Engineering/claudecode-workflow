@@ -71,7 +71,7 @@ shared fragments — under isolation, yours is the only backstop there.
    aoe add <grunt-repo-path> --group grunts --title grunt-<slug> \
      --worktree grunt/<slug> --new-branch --base-branch <default-branch> \
      --cmd claude --launch [--yolo] \
-     --extra-args '--append-system-prompt "You are the <uuid> grunt. On EVERY wake, FIRST run /engage, then read ~/.claude/grunt/<uuid>/seed-mission.md and ~/.claude/grunt/<uuid>/live-context.md and obey them. Do nothing before loading them."'
+     --extra-args '--append-system-prompt "You are the <uuid> grunt. On EVERY wake, FIRST run /engage (after a compaction, /engage reload), then read ~/.claude/grunt/<uuid>/seed-mission.md and ~/.claude/grunt/<uuid>/live-context.md and obey them. Do nothing before loading them."'
    ```
    (`--yolo` skips permission prompts for autonomy. That removes the one *hard* backstop — the
    prompt — and leaves only the grunt's judgment and charter (natural-language instruction an LLM

@@ -10,7 +10,7 @@ A guided walkthrough of the foundational skills — the ones that manage session
 
 ## Section 1: `/engage` — The Resume Cycle
 
-Narration: "The most important foundation skill. `/engage` loads your rules, restores context, and confirms ready state. You run it at session start and after every context compaction."
+Narration: "The most important foundation skill. `/engage` loads your rules, restores context, and confirms ready state. You run it at session start. After every context compaction you run `/engage reload`, which re-reads the rules without the confirmation and carries on."
 
 ### What it does
 
@@ -21,7 +21,7 @@ Narration: "The most important foundation skill. `/engage` loads your rules, res
 ### When to use it
 
 - **Every session start** — first thing you run (or Claude runs it for you)
-- **After context compaction** — when Claude's context window fills and gets summarized, `/engage` is the safety net that restores the rules that compaction may have dropped
+- **After context compaction** — when Claude's context window fills and gets summarized, `/engage reload` is the safety net that restores the rules that compaction may have dropped
 
 ### Live check
 
@@ -52,7 +52,7 @@ ls "$MEMORY_DIR"/MEMORY.md 2>/dev/null && echo "  → project has memories" || e
 
 For long-running work, plan files (`.claude/plans/`) capture session state that survives compaction. Memory files hold durable facts; plan files hold in-progress context.
 
-Narration: "Between these two mechanisms, you don't need to do anything manual before a compaction. Memory files survive because they're on disk; plan files capture working state. `/engage` is the thaw."
+Narration: "Between these two mechanisms, you don't need to do anything manual before a compaction. Memory files survive because they're on disk; plan files capture working state. `/engage reload` is the thaw."
 
 ---
 
@@ -157,7 +157,7 @@ Here is the full foundation skill set at a glance:
 
 | Skill | When | What |
 |-------|------|------|
-| `/engage` | Session start, after compaction | Load rules, restore context |
+| `/engage` | Session start (`/engage reload` after compaction) | Load rules, restore context |
 | `/ccfold` | After kit updates | Merge upstream CLAUDE.md changes |
 | `/edit` | When you need to modify a file in GUI | Open in editor |
 | `/view` | When you need to view a file in GUI | Open in viewer |

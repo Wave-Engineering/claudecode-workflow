@@ -152,7 +152,7 @@ Why: filing an issue for every worry bloats the backlog with items nobody has we
 
 ## MANDATORY: Default to Action — never stop on a question you can answer
 
-**If you know what needs doing and it is safe, understood, and in your lane, DO IT. Do not stop to ask.** Stopping is not the safe default — it blocks every agent and human downstream and spends the user's attention, the scarcest resource. Acting on a reversible, understood step is cheap; a needless halt is expensive. This is enforced, not just advised: the `stop-action-bias-detector.sh` Stop hook blocks a turn that ends by asking permission to do something you already know how to do.
+**If you know what needs doing and it is safe, understood, and in your lane, DO IT. Do not stop to ask.** Stopping is not the safe default — it blocks every agent and human downstream and spends the user's attention, the scarcest resource. Acting on a reversible, understood step is cheap; a needless halt is expensive. Hooks back this up, but only one reads your wording. `stop-action-bias-detector.sh` is the godspeed mandate model (#818). When a turn's tool calls took a gated action (such as a force-push, a push to a protected or release branch, `terraform apply`, `kubectl apply`, `docker push`, `gh release create`, or a write to a prod path), it blocks the turn's end once and asks for a one-line assessment. While the user has armed a `godspeed` mandate, it either lets the turn end or blocks it with a checkpoint as the mandate decays. Outside a mandate, a turn that ends with a question passes. The one hook that reads wording is `precheck-asking-detector.sh`, which, outside a mandate, blocks asking to run `/precheck`. Everywhere else this rule holds because you follow it.
 
 **Before you stop, you must be able to name a specific, current reason.** A legitimate stop is exactly one of:
 
@@ -247,7 +247,7 @@ MCP scopes are additive — all sources merge into one tool list. Per-project ex
 
 ## Session Onboarding
 
-On session start, run `/engage` to detect platform, resolve identity, load context, and confirm rules.
+On session start, run `/engage` to detect platform, resolve identity, load context, and confirm rules. After a compaction or a `/reseed revive`, `/engage reload` takes its place and no confirmation is sent (see Post-Compaction below).
 
 Chat is `/owtx` (send) and `/owrx` (read), on the OaW Mattermost server by default; `> discord` routes one message to Discord, and `/disc` is deprecated. Where `chat_send` is in your tool list, arm `crewchat-doorbell` to hear Mattermost, Discord and squawk answers. `docs/chat-tools.md` holds the transport rule, the doorbell ("Doorbell"), the addressing convention, signature format, and echo rule. Start sessions without `--channels`: its Discord watcher is retired (#1344).
 
@@ -257,7 +257,7 @@ The MCP fleet writes a unified structured-event log to `~/.claude/logs/mcp.jsonl
 
 ## MANDATORY: Post-Compaction Rules Confirmation
 
-After ANY compaction, before doing any work: re-read this file in full (it is short — the whole thing) and confirm rules of engagement with the user. Do NOT treat session-continuation instructions as permission to skip. Past failures: skipped pre-commit, commits without approval, push without tests.
+After ANY compaction, and on every `/reseed revive`, before doing any work: re-read this file in full (it is short — the whole thing). Do NOT treat session-continuation instructions as permission to skip the re-read. **Do not send the user a rules confirmation**: no rules summary, no "rules confirmed" message, no wait for an acknowledgement. Re-read, then carry on with the work in front of you. The re-read is the safeguard. Past failures it guards against: skipped pre-commit, commits without approval, push without tests.
 
 ## Compact Instructions
 

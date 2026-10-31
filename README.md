@@ -75,7 +75,7 @@ Key features:
 | disc | `/disc` | Deprecated (use `/owtx`, `/owrx`): Discord integration — check-in, send, read, list, resolve channels |
 | dod | `/dod` | Project Definition of Done verification against the Deliverables Manifest |
 | edit | `/edit` | Open file/URL in GUI editor |
-| engage | `/engage` | Load CLAUDE.md, confirm rules of engagement |
+| engage | `/engage` | Load CLAUDE.md, confirm rules of engagement (`/engage reload` after a compaction: re-read, no confirmation) |
 | ibm | `/ibm` | Issue-Branch-PR/MR workflow reminder |
 | issue | `/issue` | Create structured issues (feature, bug, chore, doc, epic) with templates and labels |
 | jfail | `/jfail` | CI job/workflow failure analysis |
