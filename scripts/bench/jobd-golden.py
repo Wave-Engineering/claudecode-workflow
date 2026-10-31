@@ -42,8 +42,8 @@ import math
 import os
 import random
 import re
-import statistics
 import shutil
+import statistics
 import subprocess
 import sys
 import time
@@ -405,17 +405,24 @@ def sign_test(wins: int, losses: int) -> float:
 
 
 def paired(pairs: list[tuple[dict[str, Any], dict[str, Any]]]) -> dict[str, Any]:
-    """B against A over passes on the same PR. TP wins and losses are per pair, so a PR's
-    difficulty cancels out; cost is compared as a ratio, since PR size spreads it 2× or more."""
+    """B against A over passes on the same PR, so a PR's difficulty cancels out.
+
+    Wins, ties and losses are counted per PR, from the sum of its pairs' TP differences. A
+    pooled cell holds two pairs per PR (two levels, or two models), and those share the PR's
+    own lean; counting them apart would hand the sign test twice the independent evidence.
+    Cost is compared as a ratio per pair, since PR size spreads it 2× or more."""
     def side(ps: list[dict[str, Any]]) -> dict[str, Any]:
         tp, fp, fn = (sum(p[k] for p in ps) for k in ("tp", "fp", "fn"))
         return {"tp": tp, "fp": fp, "fn": fn, "recall": tp / (tp + fn) if tp + fn else None,
                 "cost_usd": round(sum(p["cost_usd"] for p in ps), 4)}
-    wins = sum(b["tp"] > a["tp"] for a, b in pairs)
-    losses = sum(b["tp"] < a["tp"] for a, b in pairs)
+    lean: dict[str, int] = {}
+    for a, b in pairs:
+        lean[a["url"]] = lean.get(a["url"], 0) + b["tp"] - a["tp"]
+    wins = sum(d > 0 for d in lean.values())
+    losses = sum(d < 0 for d in lean.values())
     ratios = [b["cost_usd"] / a["cost_usd"] for a, b in pairs if a["cost_usd"] > 0 and b["cost_usd"] > 0]
-    return {"n": len(pairs), "a": side([a for a, _ in pairs]), "b": side([b for _, b in pairs]),
-            "tp_wins": wins, "tp_ties": len(pairs) - wins - losses, "tp_losses": losses,
+    return {"n": len(pairs), "prs": len(lean), "a": side([a for a, _ in pairs]), "b": side([b for _, b in pairs]),
+            "tp_wins": wins, "tp_ties": len(lean) - wins - losses, "tp_losses": losses,
             "sign_p": round(sign_test(wins, losses), 4),
             "cost_ratio_geomean": round(math.exp(statistics.fmean(map(math.log, ratios))), 3) if ratios else None,
             "cost_ratio_median": round(statistics.median(ratios), 3) if ratios else None}

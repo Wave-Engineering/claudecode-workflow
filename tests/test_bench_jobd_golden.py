@@ -434,5 +434,23 @@ def test_fp_sample_deterministic_and_stratified(tmp_path):
     assert table.count("| finding ") == 6 and "jobd-" not in table  # blinded: the arm is only in the key
     every = jg.fp_sample(run, SONNET, 99, 1)
     assert "12 of 12 false positives" in every and every.split("## Key", 1)[1].count("| jobd-") == 12
-    lopsided = jg.fp_sample(run, SONNET, 10, 1)  # opus has 6: sonnet's quota of 5 plus the spare
-    assert lopsided.split("## Key", 1)[1].count(OPUS) == 5 and lopsided.count("10 of 12") == 1
+
+
+def test_fp_sample_gives_a_short_models_quota_to_the_others(tmp_path):
+    run = _judged_run(tmp_path, {(1, OPUS, "medium"): (0, 6, 1.0), (1, SONNET, "medium"): (0, 2, 1.0)})
+    key = jg.fp_sample(run, SONNET, 6, 1).split("## Key", 1)[1]
+    assert key.count(OPUS) == 4 and key.count(SONNET) == 2  # sonnet has 2 of its 3: opus takes the spare
+
+
+def test_pooled_cells_count_each_pr_once(tmp_path):
+    # PR 1 at medium and high: sonnet +1 at medium, -1 at high, so the PR is a tie, not a win and
+    # a loss. PR 2 at medium and xhigh: sonnet ahead at both, so one win, not two.
+    run = _judged_run(tmp_path, {
+        (1, OPUS, "medium"): (1, 0, 1.0), (1, SONNET, "medium"): (2, 0, 1.0),
+        (1, OPUS, "high"): (2, 0, 1.0), (1, SONNET, "high"): (1, 0, 1.0),
+        (2, OPUS, "medium"): (1, 0, 1.0), (2, SONNET, "medium"): (2, 0, 1.0),
+        (2, OPUS, "xhigh"): (1, 0, 1.0), (2, SONNET, "xhigh"): (3, 0, 1.0),
+    })
+    pooled = jg.compare(run, SONNET)["model"][f"{SONNET} vs {OPUS}"]["pooled"]
+    assert (pooled["n"], pooled["prs"]) == (4, 2)
+    assert (pooled["tp_wins"], pooled["tp_ties"], pooled["tp_losses"]) == (1, 1, 0)

@@ -237,16 +237,30 @@ Per-arm sums mix PRs of different difficulty. The paired tables below answer the
 | xhigh vs medium | sonnet | | | | | | |
 | xhigh vs high | opus | | | | | | |
 | xhigh vs high | sonnet | | | | | | |
+| high vs medium | pooled | | | | | | |
+| xhigh vs medium | pooled | | | | | | |
+| xhigh vs high | pooled | | | | | | |
 
-TP wins and losses are counted per pair. The sign test is exact and two-sided, with ties
-dropped. With 16 or 17 pairs in a cell, a p under 0.05 needs a lopsided split (for example 13 to
-3, with no ties). A null result here means "no effect large enough to see", not "no effect".
+**How to read the sign test.** Wins, ties and losses are counted per PR. The `pairs` column
+counts PRs. In a pooled row a PR holds two pairs (two levels in the model table, two models in
+the effort table), and its outcome is the sign of their summed TP difference, because two pairs
+on one PR are not independent evidence. The test is exact and two-sided, with ties dropped. With
+no ties, p under 0.05 takes these splits:
+
+- an effort cell (16 or 17 PRs): 13 to 3, or 13 to 4;
+- a model cell at one level (33 or 34 PRs): 23 to 10, or 24 to 10;
+- a pooled model row (50 PRs): 33 to 17.
+
+Ties lower the count and raise the bar. A null result means "no effect large enough to see",
+not "no effect".
 
 ### False positives, spot-checked by hand (`fp-sample`)
 
 Precision is a floor until a sample is checked, because the goldens aren't exhaustive. The
 sample is split evenly between the models, drawn with a recorded seed, and blinded: the
-worksheet's table hides the arm, and its key is opened only after every verdict is in.
+worksheet's table hides the arm, and its key is opened only after every verdict is in. It is a
+sample of findings, not of distinct defects. A model reviews each PR at two levels, so the same
+issue can be drawn twice, once from each level.
 
 | model | FPs | sampled | real | not real | unsure | corrected precision |
 |---|---|---|---|---|---|---|
