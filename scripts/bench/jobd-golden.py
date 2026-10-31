@@ -210,6 +210,7 @@ def review_argv(model: str, system_file: Path, diff_dir: Path) -> list[str]:
 
 
 def review(golden_url: str, model: str, run: Path) -> dict[str, Any]:
+    run = run.resolve()  # claude -p runs with cwd=<tree>, so every path handed to it must be absolute
     d = PRS / slug(golden_url)
     pr = json.loads((d / "pr.json").read_text())
     body, agent_path, agent_sha = agent_system_prompt()

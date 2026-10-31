@@ -126,10 +126,11 @@ def test_agent_system_prompt_strips_frontmatter_and_hashes_the_body(tmp_path):
 
 
 def test_review_env_keeps_every_claude_md_out(tmp_path, monkeypatch):
-    seen = {}
+    seen, argvs = {}, []
 
     def fake_run(argv, **kw):
         seen.update(kw["env"])
+        argvs.append(argv)
         raise SystemExit("stop after the spawn")
 
     d = tmp_path / "prs" / "o__r__1"
@@ -138,10 +139,13 @@ def test_review_env_keeps_every_claude_md_out(tmp_path, monkeypatch):
     monkeypatch.setattr(jg, "PRS", tmp_path / "prs")
     monkeypatch.setattr(jg, "agent_system_prompt", lambda: ("body", "/a.md", "0" * 64))
     monkeypatch.setattr(jg.subprocess, "run", fake_run)
+    monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit):
-        jg.review("https://github.com/o/r/pull/1", "claude-opus-5-5", tmp_path / "run")
+        jg.review("https://github.com/o/r/pull/1", "claude-opus-5-5", Path("run"))  # relative, as typed
     assert seen["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] == "1"
     assert seen["OTEL_RESOURCE_ATTRIBUTES"].startswith("precheck_variant=claude-opus-5-5,")
+    sys_file = argvs[0][argvs[0].index("--system-prompt-file") + 1]
+    assert sys_file == str(tmp_path / "run" / "code-reviewer.system.md")  # absolute: cwd is the tree
 
 
 def test_memory_files_lists_a_trees_own_but_not_gits(tmp_path):
