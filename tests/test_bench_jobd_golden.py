@@ -63,8 +63,9 @@ def test_prompt_names_the_tree_the_line_count_and_every_diff_part():
 
 
 def test_review_runs_read_only_tools_and_never_the_web():
-    argv = jg.review_argv("claude-opus-5-5", Path("/r/sys.md"), Path("/d"))
+    argv = jg.review_argv("claude-opus-5-5", "high", Path("/r/sys.md"), Path("/d"))
     assert argv[:4] == ["claude", "-p", "--model", "claude-opus-5-5"]
+    assert argv[argv.index("--effort") + 1] == "high"
     assert argv[argv.index("--tools") + 1] == "Read,Grep,Glob"
     joined = " ".join(argv)
     assert "WebFetch" not in joined and "WebSearch" not in joined and "Bash" not in joined
@@ -73,10 +74,41 @@ def test_review_runs_read_only_tools_and_never_the_web():
     assert "--bare" not in argv
 
 
-def test_arms_differ_only_by_model():
-    a = jg.review_argv("claude-sonnet-5-5", Path("/r/sys.md"), Path("/d"))
-    b = jg.review_argv("claude-opus-5-5", Path("/r/sys.md"), Path("/d"))
-    assert [x for x in a if x != "claude-sonnet-5-5"] == [x for x in b if x != "claude-opus-5-5"]
+def test_arms_differ_only_by_model_and_effort():
+    a = jg.review_argv("claude-sonnet-5-5", "medium", Path("/r/sys.md"), Path("/d"))
+    b = jg.review_argv("claude-opus-5-5", "xhigh", Path("/r/sys.md"), Path("/d"))
+    assert ([x for x in a if x not in ("claude-sonnet-5-5", "medium")]
+            == [x for x in b if x not in ("claude-opus-5-5", "xhigh")])
+
+
+def test_an_arm_is_a_model_at_an_effort_and_refuses_other_levels():
+    assert jg.arm("claude-sonnet-5-5", "xhigh") == "claude-sonnet-5-5.xhigh"
+    assert jg.tool_name(jg.arm("claude-opus-5-5", "medium")) == "jobd-claude-opus-5-5.medium"
+    for bad in ("low", "max", ""):
+        with pytest.raises(SystemExit):
+            jg.arm("claude-opus-5-5", bad)
+
+
+def test_rotate2_gives_each_pr_two_levels_and_balances_every_pair():
+    urls = [f"https://github.com/o/r/pull/{n}" for n in range(1, 51)]
+    passes = jg.plan(urls, ["s", "o"], "rotate2")
+    assert len(passes) == 50 * 2 * 2
+    by_pr: dict[str, set[str]] = {}
+    for url, model, effort in passes:
+        by_pr.setdefault(url, set()).add(effort)
+    assert all(len(levels) == 2 for levels in by_pr.values())
+    counts = {pair: sum(1 for lv in by_pr.values() if lv == set(pair)) for pair in jg.EFFORT_PAIRS}
+    assert set(counts) == {("medium", "high"), ("medium", "xhigh"), ("high", "xhigh")}
+    assert max(counts.values()) - min(counts.values()) <= 1  # 17/17/16 over 50 PRs
+    for url, effort in {(u, e) for u, _, e in passes}:  # both models at every (PR, level): paired
+        assert {m for u, m, e in passes if u == url and e == effort} == {"s", "o"}
+
+
+def test_round_robin_gives_each_pr_one_level_in_rotation():
+    urls = [f"https://github.com/o/r/pull/{n}" for n in range(1, 7)]
+    passes = jg.plan(urls, ["s", "o"], "round-robin")
+    assert len(passes) == 6 * 2
+    assert [e for _, m, e in passes if m == "s"] == ["medium", "high", "xhigh"] * 2
 
 
 def test_telemetry_env_carries_the_fleet_keys_and_the_ab_labels(tmp_path):
@@ -141,9 +173,10 @@ def test_review_env_keeps_every_claude_md_out(tmp_path, monkeypatch):
     monkeypatch.setattr(jg.subprocess, "run", fake_run)
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit):
-        jg.review("https://github.com/o/r/pull/1", "claude-opus-5-5", Path("run"))  # relative, as typed
+        jg.review("https://github.com/o/r/pull/1", "claude-opus-5-5", Path("run"), "xhigh")  # relative run
     assert seen["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] == "1"
-    assert seen["OTEL_RESOURCE_ATTRIBUTES"].startswith("precheck_variant=claude-opus-5-5,")
+    assert seen["OTEL_RESOURCE_ATTRIBUTES"].startswith("precheck_variant=claude-opus-5-5.xhigh,")
+    assert argvs[0][argvs[0].index("--effort") + 1] == "xhigh"
     sys_file = argvs[0][argvs[0].index("--system-prompt-file") + 1]
     assert sys_file == str(tmp_path / "run" / "code-reviewer.system.md")  # absolute: cwd is the tree
 
