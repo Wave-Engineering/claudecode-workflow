@@ -16,8 +16,17 @@ the cache is gitignored under `.bench/`.
 
 ## What is held constant
 
-The arms differ by `--model` and nothing else (`test_arms_differ_only_by_model`):
+An arm is a `<model>.<effort>` pair. The arms differ by `--model` and `--effort` and nothing
+else (`test_arms_differ_only_by_model_and_effort`):
 
+- **Effort:** `review --effort` is required, one of `medium`, `high` and `xhigh`, which is
+  the range a `/precheck` session runs Job D at. It's passed as `--effort` and recorded in
+  every review and in the report. It matters because **Job D's subagent inherits the parent
+  session's effort**, even when Job D overrides the model (#1394, measured with hook
+  payloads). So the same `/precheck` reviews at whatever effort the session happens to run
+  at. Both models apply all three levels as given. Before #1394 the bench had no effort
+  setting: every pass, the pilot's included, ran at `medium`. (`CLAUDE_EFFORT` is output only.
+  The variable that sets effort is `CLAUDE_CODE_EFFORT_LEVEL`, and the bench uses the flag.)
 - **Prompt:** Job D-full as `skills/precheck/SKILL.md` states it, first pass. A drift test pins
   the bench's wording to the skill's, so an edit to the skill can't leave the bench measuring
   an old prompt.
@@ -35,7 +44,7 @@ The arms differ by `--model` and nothing else (`test_arms_differ_only_by_model`)
   to upstream's OpenAI client by `scripts/bench/claude-openai-shim.py`, which answers
   `chat.completions` with `claude -p` and refuses a request for any other model.
 - **Telemetry:** each process carries the fleet's OTEL keys and
-  `OTEL_RESOURCE_ATTRIBUTES=precheck_variant=<model|judge>,bench_case=<repo>-<pr>`.
+  `OTEL_RESOURCE_ATTRIBUTES=precheck_variant=<model>.<effort>|judge,bench_case=<repo>-<pr>`.
 
 ## Deviations from the real Job D, and why
 
@@ -78,7 +87,7 @@ carried ~9k tokens of this repo's rules.
 
 ## Pilot, 2026-10-31
 
-2 PRs × {`claude-sonnet-5-5`, `claude-opus-5-5`}, run serially on malory (admission a-2af983),
+2 PRs × {`claude-sonnet-5-5`, `claude-opus-5-5`}, all at effort `medium`, run serially on malory (admission a-2af983),
 harness at `e6676ed`, judge `claude-sonnet-5-5`, persona sha256 `e79b6f21…c1551`
 (code-reviewer 1.0.1). Every number below comes from the CLI's own result JSON (`total_cost_usd`,
 `usage`) or from the judge's ledger, never from an estimate.
@@ -112,24 +121,66 @@ and 2 min 42 s with 4 workers, with 0 errors.
   i18next won't fill, is in no golden. The sweep should spot-check a sample of FPs by hand
   before reading precision across arms.
 
-## Sweep budget (projected from the pilot)
+## Effort mini-pilot, 2026-10-31 (#1394)
 
-50 PRs × 2 arms, paired, one pass each:
+keycloak#37429 (4 goldens) × {`claude-sonnet-5-5`, `claude-opus-5-5`} × {`medium`, `high`,
+`xhigh`}, 6 passes run serially on malory (admission a-f4e91b), harness at `c6e4061`, judge
+`claude-sonnet-5-5`. The host was loaded (about 26% idle, swap full), so wall-clock may read
+high, while cost and turns do not depend on the host. Before the measured passes, one
+throwaway request went out under each new `precheck_variant` label, because Prometheus
+`increase()` drops a new series' first sample. With that step, the fleet's `cc_cost_usd`
+matched the harness's `usage` to the cent on all six reviews. The judge read $0.61 against
+the harness's $0.71, and the harness figure stands.
 
-| item | basis | projected |
-|---|---|---|
-| sonnet reviews | 50 × $0.171 | $8.5 |
-| opus reviews | 50 × $0.492 | $24.6 |
-| judge | 100 passes × $0.146 | $14.6 |
-| **total** | | **~$48** (range $40–100) |
+| arm | TP | FP | FN | USD | wall | turns | USD vs medium |
+|---|---|---|---|---|---|---|---|
+| sonnet.medium | 2 | 1 | 2 | 0.208 | 23 s | 4 | 1.00× |
+| sonnet.high | 2 | 0 | 2 | 0.206 | 29 s | 5 | 0.99× |
+| sonnet.xhigh | 3 | 4 | 1 | 0.541 | 139 s | 33 | 2.60× |
+| opus.medium | 3 | 5 | 1 | 0.683 | 78 s | 16 | 1.00× |
+| opus.high | 2 | 2 | 2 | 0.804 | 108 s | 22 | 1.18× |
+| opus.xhigh | 2 | 2 | 2 | 1.409 | 225 s | 39 | 2.06× |
 
-The range allows for PR size: both pilot PRs are about 1,000 diff lines, and larger PRs
-mean more turns. The judge line errs high: the full set averages 2.7 goldens per PR against
-the pilot's 4, and judge calls scale with candidates × goldens. The USD figures are the CLI's
-`total_cost_usd`. The runs use the fleet's subscription login, not an API key (`--bare` is
-never used), so they draw plan usage at that API-equivalent rate rather than a bill.
+The judge made 155 calls for the six passes, at $0.705.
 
-Wall-clock at the pilot's settings: about 73 min of serial reviews plus about 68 min of
-judging at 4 workers, so roughly 2.5 h on a shared host. It needs a cerberus admission.
+**What it shows.** Cost is the finding here, not quality:
 
-**Status:** waiting on BJ's go (`bj:needs` #123). Nothing past the pilot has run.
+- Sonnet costs the same at `medium` and `high`, then 2.6× at `xhigh`.
+- Opus rises in steps: 1.18× at `high`, 2.06× at `xhigh`.
+- Opus costs 3.3× sonnet at `medium` and 2.6× at `xhigh`.
+- `xhigh` is where the turns go: 33 and 39, against 4 and 16 at `medium`.
+- Recall is 2 or 3 of 4 in every arm, a one-golden spread on a single PR, so it says nothing
+  about effort.
+
+## Sweep budget (projected from both pilots)
+
+The basis is the first pilot's mean per pass at `medium` ($0.171 sonnet, $0.492 opus, over 2
+PRs), scaled by the mini-pilot's per-level ratios. That gives these projections per pass:
+
+- sonnet: $0.171 at `medium`, $0.169 at `high`, $0.444 at `xhigh`
+- opus: $0.492 at `medium`, $0.579 at `high`, $1.015 at `xhigh`
+
+The judge is $0.146 per pass, the higher of the two pilots ($0.117 here). Every design runs
+both models on every (PR, level), so the model comparison stays paired throughout.
+
+| design | passes | reviews | judge | **total** | serial wall |
+|---|---|---|---|---|---|
+| `rotate2`, 50 PRs | 200 | $95.6 | $29.2 | **~$125** (range $105–250) | ~7 h |
+| `round-robin`, 50 PRs | 100 | $47.8 | $14.6 | **~$62** (range $55–125) | ~3.5 h |
+| `rotate2`, 25 PRs | 100 | $47.8 | $14.6 | **~$62** (range $55–125) | ~3.5 h |
+
+- **`rotate2`** runs each PR at 2 of the 3 levels, so every pair of levels is compared on
+  the same PRs and PR difficulty cancels out.
+- **`round-robin`** runs each PR at one level, so effort is compared between PRs: about 17
+  per level, against a spread between PRs that the first pilot showed is large (2× in cost,
+  and different goldens caught). It would detect only a large effort effect.
+- **`rotate2` at 25 PRs** costs what `round-robin` does and keeps the within-PR effort
+  comparison, but it halves the model pairs.
+
+The ranges, the judge's lean high, and plan usage rather than a bill are as before: PR size
+drives turns, the full set averages 2.7 goldens per PR against the pilots' 4, and the CLI's
+`total_cost_usd` is an API-equivalent rate on the subscription login. Wall is serial reviews
+plus judging at 4 workers (about 40 s per pass). Any design needs a cerberus admission, and
+the throwaway-request step comes first.
+
+**Status:** waiting on BJ's choice of design. Nothing past the mini-pilot has run.

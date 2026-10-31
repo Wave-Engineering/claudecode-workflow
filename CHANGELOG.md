@@ -30,6 +30,14 @@ are worth keeping apart:
   hooks, MCP servers or CLAUDE.md. Without the last, CLAUDE.md discovery from the cwd had put
   this repo's rules (~9k tokens) into every review of someone else's code. Method, deviations
   and results are in `docs/bench/jobd-golden.md`. Nothing installs; it's a repo-only tool.
+- **Effort is a recorded arm of the Job D bench (#1394).** Job D's reviewer inherits the
+  effort of the session that runs `/precheck`, even across a model switch, as measured with
+  hook payloads. So real reviews run at `medium`, `high` or `xhigh`, and the bench had been
+  measuring only `medium`. `review --effort` is now required. An arm is `<model>.<effort>` in
+  the tool name, the `precheck_variant` telemetry label and the report. `plan --design
+  rotate2|round-robin` prints a balanced sweep. A 6-pass mini-pilot measured the cost per
+  level: sonnet is flat to `high` and 2.6× at `xhigh`, and opus is 1.18× at `high` and 2.06×
+  at `xhigh`.
 
 ### Changed
 - **`/precheck`'s code reviewer no longer pins opus (#1387).** Job D passed `model: opus` on
