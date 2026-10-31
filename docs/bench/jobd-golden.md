@@ -183,4 +183,5 @@ drives turns, the full set averages 2.7 goldens per PR against the pilots' 4, an
 plus judging at 4 workers (about 40 s per pass). Any design needs a cerberus admission, and
 the throwaway-request step comes first.
 
-**Status:** waiting on BJ's choice of design. Nothing past the mini-pilot has run.
+**Status:** waiting on BJ's choice of design (`bj:needs` #130, which replaces #123). Nothing
+past the mini-pilot has run.
