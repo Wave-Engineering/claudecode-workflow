@@ -29,7 +29,9 @@ Steps, each its own subcommand:
                                              a blinded worksheet of N false positives to check
                                              by hand, as Markdown
 
-Upstream runs unmodified, from DIR: its paths are relative to the working directory.
+Upstream runs from DIR, since its paths are relative to the working directory. It runs
+unmodified but for its client deadlines and its exit status on a failed call
+(scripts/bench/upstream-step.py).
 """
 
 from __future__ import annotations
@@ -58,6 +60,10 @@ AGENT_GLOB = "plugins/cache/claude-plugins-official/feature-dev/*/agents/code-re
 REVIEW_TOOLS = "Read,Grep,Glob"
 EFFORTS = ("medium", "high", "xhigh")  # the range a /precheck session runs Job D at (#1394)
 SPLIT_LINES = 1500  # under Read's 2000-line page, as precheck-review-scope.sh gather splits
+SHIM_CALL_TIMEOUT = 300  # claude-openai-shim.py's CALL_TIMEOUT: its cap on one `claude -p`
+# Every upstream step runs through this: deadlines that cover the shim's queue, and an exit
+# status that a failed call can't hide behind (#1406).
+STEP_RUNNER = ROOT / "scripts" / "bench" / "upstream-step.py"
 REVIEW_FLAGS = [
     "--setting-sources", "",
     "--strict-mcp-config",
@@ -324,12 +330,13 @@ def judge(run: Path, judge_model: str, workers: int) -> None:
             raise SystemExit(f"jobd-golden: the shim did not start: {line!r}")
         env = judge_env(line.split(" ", 1)[1], judge_model)
         model_dir = run / "results" / judge_model.replace("/", "_")
-        uv = ["uv", "run", "--project", str(OFFLINE), "python", "-m"]
-        for step in (["code_review_benchmark.step2_extract_comments"],
-                     ["code_review_benchmark.step2_5_dedup_candidates"],
-                     ["code_review_benchmark.step3_judge_comments", "--dedup-groups",
-                      str(model_dir / "dedup_groups.json")]):
-            subprocess.run(uv + step, cwd=run, env=env, check=True)
+        uv = ["uv", "run", "--project", str(OFFLINE), "python", str(STEP_RUNNER)]
+        for step, *args in (["code_review_benchmark.step2_extract_comments"],
+                            ["code_review_benchmark.step2_5_dedup_candidates"],
+                            ["code_review_benchmark.step3_judge_comments", "--dedup-groups",
+                             str(model_dir / "dedup_groups.json")]):
+            subprocess.run(uv + [step, str(workers), str(SHIM_CALL_TIMEOUT), *args],
+                           cwd=run, env=env, check=True)
     finally:
         shim.terminate()
         shim.wait(timeout=30)
@@ -340,13 +347,18 @@ def rec_missing(evals: dict[str, Any], url: str, tool: str) -> bool:
 
 
 def judged(run: Path, judge_model: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """The judge's evaluations and the run's reviews, refusing any review left unjudged."""
+    """The judge's evaluations and the run's reviews, refusing any review left unjudged or
+    judged with failed calls."""
     evals = json.loads((run / "results" / judge_model.replace("/", "_") / "evaluations.json").read_text())
     reviews = [json.loads(f.read_text()) for f in sorted((run / "reviews").glob("*.json"))]
     unjudged = [f"{r['golden_url']} {r['tool']}" for r in reviews
                 if rec_missing(evals, r["golden_url"], r["tool"])]
     if unjudged:  # a partial judge run would otherwise read as zero TP, with the pass's cost counted
         raise SystemExit("jobd-golden: no evaluation for: " + "; ".join(unjudged))
+    errored = [f"{r['golden_url']} {r['tool']}" for r in reviews
+               if evals[r["golden_url"]][r["tool"]].get("errors_count")]
+    if errored:  # a failed match call scores its candidate an FP and its golden a miss (#1406)
+        raise SystemExit("jobd-golden: judge calls failed in: " + "; ".join(errored))
     return evals, reviews
 
 

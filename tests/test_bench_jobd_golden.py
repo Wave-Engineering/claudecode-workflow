@@ -10,7 +10,10 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -200,6 +203,117 @@ def test_judge_env_points_upstream_at_the_shim_and_makes_its_package_importable(
     assert env["PYTHONPATH"].split(":") == [str(jg.OFFLINE), "/elsewhere"]
 
 
+# A stand-in for one upstream step: the module-level names upstream-step.py reaches into.
+_STEP_STUB = """\
+import json, sys
+from pathlib import Path
+BATCH_SIZE = 40
+{deadline}
+def AsyncOpenAI(**kwargs):
+    return kwargs
+def get_model_dir():
+    return Path.cwd()
+class {cls}:
+    async def {method}(self):
+        return {result}
+async def main():
+    (Path.cwd() / "dedup_groups.json").write_text("{{}}")
+    await {cls}().{method}()
+    client = AsyncOpenAI(api_key="unused")
+    print(json.dumps([globals().get("LLM_CALL_TIMEOUT"), client, sys.argv[1:],
+                      globals().get("REVIEW_TIMEOUT", "absent")]))
+"""
+
+
+def _run_step(tmp_path: Path, deadline: str = "LLM_CALL_TIMEOUT = 30", cls: str = "LLMJudge",
+              method: str = "call_llm", result: str = "{'match': True}"):
+    (tmp_path / "stubstep.py").write_text(
+        _STEP_STUB.format(deadline=deadline, cls=cls, method=method, result=result))
+    return subprocess.run([sys.executable, str(jg.STEP_RUNNER), "stubstep", "4",
+                           str(jg.SHIM_CALL_TIMEOUT), "--dedup-groups", "g.json"],
+                          cwd=tmp_path, env={**os.environ, "PYTHONPATH": str(tmp_path)},
+                          capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("deadline, upstream_deadline", [
+    ("LLM_CALL_TIMEOUT = 30", 3000),  # ceil(40 / 4) * 300
+    ("", None),  # extract has no deadline of its own: only the SDK's is set
+])
+def test_step_runner_sets_both_deadlines_to_queueing_plus_one_call(tmp_path, deadline,
+                                                                   upstream_deadline):
+    out = _run_step(tmp_path, deadline=deadline)
+    assert out.returncode == 0, out.stderr
+    upstream, client, argv, review = json.loads(out.stdout)
+    assert upstream == upstream_deadline
+    assert client == {"api_key": "unused", "timeout": 3000, "max_retries": 0}
+    assert argv == ["--dedup-groups", "g.json"]
+    assert review == "absent"  # a step without the judge's review cap gets none added
+
+
+def test_step_runner_switches_off_the_judges_cap_on_a_whole_review(tmp_path):
+    # a review can outlast 1800 s legitimately; a cancelled one is skipped and the step exits 0
+    out = _run_step(tmp_path, deadline="LLM_CALL_TIMEOUT = 30\nREVIEW_TIMEOUT = 1800")
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout)[3] is None
+
+
+@pytest.mark.parametrize("cls, method, result", [
+    ("CandidateExtractor", "call_llm", "{'issues': [], 'error': 'Max retries exceeded'}"),
+    ("LLMJudge", "call_llm", "{'error': 'Timed out after 30s'}"),
+])
+def test_step_runner_exits_3_on_a_failed_call(tmp_path, cls, method, result):
+    out = _run_step(tmp_path, cls=cls, method=method, result=result)
+    assert out.returncode == 3
+    assert "1 call(s) failed" in out.stderr
+    assert (tmp_path / "dedup_groups.json").exists()  # only dedup's output is discarded
+
+
+def test_step_runner_discards_dedups_output_on_a_failed_call(tmp_path):
+    # a rerun skips every arm in the file, so a kept fallback would never be redone
+    out = _run_step(tmp_path, cls="DedupLLM", method="dedup_candidates", result="None")
+    assert out.returncode == 3
+    assert not (tmp_path / "dedup_groups.json").exists()
+
+
+def test_step_runner_keeps_a_clean_dedup(tmp_path):
+    out = _run_step(tmp_path, cls="DedupLLM", method="dedup_candidates", result="[[0], [1]]")
+    assert out.returncode == 0, out.stderr
+    assert (tmp_path / "dedup_groups.json").exists()
+
+
+def test_shim_call_timeout_matches_the_shims_own_cap():
+    path = str(ROOT / "scripts" / "bench" / "claude-openai-shim.py")
+    loader = importlib.machinery.SourceFileLoader("claude_openai_shim", path)
+    spec = importlib.util.spec_from_file_location("claude_openai_shim", path, loader=loader)
+    shim = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shim)
+    assert jg.SHIM_CALL_TIMEOUT == shim.CALL_TIMEOUT
+
+
+def test_judge_runs_every_step_through_the_runner(tmp_path, monkeypatch):
+    calls = []
+
+    class Shim:
+        stdout = type("S", (), {"readline": staticmethod(lambda: "listening http://127.0.0.1:1/v1\n")})
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            pass
+
+    monkeypatch.setattr(jg.subprocess, "Popen", lambda *a, **k: Shim())
+    monkeypatch.setattr(jg.subprocess, "run", lambda argv, **k: calls.append(argv))
+    monkeypatch.setattr(jg, "telemetry_env", lambda *a: {})
+    jg.judge(tmp_path, "claude-sonnet-5-5", 4)
+    steps = [argv[argv.index(str(jg.STEP_RUNNER)) + 1:] for argv in calls]
+    assert [s[:3] for s in steps] == [
+        [f"code_review_benchmark.{m}", "4", str(jg.SHIM_CALL_TIMEOUT)]
+        for m in ("step2_extract_comments", "step2_5_dedup_candidates", "step3_judge_comments")]
+    assert steps[2][3:] == ["--dedup-groups",
+                            str(tmp_path / "results" / "claude-sonnet-5-5" / "dedup_groups.json")]
+
+
 def test_review_records_the_effort_in_the_record_its_file_and_the_ledger(tmp_path, monkeypatch):
     def fake_run(argv, **kw):
         out = {"result": "No findings", "total_cost_usd": 0.5, "usage": {}, "num_turns": 3}
@@ -329,6 +443,24 @@ def test_report_refuses_a_review_the_judge_never_evaluated(tmp_path):
     with pytest.raises(SystemExit) as e:
         jg.report(run, "claude-sonnet-5-5")
     assert "jobd-claude-opus-5-5" in str(e.value)
+
+
+def test_report_refuses_an_evaluation_whose_judge_calls_failed(tmp_path):
+    run = tmp_path / "run"
+    url = "https://github.com/o/r/pull/1"
+    _review(run, url, "claude-sonnet-5-5", "x")
+    _review(run, url, "claude-opus-5-5", "y")
+    edir = run / "results" / "claude-sonnet-5-5"
+    edir.mkdir(parents=True)
+    (edir / "evaluations.json").write_text(json.dumps({url: {
+        jg.tool_name("claude-sonnet-5-5"): {"tp": 1, "fp": 0, "fn": 0, "errors_count": 0},
+        jg.tool_name("claude-opus-5-5"): {"tp": 0, "fp": 2, "fn": 1, "errors_count": 3}}}))
+    (run / "judge-ledger.jsonl").write_text("")
+    with pytest.raises(SystemExit) as e:
+        jg.report(run, "claude-sonnet-5-5")
+    assert "judge calls failed" in str(e.value)
+    assert "jobd-claude-opus-5-5" in str(e.value)
+    assert "jobd-claude-sonnet-5-5" not in str(e.value)
 
 
 def test_assemble_refuses_a_pr_outside_the_benchmark(tmp_path):
