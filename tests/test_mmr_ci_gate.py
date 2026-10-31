@@ -298,7 +298,7 @@ class TestDefaultDenyDoesNotBecomeATotalBlock:
         actual failure mode, rather than the presence of a slogan.
         """
         assert re.search(
-            r"[Ee]very other status STOPs, including ones not listed here", mmr_text
+            r"[Ee]very other (?:status|value) STOPs, including ones not listed here", mmr_text
         ), "the pr_wait_ci escalation must be phrased as an allowlist"
         # The no-checks family, whatever it is currently called. `no_checks_required`
         # (mcp-server-sdlc#416) was retired in v4.0.0 and split into two values
@@ -430,7 +430,45 @@ class TestCiWaitLoop:
         assert "Unrecognized key(s) in object: 'expected_sha'" in step2
         assert re.search(r"\*\*On exactly that error\*\*, retry once without `expected_sha`", step2)
         assert "server predates expected_sha" in step2, "the degraded path must say so on the line"
-        assert re.search(r"Any other `ok: false` → STOP", step2)
+        assert re.search(r"Any other MCP error or `ok: false` → STOP", step2)
+
+    def test_old_server_rejection_is_matched_as_an_mcp_error(self, mmr_text: str) -> None:
+        """The strict schema rejects the key before the handler runs.
+
+        The dispatcher throws invalid params (-32602), so the caller sees an MCP
+        error with no JSON body, not `ok: false`. A fallback keyed on `ok: false`
+        alone would never fire, and every CI wait on an old server would STOP.
+        """
+        step2 = _step(mmr_text, "2")
+        older = re.search(r"\*\*Older server\.\*\*.*?$", step2, re.M).group(0)
+        assert "MCP error" in older and "-32602" in older
+        assert re.search(r"Either way its text contains `Unrecognized key", older)
+
+    def test_resumed_calls_cap_max_wait_sec_at_the_time_left(self, mmr_text: str) -> None:
+        """A deadline checked only between calls overruns by up to one call.
+
+        With 1500 s calls, a 60-minute deadline would end near 75 minutes. Only a
+        resumed call carries `max_wait_sec`, because only a server that knows the
+        key returns `pending`; the first call must stay as old servers accept it.
+        """
+        step2 = _step(mmr_text, "2")
+        assert re.search(
+            r"On each resumed call, also pass `max_wait_sec: min\(1500, <seconds left before the deadline>\)`",
+            step2,
+        )
+        assert "Only a resumed call carries `max_wait_sec`" in step2
+        first = re.search(r"Record the start.*?$", step2, re.M).group(0)
+        assert "max_wait_sec" not in first, "the first call must not carry max_wait_sec"
+
+    def test_escalation_grades_final_state_not_status(self, mmr_text: str) -> None:
+        """`passed` arrives in `final_state`; only the no-checks verdicts use `status`.
+
+        Read literally, `status == "passed"` never matches a polled result, so
+        every merge that waited for CI would STOP.
+        """
+        step3 = _step(mmr_text, "3")
+        assert re.search(r'Proceed \*\*only\*\* on `final_state == "passed"`', step3)
+        assert 'status == "passed"' not in mmr_text
 
     def test_escalation_runs_the_same_loop(self, mmr_text: str) -> None:
         step3 = _step(mmr_text, "3")
