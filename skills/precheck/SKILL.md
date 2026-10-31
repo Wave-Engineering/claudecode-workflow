@@ -362,7 +362,9 @@ Reading `name` is immune to all four **because it never asks the path a question
 
 **Why this is written out rather than summarised:** five verification instruments were wrong on 2026-07-19 and **not one was caught by review** — every one by someone running it against a case that could fail. The instrument is a claim, and claims get tested.
 
-**Job D — Code review** `model: opus`
+**Job D — Code review**
+
+Job D names no model (#1387). The reviewer runs on its agent definition's model, and a router in the request path may pick another. A per-call `model` would override both.
 
 Job D has **two** prompts: a **full** pass and a **delta** re-run. Which one you use is not a judgment call — it is decided by the rule below.
 
@@ -386,7 +388,6 @@ Job D has **two** prompts: a **full** pass and a **delta** re-run. Which one you
 
 ```
 subagent_type: feature-dev:code-reviewer
-model: opus
 prompt: "Review this changeset in <repo_root>.
 
          ### Diff — <N> lines total, read ALL of these files before reviewing
@@ -469,7 +470,6 @@ The ordering is load-bearing: the snapshot must equal *what the reviewer saw*. R
 **Job D-delta** — used when `resolve` printed `delta <ref>`. Same rule: the parent runs the command, the reviewer receives the content.
 ```
 subagent_type: feature-dev:code-reviewer
-model: opus
 prompt: "Re-review after fixes in <repo_root>.
 
          ### Changes since the last completed review — <N> lines, read ALL these files

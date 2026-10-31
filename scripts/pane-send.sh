@@ -19,9 +19,9 @@
 #     end of the cursor's line first, so text right of the cursor goes too. The repeats
 #     also take an empty `!` line out of shell mode ("Exit with ... Ctrl+U on an empty
 #     prompt"), which one C-u on a non-empty line doesn't, so the text is never run as
-#     bash. If the TUI doesn't bind a key, the
-#     worst case is a no-op, and the invariant still holds. Escape is NOT used: on a
-#     running turn it interrupts the turn, and twice on an empty input it opens the
+#     bash. If the TUI doesn't bind a key, the worst case is a no-op, and the invariant
+#     still holds. Escape is NOT used: on a running turn it interrupts the turn, and
+#     twice on an empty input it opens the
 #     rewind picker.
 #   - `-l` sends the text literally, so tmux never reads it as a key name (a caller
 #     passing `Enter` or `C-m` as "text" would otherwise send a bare Enter).

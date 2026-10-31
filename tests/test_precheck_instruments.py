@@ -67,15 +67,16 @@ def test_parser_finds_every_job(jobs: dict[str, str]) -> None:
 
 
 def test_precheck_jobs_abc_not_delegated(jobs: dict[str, str]) -> None:
-    """No Agent dispatch in A, B, B-ci, B-local or C; Job D's two prompts still go to opus."""
+    """No Agent dispatch in A, B, B-ci, B-local or C; Job D's two prompts go to the code
+    reviewer and name no model, so its agent definition or a router picks one (#1387)."""
     for job in ("A", "B", "B-ci", "B-local", "C"):
         body = jobs[job]
         assert "subagent_type" not in body, f"Job {job} still dispatches a sub-agent"
         assert not re.search(r"\bmodel:\s*\w", body), f"Job {job} still names a model to dispatch"
-    assert "`model: opus`" in jobs["D"].splitlines()[0], "Job D's header lost `model: opus`"
+    for job in ("D", "D-full", "D-delta"):
+        assert not re.search(r"\bmodel:\s*\w", jobs[job]), f"Job {job} pins a model again"
     for job in ("D-full", "D-delta"):
         assert "subagent_type: feature-dev:code-reviewer" in jobs[job], f"Job {job} is no longer the code-reviewer agent"
-        assert "model: opus" in jobs[job], f"Job {job} is no longer dispatched to opus"
 
 
 def test_precheck_no_subagent_gate_rule(text: str) -> None:
@@ -153,5 +154,5 @@ def test_precheck_ci_cross_checks_the_check_run(jobs: dict[str, str]) -> None:
 
 
 def test_precheck_names_no_haiku_job(text: str) -> None:
-    """No text calls A, B or C a haiku job: the only delegated job is Job D, on opus."""
+    """No text calls A, B or C a haiku job: the only delegated job is Job D."""
     assert not re.search(r"haiku", text, re.I), "SKILL.md still names a haiku job"

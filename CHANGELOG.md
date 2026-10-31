@@ -20,6 +20,11 @@ are worth keeping apart:
 ## [Unreleased]
 
 ### Changed
+- **`/precheck`'s code reviewer no longer pins opus (#1387).** Job D passed `model: opus` on
+  the `feature-dev:code-reviewer` call, which overrode both `CLAUDE_CODE_SUBAGENT_MODEL` and
+  the agent's own `model: sonnet`. On one host over 2 hours, 13 of 14 reviewer runs were on
+  opus. BJ chose sonnet, or a router's pick. Job D now names no model: today the reviewer runs
+  on its agent definition's model, and a router in the request path can choose another.
 - **No rules confirmation after a compaction or a revive (#1367).** BJ ruled it out. The
   agent still re-reads `CLAUDE.md` in full, which is the safeguard, then carries on with its
   work. It sends no rules summary and no "what next?" question. `/engage reload` is the
@@ -42,10 +47,9 @@ are worth keeping apart:
   `scripts/pane-send.sh`: in one tmux command it clears the input (C-e, then 32 C-u, which
   Claude Code's docs say to repeat across the lines of a multi-line draft, and which also
   leave `!` shell mode; never Escape, which interrupts a turn), types the text literally
-  (`-l`), then presses Enter. Enter is only ever
-  sent after non-empty literal text, so text ending in `;` (which tmux would strip as a
-  separator) is refused. Nothing else in the kit calls `send-keys`, and a test keeps it that
-  way.
+  (`-l`), then presses Enter. Enter is only ever sent after non-empty literal text, so text
+  ending in `;` (which tmux would strip as a separator) is refused. Nothing else in the kit
+  calls `send-keys`, and a test keeps it that way.
 - **A second live session in one checkout is told not to use the identity (#1366).** Two
   sessions in one checkout read the same `.claude/agent-identity.json` and answer the same
   `@name`. `scripts/identity-claimants.sh` reads the process table for another `claude` of
