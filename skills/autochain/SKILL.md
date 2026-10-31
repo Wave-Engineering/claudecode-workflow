@@ -119,7 +119,7 @@ is the failure mode they exist to prevent.
 **Default: work the finding inside the issue you are on.** Not because the current issue
 would be broken without it, but because a separate MR is expensive and the expense is
 invisible at the moment you decide. Each one costs its own `/precheck` — including an
-opus code review — plus a full CI run, a merge pipeline, and one of BJ's approval gates.
+code review — plus a full CI run, a merge pipeline, and one of BJ's approval gates.
 Two adjacent findings split into two MRs pay all of that twice and review each half
 without the other in front of the reviewer.
 

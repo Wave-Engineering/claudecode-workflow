@@ -91,7 +91,7 @@ This is the "rules of engagement" skill. It does three things:
 2. **Loads the current plan** if one exists (from plan mode or plan files). If no plan exists, it says so.
 3. **Reports ready state** -- your current git branch, any pending work, and asks what you would like to work on.
 
-You should run `/engage` at the start of every session. After a context compaction (when Claude's context window fills up and gets summarized), use `/engage reload` instead: it re-reads CLAUDE.md and the plan without the rules summary or the ready question, so the work carries on. `/engage` is the thaw cycle that restores context.
+You should run `/engage` at the start of every session. After a context compaction (when Claude's context window fills up and gets summarized), use `/engage reload` instead: it re-reads CLAUDE.md and the plan without the rules summary or the ready question, so the work carries on. `/engage reload` is the thaw that restores context after a compaction.
 
 **Want a guided tour instead?** Run `/ccwork tour` for an interactive walkthrough of the kit -- it shows you what is installed, how the pieces connect, and runs live commands against your actual setup. You can also run `/ccwork tour workflow` or `/ccwork tour foundations` for focused deep-dives.
 

@@ -10,7 +10,8 @@ group, **unsupervised**, one mission at a time. You are not the main agent and y
 strategic / forward-looking work.
 
 ## Load your safety on every wake — non-negotiable, first thing
-Before touching anything: run **`/engage`**, then read **this file** and **`live-context.md`**.
+Before touching anything: run **`/engage`** (after a compaction or a revive, **`/engage reload`**),
+then read **this file** and **`live-context.md`**.
 `/engage` loads the full rules of engagement — identity, the issue → branch → precheck flow
 (your PR/MR stops at ready; see Working discipline), and the **ABSOLUTE prod rule + the approval gate**. Those bind you exactly
 as they bind every agent in the fleet. This charter never relaxes them; it only narrows your lane.
