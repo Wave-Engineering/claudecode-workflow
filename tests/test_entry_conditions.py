@@ -126,9 +126,22 @@ class TestEvaluateWaveGate:
     def test_absent_or_empty_ec_names_none(self, raw: object) -> None:
         assert evaluate_wave_gate({}, [{"number": 5, "ec": raw}])["held"] is False
 
-    def test_malformed_ec_keeps_the_valid_ids(self) -> None:
+    def test_mixed_ec_list_is_malformed_as_a_whole(self) -> None:
+        """As sdlc#614 reads it: one bad entry makes the whole field malformed."""
         gate = evaluate_wave_gate({"EC-1": {"status": "unmet"}}, [{"number": 5, "ec": ["EC-1", 7]}])
-        assert [h["ec"] for h in gate["start"]] == ["EC-1", MALFORMED_EC]
+        assert [h["ec"] for h in gate["start"]] == [MALFORMED_EC]
+
+    def test_integral_float_depends_on_is_readable(self) -> None:
+        assert evaluate_wave_gate(None, [{"number": 6, "depends_on": [2.0]}])["held"] is False
+        assert evaluate_wave_gate(None, [{"number": 6, "depends_on": [2.5]}])["held"] is True
+
+    def test_refusal_wording_matches_sdlc(self) -> None:
+        from wave_status.entry_conditions import describe_holds
+        gate = evaluate_wave_gate(None, [{"number": 5, "ec": "EC-1", "depends_on": [None]}])
+        assert describe_holds("w1", gate["start"], gate["depends_on"]) == (
+            "wave w1 is held: #5: `ec` is not an array of EC ids; "
+            "#5 has an unreadable depends_on entry null"
+        )
 
     def test_holds_sort_numerically(self) -> None:
         ecs = {f"EC-{n}": {"status": "unmet"} for n in (10, 2)}

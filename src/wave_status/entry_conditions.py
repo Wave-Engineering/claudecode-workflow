@@ -75,19 +75,25 @@ def _ec_gates(cond: object) -> str:
     return "delivery" if gates == "delivery" else "start"
 
 
-def _ec_ids(raw: object) -> tuple[list[str], bool]:
-    """Split an ``ec`` field into its valid ids and a malformed flag.
+def _ec_ids(raw: object) -> list[str] | None:
+    """The EC ids an ``ec`` field names, or None when it is malformed.
 
     Absent, null and ``[]`` name no EC. Anything else that is not an array of
-    non-empty strings is malformed: EC ids are always strings, and dropping a
-    bad entry would drop the gate it was meant to set.
+    non-empty strings is malformed, as a whole: EC ids are always strings, and
+    dropping a bad entry would drop the gate it was meant to set.
     """
     if raw is None:
-        return [], False
-    if not isinstance(raw, list):
-        return [], True
-    ids = [e for e in raw if isinstance(e, str) and e]
-    return ids, len(ids) != len(raw)
+        return []
+    if not isinstance(raw, list) or not all(isinstance(e, str) and e for e in raw):
+        return None
+    return list(raw)
+
+
+def _is_int(value: object) -> bool:
+    """An integer as JavaScript's ``Number.isInteger`` reads JSON: ``2.0`` counts."""
+    if isinstance(value, bool):
+        return False
+    return isinstance(value, int) or (isinstance(value, float) and value.is_integer())
 
 
 def _js_json(value: object) -> str:
@@ -109,7 +115,7 @@ def _dep_holds(raw: object, n: object) -> list[dict]:
         return [{"ref": _js_json(raw), "issue": n, "reason": "malformed"}]
     holds = []
     for d in raw:
-        if isinstance(d, int) and not isinstance(d, bool):
+        if _is_int(d):
             continue
         if not (isinstance(d, str) and d.strip()):
             holds.append({"ref": _js_json(d), "issue": n, "reason": "malformed"})
@@ -138,10 +144,10 @@ def evaluate_wave_gate(entry_conditions: dict | None, issues: list[dict]) -> dic
 
     for issue in issues:
         n = issue.get("number")
-        ids, bad_ec = _ec_ids(issue.get("ec"))
-        if bad_ec:
+        ids = _ec_ids(issue.get("ec"))
+        if ids is None:
             _add(start, MALFORMED_EC, "malformed", "start", n)
-        for ec in ids:
+        for ec in ids or []:
             if ec not in ecs:
                 _add(start, ec, "undeclared", "start", n)
                 continue
@@ -174,13 +180,15 @@ def _issue_list(issues: list) -> str:
 def describe_holds(wave_id: str, holds: list[dict], deps: list[dict], *, verb: str = "held") -> str:
     """One line naming every hold, for a refusal's error message."""
     parts = [
-        f"{h['ec']} is {h['status']} ({h['gates']}) for {_issue_list(h['issues'])}"
+        f"{_issue_list(h['issues'])}: `ec` is not an array of EC ids"
+        if h["ec"] == MALFORMED_EC
+        else f"{h['ec']} is {h['status']} ({h['gates']}) for {_issue_list(h['issues'])}"
         for h in holds
     ]
     parts += [
-        f"#{d['issue']} depends on {d['ref']}, a cross-plan ref that cannot be resolved yet"
-        if d["reason"] == "cross_plan_unresolved"
-        else f"#{d['issue']} has a malformed depends_on entry {d['ref']}"
+        f"#{d['issue']} has an unreadable depends_on entry {d['ref']}"
+        if d["reason"] == "malformed"
+        else f"#{d['issue']} depends on {d['ref']}, a cross-plan ref that cannot be resolved yet"
         for d in deps
     ]
     return f"wave {wave_id} is {verb}: {'; '.join(parts)}"
