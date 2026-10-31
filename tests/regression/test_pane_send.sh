@@ -5,7 +5,8 @@
 # suggestion or a half-typed draft is never submitted. Drives it against a fake
 # tmux that logs its argv:
 #   - one tmux call: clear (C-u), type literally (-l), then Enter;
-#   - empty text, a newline, a leading dash or an empty pane: exit 2, tmux never called;
+#   - empty text, a newline, a leading dash, a trailing ';' or an empty pane: exit 2,
+#     tmux never called;
 #   - a tmux failure is the helper's exit code;
 #   - nothing else in scripts/, skills/ or config/ calls send-keys.
 
@@ -65,6 +66,8 @@ refuse newline "refuses text with a newline" %1 $'a\nb'
 refuse cr "refuses text with a carriage return" %1 $'a\rb'
 refuse dash "refuses text starting with a dash" %1 "-x"
 refuse nopane "refuses an empty pane" "" "hello"
+refuse semi "refuses text that is only ';'" %1 ";"
+refuse semitail "refuses text ending in ';'" %1 'foo\;'
 
 run tmuxfail %1 "hello" 1
 if [[ $rc -eq 1 ]]; then pass "propagates a tmux failure"; else fail "tmux exit 1 became $rc"; fi

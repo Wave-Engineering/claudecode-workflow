@@ -33,12 +33,12 @@ if [[ ! -d "$PROC" ]]; then
 	exit 0
 fi
 
-is_claude() { # <pid>
-	local comm cmd
-	comm="$(cat "$PROC/$1/comm" 2>/dev/null)" || return 1
+is_claude() { # <pid>; builtins only, since the scan calls it for every process of this user
+	local comm argv
+	{ read -r comm <"$PROC/$1/comm"; } 2>/dev/null || return 1
 	[[ "$comm" == claude ]] && return 0
-	cmd="$(tr '\0' ' ' <"$PROC/$1/cmdline" 2>/dev/null)" || return 1
-	[[ "$cmd" == *claude-code/cli.js* ]]
+	{ mapfile -d '' -t argv <"$PROC/$1/cmdline"; } 2>/dev/null || return 1
+	[[ " ${argv[*]-} " == *claude-code/cli.js* ]]
 }
 
 start_time() { # <pid> -> field 22 of stat, read after the last ')' so a comm with spaces can't shift it
@@ -73,13 +73,12 @@ self_start="$(start_time "$self")" || {
 }
 
 want="$(readlink -f -- "$root" 2>/dev/null || printf '%s' "$root")"
-uid="$(id -u)"
 older=()
 younger=()
 for dir in "$PROC"/[0-9]*; do
 	cand="${dir##*/}"
 	[[ "$cand" == "$self" ]] && continue
-	[[ "$(stat -c %u "$dir" 2>/dev/null)" == "$uid" ]] || continue
+	[[ -O "$dir" ]] || continue
 	is_claude "$cand" || continue
 	cwd="$(readlink -f -- "$dir/cwd" 2>/dev/null)" || continue
 	[[ "$cwd" == "$want" ]] || continue

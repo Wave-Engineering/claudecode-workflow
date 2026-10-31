@@ -23,8 +23,13 @@
 #
 # Known limit: C-u may clear only the current line of a multi-line draft.
 #
+#   - Text ending in `;` is refused: in a command list tmux strips a trailing `;` from an
+#     argument as a separator, so `;` alone would type nothing and Enter would accept the
+#     ghost.
+#
 # Exit: tmux's exit code; 2 on a usage error (an empty pane or text, text containing
-# a newline or carriage return, or text starting with `-`), with tmux never called.
+# a newline or carriage return, text starting with `-` or ending with `;`), with tmux
+# never called.
 
 set -uo pipefail
 
@@ -40,5 +45,6 @@ usage() {
 [[ -n "$text" ]] || usage "empty text"
 [[ "$text" != *$'\n'* && "$text" != *$'\r'* ]] || usage "text contains a newline, which would submit part of it"
 [[ "$text" != -* ]] || usage "text starts with '-', which tmux would parse as an option"
+[[ "$text" != *';' ]] || usage "text ends with ';', which tmux would read as a command separator"
 
 tmux send-keys -t "$pane" C-u \; send-keys -t "$pane" -l "$text" \; send-keys -t "$pane" Enter
