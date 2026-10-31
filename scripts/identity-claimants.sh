@@ -11,7 +11,7 @@
 #
 # A live claimant of <root> is a process of this user that is `claude` (its comm, or an
 # argv running claude-code/cli.js), whose cwd resolves to <root>, and that is not this
-# session's own claude. The OLDER process keeps the identity. The newcomer is the one
+# session's own claude or a claude above it in the ancestry. The OLDER process keeps the identity. The newcomer is the one
 # told, because it can move to a worktree before it does anything.
 #
 # Prints one line:
@@ -52,14 +52,17 @@ start_time() { # <pid> -> field 22 of stat, read after the last ')' so a comm wi
 	printf '%s\n' "${20}"
 }
 
-# This session's own claude: the first claude in the ancestry, at most 8 hops up.
+# This session's own claude: the first claude in the ancestry. Every claude further up is
+# excluded too: a nested `claude -p` run from the checkout (a headless or bench run) is
+# its parent session's child, not a rival, and its parent is always older.
 self=""
+declare -A ancestor=()
 pid="${IDENTITY_SELF_START_PID:-$PPID}"
-for _ in 1 2 3 4 5 6 7 8; do
+for _ in $(seq 64); do
 	[[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 0 ]] || break
 	if is_claude "$pid"; then
-		self="$pid"
-		break
+		[[ -n "$self" ]] || self="$pid"
+		ancestor[$pid]=1
 	fi
 	pid="$(awk '/^PPid:/ {print $2}' "$PROC/$pid/status" 2>/dev/null)"
 done
@@ -77,7 +80,7 @@ older=()
 younger=()
 for dir in "$PROC"/[0-9]*; do
 	cand="${dir##*/}"
-	[[ "$cand" == "$self" ]] && continue
+	[[ -n "${ancestor[$cand]-}" ]] && continue
 	[[ -O "$dir" ]] || continue
 	is_claude "$cand" || continue
 	cwd="$(readlink -f -- "$dir/cwd" 2>/dev/null)" || continue

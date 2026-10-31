@@ -46,7 +46,7 @@ run() { # <case> <pane> <text> [tmux rc]; sets rc and calls
 }
 
 run ok %1 "hello there"
-want='send-keys -t %1 C-u ; send-keys -t %1 -l hello there ; send-keys -t %1 Enter'
+want='send-keys -t %1 C-e C-u C-u C-u C-u C-u C-u C-u C-u ; send-keys -t %1 -l hello there ; send-keys -t %1 Enter'
 if [[ $rc -eq 0 && -f "$calls" && "$(wc -l <"$calls")" -eq 1 ]] && grep -qxF -- "$want" "$calls"; then
 	pass "clears, types literally, then Enter in one tmux call"
 else
@@ -72,8 +72,12 @@ refuse semitail "refuses text ending in ';'" %1 'foo\;'
 run tmuxfail %1 "hello" 1
 if [[ $rc -eq 1 ]]; then pass "propagates a tmux failure"; else fail "tmux exit 1 became $rc"; fi
 
-hits="$(grep -rln -- 'send-keys' "$REPO_DIR/scripts" "$REPO_DIR/skills" "$REPO_DIR/config" 2>/dev/null |
-	sed "s|^$REPO_DIR/||" | sort)"
+# Every tracked file that runs or tells an agent to run something: not tests, docs, the
+# changelog or prose Markdown, but skills' Markdown is instructions and stays in. The
+# pattern also catches tmux's `send` alias and a `tmux -L x send-keys` with options between.
+hits="$(git -C "$REPO_DIR" ls-files |
+	awk '!/^(tests|docs)\// && !/^CHANGELOG/ && (!/\.md$/ || /^skills\//)' |
+	(cd "$REPO_DIR" && xargs -d '\n' grep -lE -- 'send-keys|tmux[^|;&]*\bsend(-keys)?\b' 2>/dev/null) | sort)"
 if [[ "$hits" == "scripts/pane-send.sh" ]]; then
 	pass "no send-keys outside the helper"
 else

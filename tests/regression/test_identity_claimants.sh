@@ -101,6 +101,21 @@ printf '300 ((a b) c) S 1 %s9999 4000 0 0\n' "$(printf '0 %.0s' $(seq 16))" >"$t
 run "$t"
 check "comm with spaces parses start time" "older 300" 3
 
+# A nested `claude -p` (300) run from the session (100) in the same checkout: the parent
+# is older, but it is this run's own ancestor, not a rival.
+t="$WORK/nested"
+proc "$t" 100 1 claude 5000 "$ROOT"
+proc "$t" 200 100 bash 5100 "$ROOT"
+proc "$t" 300 200 claude 5200 "$ROOT"
+proc "$t" 400 300 bash 5300 "$ROOT"
+run "$t" 400
+check "nested claude's parent session is not a claimant" "none" 0
+
+# The same nesting beside a real older rival (50): the rival is still reported.
+proc "$t" 50 1 claude 4000 "$ROOT"
+run "$t" 400
+check "nested run still sees a real older rival" "older 50" 3
+
 run "$WORK/missing"
 check "unknown without proc" "unknown no-proc" 0
 
