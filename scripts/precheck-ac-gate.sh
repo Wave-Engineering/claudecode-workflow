@@ -55,7 +55,12 @@ POST_MERGE = [
     ("P2", re.compile(r"\bafter (the |this |a |its )?(pr|mr|merge|install(ation)?|release|deploy(ment)?|tag)\b", re.I)),
     ("P3", re.compile(r"\bmerged\b", re.I)),
     ("P4", re.compile(r"\b(ci|pipeline|build)s? (is |are )?(green|passing|passes|pass) on (main|master|trunk|the default branch|the protected branch)\b", re.I)),
-    ("P5", re.compile(r"\b(released|tagged|deployed)\b", re.I)),
+    # "tagged" only as a release tag: a version or release before it, or a version or ref after.
+    # A bare "tagged" is a tagged channel or the like, not a post-merge state (#1389).
+    ("P5", re.compile(
+        r"\b(released|deployed)\b"
+        r"|\b(v?\d+(\.\d+)+\S*|release|version|image)\s+(is |are |was |gets? |has been )?tagged\b"
+        r"|\btagged\s+(as\s+|with\s+)?(v\d|\d+\.\d|:\w)", re.I)),
     ("P6", re.compile(r"\b(in prod(uction)?|on the (live )?fleet|observed live|in the wild)\b", re.I)),
 ]
 

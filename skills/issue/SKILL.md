@@ -473,7 +473,7 @@ done
 "$ACGATE" lint <file>; echo "exit=$?"
 ```
 
-- **Exit 2** names each flagged line and its pattern id (`P1`–`P6`: post-merge, after the release, merged, CI green on main, released/tagged/deployed, in prod or on the fleet). Rewrite each one as something checkable on the PR/MR head: a hermetic test, a read of the diff, or CI on the merge result. Then lint again. **Never create an issue with a flagged line.**
+- **Exit 2** names each flagged line and its pattern id (`P1`–`P6`: post-merge, after the release, merged, CI green on main, released, deployed or a release tagged, in prod or on the fleet). Rewrite each one as something checkable on the PR/MR head: a hermetic test, a read of the diff, or CI on the merge result. Then lint again. **Never create an issue with a flagged line.**
 - A criterion that names one of those words while being checkable before merge (e.g. "the merged-results pipeline is read") ends with the literal `<!-- ac-gate: pre-merge -->`. `/precheck` lists every such override at the merge call, so use it only for a real false positive.
 - **Exit 0** → continue to Step 3. If the script can't be found, the kit is broken: say so and stop.
 
