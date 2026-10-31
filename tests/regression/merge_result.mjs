@@ -248,6 +248,17 @@ for (const wait of [NOT_FOUND, { ok: true, final_status: 'timed_out' }, { ok: tr
   for (const p of [undefined, null, {}, { status: 'pending' }, { status: 'success' }, 'no_checks_yet']) {
     ok(noRunHold(p, HEAD) === null, `noRunHold: ${JSON.stringify(p)} holds nothing`)
   }
+  // cc#1409 (mcp-server-sdlc#587): pr_wait_ci can now answer with a resumable pending. The probe is
+  // short (timeout_sec 30, far under the 1500 s budget), so it should never see one; if it does,
+  // pending is "CI has not finished", so ci_wait_run still grades. It is neither a hold nor a pass.
+  const pendingProbe = { final_state: 'pending', resume: true, checks: { total: 2, passed: 1, failed: 0, pending: 1 } }
+  ok(noRunHold(pendingProbe, HEAD) === null, 'noRunHold: a resumable pending probe falls through to ci_wait_run')
+  ok(mergeResultVerdict(greenMerge({ probe: pendingProbe })).pass === true,
+    'mergeResultVerdict: a pending probe leaves the merge-result read to grade')
+  ok(mergeResultVerdict(greenMerge({ probe: pendingProbe, merge_pipelines: [{ id: 900, ref: REF, status: 'running', sha: MERGE }] })).pass === false,
+    'mergeResultVerdict: a pending probe never turns an unfinished pipeline into a pass')
+  ok(mergeResultVerdict(greenMerge({ probe: pendingProbe, head_sha: OLD, merge_commit: { sha: MERGE, parent_ids: [TARGET, OLD] }, head_sha_final: HEAD })).pass === false,
+    'mergeResultVerdict: a pending probe with a stale head (it moved after the first read) is refused')
   const probed = mergeResultVerdict(greenMerge({ wait: NOT_FOUND, merge_pipelines: [], probe: conflicts }))
   ok(probed.pass === false && probed.path === 'probe' && probed.reason.startsWith(`no run for head ${HEAD}`),
     'mergeResultVerdict: a no-run probe with no wait verdict HOLDs path probe')
