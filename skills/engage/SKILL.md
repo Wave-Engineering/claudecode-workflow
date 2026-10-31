@@ -11,8 +11,17 @@ description: Read CLAUDE.md, confirm development rules of engagement, and load c
 
 # Engage: Rules of Engagement + Current State
 
-This skill is the post-compaction (or session-start) ritual. It restores context and confirms operating rules.
+Plain `/engage` is the session-start ritual: it restores context and confirms operating rules. `/engage reload` is the post-compaction and post-revive one: it re-reads without a confirmation.
 New to this repo, or a cold start? Run `/onboard` instead: it runs this skill first.
+
+## `/engage reload` — after a compaction or a revive
+
+**If invoked as `/engage reload`, do only this section.**
+
+- Do step 1: read `CLAUDE.md` in full, plus any file its Session Onboarding section points to.
+- Do step 3, loading the plan, silently.
+- Do not run step 2 (no rules summary) or step 4 (no ready message, no question).
+- Return to the caller, which continues its work.
 
 ## Steps
 
@@ -22,7 +31,6 @@ New to this repo, or a cold start? Run `/onboard` instead: it runs this skill fi
 2. **Confirm Rules of Engagement** - Summarize the mandatory rules found in CLAUDE.md as a numbered list
    - Focus on the MANDATORY and ABSOLUTE rules
    - Be concise - one line per rule, not full paragraphs
-   - This confirmation is required by the post-compaction protocol
 
 3. **Load Current Plan** - Check for an active plan file
    - Durable project knowledge (decisions, lessons, architecture) may already

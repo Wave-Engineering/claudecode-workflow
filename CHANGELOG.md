@@ -19,6 +19,23 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Changed
+- **No rules confirmation after a compaction or a revive (#1367).** BJ ruled it out. The
+  agent still re-reads `CLAUDE.md` in full, which is the safeguard, then carries on with its
+  work. It sends no rules summary and no "what next?" question. `/engage reload` is the
+  re-read without the confirmation, and `/reseed revive` uses it. `CLAUDE.md`'s
+  post-compaction section keeps its heading, so `/ccfold` replaces its body in every
+  consumer instead of keeping both. Plain `/engage` at session start is unchanged.
+- **Reminders of an unanswered question go to `#call-4-bj` (#1367).** `/sqtk` rule 14: post
+  the question's context there in the same turn, readable cold. When the agent is blocked
+  until BJ answers, the first line is `⏰⏰⏰⏰`.
+
+### Fixed
+- **`CLAUDE.md` described the Stop hook as it was before #818 (#1367).** It said
+  `stop-action-bias-detector.sh` blocks a turn that ends by asking permission. Since #818 no
+  hook reads the wording: that hook is the godspeed mandate model, and the one wording check
+  left is `precheck-asking-detector.sh`. The settings template's `_comment` now says the same.
+
 ## [8.20.0] - 2026-10-30
 
 Chat moves to the OaW Mattermost server by default: `/owtx` and `/owrx` are new, and `/disc` is

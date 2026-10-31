@@ -185,7 +185,7 @@
         "matcher": "*",
         "hooks": [
           {
-            "_comment": "Default to Action (cc-workflow#732): block a turn that ends by asking permission to do something the agent already knows how to do. General sibling of precheck-asking-detector. Kill-switch: STOP_ACTION_BIAS_HOOK_DISABLED=1.",
+            "_comment": "Godspeed mandate model (cc-workflow#818): one block for assessment after a gated action; under an armed godspeed mandate, GO or a decaying-mandate checkpoint. Does not read turn wording. Kill-switch: STOP_ACTION_BIAS_HOOK_DISABLED=1.",
             "type": "command",
             "command": "~/.local/bin/stop-action-bias-detector.sh"
           }

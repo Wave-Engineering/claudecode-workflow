@@ -2,9 +2,8 @@
 # shellcheck source-path=SCRIPTDIR
 # post-compact-reread.sh — PostCompact hook
 #
-# After context compaction, injects a reminder to re-read CLAUDE.md
-# and confirm rules before proceeding. This replaces the prose rule
-# "MANDATORY: Post-Compaction Rules Confirmation" in CLAUDE.md.
+# After compaction, reminds the agent to re-read CLAUDE.md and carry on;
+# no rules confirmation is sent (triage #35).
 set -uo pipefail
 
 INPUT=$(cat 2>/dev/null || true)
@@ -15,7 +14,7 @@ log_metric "$SESSION_ID" "compact"
 cat <<'EOF'
 ⚠️ Context was compacted. Before continuing work:
 1. Re-read CLAUDE.md (the full file — it is short)
-2. Confirm rules of engagement apply to current work
+2. Do not send a rules confirmation — carry on with the work
 3. Check git status for working state
 
 Past failures after compaction: skipped pre-commit checks, commits without testing, push without validation.

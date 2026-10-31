@@ -22,7 +22,7 @@ way.
 2. Print its age, its recorded branch and HEAD against the current `git branch --show-current`
    and `git rev-parse --short HEAD`. A mismatch is information, not a reason to refuse: say
    it, then carry on.
-3. Run `/engage`, then continue the work the seed names as its immediate next action.
+3. Run `/engage reload`, then continue the work the seed names as its immediate next action.
 
 No freshness gate here: an explicit `/reseed revive` is the intent.
 

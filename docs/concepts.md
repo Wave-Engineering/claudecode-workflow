@@ -123,7 +123,7 @@ The kit enforces several workflows that cannot be skipped. These exist because o
 
 ### Post-Compaction Re-Engagement
 
-**The rule:** After any context compaction, Claude must immediately re-read `CLAUDE.md` and confirm the mandatory rules before doing any other work.
+**The rule:** After any context compaction or `/reseed revive`, Claude must re-read `CLAUDE.md` in full before any other work; no confirmation message is sent. `/engage reload` does the re-read, then the work carries on.
 
 **Why it exists:** Compaction is lossy. Claude's summary of a long conversation may drop critical details like "we are on a feature branch" or "tests must pass before a protected push or a PR/MR." The `/engage` skill exists specifically to restore this context. Running it after compaction is the safety net that prevents compaction-induced rule violations.
 
@@ -230,7 +230,7 @@ The rules in `CLAUDE.md` are loaded into Claude's context at session start and t
 | Code Standards | Tooling discovery, linter/formatter defaults |
 | Secrets and Sensitive Files | Pre-staging safety net for credentials |
 | Agent Identity | Dev-Team persistence, Dev-Name assignment |
-| Post-Compaction Rules | Re-engagement after context compaction |
+| Post-Compaction Re-Read | Re-read after context compaction, no confirmation |
 
 All of these can be customized per project. The mandatory rules are written as hard constraints ("NEVER", "NON-NEGOTIABLE") because they protect against failure modes that have actually occurred. Project-specific customizations (like additional team rules or different branching conventions) can be added as new sections -- `/ccfold` will preserve them on future template merges.
 

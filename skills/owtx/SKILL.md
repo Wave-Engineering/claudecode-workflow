@@ -52,6 +52,10 @@ Resolve identity from `<project_root>/.claude/agent-identity.json` (`dev_name`, 
 - Sign as today: a last line of `— **<dev-name>** <dev-avatar> (<dev-team>)`. On Discord the daemon replaces your own trailing signature instead of doubling it.
 - Emitted addressing is `@agents`, never `@all`.
 
+## Reminding BJ: #call-4-bj
+
+A reminder of a question BJ hasn't answered is posted to `#call-4-bj` in the same turn; `/sqtk` rule 14 sets the format, including the `⏰⏰⏰⏰` first line when you are blocked.
+
 ## Without crewchat (no `chat_send` in your tool list)
 
 The host has no crewchat daemon. Post through `mcp__disc-server__disc_send(channel_id: "<channel>", message)` (it accepts the channel name), and **say once that the message went to Discord because this host has no crewchat**. Never fail silently.
