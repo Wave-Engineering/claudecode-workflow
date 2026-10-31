@@ -19,6 +19,19 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.21.0] - 2026-10-31
+
+A release install now gets the same settings merge and `scripts/` tree as `./install`, and the
+image pipeline can no longer move a GHCR version tag or promote a candidate that isn't a
+release.
+
+### Upgrading
+- **`install-remote.sh` from this release on refuses an older tarball.** v8.21.0 is the first
+  release whose tarball ships `scripts/lib/settings-merge.sh`. To install or roll back to an
+  older tag, run that tag's own installer:
+  `curl -fsSL https://raw.githubusercontent.com/Wave-Engineering/claudecode-workflow/<tag>/scripts/install-remote.sh | bash -s -- --version <tag>`.
+  `./install` from a checkout is unaffected.
+
 ### Fixed
 - **A release install now gets the same settings merge and `scripts/` tree as `./install` (#1360).**
   `install-remote.sh` carried its own copy of the merge, forked before the kit-owned union, the
@@ -47,6 +60,15 @@ are worth keeping apart:
   - **The runbook's promote commands now run.** The ops runbook's §3 named a gate-signals
     script that never existed, set `PROMOTE_ACK` instead of `OPERATOR_ACK`, and never set
     `DIGEST_REF`. It now shows the declared-absent invocation the wrapper reads.
+
+### Image
+
+- **MCP servers:** unchanged from 8.20.0: mcp-server-sdlc v5.2.0, mcp-server-wtf v1.5.2,
+  mcp-server-discord v1.4.3 and mcp-server-nerf v2.1.0. crewchat is still not baked: the image
+  has no daemon socket.
+- **trivy 0.74.0**, unchanged.
+- **The duplicate-hooks guard** the image build runs moved to
+  `scripts/lib/assert-no-duplicate-hooks.sh` (#1360).
 
 ## [8.20.0] - 2026-10-30
 
