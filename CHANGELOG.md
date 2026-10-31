@@ -19,6 +19,21 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Fixed
+- **The bench judge's deadline now covers the shim's queue (#1406).** Upstream's 30 s per-call
+  client deadline ran out while calls waited behind the shim's 4 workers, so Sweep A's first
+  judge run silently scored every candidate as a false positive. Each upstream step now runs
+  through `scripts/bench/upstream-step.py`. The runner sets `LLM_CALL_TIMEOUT` and the SDK
+  client's `timeout` to `ceil(BATCH_SIZE / workers) × SHIM_CALL_TIMEOUT` with no retries, and
+  switches off step 3's whole-review cap. It exits 3 on any failed call and drops a failed
+  dedup's groups. `report` and `compare` refuse an evaluation with `errors_count > 0`.
+- **`test_reseed_kick.sh` no longer fails on a loaded box (#1410).** Two cases raced a
+  `sleep`-timed writer against the kicker's own schedule and failed `validate.sh` at load
+  averages around 23. They now order on events: the kicker logs
+  `session live after <N> send(s); waiting up to <N>s for the revive` on entering the live
+  wait, and "live then read" appends its revive on that line. "late live" has its entry
+  written by the fake tmux's 4th send.
+
 ## [8.22.0] - 2026-10-31
 
 A wave is now held, fail-closed, on its entry conditions and on cross-plan dependencies,
