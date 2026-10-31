@@ -21,7 +21,19 @@ Report the current session identity, or pick one if not yet established.
    agent_file="${project_root}/.claude/agent-identity.json"
    ```
 
-2. **Check for existing identity** — Read the resolved `$agent_file`
+2. **Refuse a second live claimant** — Two sessions in one checkout share one identity
+   file, so both would read and answer as the same Dev-Name (#1366):
+   ```bash
+   ~/.claude/scripts/identity-claimants.sh "$project_root"
+   ```
+   - **Exit 3** (`older <pids>`): an older live session in this checkout holds the identity.
+     Do not read, migrate, pick or write any identity file, and skip steps 3-8. Report:
+     > This checkout's identity is in use by another live session (pid \<pids\>). Two
+     > sessions in one checkout share one identity file, so I won't use or overwrite it.
+     > Move this session into its own worktree, then run /name there.
+   - **Any other result** (`none`, `younger`, `unknown`): continue.
+
+3. **Check for existing identity** — Read the resolved `$agent_file`
    - If it exists and has `dev_name`, `dev_avatar`, and `dev_team`: report them
    - If it does not exist, also check the legacy `/tmp` path as a transition fallback:
      ```bash
@@ -31,10 +43,10 @@ Report the current session identity, or pick one if not yet established.
      ```
    - If neither exists: pick a new identity (see below)
 
-3. **Read Dev-Team** — Check CLAUDE.md for the `Dev-Team:` field
+4. **Read Dev-Team** — Check CLAUDE.md for the `Dev-Team:` field
    - If empty, ask the user what Dev-Team to use
 
-4. **Pick identity (if needed)**
+5. **Pick identity (if needed)**
    - `Dev-Name`: A single memorable word or hyphenated phrase in **kebab-case** (e.g., `beacon`, `null-pointer`, `mother`). Draw from nerdcore canon — sci-fi, fantasy, comics, gaming, mythology, tech puns, wordplay. The wittier and more specific the reference, the better. Generic names are boring. Kebab-case is required so the name works as a routing key for `@<dev-name>` addressing.
    - `Dev-Avatar`: A Unicode emoji character (e.g., 🧠, 👾). Should feel like it belongs with the name.
    - Persist to the resolved identity file (dual-write during transition window). It is a **merge**: set only the three keys `/name` owns, and keep every other key, such as a `lead` that `/grunt` wrote before this session ran `/name` (#1365):
@@ -52,10 +64,10 @@ Report the current session identity, or pick one if not yet established.
      ```
      **Never rewrite the whole file.** A whole-file write drops the `lead` field, and `/precheck` then notifies BJ instead of the lead. If the file is not valid JSON, the merge writes nothing: show the user the file and ask before replacing it. `agent_file` is `${project_root}/.claude/agent-identity.json` — no md5 keying needed once the file lives under the project root.
 
-5. **Announce** — Always respond with:
+6. **Announce** — Always respond with:
    > I'm **\<Dev-Name\>** \<Dev-Avatar\> from team `<Dev-Team>`.
 
-6. **Check in on `#roll-call`**, by the dual-mode rule in `docs/chat-tools.md` ("Transport: `chat_*` or `disc_*`"). With crewchat it lands on your default backend, the OaW Mattermost server for every OaW org:
+7. **Check in on `#roll-call`**, by the dual-mode rule in `docs/chat-tools.md` ("Transport: `chat_*` or `disc_*`"). With crewchat it lands on your default backend, the OaW Mattermost server for every OaW org:
 
    ```
    # chat_send in your tool list (crewchat daemon on this host): no backend
@@ -75,7 +87,7 @@ Report the current session identity, or pick one if not yet established.
      - If you changed the identity just now (a new name, team or avatar), add `chat: restart the session to register the new identity`.
      - A `chat_health` error is reported as such.
    - **No `chat_send`, but the daemon socket is usable** (`test -S /run/crewchat/crewchat.sock && test -w /run/crewchat/crewchat.sock`, the same test `install-crewchat.sh` gates on). The cause depends on where the identity came from:
-     - **This run created the identity file** (step 4): report `chat: crewchat not started (no identity at session start); restart the session`. The shim had nothing to register.
+     - **This run created the identity file** (step 5): report `chat: crewchat not started (no identity at session start); restart the session`. The shim had nothing to register.
      - **The identity file already existed:** a restart won't help. Report `chat: crewchat not registered or not running; run scripts/install-crewchat.sh check`. Usually `./install` hasn't run since the daemon was deployed.
    - **No `chat_send` and no socket:** report `chat: Discord only (no crewchat daemon on this host)`.
 
@@ -88,7 +100,7 @@ Report the current session identity, or pick one if not yet established.
 
    If the `disc-server` MCP is not registered or the call fails, skip silently — check-in is best-effort.
 
-7. **Close with the session-name next-step (FINAL output line)** — Claude Code's native
+8. **Close with the session-name next-step (FINAL output line)** — Claude Code's native
    session name (shown in the session picker, prompt bar, and `--resume`) is **user-driven
    only**: an agent cannot run `/rename` itself, and there is no hook/setting/API to set the
    name programmatically. So do NOT emit a bare `/rename` and assume it ran. Instead, end the

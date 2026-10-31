@@ -147,6 +147,16 @@
             "command": "~/.claude/scripts/hooks/workflow/context-freshness-warn.sh"
           }
         ]
+      },
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "_comment": "Identity collision warn (cc-workflow#1366): its OWN group, so merge_settings' group-signature union can't duplicate it. Warns a session whose checkout's identity file is already held by an older live claude in the same cwd (read from the process table). Dormant without .claude/agent-identity.json. Always exit 0.",
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/identity-collision-warn.sh"
+          }
+        ]
       }
     ],
     "PreCompact": [

@@ -37,6 +37,19 @@ so bump it with this release.
   merge that landed without a proven pin is reported `landedUnproven` with its merge commit, never
   as not landed. A new legal exit, `pinned-merge-unproven`, holds the wave on any unproven
   reconcile merge.
+- **Keystrokes into a pane can no longer submit a draft or a ghost suggestion (#1366).** The
+  reseed kicker and `/reseed`'s `/clear` typed text into the input box without clearing it, so
+  BJ's half-typed draft was submitted with `/reseed revive` appended. Both now go through
+  `scripts/pane-send.sh`: in one tmux command it clears the line (C-u, never Escape, which
+  interrupts a turn), types the text literally (`-l`), then presses Enter. Enter is only ever
+  sent after non-empty literal text. Nothing else in the kit calls `send-keys`, and a test
+  keeps it that way.
+- **A second live session in one checkout is told not to use the identity (#1366).** Two
+  sessions in one checkout read the same `.claude/agent-identity.json` and answer the same
+  `@name`. `scripts/identity-claimants.sh` reads the process table for another `claude` of
+  this user with the same cwd. The older session keeps the identity. A new SessionStart hook
+  (`identity-collision-warn.sh`) warns the newer one, and `/name` refuses to read or write the
+  file for it. A worktree has its own cwd, so it is never a claimant.
 
 ### Added
 - **A mechanical AC gate, and no post-merge criteria (#1365).** `/precheck` used to tick
