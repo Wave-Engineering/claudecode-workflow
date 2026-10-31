@@ -15,8 +15,8 @@
 # another server's registration.
 #
 # THE DOORBELL (K-2, #1336). The same package ships `crewchat-doorbell`, which is the
-# doorbell wherever `chat_send` exists (/disc, "Doorbell: crewchat-doorbell or the
-# one-shots"). So registration also requires the doorbell to run. A registered shim with no
+# doorbell wherever `chat_send` exists (docs/chat-tools.md, "Doorbell: crewchat-doorbell or
+# the one-shots"). So registration also requires the doorbell to run. A registered shim with no
 # doorbell would have every skill arm a command that isn't there, and the agent would be
 # deaf. Unregistered, the skills fall back to sqtk-doorbell.sh for squawks, and the kit has
 # no Discord doorbell (discord-watcher was retired, #1344).
@@ -41,7 +41,7 @@
 set -euo pipefail
 
 # The one pinned release. Bump it with each mattermost-crew release the kit adopts.
-CREWCHAT_TAG="v0.2.4"
+CREWCHAT_TAG="v0.2.6"
 # SSH, never HTTPS: the repo is private, and git to github.com goes over SSH, not a token.
 CREWCHAT_REPO="ssh://git@github.com/Wave-Engineering/mattermost-crew.git"
 CREWCHAT_SOCKET="${CREWCHAT_SOCKET:-/run/crewchat/crewchat.sock}"

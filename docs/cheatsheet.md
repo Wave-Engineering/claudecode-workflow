@@ -51,7 +51,9 @@ Quick reference for all skills and the MCP tools they route to.
 | `/wtf now` | Record manual journal entry | `wtf_now` |
 | `/wtf happened` | Get incident timeline | `wtf_happened` |
 | `/wtf imout` | Suspend recording | `wtf_imout` |
-| `/disc` | Discord (send, read, list, create) | `disc_send`, `disc_read`, `disc_list`; `chat_*` on crewchat hosts |
+| `/owtx` | Send chat: `#channel`, `@user` (a DM), or a roll-call check-in; OaW Mattermost by default, `> discord` for Discord | `chat_send`, `chat_dm`; `disc_send` without crewchat |
+| `/owrx` | Read chat: `#channel`, `thread <post_id>`, `list > discord` | `chat_read`, `chat_thread`; `disc_read` without crewchat; `disc_list` on both kinds of host |
+| `/disc` | **Deprecated** (use `/owtx`, `/owrx`): Discord send, read, list, create | `disc_send`, `disc_read`, `disc_list`; `chat_*` with `backend: "discord"` on crewchat hosts |
 | `/sqtk` | Squawk lists: `bj:needs`, `<project>:triage`, any named list | — |
 
 ## Session & UI

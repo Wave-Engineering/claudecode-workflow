@@ -32,14 +32,14 @@ Common failure modes and their fixes. Each entry describes the symptom you see, 
 **Cause:** Agents hear Discord only through `crewchat-doorbell`, on a host that runs the crewchat daemon. The `discord-watcher` channel server that used to do this was retired (#1344). Usual causes:
 
 - **No crewchat on this host.** If `chat_send` is not in the agent's tool list, the kit has no Discord doorbell there. The agent can still send and read with `disc-server`, but it only sees a message when it reads the channel.
-- **Doorbell not armed.** The agent must run `crewchat-doorbell` as a background task and re-arm it after every exit (`/disc`, "Doorbell").
+- **Doorbell not armed.** The agent must run `crewchat-doorbell` as a background task and re-arm it after every exit (`docs/chat-tools.md`, "Doorbell: `crewchat-doorbell` or the one-shots").
 - **Identity not set.** With no identity file, there is no Dev-Name to address. Run `/name`.
 - **Addressing.** A message with no `@` token reaches no agent (`docs/chat-tools.md`, "Addressing").
 
 **Fix:**
 
 1. Check that `chat_send` is in the agent's tool list. If not, the host has no crewchat daemon.
-2. Check that a `crewchat-doorbell` is running from the agent's project root, and read its last exit code against the table in `/disc`.
+2. Check that a `crewchat-doorbell` is running from the agent's project root, and read its last exit code against the exit table in `docs/chat-tools.md` ("Doorbell: `crewchat-doorbell` or the one-shots").
 3. Run `/name` to confirm the identity.
 4. Address the message with an `@` token.
 

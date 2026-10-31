@@ -454,7 +454,7 @@ If the user says they don't have a Discord server yet:
 
 Ask: *"What's your Discord server (guild) ID? You can find it by right-clicking the server name in Discord and selecting 'Copy Server ID'. (Requires Developer Mode enabled in Discord settings.)"*
 
-After receiving the guild ID, verify bot access AND auto-discover channels in one step. This setup verifies **disc-server itself**, so it calls `mcp__disc-server__*` directly even on a crewchat host. That's the one exception to the dual-mode rule in `/disc`.
+After receiving the guild ID, verify bot access AND auto-discover channels in one step. This setup verifies **disc-server itself**, so it calls `mcp__disc-server__*` directly even on a crewchat host. That's the one exception to the dual-mode rule in `docs/chat-tools.md`.
 
 ```
 mcp__disc-server__disc_list({ guild_id: "<guild_id>", type: "text" })
@@ -564,12 +564,12 @@ Check whether this host can hear Discord. Agents hear it through `crewchat-doorb
 claude mcp list 2>/dev/null | grep -qw crewchat
 ```
 
-- **If registered:** *"crewchat is registered. Agents here hear Discord through `crewchat-doorbell` (`/disc doorbell`)."*
-- **If not registered:** *"This host has no crewchat daemon, so the kit gives it no Discord doorbell. Outbound `/disc` works; agents see messages only when they read a channel."*
+- **If registered:** *"crewchat is registered. Agents here hear OaW Mattermost and Discord through `crewchat-doorbell`."*
+- **If not registered:** *"This host has no crewchat daemon, so the kit gives it no Discord doorbell. Outbound `/owtx` works (it falls back to Discord here); agents see messages only when they read a channel (`/owrx`)."*
 
 This is informational — the setup is complete regardless. (The old `discord-watcher` channel server was retired in #1344.)
 
-- **If it works:** Confirm: *"Discord configuration complete. Test message sent to the default channel. You can now use `/disc` to interact with your server."*
+- **If it works:** Confirm: *"Discord configuration complete. Test message sent to the default channel. With crewchat on this host, `/owtx` and `/owrx` reach it with `> discord`; without crewchat they use it directly."*
 - **If it fails:** Help troubleshoot (permissions, channel ID mismatch, token issues). The config file has been written — the user can fix the issue and retry with `/ccwork setup discord`.
 
 See [Discord Configuration](docs/discord-config.md) for the full schema reference and per-team scoping strategies.

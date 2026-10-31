@@ -204,7 +204,7 @@ tool call on the seed. So a revive through the Skill tool, or inside a turn that
 message or task notification started, needs no prompt. While the session is busy with a turn,
 the kicker does not type, because a send would only queue behind the turn. When the session is
 idle and still hasn't revived, it sends once. If no acknowledgement arrives, it pages BJ via vox
-and `#call-4-bj`, naming the pane. Outcomes are logged to
+and `#call-4-bj` (`notify-bj.sh`: `crewchat-send` first, Discord as the fallback), naming the pane. Outcomes are logged to
 `~/.claude/logs/reseed-kick.log`.
 
 **If tmux is not available** (`$TMUX_PANE` empty): fall back to the manual flow:

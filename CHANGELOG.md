@@ -19,20 +19,7 @@ are worth keeping apart:
 
 ## [Unreleased]
 
-**Needs sdlc v5.2.0 on the host before any auto wave runs.** The per-wave engine now counts a
-pinned merge only on pr_merge's `pinned_head_sha` echo, which first ships in mcp-server-sdlc
-v5.2.0. Before v5.1.0 the server drops the pin; v5.1.x pins but does not echo. On either, every
-auto wave halts `pinned-merge-unproven` after its first group. The kit image bakes sdlc v5.0.4,
-so bump it with this release.
-
 ### Fixed
-- **The wave gate binds to graded evidence (#1356).** Each flight is graded on its own head in
-  code (`flightCiVerdict`) before reconcile, and only green flights reach it. Reconcile and promote
-  merge pinned to the graded head (`expected_head_sha`), and a merge counts only when pr_merge
-  reports `merged:true` and echoes that head. The trivy scan must be of the head CI graded. A
-  merge that landed without a proven pin is reported `landedUnproven` with its merge commit, never
-  as not landed. A new legal exit, `pinned-merge-unproven`, holds the wave on any unproven
-  reconcile merge.
 - **Only a release reaches `:stable`, and a GHCR version tag never moves (#1359).**
   - **Promotion checks the label.** `promote-oakandwave-image.sh` now refuses a digest whose
     `org.opencontainers.image.version` label is not `X.Y.Z`, using the same rule as the Docker
@@ -48,7 +35,73 @@ so bump it with this release.
     script that never existed, set `PROMOTE_ACK` instead of `OPERATOR_ACK`, and never set
     `DIGEST_REF`. It now shows the declared-absent invocation the wrapper reads.
 
+## [8.20.0] - 2026-10-30
+
+Chat moves to the OaW Mattermost server by default: `/owtx` and `/owrx` are new, and `/disc` is
+deprecated but unchanged. `/precheck` grades every acceptance box mechanically, and can route
+its notice to a lead. The wave gate binds to graded evidence, and `wave-status` can add an issue
+to a wave. The crewchat clients move to mattermost-crew v0.2.6. A run of gate and test fixes
+rounds it out.
+
+**Needs sdlc v5.2.0 on the host before any auto wave runs.** The per-wave engine now counts a
+pinned merge only on pr_merge's `pinned_head_sha` echo, which first ships in mcp-server-sdlc
+v5.2.0. Before v5.1.0 the server drops the pin; v5.1.x pins but does not echo. On either, every
+auto wave halts `pinned-merge-unproven` after its first group. `./install` pulls the latest sdlc
+release, and this release's image bakes v5.2.0.
+
+### Upgrading
+- **`/disc` still posts to Discord. Use `/owtx` for OaW Mattermost.** Nothing that worked stops
+  working: every `/disc` intent goes where it went, and only gains a one-line deprecation notice.
+
+### Fixed
+- **The wave gate binds to graded evidence (#1356).** Each flight is graded on its own head in
+  code (`flightCiVerdict`) before reconcile, and only green flights reach it. Reconcile and promote
+  merge pinned to the graded head (`expected_head_sha`), and a merge counts only when pr_merge
+  reports `merged:true` and echoes that head. The trivy scan must be of the head CI graded. A
+  merge that landed without a proven pin is reported `landedUnproven` with its merge commit, never
+  as not landed. A new legal exit, `pinned-merge-unproven`, holds the wave on any unproven
+  reconcile merge.
+- **One lock predicate for the dependency scan (#1358).** `dependency-scan.sh`, the trust gate's
+  trivy prompt and `/precheck`'s Job C fallback each counted lockfiles differently, so a precheck
+  could pass a tree the trust gate held. `scripts/ci/lock-predicate.sh` is now the one predicate,
+  and a test fails CI when the prose copies drift from it. Every trivy run ignores stray
+  `.trivyignore` and config files. A summary over 64 KiB no longer false-fails the scan with
+  exit 5. CI and the image move to trivy 0.74.0.
+- **GitLab merged-results pipelines are found, and a wait fails fast when CI can't start
+  (#1357).** A merged-results pipeline runs on `refs/merge-requests/<iid>/merge`, so lookups by
+  branch or head SHA never found it, and the wave waited out its whole budget. The prompts name
+  the right ref per platform. A probe before each wave wait HOLDs or blocks with the reason
+  (`no run for head <sha>; mergeable=<state>`) when no run can start. `precheck-ci-source.sh`
+  resolves the merge pipeline bound to HEAD, and `precheck-status.sh post` guards a GitLab MR's
+  head pipeline around the post.
+- **The push gates allow deleting one non-protected branch (#1364).** A plain
+  `git push <remote> --delete <b>` (or `:<b>`) of one branch that isn't protected or a release
+  ref passes with no test run and no secret scan, since a delete publishes no code. Deleting a
+  protected ref is refused even after a test run.
+- **The test sentinel counts only a known exit status (#1361).** It read a field Claude Code
+  never sends, so any matching command counted, including a failed lane run. It now writes the
+  sentinel only when the test's own status is known to be 0, and a background run never counts.
+- **`uninstall.sh` removes only registered MCP servers (#1361, #815, #1152).** It ran every
+  listed server's remote uninstaller, registered or not, and `--local` never turned MCP removal
+  off (#815). It now skips MCPs under `--local`, removes only servers `claude mcp list` shows,
+  and removes nothing when that list can't be read (#1361). The uninstall tests are hermetic
+  (#1152), and the vox timeout tests no longer race their signal trap (#1361).
+- **An arrow in a squawk's own text is not an answer (#1363).** The drain, banner and doorbell
+  read everything after a squawk's last `→` as BJ's answer, so an agent's own prose arrow came
+  back as "answered". `sqtk-answer.jq` holds the one rule: compared against the squawk's
+  original text, only an arrow added after it marks an answer. The doorbell passes its maps to
+  jq through files, so a large squawk list can no longer push it past the 128 KiB argument
+  limit and leave it deaf.
+- **`generate-status-panel` no longer crashes when a campaign's last wave completes (#1362).**
+  `current_wave: null` reached `html.escape`. The CLI dashboard header no longer reads
+  "Wave: None".
+
 ### Added
+- **`wave-status add-issue <wave> <N|owner/repo#N>` (#1362).** It adds an issue to an existing
+  wave's plan entry and to `state.json`, so a HOLD fix re-driven with its wave reaches every
+  reader of the wave's issue list. It is idempotent for the same wave, and refuses another wave's
+  issue, an unknown wave, a new issue on a completed wave and a bad ref. `/wavemachine` says to
+  run it before a re-drive.
 - **A mechanical AC gate, and no post-merge criteria (#1365).** `/precheck` used to tick
   "Implementation (AC verified)" from the agent's own reading, and nothing read the boxes. The new
   `scripts/precheck-ac-gate.sh` is Job E: every AC box on each closing issue, and every box in the
@@ -61,6 +114,45 @@ so bump it with this release.
   `.claude/agent-identity.json` (written by `/grunt`; `/name` now merges the file rather than
   rewriting it) routes `/precheck`'s notice to that lead by `SendMessage`, with no `#precheck` post
   and no `vox`. With no `lead`, the notice goes to BJ as before (`scripts/precheck-notify-target.sh`).
+- **`/owtx` and `/owrx`: chat on the OaW Mattermost server by default (#1348).** They replace
+  `/disc`'s send and read sides with no verbs: `#<channel>` is a channel, `@<user>` a DM, and a
+  bare `/owtx` a roll-call check-in. With no route, neither passes `backend`, so the default
+  applies (`home_backend`, then `chat-defaults.json`, which maps every OaW org to
+  `mattermost:oaw-dev`, then ask-once). A last token pair of `> discord` or `> <server_id>`
+  routes one message elsewhere; it counts only after the closing quote and only for a known
+  name, so `"x > y"` stays text. New commands, not a new meaning for `/disc`: a changed default
+  would have sent every habitual `/disc send` somewhere new without a word.
+
+### Changed
+- **The kit's own notifications go to the default backend (#1348).** `/precheck`'s `#precheck`
+  post, `/name`'s roll-call and the wave skills' `#wave-status` announcements name the channel
+  and pass no `backend`. Discord channel IDs survive only in each skill's no-crewchat fallback,
+  and a test keeps it that way.
+- **Pages go through `crewchat-send` first (#1348).** `notify-bj.sh` posts to `#call-4-bj` with
+  `crewchat-send` (mattermost-crew #146), as the checkout's agent (`NOTIFY_BJ_REPO_ROOT`), and
+  falls back to Discord when it is missing or exits non-zero. It logs which path delivered, and
+  exits non-zero only when both fail, so a page never goes quiet. `reseed-kick.sh` passes its
+  project root, and godspeed's checkpoint notify now goes through `notify-bj.sh` instead of its
+  own copy of the Discord poster. `discord-status-post` stays on Discord: it edits one rich
+  embed per project in place, and crewchat has no edit op.
+- **The dual-mode rule and the doorbell moved to `docs/chat-tools.md` (#1348).** They are
+  cross-skill rules, not `/disc`'s, and the doc is installed to `~/.claude/docs`. It also holds
+  the `> <route>` grammar. Every skill that pointed at `/disc` for them points at the doc.
+- **crewchat is pinned to v0.2.6 (#1348):** Mattermost channel names resolve (mattermost-crew
+  #145), and `crewchat-send` exists (#146).
+- **The wave dashboard lives at `.claude/status/dashboard.html` (#1362).** With no `.sdlc/`, it
+  is written beside `state.json` instead of as an untracked `.status-panel.html` at the repo
+  root. A stale `.status-panel.html` left by an earlier release can be deleted.
+
+### Deprecated
+- **`/disc` (#1348).** Use `/owtx` and `/owrx`. Removing it is a later major release.
+
+### Image
+
+- **MCP servers:** mcp-server-sdlc v5.2.0 (was v5.0.4), mcp-server-wtf v1.5.2,
+  mcp-server-discord v1.4.3 and mcp-server-nerf v2.1.0. crewchat is still not baked: the image
+  has no daemon socket.
+- **trivy 0.74.0** (was 0.72.0; #1358).
 
 ## [8.19.0] - 2026-10-30
 

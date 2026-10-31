@@ -306,7 +306,8 @@ human recovery via `set_current_wave`, `extend_state`'s auto-advance).
    base; and a trunk-based branch gives wave 2 a baseline missing wave 1's integrated work. The
    campaign branch is a separate, client-side ref — and the two prefixes must stay distinct because
    git cannot hold a branch that is a directory prefix of another branch.
-4. Announce to `#wave-status`; emit `mcp-log wavemachine_start`.
+4. Announce to `#wave-status` (`/owtx #wave-status "<announcement>"`: by channel name, no
+   `backend`); emit `mcp-log wavemachine_start`.
 
 ## Launching a wave (the input blob — consistent with `/nextwave`)
 
@@ -472,7 +473,7 @@ would hold forever with every wave actually integrated.
 
 Per WAVE_AXIOMS Axiom 3 the campaign legal-exits list is the closed set above. Per
 Axiom 4, unease that matches no exit rides the Concerns Channel (`[concern]` comment +
-optional Discord ping) and the loop CONTINUES. Explicit non-exits (do NOT halt): phase
+optional `/owtx` ping) and the loop CONTINUES. Explicit non-exits (do NOT halt): phase
 transitions, first multi-issue wave, session elapsed time, first-time execution of a
 described pattern, recent successes increasing anxiety, general caution. If something
 goes wrong it surfaces as a wave verdict (`HOLD`/`SKIPPED`) or a campaign exit above —
