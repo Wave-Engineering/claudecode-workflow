@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -358,6 +359,10 @@ class TestComplete:
             assert "alone in its own comment" in msg
             assert "no backticks" in msg
             assert "`" not in EC_RECORD_HINT
+        # The hint ends with its example, which parses as sdlc reads a state line:
+        # the tag, a bare `met` token (no trailing comma), evidence on the same line.
+        example = EC_RECORD_HINT.rsplit(": ", 1)[1]
+        assert re.fullmatch(r"\[ec-state EC-\d+\] met — \S+", example)
 
     def test_met_wave_completes(self, tmp_path: Path) -> None:
         init_state(_plan("met"), tmp_path)
