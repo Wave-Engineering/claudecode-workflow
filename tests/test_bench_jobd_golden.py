@@ -10,7 +10,10 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -200,6 +203,61 @@ def test_judge_env_points_upstream_at_the_shim_and_makes_its_package_importable(
     assert env["PYTHONPATH"].split(":") == [str(jg.OFFLINE), "/elsewhere"]
 
 
+_STEP_STUB = """\
+import sys
+BATCH_SIZE = 40
+{deadline}
+async def main():
+    print(globals().get("LLM_CALL_TIMEOUT"), sys.argv[1:])
+"""
+
+
+@pytest.mark.parametrize("deadline, printed", [
+    ("LLM_CALL_TIMEOUT = 30", "3000 ['--dedup-groups', 'g.json']"),  # ceil(40 / 4) * 300
+    ("", "None ['--dedup-groups', 'g.json']"),  # extract has no deadline: left alone
+])
+def test_step_runner_sets_the_deadline_to_queueing_plus_one_call(tmp_path, deadline, printed):
+    (tmp_path / "stubstep.py").write_text(_STEP_STUB.format(deadline=deadline))
+    out = subprocess.run([sys.executable, "-c", jg.STEP_RUNNER, "stubstep", "4",
+                          str(jg.SHIM_CALL_TIMEOUT), "--dedup-groups", "g.json"],
+                         cwd=tmp_path, env={**os.environ, "PYTHONPATH": str(tmp_path)},
+                         capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == printed
+
+
+def test_shim_call_timeout_matches_the_shims_own_cap():
+    path = str(ROOT / "scripts" / "bench" / "claude-openai-shim.py")
+    loader = importlib.machinery.SourceFileLoader("claude_openai_shim", path)
+    spec = importlib.util.spec_from_file_location("claude_openai_shim", path, loader=loader)
+    shim = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shim)
+    assert jg.SHIM_CALL_TIMEOUT == shim.CALL_TIMEOUT
+
+
+def test_judge_runs_every_step_through_the_runner(tmp_path, monkeypatch):
+    calls = []
+
+    class Shim:
+        stdout = type("S", (), {"readline": staticmethod(lambda: "listening http://127.0.0.1:1/v1\n")})
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            pass
+
+    monkeypatch.setattr(jg.subprocess, "Popen", lambda *a, **k: Shim())
+    monkeypatch.setattr(jg.subprocess, "run", lambda argv, **k: calls.append(argv))
+    monkeypatch.setattr(jg, "telemetry_env", lambda *a: {})
+    jg.judge(tmp_path, "claude-sonnet-5-5", 4)
+    steps = [argv[argv.index(jg.STEP_RUNNER) + 1:] for argv in calls]
+    assert [s[:3] for s in steps] == [
+        [f"code_review_benchmark.{m}", "4", str(jg.SHIM_CALL_TIMEOUT)]
+        for m in ("step2_extract_comments", "step2_5_dedup_candidates", "step3_judge_comments")]
+    assert steps[2][3:] == ["--dedup-groups",
+                            str(tmp_path / "results" / "claude-sonnet-5-5" / "dedup_groups.json")]
+
+
 def test_review_records_the_effort_in_the_record_its_file_and_the_ledger(tmp_path, monkeypatch):
     def fake_run(argv, **kw):
         out = {"result": "No findings", "total_cost_usd": 0.5, "usage": {}, "num_turns": 3}
@@ -329,6 +387,24 @@ def test_report_refuses_a_review_the_judge_never_evaluated(tmp_path):
     with pytest.raises(SystemExit) as e:
         jg.report(run, "claude-sonnet-5-5")
     assert "jobd-claude-opus-5-5" in str(e.value)
+
+
+def test_report_refuses_an_evaluation_whose_judge_calls_failed(tmp_path):
+    run = tmp_path / "run"
+    url = "https://github.com/o/r/pull/1"
+    _review(run, url, "claude-sonnet-5-5", "x")
+    _review(run, url, "claude-opus-5-5", "y")
+    edir = run / "results" / "claude-sonnet-5-5"
+    edir.mkdir(parents=True)
+    (edir / "evaluations.json").write_text(json.dumps({url: {
+        jg.tool_name("claude-sonnet-5-5"): {"tp": 1, "fp": 0, "fn": 0, "errors_count": 0},
+        jg.tool_name("claude-opus-5-5"): {"tp": 0, "fp": 2, "fn": 1, "errors_count": 3}}}))
+    (run / "judge-ledger.jsonl").write_text("")
+    with pytest.raises(SystemExit) as e:
+        jg.report(run, "claude-sonnet-5-5")
+    assert "judge calls failed" in str(e.value)
+    assert "jobd-claude-opus-5-5" in str(e.value)
+    assert "jobd-claude-sonnet-5-5" not in str(e.value)
 
 
 def test_assemble_refuses_a_pr_outside_the_benchmark(tmp_path):
