@@ -27,7 +27,8 @@ are worth keeping apart:
   `scripts/lib/settings-merge.sh`, and both installers source it. The tarball ships `scripts/`
   recursively with its file modes, plus `assets/logrotate`. `install-remote.sh` refuses a tarball
   older than v8.21.0 (the first with the lib), and `--dry-run` no longer writes settings. Also: a
-  plugin the user set to `false` is no longer re-added, the template no longer pins `model`, and
+  plugin the user set to `false` is no longer reported as added, or as missing by `--check`
+  (both tested its value, not its key); the template no longer pins `model`; and
   only executable skill helpers get a PATH link. Two skills claiming one helper name now fail the
   install instead of overwriting silently. **The duplicate-hooks guard moved** from
   `scripts/ci/` to `scripts/lib/assert-no-duplicate-hooks.sh`.

@@ -487,7 +487,7 @@ do_install() {
 	# The settings merge comes from the tarball itself (#1360). An older tarball has
 	# none, so refuse it here, before anything is written.
 	[[ -f "$release_dir/scripts/lib/settings-merge.sh" ]] ||
-		die "release tarball has no scripts/lib/settings-merge.sh: it predates the shared settings merge; the first installable version is v${SETTINGS_MERGE_FLOOR}; pass --version v${SETTINGS_MERGE_FLOOR} or newer"
+		die "release tarball has no scripts/lib/settings-merge.sh: it predates the shared settings merge; the first installable version is v${SETTINGS_MERGE_FLOOR}; pass --version v${SETTINGS_MERGE_FLOOR} or newer, or install an older tag with that tag's own installer: curl -fsSL https://raw.githubusercontent.com/Wave-Engineering/claudecode-workflow/<tag>/scripts/install-remote.sh | bash -s -- --version <tag>"
 	# shellcheck source=scripts/lib/settings-merge.sh
 	source "$release_dir/scripts/lib/settings-merge.sh"
 

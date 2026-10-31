@@ -134,6 +134,7 @@ def test_remote_refuses_a_tarball_without_the_lib(env: tuple[Path, Path], tarbal
     assert r.returncode != 0, f"a lib-less tarball was installed:\n{out}"
     assert "predates the shared settings merge" in out, out
     assert f"v{floor.group(1)}" in out, f"the refusal does not name v{floor.group(1)}:\n{out}"
+    assert "<tag>/scripts/install-remote.sh" in out, f"the refusal does not say how to install an older tag:\n{out}"
     assert not (home / ".claude" / "scripts").exists(), "the refused install wrote the Cellar"
 
 
