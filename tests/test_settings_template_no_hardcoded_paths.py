@@ -28,3 +28,11 @@ def test_settings_template_has_no_hardcoded_home_paths() -> None:
         "/home/<user>/ path — use a ~/ path, which expands to $HOME at "
         f"hook-exec time. Offending prefixes: {matches}"
     )
+
+
+def test_template_pins_no_model() -> None:
+    """#1360 (triage #14): the merge adds any top-level key a user lacks, so a template
+    `model` came back on every host whose user had removed it."""
+    import json
+
+    assert "model" not in json.loads(TEMPLATE.read_text())
