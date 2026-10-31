@@ -45,3 +45,6 @@ reports/
 .worktrees/
 
 .wtf/
+
+# #1195: the pinned Job D benchmark cache (scripts/bench/fetch-code-review-benchmark.sh)
+/.bench/
