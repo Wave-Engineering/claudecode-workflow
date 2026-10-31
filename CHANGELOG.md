@@ -32,6 +32,21 @@ are worth keeping apart:
   only executable skill helpers get a PATH link. Two skills claiming one helper name now fail the
   install instead of overwriting silently. **The duplicate-hooks guard moved** from
   `scripts/ci/` to `scripts/lib/assert-no-duplicate-hooks.sh`.
+- **Only a release reaches `:stable`, and a GHCR version tag never moves (#1359).**
+  - **Promotion checks the label.** `promote-oakandwave-image.sh` now refuses a digest whose
+    `org.opencontainers.image.version` label is not `X.Y.Z`, using the same rule as the Docker
+    Hub mirror (both call the new `scripts/ci/read-oci-version.sh`). Before, a
+    `workflow_dispatch` candidate (label `8.14.0-3-gabc`) could reach GHCR `:stable`, which the
+    mirror then refused, leaving the two registries' `:stable` on different digests. The
+    refusal also shows in a dry run.
+  - **Version tags are written once.** The image build now pushes only `:edge`. A tag build's
+    `:vX.Y.Z` is written by `oaw-mirror-image` after signing, under a `v`-prefixed regex, and
+    refused if it already names another digest. So the tag only ever names a signed digest,
+    and a transient signing failure still re-runs green. Before, re-running the build job on a
+    `v*` tag silently moved it.
+  - **The runbook's promote commands now run.** The ops runbook's §3 named a gate-signals
+    script that never existed, set `PROMOTE_ACK` instead of `OPERATOR_ACK`, and never set
+    `DIGEST_REF`. It now shows the declared-absent invocation the wrapper reads.
 
 ## [8.20.0] - 2026-10-30
 
