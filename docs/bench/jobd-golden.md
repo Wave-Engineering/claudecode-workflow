@@ -220,7 +220,7 @@ Per-arm sums mix PRs of different difficulty. The paired tables below answer the
 
 ### Model: sonnet vs opus on the same (PR, level) (`compare` → `model`)
 
-| level | pairs | opus TP | sonnet TP | sonnet wins / ties / losses | sign p | cost ratio (geomean, median) |
+| level | PRs | opus TP | sonnet TP | sonnet wins / ties / losses | sign p | cost ratio (geomean, median) |
 |---|---|---|---|---|---|---|
 | medium | | | | | | |
 | high | | | | | | |
@@ -229,7 +229,7 @@ Per-arm sums mix PRs of different difficulty. The paired tables below answer the
 
 ### Effort: the higher level against the lower, same PR and model (`compare` → `effort`)
 
-| levels | model | pairs | lower TP | higher TP | higher wins / ties / losses | sign p | cost ratio (geomean, median) |
+| levels | model | PRs | lower TP | higher TP | higher wins / ties / losses | sign p | cost ratio (geomean, median) |
 |---|---|---|---|---|---|---|---|
 | high vs medium | opus | | | | | | |
 | high vs medium | sonnet | | | | | | |
@@ -241,10 +241,11 @@ Per-arm sums mix PRs of different difficulty. The paired tables below answer the
 | xhigh vs medium | pooled | | | | | | |
 | xhigh vs high | pooled | | | | | | |
 
-**How to read the sign test.** Wins, ties and losses are counted per PR. The `pairs` column
-counts PRs. In a pooled row a PR holds two pairs (two levels in the model table, two models in
-the effort table), and its outcome is the sign of their summed TP difference, because two pairs
-on one PR are not independent evidence. The test is exact and two-sided, with ties dropped. With
+**How to read the sign test.** Wins, ties and losses are counted per PR. The `PRs` column is
+`compare`'s `prs` field, never `n`, which counts pairs and is twice `prs` in a pooled row. In
+a pooled row a PR holds two pairs (two levels in the model table, two models in the effort
+table), and its outcome is the sign of their summed TP difference, because two pairs on one
+PR are not independent evidence. The test is exact and two-sided, with ties dropped. With
 no ties, p under 0.05 takes these splits:
 
 - an effort cell (16 or 17 PRs): 13 to 3, or 13 to 4;
