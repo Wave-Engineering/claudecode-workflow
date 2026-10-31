@@ -19,7 +19,7 @@
 #      right after /clear (the typed sends then sit queued behind the busy turn).
 #      So: an assistant tool call in the session's transcript (SessionStart's
 #      .transcript_path) that is a Skill call for `reseed revive`, or a tool call
-#      naming reseed-revive.md followed by a Skill call for `engage`. Reading the
+#      naming reseed-revive.md followed by a Skill call for `engage reload`. Reading the
 #      seed alone is NOT a revive (#1400): a turn a peer message started right
 #      after /clear read the seed, answered the peer and stopped, and was acked
 #      unrevived. It must be the agent's own tool call, not just the path
@@ -115,8 +115,9 @@ fi
 
 # revive_seen — the agent's own tool calls from START on, in file order, show the
 # revive: a Skill call for `reseed revive`, or a call naming the seed and then a
-# Skill call for `engage` (the procedure's read-then-/engage, done by hand). A call
-# that only names the seed is a read, not a revive (#1400). jq tags each call and
+# Skill call for `engage reload` (the procedure's read-then-/engage reload, done by
+# hand). A call that only names the seed is a read, not a revive (#1400), and nor is
+# a plain `/engage` after it: a fresh session's onboarding, not the revive. jq tags each call and
 # awk decides. Process substitution, not a pipe, and a streaming jq, not `-s`: the
 # last line of a live transcript can be half-written, and jq's error exit must not
 # mask a tag printed before it.
@@ -127,7 +128,7 @@ revive_seen() {
 			'select(.type == "assistant" and ((.timestamp // "")[0:19]) >= $s)
 			 | .message.content[]? | select(.type == "tool_use")
 			 | if .name == "Skill" and (.input.skill // "") == "reseed" and ((.input.args // "") | test("revive")) then "revive"
-			   elif .name == "Skill" and (.input.skill // "") == "engage" then "engage"
+			   elif .name == "Skill" and (.input.skill // "") == "engage" and ((.input.args // "") | tostring | test("reload")) then "engage"
 			   elif (.input | tostring | test("reseed-revive\\.md")) then "seed"
 			   else empty end' "$transcript" 2>/dev/null)
 }

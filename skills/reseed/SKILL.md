@@ -203,7 +203,7 @@ The `SessionStart{clear}` hook (`reseed-revive.sh`) fires on the fresh session, 
 the seed, and launches `reseed-kick.sh`, which types `/reseed revive` into the pane until
 the session acknowledges it. Either signal counts: the `reseed-ack.sh` prompt hook removes
 a nonce when `/reseed revive` is submitted, or the session's transcript shows the revive
-itself: a `reseed revive` Skill call, or the seed read and then `/engage`. So a revive through
+itself: a `reseed revive` Skill call, or the seed read and then `/engage reload`. So a revive through
 the Skill tool, or inside a turn that a peer message or task notification started, needs no
 prompt. Reading the seed alone is not a revive: a turn that reads it, answers a peer and stops
 still gets the send once it is idle (#1400). While the session is busy with a turn,

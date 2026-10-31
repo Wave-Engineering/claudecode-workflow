@@ -11,8 +11,9 @@
 #   - it types exactly `/reseed revive` into the pane it was given, through
 #     pane-send.sh: clear the line, type literally, then Enter, in one call (#1366);
 #   - #1244, #1400: the revive in the transcript acks (a Skill `reseed revive`, or
-#     the seed named by any tool and then a Skill `engage`), while a read of the
-#     seed alone, the hook's notice and pre-clear entries do not; a
+#     the seed named by any tool and then a Skill `engage reload`), while a read of
+#     the seed alone or followed by a plain `engage`, the hook's notice and
+#     pre-clear entries do not; a
 #     busy session gets no stacked sends, an idle unrevived one gets one send per
 #     idle spell, a session that goes live late still gets the live wait, and a
 #     live session pages only if it never revives.
@@ -206,6 +207,24 @@ if [[ $rc -eq 0 ]] && grep -q 'acked after 1$' "$C/kick.log" && [[ "$(wc -l <"$C
 	pass "a seed read alone is not a revive: the idle session gets one send, which acks"
 else
 	fail "read only: rc=$rc sends=$(wc -l <"$C/calls") log=$(cat "$C/kick.log")"
+fi
+
+# A plain /engage after the seed read is a fresh session onboarding, not the
+# revive (/reseed revive runs /engage reload): no ack, one send once idle.
+C="$WORK/plainengage"
+mkdir -p "$C"
+{
+	entry "$LATER" Read "$SEED_READ"
+	entry "$LATER" Skill '{"skill": "engage"}'
+	jq -cn --arg t "$LATER" '{type: "assistant", timestamp: $t,
+		message: {stop_reason: "end_turn", content: [{type: "text", text: "answered the peer"}]}}'
+} >"$C/t.jsonl"
+run_kick_t "$C" "$C/t.jsonl" 1
+rc=$?
+if [[ $rc -eq 0 ]] && grep -q 'acked after 1$' "$C/kick.log" && [[ "$(wc -l <"$C/calls")" -eq 1 ]]; then
+	pass "a plain /engage after the seed read is not a revive: one send, which acks"
+else
+	fail "plain engage: rc=$rc sends=$(wc -l <"$C/calls") log=$(cat "$C/kick.log")"
 fi
 
 # Order matters: /engage before the seed is named is not the revive.
