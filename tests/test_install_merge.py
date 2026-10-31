@@ -174,7 +174,8 @@ class TestFreshInstallCopiesTemplate:
         assert "permissions" in settings
         assert "hooks" in settings
         assert "enabledPlugins" in settings
-        assert "model" in settings
+        # The template pins no model (#1360): a fresh install has none.
+        assert "model" not in settings
 
 
 @_SKIP_NO_BASH
@@ -517,3 +518,63 @@ class TestMergeIdempotent:
         assert first_result == second_result, (
             "Merge is not idempotent — results differ between runs"
         )
+
+
+_FALSE_PLUGIN = "github@claude-plugins-official"
+
+
+@_SKIP_NO_BASH
+@_SKIP_NO_JQ
+class TestFalsePluginIsPresent:
+    """A plugin the user set to false is present, not absent (#1360, triage #13)."""
+
+    def test_merge_report_counts_false_plugin_as_present(self, sandbox_home: Path) -> None:
+        settings_path = sandbox_home / ".claude" / "settings.json"
+        local = _minimal_local_settings()
+        local["enabledPlugins"][_FALSE_PLUGIN] = False
+        _write_json(settings_path, local)
+
+        rc, out, err = _run_install(["--config"], sandbox_home)
+        assert _install_ok(rc, out, err), f"install failed: {err}"
+
+        assert f"enabledPlugins.{_FALSE_PLUGIN} — already present (skipped)" in out, out
+        assert f"enabledPlugins.{_FALSE_PLUGIN} — added" not in out, out
+        assert _read_json(settings_path)["enabledPlugins"][_FALSE_PLUGIN] is False
+
+    def test_check_counts_false_plugin_as_in_sync(self, sandbox_home: Path) -> None:
+        settings_path = sandbox_home / ".claude" / "settings.json"
+        local = _minimal_local_settings()
+        local["enabledPlugins"][_FALSE_PLUGIN] = False
+        _write_json(settings_path, local)
+        rc, out, err = _run_install(["--config"], sandbox_home)
+        assert _install_ok(rc, out, err), f"install failed: {err}"
+
+        rc, out, err = _run_install(["--check"], sandbox_home)
+        assert _install_ok(rc, out, err), f"--check failed: {err}"
+        assert f"missing plugin: {_FALSE_PLUGIN}" not in out, out
+
+
+@_SKIP_NO_BASH
+@_SKIP_NO_JQ
+class TestNoModelPin:
+    """The template stops adding a model, and never removes a user's own (#1360, triage #14)."""
+
+    def test_merge_keeps_an_existing_model(self, sandbox_home: Path) -> None:
+        settings_path = sandbox_home / ".claude" / "settings.json"
+        local = _minimal_local_settings()
+        assert local["model"] == "opus"
+        _write_json(settings_path, local)
+
+        rc, out, err = _run_install(["--config"], sandbox_home)
+        assert _install_ok(rc, out, err), f"install failed: {err}"
+        assert _read_json(settings_path)["model"] == "opus"
+
+    def test_merge_adds_no_model(self, sandbox_home: Path) -> None:
+        settings_path = sandbox_home / ".claude" / "settings.json"
+        local = _minimal_local_settings()
+        del local["model"]
+        _write_json(settings_path, local)
+
+        rc, out, err = _run_install(["--config"], sandbox_home)
+        assert _install_ok(rc, out, err), f"install failed: {err}"
+        assert "model" not in _read_json(settings_path)

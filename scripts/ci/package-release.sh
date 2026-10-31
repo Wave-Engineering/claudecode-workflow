@@ -11,9 +11,12 @@
 #   cc-workflow.tar.gz (in the current directory)
 #
 # The tarball contains:
-#   skills/       — All SKILL.md files, helper files, and content subdirs
-#   scripts/      — All bin scripts (top-level files in scripts/, no ci/)
+#   skills/       — All SKILL.md files, helper files, and content subdirs (modes kept)
+#   scripts/      — All of scripts/, recursively (hooks/, lib/ and the other
+#                   subtrees the Cellar holds), with ./install's exclusions:
+#                   no ci/, tests/, fixtures/, __pycache__/ or .pytest_cache/ (#1360)
 #   config/       — statusline-command.sh, settings.template.json
+#   assets/logrotate/cc-mcp-logs — the logrotate policy --with-logrotate installs
 #   dist/         — Pre-built Python zipapp packages
 #   mcps.json     — MCP manifest
 
@@ -41,7 +44,7 @@ for skill_dir in "$REPO_DIR"/skills/*/; do
 	mkdir -p "$STAGING/skills/$skill_name"
 	# Copy all files
 	for f in "$skill_dir"/*; do
-		[[ -f "$f" ]] && cp "$f" "$STAGING/skills/$skill_name/"
+		[[ -f "$f" ]] && cp -p "$f" "$STAGING/skills/$skill_name/"
 	done
 	# Copy subdirectories (tours/, lib/, etc.)
 	for subdir in "$skill_dir"*/; do
@@ -49,18 +52,27 @@ for skill_dir in "$REPO_DIR"/skills/*/; do
 		subdir_name="$(basename "$subdir")"
 		mkdir -p "$STAGING/skills/$skill_name/$subdir_name"
 		for f in "$subdir"*; do
-			[[ -f "$f" ]] && cp "$f" "$STAGING/skills/$skill_name/$subdir_name/"
+			[[ -f "$f" ]] && cp -p "$f" "$STAGING/skills/$skill_name/$subdir_name/"
 		done
 	done
 done
 
-# --- Scripts (top-level files only, not ci/) ---
+# --- Scripts (recursive, the same set ./install deploys to the Cellar) ---
+# Before #1360 only top-level files were packaged, so a release install had no
+# hooks/ (every template hook pointed at a missing file) and no lib/.
 info "Collecting scripts..."
 mkdir -p "$STAGING/scripts"
-for script in "$REPO_DIR"/scripts/*; do
-	[[ -f "$script" ]] || continue
-	cp "$script" "$STAGING/scripts/"
-done
+while IFS= read -r rel; do
+	mkdir -p "$STAGING/scripts/$(dirname "$rel")"
+	cp -p "$REPO_DIR/scripts/$rel" "$STAGING/scripts/$rel"
+done < <(cd "$REPO_DIR/scripts" && find . -type f -not -path './ci/*' -not -path '*/tests/*' \
+	-not -path '*/fixtures/*' -not -path '*/__pycache__/*' -not -path '*/.pytest_cache/*' |
+	sed 's|^\./||' | sort)
+
+# --- Assets ---
+info "Collecting assets..."
+mkdir -p "$STAGING/assets/logrotate"
+cp -p "$REPO_DIR/assets/logrotate/cc-mcp-logs" "$STAGING/assets/logrotate/"
 
 # --- Config ---
 info "Collecting config..."

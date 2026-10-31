@@ -35,6 +35,57 @@ are worth keeping apart:
   (`identity-collision-warn.sh`) warns the newer one, and `/name` refuses to read or write the
   file for it. A worktree has its own cwd, so it is never a claimant.
 
+## [8.21.0] - 2026-10-31
+
+A release install now gets the same settings merge and `scripts/` tree as `./install`, and the
+image pipeline can no longer move a GHCR version tag or promote a candidate that isn't a
+release.
+
+### Upgrading
+- **`install-remote.sh` from this release on refuses an older tarball.** v8.21.0 is the first
+  release whose tarball ships `scripts/lib/settings-merge.sh`. To install or roll back to an
+  older tag, run that tag's own installer:
+  `curl -fsSL https://raw.githubusercontent.com/Wave-Engineering/claudecode-workflow/<tag>/scripts/install-remote.sh | bash -s -- --version <tag>`.
+  `./install` from a checkout is unaffected.
+
+### Fixed
+- **A release install now gets the same settings merge and `scripts/` tree as `./install` (#1360).**
+  `install-remote.sh` carried its own copy of the merge, forked before the kit-owned union, the
+  old-path migration and the duplicate collapse. The release tarball also shipped only top-level
+  `scripts/` files, so every template hook pointed at a missing file. Now the merge lives once in
+  `scripts/lib/settings-merge.sh`, and both installers source it. The tarball ships `scripts/`
+  recursively with its file modes, plus `assets/logrotate`. `install-remote.sh` refuses a tarball
+  older than v8.21.0 (the first with the lib), and `--dry-run` no longer writes settings. Also: a
+  plugin the user set to `false` is no longer reported as added, or as missing by `--check`
+  (both tested its value, not its key); the template no longer pins `model`; and
+  only executable skill helpers get a PATH link. Two skills claiming one helper name now fail the
+  install instead of overwriting silently. **The duplicate-hooks guard moved** from
+  `scripts/ci/` to `scripts/lib/assert-no-duplicate-hooks.sh`.
+- **Only a release reaches `:stable`, and a GHCR version tag never moves (#1359).**
+  - **Promotion checks the label.** `promote-oakandwave-image.sh` now refuses a digest whose
+    `org.opencontainers.image.version` label is not `X.Y.Z`, using the same rule as the Docker
+    Hub mirror (both call the new `scripts/ci/read-oci-version.sh`). Before, a
+    `workflow_dispatch` candidate (label `8.14.0-3-gabc`) could reach GHCR `:stable`, which the
+    mirror then refused, leaving the two registries' `:stable` on different digests. The
+    refusal also shows in a dry run.
+  - **Version tags are written once.** The image build now pushes only `:edge`. A tag build's
+    `:vX.Y.Z` is written by `oaw-mirror-image` after signing, under a `v`-prefixed regex, and
+    refused if it already names another digest. So the tag only ever names a signed digest,
+    and a transient signing failure still re-runs green. Before, re-running the build job on a
+    `v*` tag silently moved it.
+  - **The runbook's promote commands now run.** The ops runbook's §3 named a gate-signals
+    script that never existed, set `PROMOTE_ACK` instead of `OPERATOR_ACK`, and never set
+    `DIGEST_REF`. It now shows the declared-absent invocation the wrapper reads.
+
+### Image
+
+- **MCP servers:** unchanged from 8.20.0: mcp-server-sdlc v5.2.0, mcp-server-wtf v1.5.2,
+  mcp-server-discord v1.4.3 and mcp-server-nerf v2.1.0. crewchat is still not baked: the image
+  has no daemon socket.
+- **trivy 0.74.0**, unchanged.
+- **The duplicate-hooks guard** the image build runs moved to
+  `scripts/lib/assert-no-duplicate-hooks.sh` (#1360).
+
 ## [8.20.0] - 2026-10-30
 
 Chat moves to the OaW Mattermost server by default: `/owtx` and `/owrx` are new, and `/disc` is
