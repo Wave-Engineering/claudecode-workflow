@@ -8,7 +8,8 @@
 #   - sends dropped twice, the third acknowledged → stops, logs "acked after 3";
 #   - no acknowledgement ever → stops after the schedule, logs FAILED, pages BJ
 #     (stubbed) naming the pane, and leaves no nonce behind;
-#   - it types exactly `/reseed revive` into the pane it was given;
+#   - it types exactly `/reseed revive` into the pane it was given, through
+#     pane-send.sh: clear the line, type literally, then Enter, in one call (#1366);
 #   - #1244: the agent's own read of the seed in the transcript acks, by any tool
 #     or the Skill tool, while the hook's notice and pre-clear entries do not; a
 #     busy session gets no stacked sends, an idle unrevived one gets one send per
@@ -81,7 +82,7 @@ if [[ "$(wc -l <"$C/calls")" -eq 3 ]]; then
 else
 	fail "sent $(wc -l <"$C/calls") times, want 3"
 fi
-if grep -qx -- 'send-keys -t %42 /reseed revive Enter' "$C/calls"; then
+if grep -qx -- "send-keys -t %42 C-e$(printf ' C-u%.0s' $(seq 32)) ; send-keys -t %42 -l /reseed revive ; send-keys -t %42 Enter" "$C/calls"; then
 	pass "types exactly '/reseed revive' into the given pane"
 else
 	fail "unexpected tmux call: $(head -1 "$C/calls")"

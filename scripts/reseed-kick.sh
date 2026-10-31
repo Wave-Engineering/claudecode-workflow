@@ -3,8 +3,8 @@
 # session acknowledges it, then stop. Launched detached (setsid) by
 # hooks/workflow/reseed-revive.sh. (#1225, #1244)
 #
-# WHY THIS EXISTS. The revive used to be `(sleep 2 && tmux send-keys … continue)
-# & disown`: a fixed two-second guess at when the TUI would accept input,
+# WHY THIS EXISTS. The revive used to be a backgrounded `sleep 2` and a blind tmux
+# keystroke of `continue`: a fixed two-second guess at when the TUI would accept input,
 # fire-and-forget, no check it landed, and a log line saying "tmux trigger sent"
 # either way. A keystroke typed before the TUI is ready is silently dropped, so
 # the revive missed often enough that BJ routinely found the seed by hand.
@@ -53,6 +53,7 @@
 #                               (either one not a positive integer → its default)
 #        RESEED_KICK_LOG        log file (default ~/.claude/logs/reseed-kick.log)
 #        RESEED_KICK_NOTIFY     notifier (default notify-bj.sh beside this script)
+#        RESEED_KICK_SEND       pane sender (default pane-send.sh beside this script)
 # Exit:  0 acked; 1 FAILED; 2 usage
 
 set -uo pipefail
@@ -62,6 +63,9 @@ root="${2:-}"
 transcript="${3:-}"
 LOG_FILE="${RESEED_KICK_LOG:-$HOME/.claude/logs/reseed-kick.log}"
 NOTIFY="${RESEED_KICK_NOTIFY:-$(dirname "$0")/notify-bj.sh}"
+# Every keystroke goes through pane-send.sh: clear the line, type literally, then Enter,
+# so a draft or ghost suggestion in the pane is never submitted (#1366).
+SEND="${RESEED_KICK_SEND:-$(dirname "$0")/pane-send.sh}"
 LIVE_WAIT="${RESEED_KICK_LIVE_WAIT:-600}"
 POLL="${RESEED_KICK_POLL:-5}"
 # Shell arithmetic is integer-only: `0.5` would be a syntax error and `0` a loop
@@ -148,7 +152,7 @@ state() {
 }
 
 send() { # returns 1 when tmux refused, so an idle spell is not marked as served
-	if tmux send-keys -t "$pane" "/reseed revive" Enter 2>/dev/null; then
+	if "$SEND" "$pane" "/reseed revive" 2>/dev/null; then
 		sends=$((sends + 1))
 	else
 		log "send to pane failed (tmux exit non-zero) — will retry"

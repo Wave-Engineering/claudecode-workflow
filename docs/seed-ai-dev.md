@@ -171,6 +171,7 @@ Rules in `CLAUDE.md` are prose — agents can drift from them. The enforcement l
 | `post-tool-test-sentinel.sh` | PostToolUse (Bash) | Records successful test runs — creates the sentinel that unblocks the push gate, only when the test command's own exit status is known to be 0: an `exit=0` line from an `echo "exit=$?"` that follows the test directly (through `&&` only, then one `;` or newline), or nothing but `&&` after the test. A run in the background never counts |
 | `post-tool-context-tracker.sh` | PostToolUse (Skill\|ToolSearch) | Logs skill invocations and tool-schema loads for context-diet monitoring |
 | `post-compact-reread.sh` | PostCompact | Injects reminder to re-read CLAUDE.md after compaction |
+| `identity-collision-warn.sh` | SessionStart (startup\|resume) | Warns a session when an older live session in the same checkout already holds its `.claude/agent-identity.json` (read from the process table by `identity-claimants.sh`): don't use that Dev-Name, move to a worktree. Dormant without an identity file; always exits 0 |
 
 ### Metrics
 

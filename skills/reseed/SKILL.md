@@ -189,8 +189,11 @@ jq -n --arg a "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg p "${TMUX_PANE:-}" \
 With the hook armed, trigger `/clear` immediately via tmux — do not ask the user to do it:
 
 ```bash
-tmux send-keys -t "${TMUX_PANE}" "/clear" Enter
+~/.claude/scripts/pane-send.sh "${TMUX_PANE}" "/clear"
 ```
+
+It clears the input line first, so a half-typed draft in the pane is discarded rather
+than submitted with `/clear` appended.
 
 Then end your turn with a brief note:
 

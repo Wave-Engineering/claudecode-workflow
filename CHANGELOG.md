@@ -36,6 +36,22 @@ are worth keeping apart:
   hook doesn't read the wording: it is the godspeed mandate model, and the only hook left that
   reads wording is `precheck-asking-detector.sh`. The settings template's `_comment` now says
   the same.
+- **Keystrokes into a pane can no longer submit a draft or a ghost suggestion (#1366).** The
+  reseed kicker and `/reseed`'s `/clear` typed text into the input box without clearing it, so
+  BJ's half-typed draft was submitted with `/reseed revive` appended. Both now go through
+  `scripts/pane-send.sh`: in one tmux command it clears the input (C-e, then 32 C-u, which
+  Claude Code's docs say to repeat across the lines of a multi-line draft, and which also
+  leave `!` shell mode; never Escape, which interrupts a turn), types the text literally
+  (`-l`), then presses Enter. Enter is only ever
+  sent after non-empty literal text, so text ending in `;` (which tmux would strip as a
+  separator) is refused. Nothing else in the kit calls `send-keys`, and a test keeps it that
+  way.
+- **A second live session in one checkout is told not to use the identity (#1366).** Two
+  sessions in one checkout read the same `.claude/agent-identity.json` and answer the same
+  `@name`. `scripts/identity-claimants.sh` reads the process table for another `claude` of
+  this user with the same cwd. The older session keeps the identity. A new SessionStart hook
+  (`identity-collision-warn.sh`) warns the newer one, and `/name` refuses to read or write the
+  file for it. A worktree has its own cwd, so it is never a claimant.
 
 ## [8.21.0] - 2026-10-31
 
