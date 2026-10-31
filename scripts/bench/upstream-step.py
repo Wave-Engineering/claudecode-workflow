@@ -85,9 +85,11 @@ def main(argv: list[str]) -> int:
     if hasattr(m, "LLM_CALL_TIMEOUT"):
         m.LLM_CALL_TIMEOUT = limit
     if hasattr(m, "REVIEW_TIMEOUT"):
-        # The judge also caps a whole review (1800 s), under one call's worst case. Its cancel
-        # drops the calls in flight, which the shim still runs, and step 3 skips the review and
-        # exits 0. Every call inside is already bounded, so the cap is switched off.
+        # The judge also caps a whole review (1800 s). A review runs its batches one after
+        # another, each call with up to 3 attempts, so a review can legitimately outlast the cap
+        # at any worker count. Its cancel drops the calls in flight, which the shim still runs,
+        # and step 3 skips the review and exits 0. Every call inside is already bounded, so the
+        # cap is switched off.
         m.REVIEW_TIMEOUT = None
     # Upstream constructs the client by its module-level name, so this reaches every instance.
     m.AsyncOpenAI = functools.partial(m.AsyncOpenAI, timeout=limit, max_retries=0)

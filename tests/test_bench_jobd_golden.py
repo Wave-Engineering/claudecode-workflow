@@ -251,7 +251,7 @@ def test_step_runner_sets_both_deadlines_to_queueing_plus_one_call(tmp_path, dea
 
 
 def test_step_runner_switches_off_the_judges_cap_on_a_whole_review(tmp_path):
-    # 1800 s is under one call's worst case; a cancelled review is skipped and the step exits 0
+    # a review can outlast 1800 s legitimately; a cancelled one is skipped and the step exits 0
     out = _run_step(tmp_path, deadline="LLM_CALL_TIMEOUT = 30\nREVIEW_TIMEOUT = 1800")
     assert out.returncode == 0, out.stderr
     assert json.loads(out.stdout)[3] is None
