@@ -202,9 +202,11 @@ Then end your turn with a brief note:
 The `SessionStart{clear}` hook (`reseed-revive.sh`) fires on the fresh session, points it at
 the seed, and launches `reseed-kick.sh`, which types `/reseed revive` into the pane until
 the session acknowledges it. Either signal counts: the `reseed-ack.sh` prompt hook removes
-a nonce when `/reseed revive` is submitted, or the session's transcript shows the agent's own
-tool call on the seed. So a revive through the Skill tool, or inside a turn that a peer
-message or task notification started, needs no prompt. While the session is busy with a turn,
+a nonce when `/reseed revive` is submitted, or the session's transcript shows the revive
+itself: a `reseed revive` Skill call, or the seed read and then `/engage`. So a revive through
+the Skill tool, or inside a turn that a peer message or task notification started, needs no
+prompt. Reading the seed alone is not a revive: a turn that reads it, answers a peer and stops
+still gets the send once it is idle (#1400). While the session is busy with a turn,
 the kicker does not type, because a send would only queue behind the turn. When the session is
 idle and still hasn't revived, it sends once. If no acknowledgement arrives, it pages BJ via vox
 and `#call-4-bj` (`notify-bj.sh`: `crewchat-send` first, Discord as the fallback), naming the pane. Outcomes are logged to

@@ -13,16 +13,19 @@
 #   1. The nonce. Before the first send this writes <project_root>/.claude/
 #      reseed-ack. The UserPromptSubmit hook reseed-ack.sh removes it when the
 #      submitted prompt is exactly `/reseed revive`.
-#   2. The seed was read (#1244). The nonce alone false-paged BJ whenever a
-#      session revived WITHOUT that prompt being submitted: through the Skill
-#      tool, or inside a turn a peer message or task notification started right
-#      after /clear (the typed sends then sit queued behind the busy turn). Every
-#      revive path touches the seed, so: an assistant tool call in the session's
-#      transcript (SessionStart's .transcript_path) whose input names
-#      reseed-revive.md, or a Skill call for `reseed revive`. It must be the
-#      agent's own tool call, not just the path appearing in the transcript: the
-#      SessionStart notice names the seed too. Only entries from this kick's
-#      start onward count, so a pre-clear Write of the seed cannot ack.
+#   2. The revive is in the transcript (#1244, #1400). The nonce alone false-paged
+#      BJ whenever a session revived WITHOUT that prompt being submitted: through
+#      the Skill tool, or inside a turn a peer message or task notification started
+#      right after /clear (the typed sends then sit queued behind the busy turn).
+#      So: an assistant tool call in the session's transcript (SessionStart's
+#      .transcript_path) that is a Skill call for `reseed revive`, or a tool call
+#      naming reseed-revive.md followed by a Skill call for `engage`. Reading the
+#      seed alone is NOT a revive (#1400): a turn a peer message started right
+#      after /clear read the seed, answered the peer and stopped, and was acked
+#      unrevived. It must be the agent's own tool call, not just the path
+#      appearing in the transcript: the SessionStart notice names the seed too.
+#      Only entries from this kick's start onward count, so a pre-clear Write of
+#      the seed cannot ack.
 #
 # A BUSY SESSION IS NOT A DROPPED KEYSTROKE. The transcript says whether the
 # session is live (an assistant or main-thread `api-request` entry since the
@@ -41,7 +44,7 @@
 #
 # OUTCOMES, logged as they are, never as "sent":
 #   acked after <N>              — the session received the Nth send (0: a human typed it)
-#   acked (seed read) after <N>  — the transcript shows the revive, whatever its path
+#   acked (revive seen) after <N> — the transcript shows the revive, whatever its path
 #   FAILED …                     — no ack; BJ is paged via notify-bj.sh (vox +
 #                                  #call-4-bj) naming the pane
 #
@@ -110,19 +113,23 @@ if ! { mkdir -p "$root/.claude" && printf '%s %s\n' "$$" "$(date -u +%Y-%m-%dT%H
 	exit 1
 fi
 
-# transcript_has <jq-filter over one assistant entry> — any match from START on.
-# Process substitution, not a pipe: the last line of a live transcript can be
-# half-written, and jq's error exit must not mask a hit printed before it.
-transcript_has() {
+# revive_seen — the agent's own tool calls from START on, in file order, show the
+# revive: a Skill call for `reseed revive`, or a call naming the seed and then a
+# Skill call for `engage` (the procedure's read-then-/engage, done by hand). A call
+# that only names the seed is a read, not a revive (#1400). jq tags each call and
+# awk decides. Process substitution, not a pipe, and a streaming jq, not `-s`: the
+# last line of a live transcript can be half-written, and jq's error exit must not
+# mask a tag printed before it.
+revive_seen() {
 	[[ -n "$transcript" && -f "$transcript" ]] || return 1
-	grep -q '^hit$' < <(jq -r --arg s "$START" \
-		"select(.type == \"assistant\" and ((.timestamp // \"\")[0:19]) >= \$s) | select($1) | \"hit\"" \
-		"$transcript" 2>/dev/null)
-}
-seed_read() {
-	transcript_has 'any(.message.content[]?; .type == "tool_use" and
-		((.input | tostring | test("reseed-revive\\.md")) or
-		 (.name == "Skill" and (.input.skill // "") == "reseed" and ((.input.args // "") | test("revive")))))'
+	awk '/^revive$/ { ok = 1 } /^seed$/ { seed = 1 } /^engage$/ && seed { ok = 1 } END { exit !ok }' \
+		< <(jq -r --arg s "$START" \
+			'select(.type == "assistant" and ((.timestamp // "")[0:19]) >= $s)
+			 | .message.content[]? | select(.type == "tool_use")
+			 | if .name == "Skill" and (.input.skill // "") == "reseed" and ((.input.args // "") | test("revive")) then "revive"
+			   elif .name == "Skill" and (.input.skill // "") == "engage" then "engage"
+			   elif (.input | tostring | test("reseed-revive\\.md")) then "seed"
+			   else empty end' "$transcript" 2>/dev/null)
 }
 # last_activity — "<type>:<stop_reason>" of the last activity entry from START on;
 # empty when there is none (or no transcript, or no jq). Activity: an assistant
@@ -162,9 +169,9 @@ send() { # returns 1 when tmux refused, so an idle spell is not marked as served
 
 acked() {
 	[[ ! -e "$ACK" ]] && return 0
-	if seed_read; then
+	if revive_seen; then
 		rm -f "$ACK"
-		via=" (seed read)"
+		via=" (revive seen)"
 		return 0
 	fi
 	return 1
