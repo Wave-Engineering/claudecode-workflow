@@ -20,6 +20,28 @@ are worth keeping apart:
 ## [Unreleased]
 
 ### Added
+- **`wave-status` holds a wave on its entry conditions, fail-closed (#1393).** This is the
+  Python half of mcp-server-sdlc#613. Before it, the EC gate lived in `wave_next_pending`
+  alone, so `wave_preflight` and `wave_flight_plan` would still let a held story through.
+  - **Start ECs:** `preflight`, `planning` and `flight-plan` now evaluate the current wave
+    against a fresh read of `phases-waves.json`. If any story names a `start` EC that is not
+    `met`, the step exits 1, sets the wave `held` with `held_by: [{ec, status, gates, issues}]`,
+    and names every hold.
+  - **Delivery ECs:** a `delivery` EC lets the wave run. `complete` refuses while any EC holds
+    the wave, read fresh, so a held wave never becomes `completed`.
+  - **What reads as not met:** a missing or invalid status reads `unmet`. An EC the plan never
+    declares reads `undeclared`. An `ec` that is not an array of non-empty strings reads
+    `malformed`.
+  - **Refs:** a cross-plan `<plan>#<n>` ref goes in `held_by_depends_on` and holds
+    unconditionally, as does a malformed `depends_on` entry. Integer entries and `#N` /
+    `owner/repo#N` refs are untouched.
+  - **Never cached:** a `met` is never read back from `state.json`, so an EC that goes
+    `reclosed` holds the wave again on its next step.
+  - **`show`:** it marks a held wave and lists each EC, its state, and the waves and issues it
+    holds.
+  - **Unchanged:** a plan with no ECs behaves exactly as before and gains no keys, and a
+    promotion-gate hold from `hold-wave` still completes.
+  - **`init --extend`:** it now merges an extension's EC declarations instead of dropping them.
 - **A bench for `/precheck` Job D on a public golden-comment set (#1195).** The question is
   what the reviewer catches, and at what cost per pass, under each model now that #1387 lets
   it vary. `scripts/bench/jobd-golden.py` runs Job D-full's prompt and the
