@@ -33,7 +33,6 @@
       "Write(.claude/plans/*)"
     ]
   },
-  "model": "opus",
   "hooks": {
     "PreToolUse": [
       {

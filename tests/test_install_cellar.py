@@ -148,9 +148,11 @@ def _build_synthetic_repo(tmp_path: Path) -> Path:
     }
     (config_dir / "settings.template.json").write_text(json.dumps(template, indent=2))
 
-    # Drop the real install script in.
+    # Drop the real install script in, with the settings merge it sources (#1360).
     shutil.copy(_INSTALL_SCRIPT, repo / "install")
     os.chmod(repo / "install", 0o755)
+    (scripts / "lib").mkdir()
+    shutil.copy(_REPO_DIR / "scripts" / "lib" / "settings-merge.sh", scripts / "lib")
     return repo
 
 

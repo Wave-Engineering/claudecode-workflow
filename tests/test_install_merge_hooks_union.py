@@ -106,6 +106,10 @@ def _override_template(home: Path, template_data: dict) -> Path:
         "#!/usr/bin/env bash\ncheck_deps() { return 0; }\n"
     )
     (sandbox_repo / "scripts" / "ci" / "check-deps.sh").chmod(0o755)
+    # install sources the shared merge (#1360); the duplicate guard beside it is
+    # opt-in, via _sandbox_with_guard.
+    (sandbox_repo / "scripts" / "lib").mkdir(parents=True, exist_ok=True)
+    shutil.copy(_REPO_DIR / "scripts" / "lib" / "settings-merge.sh", sandbox_repo / "scripts" / "lib")
     return sandbox_repo / "install"
 
 
@@ -582,7 +586,7 @@ def test_local_hook_path_resolution(sandbox_home: Path) -> None:
 # #1225: install is idempotent — no run may register a kit hook twice
 # ---------------------------------------------------------------------------
 
-_GUARD = _REPO_DIR / "scripts" / "ci" / "assert-no-duplicate-hooks.sh"
+_GUARD = _REPO_DIR / "scripts" / "lib" / "assert-no-duplicate-hooks.sh"
 
 # Path-rooted kit hooks, so the duplicate guard can judge them (bare commands
 # are "nothing judgeable" to it). Two events, two kit prefixes.
@@ -601,7 +605,7 @@ _KIT_TEMPLATE = {
 
 def _sandbox_with_guard(home: Path, template: dict) -> Path:
     install = _override_template(home, template)
-    shutil.copy(_GUARD, install.parent / "scripts" / "ci" / _GUARD.name)
+    shutil.copy(_GUARD, install.parent / "scripts" / "lib" / _GUARD.name)
     return install
 
 

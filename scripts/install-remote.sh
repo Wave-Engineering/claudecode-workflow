@@ -29,6 +29,10 @@ CLAUDE_DIR="$HOME/.claude"
 # symlink farm pointing into here for entries that need PATH. Ported from
 # install per cc-workflow#560.
 CELLAR_DIR="$HOME/.claude/scripts"
+# The first release whose tarball ships scripts/lib/settings-merge.sh, the merge
+# this installer sources (#1360). An older tarball is refused, and the message
+# names this version so an operator rolling back knows what to pick.
+SETTINGS_MERGE_FLOOR="8.21.0"
 
 VERSION=""
 NO_MCPS=false
@@ -173,9 +177,9 @@ cellar_deploy() {
 }
 
 # Drop a skill helper into a per-skill Cellar subdir at
-# $CELLAR_DIR/skills/<skill_name>/<helper_name>. Preserves +x. Distinct
-# from a flat Cellar drop so two skills shipping same-named helpers cannot
-# silently overwrite each other.
+# $CELLAR_DIR/skills/<skill_name>/<helper_name>. Keeps the source's mode, so a
+# JS module stays non-executable (#1360). Distinct from a flat Cellar drop so
+# two skills shipping same-named helpers cannot silently overwrite each other.
 cellar_install_skill_helper() {
 	local src="$1" skill_name="$2" helper_name="$3"
 	local dest="$CELLAR_DIR/skills/$skill_name/$helper_name"
@@ -184,8 +188,13 @@ cellar_install_skill_helper() {
 		return 0
 	fi
 	mkdir -p "$(dirname "$dest")"
+	# cp onto an existing file keeps the file's old mode, and an older install made
+	# every helper +x. A fresh file takes the source's mode.
+	rm -f "$dest"
 	cp "$src" "$dest"
-	chmod +x "$dest"
+	if [[ -x "$src" ]]; then
+		chmod +x "$dest"
+	fi
 }
 
 # Move every *.bak an older ./install left under $SKILLS_DIR to the mirror path
@@ -240,25 +249,50 @@ farm_symlink() {
 	ln -sf "$target" "$link"
 }
 
-# Create or refresh a symlink at $SCRIPTS_DIR/<helper_name> pointing into
-# the per-skill Cellar subdir. Warn loudly on cross-skill name collision.
+# The "<helper> <skill>" pairs farmed so far in this run, one per line.
+FARMED_SKILL_HELPERS=""
+
+# Create or refresh a symlink at $SCRIPTS_DIR/<helper_name> pointing into the
+# per-skill Cellar subdir. Only executable helpers are farmed (#1360). Two
+# skills farming the same name in one run is fatal, with the first skill's
+# link left as it was; a link an earlier install left is simply replaced.
 farm_symlink_skill_helper() {
 	local skill_name="$1" helper_name="$2"
 	local target="$CELLAR_DIR/skills/$skill_name/$helper_name"
 	local link="$SCRIPTS_DIR/$helper_name"
+	local prior
+	prior=$(printf '%s\n' "$FARMED_SKILL_HELPERS" | awk -v n="$helper_name" '$1 == n { print $2; exit }')
+	if [[ -n "$prior" && "$prior" != "$skill_name" ]]; then
+		fail "Helper name collision for '$helper_name': $CELLAR_DIR/skills/$prior/$helper_name is already farmed from another skill; refusing to overwrite it with $target" >&2
+		exit 1
+	fi
+	FARMED_SKILL_HELPERS+="$helper_name $skill_name"$'\n'
 	if [[ "$DRY_RUN" == true ]]; then
 		info "(dry-run) symlink $link → $target"
 		return 0
 	fi
-	if [[ -L "$link" ]]; then
-		local existing
-		existing=$(resolve_symlink_target "$link")
-		if [[ "$existing" == "$CELLAR_DIR/skills/"* && "$existing" != "$target" ]]; then
-			warn "Helper name collision for '$helper_name': $existing already farmed; overwriting with $target"
-		fi
-	fi
 	mkdir -p "$(dirname "$link")"
 	ln -sf "$target" "$link"
+}
+
+# Remove $SCRIPTS_DIR links into $CELLAR_DIR/skills/ whose target exists but is
+# not executable: the PATH links an older install made for JS modules such as
+# bundle.mjs and gate.js (#1360). Foreign links, and links into the top-level
+# Cellar, are never touched. Honors $DRY_RUN.
+reap_unfarmed_skill_helper_links() {
+	[[ -d "$SCRIPTS_DIR" ]] || return 0
+	local link target
+	while IFS= read -r link; do
+		target=$(resolve_symlink_target "$link")
+		[[ "$target" == "$CELLAR_DIR/skills/"* ]] || continue
+		[[ -e "$target" && ! -x "$target" ]] || continue
+		if [[ "$DRY_RUN" == true ]]; then
+			info "(dry-run) Would reap non-executable helper link: $link"
+		else
+			rm -f "$link"
+			info "Reaped non-executable helper link: $link"
+		fi
+	done < <(find "$SCRIPTS_DIR" -maxdepth 1 -type l 2>/dev/null)
 }
 
 # Walk $SCRIPTS_DIR and remove symlinks pointing into the Cellar whose
@@ -282,124 +316,6 @@ reap_stale_cellar_symlinks() {
 	done < <(find "$SCRIPTS_DIR" -maxdepth 1 -type l 2>/dev/null)
 	if [[ $removed -eq 0 ]]; then
 		skip "No stale symlinks under $SCRIPTS_DIR (Cellar reaper)"
-	fi
-}
-
-# ---------------------------------------------------------------------------
-# Settings smart-merge (ported from install — see #556 for hook union-merge)
-# ---------------------------------------------------------------------------
-
-merge_settings() {
-	local template="$1" target="$2"
-
-	cp "$target" "${target}.bak"
-
-	# Deep merge: template into local, preserving user customizations
-	# Rules:
-	#   1. Top-level keys (scalars AND objects): added only if ABSENT locally
-	#   2. hooks:
-	#      - Event keys missing locally: added from template
-	#      - Event keys present in both: matcher arrays unioned by .matcher
-	#        value (template matcher entries whose .matcher is not in the
-	#        local array are appended; existing local entries left untouched)
-	#   3. permissions.allow: union of both arrays (deduplicated)
-	#   4. enabledPlugins: add missing keys from template; leave existing alone
-	#   5. _comment keys: stripped from result (template-only documentation)
-	#   6. Any key present locally but not in template: preserve as-is
-	local merged
-	merged=$(jq -s '
-		# .[0] = template, .[1] = local
-
-		# Top-level keys from template (excluding special-merge keys)
-		(.[0] | to_entries | map(
-			select(.key | IN("hooks", "permissions", "enabledPlugins", "_comment") | not)
-		)) as $tpl_defaults |
-
-		# Capture local keys before entering reduce
-		(.[1] | keys) as $local_keys |
-
-		# Merge hooks: add missing event keys AND union matcher arrays for shared keys
-		((.[0].hooks // {}) | to_entries | map(
-			select(.key != "_comment")
-		)) as $tpl_hooks |
-		((.[1].hooks // {}) | to_entries | map(
-			select(.key != "_comment")
-		)) as $local_hooks |
-		((.[1].hooks // {}) | keys) as $local_hook_keys |
-		# New event keys (template only) — add wholesale
-		($tpl_hooks | map(select(.key | IN($local_hook_keys[]) | not))) as $new_hooks |
-		# Shared event keys — union their matcher arrays by .matcher value
-		($tpl_hooks | map(select(.key | IN($local_hook_keys[]))) | map({
-			key: .key,
-			value: (
-				(.value // []) as $tpl_arr |
-				(($local_hooks | from_entries)[.key] // []) as $local_arr |
-				($local_arr | map(.matcher)) as $local_matchers |
-				$local_arr + ($tpl_arr | map(select(.matcher as $m | $local_matchers | index($m) | not)))
-			)
-		}) | from_entries) as $merged_shared_hooks |
-
-		# Merge permissions.allow: union
-		((.[0].permissions.allow // []) + (.[1].permissions.allow // []) | unique) as $merged_perms |
-
-		# Merge enabledPlugins: add missing keys
-		((.[0].enabledPlugins // {}) | to_entries) as $tpl_plugins |
-		((.[1].enabledPlugins // {}) | keys) as $local_plugin_keys |
-		($tpl_plugins | map(select(.key | IN($local_plugin_keys[]) | not))) as $new_plugins |
-
-		# Build result: start with local, add missing pieces
-		.[1]
-		| .permissions.allow = $merged_perms
-		| .hooks = ((.hooks // {}) + ($new_hooks | from_entries) + $merged_shared_hooks)
-		| .enabledPlugins = ((.enabledPlugins // {}) + ($new_plugins | from_entries))
-		| reduce ($tpl_defaults[] | select(.key | IN($local_keys[]) | not)) as $s (.; .[$s.key] = $s.value)
-		| del(._comment)
-		| del(.hooks._comment)
-	' "$template" "$target")
-
-	echo "$merged" >"$target"
-
-	# Report what changed
-
-	# Report new hooks (and new matchers within shared event keys)
-	for hook_event in $(jq -r '.hooks // {} | keys[] | select(. != "_comment")' "$template"); do
-		if jq -e ".hooks.\"${hook_event}\"" "${target}.bak" &>/dev/null; then
-			# Event already exists locally — diff matcher arrays and report
-			# any template matchers appended by the union-merge.
-			local added_matchers
-			added_matchers=$(jq -r --arg ev "$hook_event" --slurpfile bak "${target}.bak" '
-				(($bak[0].hooks[$ev] // []) | map(.matcher)) as $local_ms |
-				(.hooks[$ev] // []) | map(.matcher) | map(select(. as $m | $local_ms | index($m) | not)) | .[]
-			' "$target")
-			if [[ -z "$added_matchers" ]]; then
-				skip "hooks.$hook_event -- already present (skipped)"
-			else
-				while IFS= read -r m; do
-					[[ -z "$m" ]] && continue
-					info "hooks.$hook_event -- matcher \"$m\" added"
-				done <<<"$added_matchers"
-			fi
-		else
-			info "hooks.$hook_event -- added"
-		fi
-	done
-
-	for plugin in $(jq -r '.enabledPlugins // {} | keys[]' "$template"); do
-		if jq -e ".enabledPlugins.\"${plugin}\"" "${target}.bak" &>/dev/null; then
-			skip "enabledPlugins.$plugin -- already present (skipped)"
-		else
-			info "enabledPlugins.$plugin -- added"
-		fi
-	done
-
-	local old_perm_count new_perm_total
-	old_perm_count=$(jq '.permissions.allow | length' "${target}.bak")
-	new_perm_total=$(jq '.permissions.allow | length' "$target")
-	local perm_diff=$((new_perm_total - old_perm_count))
-	if [[ $perm_diff -gt 0 ]]; then
-		info "permissions -- $perm_diff new entries merged"
-	else
-		skip "permissions -- no new entries"
 	fi
 }
 
@@ -568,6 +484,13 @@ do_install() {
 
 	local release_dir="$tmpdir"
 
+	# The settings merge comes from the tarball itself (#1360). An older tarball has
+	# none, so refuse it here, before anything is written.
+	[[ -f "$release_dir/scripts/lib/settings-merge.sh" ]] ||
+		die "release tarball has no scripts/lib/settings-merge.sh: it predates the shared settings merge; the first installable version is v${SETTINGS_MERGE_FLOOR}; pass --version v${SETTINGS_MERGE_FLOOR} or newer, or install an older tag with that tag's own installer: curl -fsSL https://raw.githubusercontent.com/Wave-Engineering/claudecode-workflow/<tag>/scripts/install-remote.sh | bash -s -- --version <tag>"
+	# shellcheck source=scripts/lib/settings-merge.sh
+	source "$release_dir/scripts/lib/settings-merge.sh"
+
 	# --- Install scripts (Cellar + symlink-farm, ported from install — #560) ---
 	# Order matters: cellar_deploy wipes $CELLAR_DIR before deploying, so
 	# skill helpers (which live under $CELLAR_DIR/skills/) would be obliterated
@@ -620,8 +543,11 @@ do_install() {
 				cp "$helper" "$SKILLS_DIR/$skill_name/$helper_name"
 			else
 				cellar_install_skill_helper "$helper" "$skill_name" "$helper_name"
-				safeguard_user_file "$helper_name"
-				farm_symlink_skill_helper "$skill_name" "$helper_name"
+				# Only an executable helper gets a PATH link (#1360).
+				if [[ -x "$helper" ]]; then
+					safeguard_user_file "$helper_name"
+					farm_symlink_skill_helper "$skill_name" "$helper_name"
+				fi
 			fi
 		done
 
@@ -641,6 +567,7 @@ do_install() {
 
 		ok "$skill_name"
 	done
+	reap_unfarmed_skill_helper_links
 	echo ""
 
 	# --- Install pre-built packages ---
@@ -701,9 +628,15 @@ do_install() {
 	# settings.json smart-merge
 	if [[ -f "$release_dir/config/settings.template.json" ]]; then
 		if [[ -f "$CLAUDE_DIR/settings.json" ]]; then
-			info "Smart-merging settings.template.json into settings.json..."
-			merge_settings "$release_dir/config/settings.template.json" "$CLAUDE_DIR/settings.json"
-			ok "settings.json merged (backup at settings.json.bak)"
+			if [[ "$DRY_RUN" == true ]]; then
+				info "(dry-run) Would merge settings.template.json into settings.json"
+			else
+				info "Smart-merging settings.template.json into settings.json..."
+				merge_settings "$release_dir/config/settings.template.json" "$CLAUDE_DIR/settings.json"
+				ok "settings.json merged (backup at settings.json.bak)"
+			fi
+		elif [[ "$DRY_RUN" == true ]]; then
+			info "(dry-run) Would install settings.json from settings.template.json (fresh)"
 		else
 			# Fresh install: copy template and strip _comment keys
 			jq 'del(._comment) | del(.hooks._comment)' \

@@ -66,6 +66,9 @@ def _build_synthetic_repo(tmp_path: Path) -> Path:
         "#!/usr/bin/env bash\ncheck_deps() { return 0; }\n"
     )
     (ci_dir / "check-deps.sh").chmod(0o755)
+    # install sources the shared settings merge (#1360).
+    (repo / "scripts" / "lib").mkdir()
+    shutil.copy(_REPO_DIR / "scripts" / "lib" / "settings-merge.sh", repo / "scripts" / "lib")
 
     shutil.copy(_INSTALL_SCRIPT, repo / "install")
     os.chmod(repo / "install", 0o755)

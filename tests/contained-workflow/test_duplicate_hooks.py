@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-ASSERT = REPO / "scripts" / "ci" / "assert-no-duplicate-hooks.sh"
+ASSERT = REPO / "scripts" / "lib" / "assert-no-duplicate-hooks.sh"
 DOCKERFILE = REPO / "containers" / "oakandwave-workflow" / "Dockerfile"
 
 HOOK = ".local/share/wtf-server/hooks/wtf-post-tool-use.sh"
