@@ -48,10 +48,15 @@ def test_section_names_interpreter_lookups():
 
 def test_section_gives_bounded_fallback():
     s = section(CLAUDE, HEADING)
-    assert "-xdev" in s
-    assert "timeout 60" in s
-    for pruned in ("/proc", "/sys", "/run", "/mnt", "/media"):
-        assert f"-path {pruned}" in s, pruned
+    fallback = next(line for line in s.splitlines() if "-xdev" in line)
+    assert "timeout 60" in fallback
+    # -xdev is what keeps the walk out of these, so the text names each of them.
+    for tree in ("/proc", "/sys", "/run", "/mnt", "/media", "FUSE"):
+        assert tree in fallback, tree
+    assert "Never drop it" in fallback
+    # An absolute -path prune only fires from `/`, so it must not be offered as the guard.
+    assert "-path /proc -prune` clause does not replace it" in fallback
+    assert "-prune" in fallback  # the <root>-relative prune for same-filesystem trees
 
 
 def test_section_reaches_subagent_briefs():

@@ -24,7 +24,9 @@ are worth keeping apart:
   self-recursive kio-fuse mount and held a shared host at load ~105 for about 90 minutes. The
   new section bans recursive searches rooted at `/` or `/run`, names the toolchain lookups to
   use instead (`import`, `pip show -f`, `npm root -g`, `go env GOMODCACHE`), and gives the
-  fallback (`-xdev`, the pruned pseudo and mount trees, `timeout 60`). It also says to carry
+  fallback: `timeout 60 find <root> -xdev`, where `-xdev` keeps the walk out of `/proc`,
+  `/sys`, `/run` and any FUSE or network mount, which an absolute `-path` prune can't do from
+  any root but `/`. It also says to carry
   the rule into subagent briefs, where the walk came from. `/ccfold` brings it into consumers.
 
 ### Fixed
