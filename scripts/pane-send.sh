@@ -15,17 +15,17 @@
 #     text appended. C-u is readline's kill-to-start-of-line; if the TUI doesn't bind
 #     it, the worst case is a no-op, and the invariant still holds. Escape is NOT used:
 #     on a running turn it interrupts the turn, and twice on an empty input it opens
-#     the rewind picker.
+#     the rewind picker. This C-u and Escape behaviour was observed in use, not checked
+#     against a primary source (the TUI's keybinding docs or source).
 #   - `-l` sends the text literally, so tmux never reads it as a key name (a caller
 #     passing `Enter` or `C-m` as "text" would otherwise send a bare Enter).
 #   - The three steps are one tmux invocation (a `;`-separated command list), so no
 #     other client can interleave keys between them.
-#
-# Known limit: C-u may clear only the current line of a multi-line draft.
-#
 #   - Text ending in `;` is refused: in a command list tmux strips a trailing `;` from an
 #     argument as a separator, so `;` alone would type nothing and Enter would accept the
 #     ghost.
+#
+# Known limit: C-u may clear only the current line of a multi-line draft.
 #
 # Exit: tmux's exit code; 2 on a usage error (an empty pane or text, text containing
 # a newline or carriage return, text starting with `-` or ending with `;`), with tmux
