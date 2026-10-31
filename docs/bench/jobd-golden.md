@@ -296,28 +296,34 @@ p = 0.45).
 
 ### What it shows
 
-**Sonnet matches opus on what it finds, at a third of the price.** Paired on the same PR and
-level, the true-positive counts don't separate:
+**No detectable TP difference between sonnet and opus, at a third of the price.** Paired on the
+same PR and level, the true-positive counts don't separate:
 - pooled over all 50 PRs, sonnet wins on 12, ties on 22 and loses on 16 (p = 0.57);
-- no single level comes near the bar.
+- no single level comes near the bar. The largest gap, at `high`, favours opus, 53 TPs against
+  43 (sonnet wins 4, loses 9; p = 0.27).
 
-Sonnet costs 0.33× opus per pass (geometric mean; 0.30–0.37 by level).
+That is a null result, not a finding of equivalence: a shortfall of about a fifth, like the one
+at `high`, is too small for this sweep to see. Sonnet costs 0.33× opus per pass (geometric mean;
+0.30–0.37 by level).
 
-**Effort: only `xhigh` against `medium` shows an effect, and it is marginal.**
-- **xhigh against medium (pooled):** 9 wins, 0 losses, p = 0.0039, about 22% more TPs (46 → 56) at 3.0× the cost.
+**Effort: no pair survives correction; `xhigh` against `medium` is the only hint.**
+- **xhigh against medium (pooled):** 9 wins, 0 losses, p = 2/512 = 0.0039, about 22% more TPs (46 → 56) at 3.0× the cost.
 - **Other pairs:** `high` against `medium` and `xhigh` against `high` show nothing (p = 0.45 each).
-- **Multiple tests:** 13 sign tests were run (4 model, 9 effort). A Bonferroni bound at 0.05 is 0.0038, and this result sits on it, not clearly under it.
+- **Multiple tests:** 13 sign tests were run (4 model, 9 effort). The Bonferroni bar at 0.05 is 0.05/13 = 0.0038, and 0.0039 is just above it, so the result does not survive correction. With 17 PRs and 8 ties, 9 to 0 is the most extreme split possible, so this sweep could not have cleared the corrected bar on that pair at all.
 - **Not monotonic:** the gain doesn't show up as a step through `high`. Read it as "maybe a modest recall gain at `xhigh`", worth a confirming run, not as a settled effect.
 
-**Raw precision is a floor, and a low one.** The goldens miss most of what the reviewers flag
-that is real: a hand-checked sample puts corrected precision near 0.8 for opus and 0.7 for sonnet,
-against 0.29–0.31 raw. The sample can't tell the models apart, but it moves where the reading
-should start. A finding Job D raises that isn't in the goldens is more often a real defect than
-not.
+**Raw precision is a floor, and a low one.** On the point estimates, a hand-checked sample puts
+corrected precision near 0.8 for opus and 0.7 for sonnet, against 0.29–0.31 raw, so the goldens
+would miss more than half of what the reviewers flag that is real. The intervals are wide. At
+the low end of sonnet's, 0.27 × 323 ≈ 87 real FPs is under its 143 TPs, so the goldens would
+not miss most. The pooled real share, 19/30, has a 95% interval of about 0.44–0.80, which
+includes 0.5. The sample
+can't tell the models apart, but it moves where the reading should start: a finding Job D raises
+that isn't in the goldens may well be a real defect, and should be read, not discounted.
 
 **For `/precheck`'s Job D**, on this evidence:
-- **Model:** sonnet at `medium` gives the same TP yield as opus at a third of the cost.
-- **Effort:** `xhigh` might add recall for about 3× the cost and 3.3–4.4× the wall time. That's a trade to confirm before buying it, not one this sweep settles.
+- **Model:** sonnet at `medium` showed no detectable TP shortfall against opus at `medium`, at a third of the cost.
+- **Effort:** `xhigh` might add recall for about 3× the cost and 3.3–4.4× the wall time (per-arm means, unpaired, which overstate the ratio as they did the cost by 10–13%). That's a trade to confirm before buying it, not one this sweep settles.
 
 The sweep doesn't measure severity-weighted value. All rows count a Low golden the same as a
 Critical.
