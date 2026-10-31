@@ -160,13 +160,13 @@ SEED_CAT='{"command": "cat .claude/reseed-revive.md"}'
 SEED_READ='{"file_path": "/p/.claude/reseed-revive.md"}'
 ENGAGE='{"skill": "engage", "args": "reload"}'
 
-run_kick_t() { # <case-dir> <transcript> [<ack-on-call>]   env KB overrides the backoff
+run_kick_t() { # <case-dir> <transcript> [<ack-on-call>]   env KB overrides the backoff, LW the live wait
 	local d="$1"
 	mkdir -p "$d/root"
 	: >"$d/calls"
 	env PATH="$SHIM:$PATH" TMUX_CALLS="$d/calls" ACK_ON_CALL="${3:-}" ACK_ROOT="$d/root" \
 		NOTIFIED="$d/notified" RESEED_KICK_BACKOFF="${KB:-0 0.1 0.1 0.1}" \
-		RESEED_KICK_LIVE_WAIT=2 RESEED_KICK_POLL=1 \
+		RESEED_KICK_LIVE_WAIT="${LW:-2}" RESEED_KICK_POLL=1 \
 		RESEED_KICK_LOG="$d/kick.log" RESEED_KICK_NOTIFY="$SHIM/notify" \
 		bash "$KICK" "%42" "$d/root" "$2"
 }
@@ -280,20 +280,31 @@ else
 fi
 
 # A live session (a turn a peer message started) that has not read the seed yet:
-# no sends stack up behind it, and the revive during the wait acks.
+# no sends stack up behind it, and the revive during the wait acks. The revive is
+# appended once the kicker logs that it entered the live wait, never on a timer: a
+# timed append misses a short wait on a loaded box (#1410). The 30 s wait only
+# bounds a broken run; a passing one acks at the first poll after the append.
 C="$WORK/livelater"
 mkdir -p "$C"
 entry "$LATER" Bash '{"command": "echo answering a peer"}' >"$C/t.jsonl"
 (
-	sleep 1
+	for _ in $(seq 300); do
+		grep -q 'session live after 0 send(s); waiting up to 30s' "$C/kick.log" 2>/dev/null && break
+		sleep 0.1
+	done
 	{
 		entry "$LATER" Read "$SEED_READ"
 		entry "$LATER" Skill "$ENGAGE"
 	} >>"$C/t.jsonl"
 ) &
-run_kick_t "$C" "$C/t.jsonl"
+LW=30 run_kick_t "$C" "$C/t.jsonl"
 rc=$?
 wait
+if grep -q 'session live after 0 send(s); waiting up to 30s for the revive' "$C/kick.log"; then
+	pass "the kicker logs entering the live wait"
+else
+	fail "no live-wait line: log=$(cat "$C/kick.log")"
+fi
 if [[ $rc -eq 0 ]] && grep -q 'acked (revive seen) after 0 (session was live' "$C/kick.log"; then
 	pass "live session: waits, then acks on the revive"
 else
@@ -426,20 +437,32 @@ else
 fi
 
 # The session goes live DURING the final wait (after all 4 sends): it must enter
-# the live wait, not page "no ack after 4 send(s)". Schedule 0 .1 .1 1: the 4th
-# check is at ~1.2 s and the final wait ends at ~2.2 s; the entry lands at ~1.7 s.
+# the live wait, not page "no ack after 4 send(s)". A fake `sleep` writes the entry
+# on its 5th call: the kicker sleeps once per schedule step (4) and then once more
+# for the final wait, so the entry lands inside the final wait by construction. A
+# kicker that read the state before that wait would see a fresh session and page
+# "no ack". No timer: a timed write missed that window on a loaded box (#1410).
 C="$WORK/latelive"
-mkdir -p "$C"
+mkdir -p "$C/root" "$C/shim"
+cat >"$C/shim/sleep" <<'SH'
+#!/usr/bin/env bash
+printf 'x\n' >>"$SLEEP_CALLS"
+if [[ "$(wc -l <"$SLEEP_CALLS")" -eq 5 ]]; then
+	jq -cn --arg t "$LIVE_TS" '{type: "api-request-shape", timestamp: $t, shape: "x"}' >>"$LIVE_T"
+fi
+exec /bin/sleep "$@"
+SH
+chmod +x "$C/shim/sleep"
+: >"$C/calls"
+: >"$C/sleeps"
 : >"$C/t.jsonl"
-(
-	sleep 1.7
-	jq -cn --arg t "$LATER" '{type: "api-request-shape", timestamp: $t, shape: "x"}' >>"$C/t.jsonl"
-) &
-KB="0 0.1 0.1 1" run_kick_t "$C" "$C/t.jsonl"
+env PATH="$C/shim:$SHIM:$PATH" TMUX_CALLS="$C/calls" SLEEP_CALLS="$C/sleeps" LIVE_T="$C/t.jsonl" LIVE_TS="$LATER" \
+	ACK_ON_CALL="" ACK_ROOT="$C/root" NOTIFIED="$C/notified" RESEED_KICK_BACKOFF="0 0.1 0.1 0.1" \
+	RESEED_KICK_LIVE_WAIT=2 RESEED_KICK_POLL=1 \
+	RESEED_KICK_LOG="$C/kick.log" RESEED_KICK_NOTIFY="$SHIM/notify" \
+	bash "$KICK" "%42" "$C/root" "$C/t.jsonl"
 rc=$?
-wait
-# 4 sends proves the entry landed AFTER the 4th check, i.e. in the final wait; a
-# loaded runner that lands it earlier fails here loudly instead of passing quietly.
+# Exactly 4 sends: the entry made every later check read the session as busy.
 if [[ $rc -eq 1 && "$(wc -l <"$C/calls")" -eq 4 ]] && grep -q 'FAILED session live' "$C/kick.log" &&
 	! grep -q 'FAILED no ack' "$C/kick.log"; then
 	pass "a session that goes live during the final wait gets the live wait, not 'no ack'"
