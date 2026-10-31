@@ -125,7 +125,7 @@ The kit enforces several workflows that cannot be skipped. These exist because o
 
 **The rule:** After any context compaction or `/reseed revive`, Claude must re-read `CLAUDE.md` in full before any other work; no confirmation message is sent. `/engage reload` does the re-read, then the work carries on.
 
-**Why it exists:** Compaction is lossy. Claude's summary of a long conversation may drop critical details like "we are on a feature branch" or "tests must pass before a protected push or a PR/MR." The `/engage` skill exists specifically to restore this context. Running it after compaction is the safety net that prevents compaction-induced rule violations.
+**Why it exists:** Compaction is lossy. Claude's summary of a long conversation may drop critical details like "we are on a feature branch" or "tests must pass before a protected push or a PR/MR." The `/engage` skill exists specifically to restore this context. Running `/engage reload` after compaction is the safety net that prevents compaction-induced rule violations.
 
 ---
 

@@ -53,5 +53,5 @@ New to this repo, or a cold start? Run `/onboard` instead: it runs this skill fi
 ## Important
 
 - Be concise. This is a status check, not a lecture.
-- Do NOT start doing work. Just confirm state and wait for direction.
+- Plain `/engage` only: do NOT start doing work. Just confirm state and wait for direction. `/engage reload` returns to its caller, which carries on.
 - If CLAUDE.md has a "Session Onboarding" section pointing to another file, read that too.

@@ -32,9 +32,9 @@ are worth keeping apart:
 
 ### Fixed
 - **`CLAUDE.md` described the Stop hook as it was before #818 (#1367).** It said
-  `stop-action-bias-detector.sh` blocks a turn that ends by asking permission. Since #818 no
-  hook reads the wording: that hook is the godspeed mandate model, and the one wording check
-  left is `precheck-asking-detector.sh`. The settings template's `_comment` now says the same.
+  `stop-action-bias-detector.sh` blocks a turn that ends by asking permission. Since #818 that
+  hook doesn't read the wording: it is the godspeed mandate model, and the only hook left that
+  reads wording is `precheck-asking-detector.sh`. The settings template's `_comment` now says the same.
 
 ## [8.20.0] - 2026-10-30
 

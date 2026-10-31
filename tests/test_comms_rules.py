@@ -113,6 +113,27 @@ def test_docs_drop_post_compaction_confirm():
     assert "`/engage reload`" in read("docs/getting-started.md")
 
 
+def test_no_after_compaction_row_maps_to_plain_engage():
+    # The entry-point tables an agent checks must send a compacted session to the reload.
+    row = re.compile(r"^\|[^|\n]*\bafter (a )?compaction\b[^\n]*`/engage`\s*\|\s*$", re.I | re.M)
+    for rel in (
+        "skills/onboard/SKILL.md",
+        "docs/skill-reference.md",
+        "skills/ccwork/tours/orientation.md",
+        "skills/ccwork/tours/foundations.md",
+    ):
+        text = read(rel)
+        assert not row.search(text), rel
+    assert "| The same session, after a compaction | `/engage reload` |" in read(
+        "skills/onboard/SKILL.md"
+    )
+
+
+def test_engage_important_scoped_to_plain_engage():
+    s = section(ENGAGE, "Important")
+    assert "Plain `/engage` only: do NOT start doing work" in s
+
+
 # --- #36: reminders go to #call-4-bj ------------------------------------------
 
 
@@ -142,6 +163,7 @@ def test_default_to_action_describes_mandate_model():
     assert "godspeed" in s
     assert "precheck-asking-detector.sh" in s
     assert "blocks a turn that ends by asking permission" not in s
+    assert "no hook reads your wording" not in s  # precheck-asking-detector is one
 
 
 def test_stop_hook_comment_current():

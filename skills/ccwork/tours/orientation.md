@@ -87,7 +87,7 @@ Narration: "Sessions have a rhythm: start, work, compact, resume. Durable state 
 | Moment | What happens | Skill |
 |--------|-------------|-------|
 | Session start | Load rules, memories, plan state | `/engage` |
-| After compaction | Resume — restore rules and context | `/engage` |
+| After compaction | Resume — re-read rules and context, no confirmation | `/engage reload` |
 | Any time | Check or pick your identity | `/name` |
 | Template update | Merge upstream CLAUDE.md changes | `/ccfold` |
 
