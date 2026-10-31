@@ -18,6 +18,13 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+from wave_status.entry_conditions import (
+    describe_holds,
+    ec_summary,
+    evaluate_wave_gate,
+    wave_issues,
+)
+
 
 # ---------------------------------------------------------------------------
 # FlightDeck emit (S1.2 / #855) — ADDITIVE, fire-and-forget instrumentation.
@@ -781,8 +788,14 @@ def extend_state(plan_data: dict, root: Path) -> None:
             "Each issue should belong to exactly one phase."
         )
 
-    # Merge phases into plan
+    # Merge phases into plan. New EC declarations join the plan's; an EC it
+    # already declares keeps its entry, since that may carry synced state (#1393).
     existing_plan["phases"].extend(plan_data["phases"])
+    new_ecs = plan_data.get("entry_conditions")
+    if isinstance(new_ecs, dict) and new_ecs:
+        merged = dict(new_ecs)
+        merged.update(existing_plan.get("entry_conditions") or {})
+        existing_plan["entry_conditions"] = merged
     save_json(phases_path, existing_plan)
 
     # Add new waves and issues to state (preserve existing)
@@ -865,6 +878,7 @@ def store_flight_plan(flights_data: list, root: Path) -> None:
             "Error: no current wave is set. "
             "Run 'init' before storing a flight plan."
         )
+    enforce_start_gate(root, "flight-plan")
 
     flights = load_json(d / "flights.json")
     flights["flights"][current_wave] = flights_data
@@ -901,13 +915,96 @@ def _set_action(
     return state_data
 
 
+# ---------------------------------------------------------------------------
+# Entry-condition gate (#1393, the Python half of mcp-server-sdlc#613).
+#
+# Every step that moves a wave toward running (preflight, planning,
+# flight-plan) evaluates the current wave against a FRESH read of
+# phases-waves.json, and ``complete`` does the same for the wave it closes.
+# state.json records the result (``held_by``, ``held_by_depends_on``,
+# ``delivery_held_by``) for show and the dashboard, but nothing ever reads a
+# ``met`` back from it: an EC that goes ``reclosed`` holds again on the next
+# step. A plan with no ECs evaluates clean and gains no keys.
+# ---------------------------------------------------------------------------
+
+def _record_gate(wave: dict, gate: dict) -> bool:
+    """Write *gate*'s holds onto a wave's state entry; return True if it changed.
+
+    Holding a wave records the status it had in ``ec_held_from``, and a clean
+    gate restores it, so a wave held mid-run goes back to ``in_progress``, not
+    ``pending``. A wave that also carries a ``hold_detail`` (a promotion-gate
+    hold from :func:`hold_wave`, which only a run clears) stays ``held``.
+    """
+    before = dict(wave)
+    for key, value in (
+        ("held_by", gate["start"]),
+        ("held_by_depends_on", gate["depends_on"]),
+        ("delivery_held_by", gate["delivery"]),
+    ):
+        if value:
+            wave[key] = value
+        else:
+            wave.pop(key, None)
+    was_ec_held = bool(before.get("held_by") or before.get("held_by_depends_on"))
+    if gate["held"]:
+        if not was_ec_held:
+            wave["ec_held_from"] = before.get("status", "pending")
+        wave["status"] = "held"
+    elif was_ec_held:
+        prior = wave.pop("ec_held_from", "pending")
+        if wave.get("status") == "held" and "hold_detail" not in wave:
+            wave["status"] = prior
+    return wave != before
+
+
+def enforce_start_gate(root: Path, step: str) -> None:
+    """Refuse *step* on the current wave while any ``start`` EC is not met.
+
+    Holds the wave (status ``held`` with ``held_by``) and raises ``ValueError``
+    naming every blocking EC and cross-plan ref. A clean gate clears an earlier
+    EC hold. No-op when no current wave is set.
+    """
+    d = status_dir(root)
+    state_data = load_state(d / "state.json")
+    wave_id = state_data.get("current_wave")
+    wave = state_data.get("waves", {}).get(wave_id) if wave_id else None
+    if wave is None:
+        return
+    plan_data = load_json(d / "phases-waves.json")
+    gate = evaluate_wave_gate(
+        plan_data.get("entry_conditions"), wave_issues(plan_data, wave_id) or []
+    )
+    if not _record_gate(wave, gate) and not gate["held"]:
+        return
+    state_data["last_updated"] = _now_iso()
+    save_json(d / "state.json", state_data)
+    if not gate["held"]:
+        return
+    reason = describe_holds(wave_id, gate["start"], gate["depends_on"])
+    _emit_event(
+        root, "step", wave=wave_id, action="ec-hold",
+        label="wave held by entry conditions", detail=reason,
+    )
+    raise ValueError(
+        f"Error: {reason}. Refusing {step}. Record each EC on the Plan issue "
+        "as `[ec-state EC-n] met`, run wave_ec_sync, then retry."
+    )
+
+
 def preflight(root: Path) -> dict:
-    """Set current_action to ``pre-flight`` [R-05]."""
+    """Set current_action to ``pre-flight`` [R-05], refusing a wave the EC
+    gate holds (#1393)."""
+    enforce_start_gate(root, "preflight")
     return _set_action(root, "pre-flight", "pre-flight")
 
 
 def planning(root: Path) -> dict:
-    """Set current_action to ``planning`` and current wave to ``in_progress`` [R-05]."""
+    """Set current_action to ``planning`` and current wave to ``in_progress`` [R-05].
+
+    Refuses a wave the EC gate holds (#1393), so a held wave never reads
+    ``in_progress``.
+    """
+    enforce_start_gate(root, "planning")
     d = status_dir(root)
     state_data = load_state(d / "state.json")
     current_wave = state_data.get("current_wave")
@@ -1492,6 +1589,26 @@ def complete(root: Path, wave_id: str | None = None) -> dict:
             "Run 'init' and 'planning' before completing a wave."
         )
 
+    # A wave the EC gate holds never completes (#1393). Any unmet EC blocks
+    # here, `delivery` included, read fresh from the plan. A wave already
+    # completed is past the gate: re-running complete stays idempotent even
+    # if an EC has since been reclosed.
+    wave_state = state_data.get("waves", {}).get(target)
+    if wave_state is not None and wave_state.get("status") != "completed":
+        gate = evaluate_wave_gate(
+            plan_data.get("entry_conditions"), wave_issues(plan_data, target) or []
+        )
+        if _record_gate(wave_state, gate):
+            state_data["last_updated"] = _now_iso()
+            save_json(d / "state.json", state_data)
+        holds = gate["start"] + gate["delivery"]
+        if holds or gate["depends_on"]:
+            reason = describe_holds(target, holds, gate["depends_on"], verb="held from completion")
+            raise ValueError(
+                f"Error: {reason}. Refusing complete. Record each EC on the Plan "
+                "issue as `[ec-state EC-n] met`, run wave_ec_sync, then retry."
+            )
+
     # Mark the target (the run's actual) wave as completed.
     if target in state_data.get("waves", {}):
         state_data["waves"][target]["status"] = "completed"
@@ -1982,6 +2099,13 @@ def show(root: Path) -> dict:
         1 for fl in wave_flights if fl.get("status") != "completed"
     )
 
+    # Entry conditions (#1393), evaluated fresh from the plan. ``wave_held``
+    # is the EC gate's verdict on the current wave, not a cached state field.
+    ecs = ec_summary(plan_data, state_data)
+    current_gate = evaluate_wave_gate(
+        plan_data.get("entry_conditions"), wave_issues(plan_data, current_wave or "") or []
+    )
+
     return {
         "project": plan_data.get("project", "unknown"),
         "phase": f"{current_phase_idx}/{total_phases}",
@@ -1999,6 +2123,9 @@ def show(root: Path) -> dict:
         "kahuna_branches": state_data.get("kahuna_branches", []) or [],
         "kahuna_flights_merged": kahuna_merged,
         "kahuna_flights_pending": kahuna_pending,
+        "wave_held": current_gate["held"],
+        "entry_conditions": ecs["entry_conditions"],
+        "ec_depends_on": ecs["depends_on"],
     }
 
 

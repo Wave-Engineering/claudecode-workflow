@@ -174,22 +174,30 @@ def _cmd_flight_plan(args: argparse.Namespace) -> None:
     # wave-status read path. Normalize to the bare list at this boundary.
     if isinstance(flights_data, dict) and "flights" in flights_data:
         flights_data = flights_data["flights"]
-    store_flight_plan(flights_data, root)
-    _safe_regenerate_dashboard(root)
+    # An entry-condition refusal saves the held wave before it raises, so the
+    # dashboard is regenerated on refusal too (#1393). Same for the three below.
+    try:
+        store_flight_plan(flights_data, root)
+    finally:
+        _safe_regenerate_dashboard(root)
 
 
 def _cmd_preflight(args: argparse.Namespace) -> None:
     """Handle ``preflight``."""
     root = get_project_root()
-    preflight(root)
-    _safe_regenerate_dashboard(root)
+    try:
+        preflight(root)
+    finally:
+        _safe_regenerate_dashboard(root)
 
 
 def _cmd_planning(args: argparse.Namespace) -> None:
     """Handle ``planning``."""
     root = get_project_root()
-    planning(root)
-    _safe_regenerate_dashboard(root)
+    try:
+        planning(root)
+    finally:
+        _safe_regenerate_dashboard(root)
 
 
 def _cmd_flight(args: argparse.Namespace) -> None:
@@ -219,8 +227,10 @@ def _cmd_complete(args: argparse.Namespace) -> None:
     """Handle ``complete [wave-id]`` — target the run's explicit wave when given
     (ENG-1 / #846); default to ``current_wave`` when omitted."""
     root = get_project_root()
-    complete(root, wave_id=getattr(args, "wave_id", None) or None)
-    _safe_regenerate_dashboard(root)
+    try:
+        complete(root, wave_id=getattr(args, "wave_id", None) or None)
+    finally:
+        _safe_regenerate_dashboard(root)
 
 
 def _cmd_hold_wave(args: argparse.Namespace) -> None:
@@ -537,17 +547,41 @@ def _cmd_show(args: argparse.Namespace) -> None:
     """
     root = get_project_root()
     summary = show(root)
+    held = " — HELD (entry conditions)" if summary.get("wave_held") else ""
     lines = [
         f"Project:   {summary['project']}",
         f"Phase:     {summary['phase']} — {summary['phase_name']}",
-        f"Wave:      {summary['wave']}",
+        f"Wave:      {summary['wave']}{held}",
         f"Flight:    {summary['flight']}",
         f"Action:    {summary['action']}",
         f"Progress:  {summary['progress']}",
         f"Deferrals: {summary['deferrals']}",
     ]
+    lines.extend(_render_ec_cli(summary))
     lines.extend(_render_kahuna_cli(summary))
     print("\n".join(lines))
+
+
+def _render_ec_cli(summary: dict) -> list[str]:
+    """Format the Entry conditions block from a ``state.show`` summary (#1393).
+
+    Returns an empty list for a plan with no ECs and no ``depends_on`` holds,
+    so legacy output stays byte-identical.
+    """
+    ecs = summary.get("entry_conditions") or []
+    deps = summary.get("ec_depends_on") or []
+    if not ecs and not deps:
+        return []
+    out: list[str] = ["", "Entry conditions:"]
+    for row in ecs:
+        out.append(f"  {row['ec']}: {row['status']} ({row['gates']})")
+        for h in row["holds"]:
+            what = "completion of " if row["gates"] == "delivery" else ""
+            issues = ", ".join(f"#{n}" for n in h["issues"])
+            out.append(f"    holds {what}{h['wave']}: {issues}")
+    for d in deps:
+        out.append(f"  depends_on {d['ref']} ({d['reason']}): holds {d['wave']}: #{d['issue']}")
+    return out
 
 
 def _render_kahuna_cli(summary: dict) -> list[str]:
