@@ -37,8 +37,8 @@ are worth keeping apart:
   the tool name, the `precheck_variant` telemetry label and the report. `plan --design
   rotate2|round-robin` prints a balanced sweep and refuses an empty or repeated model. A
   6-pass mini-pilot on one PR measured the cost per level: sonnet is flat to `high` and 2.6×
-  at `xhigh`, and opus is 1.18× at `high` and 2.06× at `xhigh`. Only the `xhigh` step is
-  clearly outside run-to-run noise.
+  at `xhigh`, and opus is 1.18× at `high` and 2.06× at `xhigh`. Sonnet's flat step is within
+  run-to-run noise, and the `xhigh` step clearly isn't.
 
 ### Changed
 - **`/precheck`'s code reviewer no longer pins opus (#1387).** Job D passed `model: opus` on

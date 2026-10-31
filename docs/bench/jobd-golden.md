@@ -152,10 +152,10 @@ The judge made 155 calls for the six passes, at $0.705.
 - Recall is 2 or 3 of 4 in every arm, a one-golden spread on a single PR, so it says nothing
   about effort.
 
-Every ratio comes from one PR at one pass per cell. The same arm on the same PR moved by about
-9% between the two pilots: sonnet at `medium` went from $0.227 to $0.208, and opus from $0.656
-to $0.683. So sonnet's "flat to `high`" and opus's 1.18× are inside run-to-run noise. Only the
-2–2.6× at `xhigh` is clearly outside it.
+Every ratio comes from one PR at one pass per cell. Between the two pilots, the same arm on the
+same PR moved by about 9% for sonnet (`medium`, $0.227 to $0.208) and about 4% for opus ($0.656
+to $0.683). So sonnet's "flat to `high`" is within run-to-run noise. Opus's 1.18× is probably
+real, but one sample can't size it. The 2–2.6× at `xhigh` is clearly outside the noise.
 
 ## Sweep budget (projected from both pilots)
 

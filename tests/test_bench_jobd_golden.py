@@ -236,7 +236,7 @@ def test_plan_cli_prints_one_tab_separated_pass_per_line(capsys):
         f"https://github.com/o/r/pull/1\tb\t{jg.EFFORTS[0]}"]
 
 
-@pytest.mark.parametrize("models", ["a,", "a,,b", ",a", "a,a"])
+@pytest.mark.parametrize("models", ["a,", "a,,b", ",a", "a,a", "a, a", "a, "])
 def test_plan_cli_refuses_an_empty_or_repeated_model(models):
     with pytest.raises(SystemExit) as e:
         jg.main(["plan", "--design", "rotate2", "--models", models, "https://github.com/o/r/pull/1"])

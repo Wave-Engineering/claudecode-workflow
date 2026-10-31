@@ -370,8 +370,8 @@ def report(run: Path, judge_model: str) -> dict[str, Any]:
 def models_arg(value: str) -> list[str]:
     """`plan --models`: an empty entry would plan a pass that fails at `claude -p`, and a
     repeated one would run every pass of that arm twice."""
-    models = value.split(",")
-    if any(not m.strip() for m in models) or len(set(models)) != len(models):
+    models = [m.strip() for m in value.split(",")]
+    if not all(models) or len(set(models)) != len(models):
         raise argparse.ArgumentTypeError(f"want distinct, non-empty models: {value!r}")
     return models
 
