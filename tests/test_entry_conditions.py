@@ -148,6 +148,10 @@ class TestEvaluateWaveGate:
         gate = evaluate_wave_gate(ecs, [{"number": 1, "ec": ["EC-10", "EC-2"]}])
         assert [h["ec"] for h in gate["start"]] == ["EC-2", "EC-10"]
 
+    def test_superscript_digit_in_an_id_does_not_crash(self) -> None:
+        gate = evaluate_wave_gate({}, [{"number": 1, "ec": ["EC²", "EC-1"]}])
+        assert {h["ec"] for h in gate["start"]} == {"EC²", "EC-1"}
+
     def test_malformed_sorts_first_as_sdlc_does(self) -> None:
         """localeCompare(numeric) puts punctuation before letters."""
         gate = evaluate_wave_gate(

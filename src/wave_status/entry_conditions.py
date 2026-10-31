@@ -133,7 +133,7 @@ def _natural_key(s: str) -> list[tuple]:
     """
     key: list[tuple] = []
     for run in re.findall(r"\d+|\D", s):
-        if run.isdigit():
+        if run.isdecimal():
             key.append((1, int(run), ""))
         elif run.isalpha():
             key.append((2, 0, run.lower()))
