@@ -52,7 +52,7 @@ ls "$MEMORY_DIR"/MEMORY.md 2>/dev/null && echo "  → project has memories" || e
 
 For long-running work, plan files (`.claude/plans/`) capture session state that survives compaction. Memory files hold durable facts; plan files hold in-progress context.
 
-Narration: "Between these two mechanisms, you don't need to do anything manual before a compaction. Memory files survive because they're on disk; plan files capture working state. `/engage` is the thaw."
+Narration: "Between these two mechanisms, you don't need to do anything manual before a compaction. Memory files survive because they're on disk; plan files capture working state. `/engage reload` is the thaw."
 
 ---
 

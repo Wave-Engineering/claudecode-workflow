@@ -258,7 +258,7 @@ This merges new sections and updates while preserving your project-specific cont
 | Open PR/MR + MR gate | `/scpmr` (or `/precheck` on a pushed branch) |
 | Merge | `/mmr` or `/scpmmr` |
 | Context budget | `/nerf` |
-| Restore state | `/engage` |
+| Restore state | `/engage` (after a compaction, `/engage reload`) |
 | Update kit | `git pull && ./install.sh` |
 | Sync CLAUDE.md | `/ccfold` |
 | Skill reference | [docs/skill-reference.md](skill-reference.md) |

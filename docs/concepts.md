@@ -139,11 +139,11 @@ These manage the agent's own state and context. You use them at session boundari
 
 | Skill | Purpose |
 |-------|---------|
-| `/engage` | Load rules, restore context, confirm ready state. The resume entry point. |
+| `/engage` | Load rules, restore context, confirm ready state. The session-start entry point; `/engage reload` is the resume after a compaction or `/reseed revive`. |
 | `/ccfold` | Merge upstream CLAUDE.md template changes into a project's local copy. |
 | `/name` | Report or pick the agent's session identity (Dev-Name, Dev-Avatar). |
 
-State preservation across compaction is automatic: durable facts live in memory files (project-scoped), and plan files (`.claude/plans/`) capture working state. `/engage` is the single entry point for resume — memory is loaded by the harness before the skill runs.
+State preservation across compaction is automatic: durable facts live in memory files (project-scoped), and plan files (`.claude/plans/`) capture working state. `/engage reload` is the single entry point for resume — memory is loaded by the harness before the skill runs.
 
 ### Workflow Skills
 

@@ -137,6 +137,15 @@ def test_no_after_compaction_row_maps_to_plain_engage():
     assert "or a revive: `/engage reload`" in read("docs/skill-reference.md")
 
 
+def test_session_start_paths_name_the_reload():
+    # A revive is a SessionStart{clear}, and a grunt's appended prompt survives compaction:
+    # both must point a compacted session at the reload, not plain /engage.
+    onboarding = read("CLAUDE.md").split("## Session Onboarding", 1)[1].split("\n## ", 1)[0]
+    assert "`/engage reload` takes its place" in onboarding
+    assert "FIRST run /engage (after a compaction, /engage reload)" in read("skills/grunt/SKILL.md")
+    assert "`/engage reload` is the single entry point for resume" in read("docs/concepts.md")
+
+
 def test_engage_important_scoped_to_plain_engage():
     s = section(ENGAGE, "Important")
     assert "Plain `/engage` only: do NOT start doing work" in s

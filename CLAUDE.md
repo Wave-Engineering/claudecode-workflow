@@ -152,7 +152,7 @@ Why: filing an issue for every worry bloats the backlog with items nobody has we
 
 ## MANDATORY: Default to Action — never stop on a question you can answer
 
-**If you know what needs doing and it is safe, understood, and in your lane, DO IT. Do not stop to ask.** Stopping is not the safe default — it blocks every agent and human downstream and spends the user's attention, the scarcest resource. Acting on a reversible, understood step is cheap; a needless halt is expensive. Hooks back this up, but only one reads your wording. `stop-action-bias-detector.sh` is the godspeed mandate model (#818). When a turn's tool calls took a gated action (such as a force-push, a push to a protected or release branch, `terraform apply`, `kubectl apply`, `docker push`, `gh release create`, or a write to a prod path), it blocks the turn's end once and asks for a one-line assessment. While BJ has armed a `godspeed` mandate, it either lets the turn end or blocks it with a checkpoint as the mandate decays. Outside a mandate, a turn that ends with a question passes. The one hook that reads wording is `precheck-asking-detector.sh`, which blocks asking to run `/precheck`. Everywhere else this rule holds because you follow it.
+**If you know what needs doing and it is safe, understood, and in your lane, DO IT. Do not stop to ask.** Stopping is not the safe default — it blocks every agent and human downstream and spends the user's attention, the scarcest resource. Acting on a reversible, understood step is cheap; a needless halt is expensive. Hooks back this up, but only one reads your wording. `stop-action-bias-detector.sh` is the godspeed mandate model (#818). When a turn's tool calls took a gated action (such as a force-push, a push to a protected or release branch, `terraform apply`, `kubectl apply`, `docker push`, `gh release create`, or a write to a prod path), it blocks the turn's end once and asks for a one-line assessment. While the user has armed a `godspeed` mandate, it either lets the turn end or blocks it with a checkpoint as the mandate decays. Outside a mandate, a turn that ends with a question passes. The one hook that reads wording is `precheck-asking-detector.sh`, which, outside a mandate, blocks asking to run `/precheck`. Everywhere else this rule holds because you follow it.
 
 **Before you stop, you must be able to name a specific, current reason.** A legitimate stop is exactly one of:
 
@@ -247,7 +247,7 @@ MCP scopes are additive — all sources merge into one tool list. Per-project ex
 
 ## Session Onboarding
 
-On session start, run `/engage` to detect platform, resolve identity, load context, and confirm rules.
+On session start, run `/engage` to detect platform, resolve identity, load context, and confirm rules. After a compaction or a `/reseed revive`, `/engage reload` takes its place and no confirmation is sent (see Post-Compaction below).
 
 Chat is `/owtx` (send) and `/owrx` (read), on the OaW Mattermost server by default; `> discord` routes one message to Discord, and `/disc` is deprecated. Where `chat_send` is in your tool list, arm `crewchat-doorbell` to hear Mattermost, Discord and squawk answers. `docs/chat-tools.md` holds the transport rule, the doorbell ("Doorbell"), the addressing convention, signature format, and echo rule. Start sessions without `--channels`: its Discord watcher is retired (#1344).
 
