@@ -28,9 +28,10 @@ are worth keeping apart:
     mirror then refused, leaving the two registries' `:stable` on different digests. The
     refusal also shows in a dry run.
   - **Version tags are written once.** The image build now pushes only `:edge`. A tag build's
-    `:vX.Y.Z` is written by `oaw-mirror-image`, under a `v`-prefixed regex, and refused if it
-    already names another digest. Before, re-running the build job on a `v*` tag silently moved
-    it.
+    `:vX.Y.Z` is written by `oaw-mirror-image` after signing, under a `v`-prefixed regex, and
+    refused if it already names another digest. So the tag only ever names a signed digest,
+    and a transient signing failure still re-runs green. Before, re-running the build job on a
+    `v*` tag silently moved it.
   - **The runbook's promote commands now run.** The ops runbook's §3 named a gate-signals
     script that never existed, set `PROMOTE_ACK` instead of `OPERATOR_ACK`, and never set
     `DIGEST_REF`. It now shows the declared-absent invocation the wrapper reads.

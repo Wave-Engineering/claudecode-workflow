@@ -48,10 +48,13 @@ def test_runbook_promote_block_matches_the_wrapper() -> None:
 
 
 def test_section_3_says_how_to_recover_a_refused_rerun() -> None:
-    """A version tag is written once, so a tag build that fails after it can't be re-run
-    green. The operator needs the way out written down where they will look."""
+    """A version tag is written once, after signing. A sign failure re-runs green, a smoke
+    failure re-runs only its failed job, and a real smoke failure needs the next patch tag.
+    The operator needs each way out written down where they will look."""
     sec = " ".join(_section_3().split())
+    assert "after signing" in sec
     assert "never re-pushed" in sec
+    assert "Re-run failed jobs" in sec
     assert "next patch tag" in sec
 
 

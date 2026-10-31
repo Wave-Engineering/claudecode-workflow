@@ -65,7 +65,7 @@ def test_ghcr_version_tag_goes_through_oaw_mirror_image() -> None:
     at = steps.index(step)
     build_at = names.index("build")
     sign_at = next(i for i, s in enumerate(steps) if s.get("name", "").startswith("Sign"))
-    assert build_at < at < sign_at, "the version tag must be written after the build and before signing"
+    assert build_at < sign_at < at, "the version tag must be written after signing, so it only names a signed digest"
     assert not [s for s in steps if "EXTRA_TAGS" in (s.get("env") or {})], "a step still passes EXTRA_TAGS"
 
 

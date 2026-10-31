@@ -211,22 +211,25 @@ PROMOTE_DRY_RUN=false OPERATOR_ACK=true \
 — or a green gate with no ACK — exits non-zero and retags nothing. The ACK is a
 switch that only closes over an already-green circuit.
 
-**A tag build cannot be re-run past its version tag (#1359).** The build writes
-`:vX.Y.Z` before signing, and the tag is written once. Every rebuild produces a new
-digest (the `created` label differs). So if a `v*` build fails after the version-tag
-step, for example a transient signing or TSA error, re-running the job rebuilds,
-gets a new digest, and stops at "already names … a version tag is never re-pushed".
-That refusal is the protection working, not a bug to route around. **Cut the next
-patch tag** (`vX.Y.Z+1`) from the same commit, which gets a clean build, sign and
-smoke. There is no hand path for the first digest: keyless cosign signing needs the
-workflow's OIDC identity, which an operator shell does not have. `:vX.Y.Z` stays on
-that unsigned, unsmoked digest, so it can never pass the gate. Say so in the release
-notes.
+**A version tag is written once, after signing (#1359).** The build job writes
+`:vX.Y.Z` as its last step, after the digest is signed, so the tag only ever names a
+signed digest. Every rebuild produces a new digest (the `created` label differs).
+What a re-run does depends on where the first run stopped:
 
-The refused re-run has still pushed `:edge` onto its unsigned new digest. Promotion
-and the smoke ring pin by digest, so they are unaffected. Anything that pulls `:edge`
-by tag, such as the dogfood cutover, gets the unsigned build until the next good
-build moves `:edge` again.
+- **Build or signing failed** (for example a transient signing or TSA error). No version
+  tag exists yet, so re-running the build job rebuilds, signs, tags and goes green.
+- **Smoke failed after the tag was written.** Use **Re-run failed jobs**. The build job's
+  `digest_ref` output is kept, and smoke re-runs on the same digest. **Re-run all jobs**
+  rebuilds, gets a new digest, and stops at "already names … a version tag is never
+  re-pushed". That refusal is the protection working, not a bug to route around.
+- **Smoke really failed on that digest.** That digest must not be promoted: it was
+  never smoked green. **Cut the next patch tag** (`vX.Y.Z+1`) from a fixed commit, and
+  say so in the release notes. The promotion wrapper does not verify signatures or
+  smoke itself; it trusts `THROWAWAY_CI_PASSED`, so that flag is the operator's word.
+
+A refused re-run still pushes `:edge` onto its new digest, which is signed (signing runs
+before the tag step). Promotion and the smoke ring pin by digest, so they are
+unaffected.
 
 ---
 

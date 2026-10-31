@@ -102,13 +102,20 @@ jobs:
           OAKANDWAVE_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: ./scripts/ci/build-oakandwave-image.sh
 
+      - name: Sign (cosign) + SBOM (syft) the digest
+        env:
+          DIGEST_REF: ${{ steps.build.outputs.digest_ref }}
+        run: ./scripts/ci/sign-oakandwave-image.sh
+
       # A tag-triggered build ALSO publishes the version tag on the digest it just pushed
       # (#1122), and that tag is written once (#1359). The build used to add it as a second
       # `-t` on the same push, so re-running this job on a `v*` tag rebuilt the image and
       # silently moved GHCR :vX.Y.Z to the new digest. oaw-mirror-image pushes a version tag
-      # only when it is absent and refuses when it names another digest. It runs before
-      # signing, so a rerun with a new digest fails here, before that digest is signed or
-      # smoke-tested.
+      # only when it is absent and refuses when it names another digest.
+      #
+      # It runs AFTER signing, so :vX.Y.Z only ever names a signed digest. A transient sign
+      # failure leaves no version tag behind, so a rerun rebuilds, signs, tags and goes
+      # green. A rerun of a build that already tagged gets a new digest and is refused here.
       #
       # GHCR version tags carry the git tag's leading `v` (v8.15.0), so the regex must too:
       # under the action's default bare-X.Y.Z regex, `v8.15.0` would count as a moving tag
@@ -122,11 +129,6 @@ jobs:
           tags: ${{ github.ref_name }}
           dest-image: ${{ env.IMAGE }}
           immutable-tag-regex: '^v[0-9]+\.[0-9]+\.[0-9]+$'
-
-      - name: Sign (cosign) + SBOM (syft) the digest
-        env:
-          DIGEST_REF: ${{ steps.build.outputs.digest_ref }}
-        run: ./scripts/ci/sign-oakandwave-image.sh
 
   # Throwaway-CI ring (Story 2.2, E2E-01 — Dev Spec §6.3, R-05/R-23/R-24). Pulls
   # the candidate BY DIGEST from ghcr, verifies labels/permissions/signature/SBOM,
