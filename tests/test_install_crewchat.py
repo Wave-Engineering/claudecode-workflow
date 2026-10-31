@@ -23,7 +23,7 @@ import pytest
 
 _REPO = Path(__file__).resolve().parent.parent
 _SCRIPT = _REPO / "scripts" / "install-crewchat.sh"
-# The pinned tag, read from the script, so a pin bump touches one test (`test_pin`), not all.
+# The pinned tag, read from the script, so a pin bump touches one test (`test_install_pins_crewchat_v026`), not all.
 _PIN = re.search(r'^CREWCHAT_TAG="(v[^"]+)"$', _SCRIPT.read_text(), re.MULTILINE)
 assert _PIN, "install-crewchat.sh must set CREWCHAT_TAG"
 _TAG = _PIN.group(1)
@@ -278,12 +278,14 @@ def test_check_states(stubs: Path, live_socket: Path, tmp_path: Path) -> None:
     assert r.returncode == 1 and "registered, but no crewchat daemon" in r.stdout
 
 
-def test_pin() -> None:
+def test_install_pins_crewchat_v026() -> None:
     # K-2 (#1336) needs v0.2.1 or later: crewchat-doorbell drops a repeated event_id, and the
     # kiosk review's event_id carries the transcript's generation. #1340 needs v0.2.2: health
     # takes dev_name, so `chat_health()` re-registers after a daemon restart. #1342 needs v0.2.4:
     # the doorbell waits 60 s through a daemon restart, and the shim's `ping` re-registers.
-    assert _TAG == "v0.2.4"
+    # #1348 needs v0.2.6: Mattermost channel names resolve (mattermost-crew #145), and
+    # `crewchat-send` lets the kit's page scripts post through crewchat (#146).
+    assert _TAG == "v0.2.6"
 
 
 def test_install_without_doorbell_does_not_register(stubs: Path, live_socket: Path) -> None:

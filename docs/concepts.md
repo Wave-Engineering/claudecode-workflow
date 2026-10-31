@@ -91,7 +91,7 @@ Session start: Claude picks Dev-Name + Dev-Avatar
   }
         |
         v
-Used by: /disc, /name, statusline,
+Used by: /owtx, /owrx, /name, statusline,
          chat addressing, message signatures
 ```
 
@@ -166,7 +166,9 @@ These handle interaction with external systems: Discord, voice, and file viewers
 
 | Skill | Purpose |
 |-------|---------|
-| `/disc` | Discord integration -- send, read, create channels, check in. |
+| `/owtx` | Send chat -- a channel, a DM, or a roll-call check-in. OaW Mattermost by default; `> discord` for Discord. |
+| `/owrx` | Read chat -- a channel or a thread. OaW Mattermost by default; `> discord` for Discord. |
+| `/disc` | **Deprecated** (use `/owtx` and `/owrx`). Discord integration -- send, read, create channels, check in. |
 | `/vox` | Text-to-speech voice announcements. |
 | `/view` | Open a file or URL in a GUI viewer (read-only). |
 | `/edit` | Open a file or URL in a GUI editor (modification intent). |

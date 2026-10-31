@@ -95,8 +95,8 @@ story. And `--channels` is *correlated but separately gated* (it is
 admin-enabled on Team/Enterprise plans), so the two must be diagnosed
 independently rather than inferred from one another.
 
-Full operator-facing detail: `skills/disc/SKILL.md`, "Arming the channels-free
-doorbell".
+Full operator-facing detail: `docs/chat-tools.md`, "Doorbell: `crewchat-doorbell` or the
+one-shots".
 
 ## 4. Verify the instruments before trusting them
 

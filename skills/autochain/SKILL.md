@@ -173,8 +173,8 @@ Deploys and anything that changes what production runs are his, per the ABSOLUTE
 **Do not assume a chain is deploy-free** — check, and if a step turns out to touch a tier, that
 is a stop.
 
-**If you need him, get loud:** `vox`, then `disc send @BJ on #call-4-bj` with what you need and
-what it blocks. If `vox` fails, say so rather than assuming he heard.
+**If you need him, get loud:** `vox`, then `/owtx #call-4-bj "<what you need and what it
+blocks>"` (OaW Mattermost by default). If `vox` fails, say so rather than assuming he heard.
 
 **Any stop ends the approval.** Run `autochain-gate.sh disarm <repo_root>` before you stop for
 any reason. Approval attached to a chain that was running; a stopped chain resumes only on a fresh

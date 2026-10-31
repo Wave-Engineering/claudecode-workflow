@@ -150,10 +150,10 @@ When BJ settles a squawk, you find out mechanically:
   (every one is settled or gone), so there's nothing to wait for. Re-arm after adding new
   squawks, because the set is read when it's armed.
 
-  **On a crewchat host** (`chat_send` in your tool list, by the dual-mode rule in `/disc`),
-  `crewchat-doorbell` replaces `sqtk-doorbell.sh`. Its one stream carries your squawk answers
-  as `squawk.updated` and `sqtk.catch-up` events, alongside chat. Arm only that, as `/disc`
-  says ("Doorbell: `crewchat-doorbell` or the one-shots"). Arming both rings twice for every
+  **On a crewchat host** (`chat_send` in your tool list, by the dual-mode rule in
+  `docs/chat-tools.md`), `crewchat-doorbell` replaces `sqtk-doorbell.sh`. Its one stream carries
+  your squawk answers as `squawk.updated` and `sqtk.catch-up` events, alongside chat. Arm only
+  that, as `docs/chat-tools.md` says ("Doorbell: `crewchat-doorbell` or the one-shots"). Arming both rings twice for every
   answer.
 
   A squawk that vanishes from its list, or whose list is deleted, is only marked gone after
