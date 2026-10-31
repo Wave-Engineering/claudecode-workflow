@@ -10,8 +10,10 @@
 #     (stubbed) naming the pane, and leaves no nonce behind;
 #   - it types exactly `/reseed revive` into the pane it was given, through
 #     pane-send.sh: clear the line, type literally, then Enter, in one call (#1366);
-#   - #1244: the agent's own read of the seed in the transcript acks, by any tool
-#     or the Skill tool, while the hook's notice and pre-clear entries do not; a
+#   - #1244, #1400: the revive in the transcript acks (a Skill `reseed revive`, or
+#     the seed named by any tool and then a Skill `engage reload`), while a read of
+#     the seed alone or followed by a plain `engage`, the hook's notice and
+#     pre-clear entries do not; a
 #     busy session gets no stacked sends, an idle unrevived one gets one send per
 #     idle spell, a session that goes live late still gets the live wait, and a
 #     live session pages only if it never revives.
@@ -144,7 +146,7 @@ else
 	fail "unwritable nonce: sent=$(wc -l <"$C/calls") paged=$([[ -e "$C/notified" ]] && echo yes || echo no)"
 fi
 
-# --- #1244: the seed read in the transcript is an ack ----------------------------------
+# --- #1244, #1400: the revive in the transcript is an ack --------------------------------
 # No send ever lands (ACK_ON_CALL empty), so only the transcript can acknowledge.
 # Timestamps are pinned far from the kick's start, so no case depends on a second
 # boundary: 2099 is "after the kick started", 2000 is "before /clear".
@@ -155,6 +157,8 @@ entry() { # <timestamp> <tool name> <input json>
 LATER="2099-01-01T00:00:00.000Z"
 BEFORE="2000-01-01T00:00:00.000Z"
 SEED_CAT='{"command": "cat .claude/reseed-revive.md"}'
+SEED_READ='{"file_path": "/p/.claude/reseed-revive.md"}'
+ENGAGE='{"skill": "engage", "args": "reload"}'
 
 run_kick_t() { # <case-dir> <transcript> [<ack-on-call>]   env KB overrides the backoff
 	local d="$1"
@@ -167,21 +171,75 @@ run_kick_t() { # <case-dir> <transcript> [<ack-on-call>]   env KB overrides the 
 		bash "$KICK" "%42" "$d/root" "$2"
 }
 
-# A Bash `cat` of the seed: a revive by any tool counts, not only Read.
+# A Bash `cat` of the seed, then /engage: the revive done by hand, by any tool.
 C="$WORK/seedread"
 mkdir -p "$C"
-entry "$LATER" Bash "$SEED_CAT" >"$C/t.jsonl"
+{
+	entry "$LATER" Bash "$SEED_CAT"
+	entry "$LATER" Skill "$ENGAGE"
+} >"$C/t.jsonl"
 run_kick_t "$C" "$C/t.jsonl"
 rc=$?
-if [[ $rc -eq 0 ]] && grep -q 'acked (seed read) after 0' "$C/kick.log"; then
-	pass "seed read in the transcript acks, with no prompt submitted"
+if [[ $rc -eq 0 ]] && grep -q 'acked (revive seen) after 0' "$C/kick.log"; then
+	pass "seed read then /engage in the transcript acks, with no prompt submitted"
 else
-	fail "seed read: rc=$rc log=$(cat "$C/kick.log")"
+	fail "seed read + engage: rc=$rc log=$(cat "$C/kick.log")"
 fi
 if [[ ! -s "$C/calls" && ! -e "$C/notified" && ! -e "$C/root/.claude/reseed-ack" ]]; then
 	pass "…sends nothing, pages nobody, removes the nonce"
 else
-	fail "seed read: sent=$(wc -l <"$C/calls") paged=$([[ -e "$C/notified" ]] && echo yes || echo no)"
+	fail "seed read + engage: sent=$(wc -l <"$C/calls") paged=$([[ -e "$C/notified" ]] && echo yes || echo no)"
+fi
+
+# #1400, the incident: a peer message woke the turn right after /clear, which read
+# the seed, answered the peer and ended. That is not a revive: no ack from the
+# transcript, so the idle session gets its one send, and the nonce acks it.
+C="$WORK/readonly"
+mkdir -p "$C"
+{
+	entry "$LATER" Read "$SEED_READ"
+	jq -cn --arg t "$LATER" '{type: "assistant", timestamp: $t,
+		message: {stop_reason: "end_turn", content: [{type: "text", text: "answered the peer"}]}}'
+} >"$C/t.jsonl"
+run_kick_t "$C" "$C/t.jsonl" 1
+rc=$?
+if [[ $rc -eq 0 ]] && grep -q 'acked after 1$' "$C/kick.log" && [[ "$(wc -l <"$C/calls")" -eq 1 ]]; then
+	pass "a seed read alone is not a revive: the idle session gets one send, which acks"
+else
+	fail "read only: rc=$rc sends=$(wc -l <"$C/calls") log=$(cat "$C/kick.log")"
+fi
+
+# A plain /engage after the seed read is a fresh session onboarding, not the
+# revive (/reseed revive runs /engage reload): no ack, one send once idle.
+C="$WORK/plainengage"
+mkdir -p "$C"
+{
+	entry "$LATER" Read "$SEED_READ"
+	entry "$LATER" Skill '{"skill": "engage"}'
+	jq -cn --arg t "$LATER" '{type: "assistant", timestamp: $t,
+		message: {stop_reason: "end_turn", content: [{type: "text", text: "answered the peer"}]}}'
+} >"$C/t.jsonl"
+run_kick_t "$C" "$C/t.jsonl" 1
+rc=$?
+if [[ $rc -eq 0 ]] && grep -q 'acked after 1$' "$C/kick.log" && [[ "$(wc -l <"$C/calls")" -eq 1 ]]; then
+	pass "a plain /engage after the seed read is not a revive: one send, which acks"
+else
+	fail "plain engage: rc=$rc sends=$(wc -l <"$C/calls") log=$(cat "$C/kick.log")"
+fi
+
+# Order matters: /engage before the seed is named is not the revive.
+C="$WORK/engagefirst"
+mkdir -p "$C"
+{
+	entry "$LATER" Skill "$ENGAGE"
+	entry "$LATER" Read "$SEED_READ"
+} >"$C/t.jsonl"
+run_kick_t "$C" "$C/t.jsonl"
+rc=$?
+if [[ $rc -eq 1 ]] && ! grep -q 'acked' "$C/kick.log"; then
+	pass "/engage before the seed read does not ack"
+else
+	fail "engage first: rc=$rc log=$(cat "$C/kick.log")"
 fi
 
 # A Skill-tool revive (#1244's first report).
@@ -190,7 +248,7 @@ mkdir -p "$C"
 entry "$LATER" Skill '{"skill": "reseed", "args": "revive"}' >"$C/t.jsonl"
 run_kick_t "$C" "$C/t.jsonl"
 rc=$?
-if [[ $rc -eq 0 ]] && grep -q 'acked (seed read)' "$C/kick.log"; then
+if [[ $rc -eq 0 ]] && grep -q 'acked (revive seen)' "$C/kick.log"; then
 	pass "Skill(reseed, revive) acks"
 else
 	fail "Skill revive: rc=$rc log=$(cat "$C/kick.log")"
@@ -222,19 +280,22 @@ else
 fi
 
 # A live session (a turn a peer message started) that has not read the seed yet:
-# no sends stack up behind it, and the seed read during the wait acks.
+# no sends stack up behind it, and the revive during the wait acks.
 C="$WORK/livelater"
 mkdir -p "$C"
 entry "$LATER" Bash '{"command": "echo answering a peer"}' >"$C/t.jsonl"
 (
 	sleep 1
-	entry "$LATER" Read '{"file_path": "/p/.claude/reseed-revive.md"}' >>"$C/t.jsonl"
+	{
+		entry "$LATER" Read "$SEED_READ"
+		entry "$LATER" Skill "$ENGAGE"
+	} >>"$C/t.jsonl"
 ) &
 run_kick_t "$C" "$C/t.jsonl"
 rc=$?
 wait
-if [[ $rc -eq 0 ]] && grep -q 'acked (seed read) after 0 (session was live' "$C/kick.log"; then
-	pass "live session: waits, then acks on the seed read"
+if [[ $rc -eq 0 ]] && grep -q 'acked (revive seen) after 0 (session was live' "$C/kick.log"; then
+	pass "live session: waits, then acks on the revive"
 else
 	fail "live then read: rc=$rc log=$(cat "$C/kick.log")"
 fi
@@ -409,12 +470,13 @@ C="$WORK/partial"
 mkdir -p "$C"
 {
 	entry "$LATER" Bash "$SEED_CAT"
+	entry "$LATER" Skill "$ENGAGE"
 	printf '{"type": "assistant", "timest'
 } >"$C/t.jsonl"
 run_kick_t "$C" "$C/t.jsonl"
 rc=$?
-if [[ $rc -eq 0 ]] && grep -q 'acked (seed read)' "$C/kick.log"; then
-	pass "a truncated last transcript line does not mask the seed read"
+if [[ $rc -eq 0 ]] && grep -q 'acked (revive seen)' "$C/kick.log"; then
+	pass "a truncated last transcript line does not mask the revive"
 else
 	fail "partial: log=$(cat "$C/kick.log")"
 fi
