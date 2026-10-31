@@ -135,11 +135,14 @@ learned in steps 3–6 contradicts it (platform, toolchain, CI, labels), or when
 compare (its Steps 1–4, which write nothing) finds sections the upstream template has updated
 or added. If neither file is stale, go to step 8.
 
-1. **The working tree must be clean**, apart from the identity file `/name` just wrote. This
-   prints nothing when it is:
+1. **The working tree must be clean**, apart from the identity file `/name` just wrote and the
+   untracked `.claude/wtf/` journal. The wtf hook creates that journal on this session's own
+   first tool call in any repo that doesn't ignore it, so without the exemption no refresh
+   would ever run. This prints nothing when the tree is clean:
 
    ```bash
-   git status --porcelain --untracked-files=all | grep -v '^?? \.claude/agent-identity\.json$' || true
+   git status --porcelain --untracked-files=all |
+     grep -Ev '^\?\? \.claude/(agent-identity\.json$|wtf/)' || true
    ```
 
    If it prints anything, leave the tree alone and report the stale files at tag-up. Never
@@ -159,6 +162,12 @@ or added. If neither file is stale, go to step 8.
      first set its `Dev-Team:` to the team `/name` used.
    - Update `.gitignore` as part of this. If `git check-ignore -q .claude/agent-identity.json`
      fails, add that path, so no commit can pick the identity file up.
+   - A repo with no lockfiles fails `/precheck`'s dependency scan unless a
+     `.no-scannable-dependencies` file at its root declares that, with a reason. If the repo
+     has neither, add the declaration here. The declaration is documented under Job C in `/precheck`
+     (`skills/precheck/SKILL.md`) and in `scripts/ci/check-scannable.sh`.
+   - Judge what is left to commit with item 1's check, and never stage `.claude/wtf/`: the
+     journal is the session's, not the refresh's.
    - If all that leaves nothing to commit, the files weren't stale after all. Switch back to the
      branch you started on, delete `chore/<N>-ccfold`, close the issue as not planned (GitHub
      `--reason "not planned"`; GitLab Status `Won't do`), and go to step 8. An open refresh issue
