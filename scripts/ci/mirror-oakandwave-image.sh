@@ -37,22 +37,8 @@ if [[ "$SRC_DIGEST" != *"@sha256:"* || ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; 
 	exit 1
 fi
 
-# The label, from every platform's config. A single-platform image's .Image is one config;
-# an index's is a map of platform -> config. Every platform must carry the same version.
-version="$(docker buildx imagetools inspect "$SRC_DIGEST" --format '{{json .Image}}' |
-	jq -er '
-		(if has("config") then [.] else [.[]] end)
-		| map(.config.Labels["org.opencontainers.image.version"] // "")
-		| unique
-		| if length == 1 then .[0] else error("platforms disagree on the version label") end
-	')" || {
-	echo "  [!] could not read org.opencontainers.image.version off $SRC_DIGEST" >&2
-	exit 1
-}
-if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-	echo "  [!] $SRC_DIGEST has version label '$version', not X.Y.Z: only a release is mirrored" >&2
-	exit 1
-fi
+# The X.Y.Z version label, by the one rule promotion also applies (#1359).
+version="$(bash "$(dirname "${BASH_SOURCE[0]}")/read-oci-version.sh" "$SRC_DIGEST")" || exit 1
 
 core="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/.github/actions/oaw-mirror-image/oaw-mirror-image.sh"
 SOURCE_DIGEST_REF="$SRC_DIGEST" \

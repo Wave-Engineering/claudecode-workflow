@@ -3,7 +3,10 @@
 **A candidate image is cut deliberately.** Merging to `main` does not build one,
 does not sign one, and does not push one to GHCR. Only a version tag or a manual
 dispatch mints a candidate, and only an explicit promote turns a candidate into
-`:stable`.
+`:stable`. Only a candidate built from a `v*` ref can be promoted: any other build carries
+a `git describe` fallback as its version label (`8.14.0-3-gabc`, or a bare short
+SHA in a shallow CI checkout), and promotion refuses any label that is not
+`X.Y.Z` (#1359).
 
 This page is the operator-facing half of #1063. The trigger's own header comment
 in `.github/workflows/oakandwave-workflow-image.yml` carries the rationale;
@@ -165,8 +168,9 @@ worse, be "fixed" by removing it). Retention stays a host-side operator step unt
 releases carry registry tags.
 
 **Releases now carry `:vX.Y.Z` (#1122), and that is the anchor.** A tag-triggered
-build publishes the version tag alongside `:edge` at the same digest;
-`workflow_dispatch` gets `:edge` only, because a manual build is a candidate, not
+build pushes `:edge`, then `oaw-mirror-image` writes `:vX.Y.Z` on that exact digest,
+and refuses if the tag already names another digest (#1359), so a rerun can never
+move a release tag. `workflow_dispatch` gets `:edge` only, because a manual build is a candidate, not
 a release. `scripts/ci/backfill-release-tags.sh` gave the already-published
 releases their tags, reading the version from each image's own
 `org.opencontainers.image.version` label rather than a hand-typed list.
