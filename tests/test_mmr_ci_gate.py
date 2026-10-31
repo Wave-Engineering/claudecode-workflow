@@ -306,7 +306,9 @@ class TestDefaultDenyDoesNotBecomeATotalBlock:
         # Both successors must be named — this assertion is about the
         # COMPLETENESS of the enumeration, so it tracks the vocabulary rather
         # than pinning one historical spelling.
-        for status in ("no_checks_configured", "no_checks_yet"):
+        # `pending` (mcp-server-sdlc#587) is a non-terminal status. Step 2's loop
+        # resumes it, but one that reaches this list must be an explicit STOP.
+        for status in ("no_checks_configured", "no_checks_yet", "pending"):
             assert re.search(rf"`?{status}`?\s*→\s*\*\*STOP", mmr_text), (
                 f"`{status}` must be named as an explicit STOP — a no-checks "
                 f"verdict is definite and successful-sounding, which makes this "
@@ -369,6 +371,72 @@ class TestDefaultDenyDoesNotBecomeATotalBlock:
             "the skill must cite the still-open GitLab variant; without a live "
             "counter-example the warning is an assertion a future editor can "
             "reasonably dismiss"
+        )
+
+
+def _step(mmr_text: str, n: str) -> str:
+    """The body of procedure step `n`, up to the next numbered step."""
+    m = re.search(rf"^{re.escape(n)}\. .*?(?=^\d+(?:\.\d+)?\. )", mmr_text, re.S | re.M)
+    assert m, f"step {n} not found"
+    return m.group(0)
+
+
+class TestCiWaitLoop:
+    """Step 2 binds the wait to the head and resumes on `pending` (cc-workflow#1409).
+
+    mcp-server-sdlc#587: the MCP client aborts a tool call idle for 1800 s, and
+    an aborted call returns nothing, so the server now bounds each call and hands
+    back `final_state: "pending"` with `resume: true`. mcp-server-sdlc#588: a
+    lagging MR record could grade a pipeline of an earlier head, so the server
+    takes `expected_sha`. Both are only as good as the caller that uses them.
+    """
+
+    def test_passes_the_step_1_5_head_as_expected_sha(self, mmr_text: str) -> None:
+        step2 = _step(mmr_text, "2")
+        assert re.search(
+            r"pr_wait_ci\(number, [^)]*expected_sha: <head_sha from step 1\.5's pr-head>\)", step2
+        ), "step 2 must bind the wait to the head step 1.5 verified the precheck pass on"
+        assert "mcp-server-sdlc#588" in step2
+
+    def test_pending_with_resume_calls_again(self, mmr_text: str) -> None:
+        step2 = _step(mmr_text, "2")
+        assert re.search(
+            r'`final_state == "pending"` with `resume == true`, call again with the same arguments',
+            step2,
+        ), "pending+resume must re-invoke, not stop or proceed"
+        assert re.search(r"`pending` is not a pass", step2)
+
+    def test_deadline_expiring_stops_and_is_never_a_pass(self, mmr_text: str) -> None:
+        step2 = _step(mmr_text, "2")
+        assert re.search(r"Overall deadline: 60 minutes from the start", step2), (
+            "the loop needs a caller-side overall deadline; per-call bounds alone "
+            "would let a stuck pipeline loop forever"
+        )
+        deadline = re.search(r"Overall deadline.*?$", step2, re.M).group(0)
+        assert "**STOP**" in deadline and "never a pass" in deadline
+
+    def test_failed_stops_at_once_and_is_never_resumed(self, mmr_text: str) -> None:
+        step2 = _step(mmr_text, "2")
+        assert re.search(r"`failed` → STOP at once; it is never resumed", step2)
+
+    def test_old_server_fallback_is_narrow(self, mmr_text: str) -> None:
+        """Only the strict-schema rejection of `expected_sha` may drop the key.
+
+        Every release through mcp-server-sdlc v5.3.0 has a `.strict()` input
+        schema, so an old server rejects the key rather than ignoring it. A
+        broad "on error, retry without it" would also swallow real failures.
+        """
+        step2 = _step(mmr_text, "2")
+        assert "Unrecognized key(s) in object: 'expected_sha'" in step2
+        assert re.search(r"\*\*On exactly that error\*\*, retry once without `expected_sha`", step2)
+        assert "server predates expected_sha" in step2, "the degraded path must say so on the line"
+        assert re.search(r"Any other `ok: false` → STOP", step2)
+
+    def test_escalation_runs_the_same_loop(self, mmr_text: str) -> None:
+        step3 = _step(mmr_text, "3")
+        assert re.search(r"through step 2's CI wait loop", step3), (
+            "step 3's escalation calls pr_wait_ci too; without the loop it would "
+            "drop expected_sha and STOP on the first pending"
         )
 
 
