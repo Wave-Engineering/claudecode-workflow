@@ -4,11 +4,12 @@
 # Every kit keystroke into an agent pane goes through pane-send.sh, so a ghost
 # suggestion or a half-typed draft is never submitted. Drives it against a fake
 # tmux that logs its argv:
-#   - one tmux call: clear (C-u), type literally (-l), then Enter;
+#   - one tmux call: clear (C-e, then 32 C-u), type literally (-l), then Enter;
 #   - empty text, a newline, a leading dash, a trailing ';' or an empty pane: exit 2,
 #     tmux never called;
 #   - a tmux failure is the helper's exit code;
-#   - nothing else in scripts/, skills/ or config/ calls send-keys.
+#   - no other tracked file calls send-keys or tmux's `send` alias (tests, docs, the
+#     changelog and Markdown outside skills/ excepted).
 
 set -uo pipefail
 
@@ -46,7 +47,8 @@ run() { # <case> <pane> <text> [tmux rc]; sets rc and calls
 }
 
 run ok %1 "hello there"
-want='send-keys -t %1 C-e C-u C-u C-u C-u C-u C-u C-u C-u ; send-keys -t %1 -l hello there ; send-keys -t %1 Enter'
+CLEAR="C-e$(printf ' C-u%.0s' $(seq 32))"
+want="send-keys -t %1 $CLEAR ; send-keys -t %1 -l hello there ; send-keys -t %1 Enter"
 if [[ $rc -eq 0 && -f "$calls" && "$(wc -l <"$calls")" -eq 1 ]] && grep -qxF -- "$want" "$calls"; then
 	pass "clears, types literally, then Enter in one tmux call"
 else

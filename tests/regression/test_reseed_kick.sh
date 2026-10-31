@@ -82,7 +82,7 @@ if [[ "$(wc -l <"$C/calls")" -eq 3 ]]; then
 else
 	fail "sent $(wc -l <"$C/calls") times, want 3"
 fi
-if grep -qx -- 'send-keys -t %42 C-e C-u C-u C-u C-u C-u C-u C-u C-u ; send-keys -t %42 -l /reseed revive ; send-keys -t %42 Enter' "$C/calls"; then
+if grep -qx -- "send-keys -t %42 C-e$(printf ' C-u%.0s' $(seq 32)) ; send-keys -t %42 -l /reseed revive ; send-keys -t %42 Enter" "$C/calls"; then
 	pass "types exactly '/reseed revive' into the given pane"
 else
 	fail "unexpected tmux call: $(head -1 "$C/calls")"

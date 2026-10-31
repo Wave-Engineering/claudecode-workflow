@@ -11,8 +11,9 @@
 #
 # A live claimant of <root> is a process of this user that is `claude` (its comm, or an
 # argv running claude-code/cli.js), whose cwd resolves to <root>, and that is not this
-# session's own claude or a claude above it in the ancestry. The OLDER process keeps the identity. The newcomer is the one
-# told, because it can move to a worktree before it does anything.
+# session's own claude or a claude above it in the ancestry. The OLDER process keeps the
+# identity. The newcomer is the one told, because it can move to a worktree before it
+# does anything.
 #
 # Prints one line:
 #   none                      no other live claimant                          exit 0

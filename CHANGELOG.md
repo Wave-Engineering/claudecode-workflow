@@ -23,8 +23,10 @@ are worth keeping apart:
 - **Keystrokes into a pane can no longer submit a draft or a ghost suggestion (#1366).** The
   reseed kicker and `/reseed`'s `/clear` typed text into the input box without clearing it, so
   BJ's half-typed draft was submitted with `/reseed revive` appended. Both now go through
-  `scripts/pane-send.sh`: in one tmux command it clears the line (C-u, never Escape, which
-  interrupts a turn), types the text literally (`-l`), then presses Enter. Enter is only ever
+  `scripts/pane-send.sh`: in one tmux command it clears the input (C-e, then 32 C-u, which
+  Claude Code's docs say to repeat across the lines of a multi-line draft, and which also
+  leave `!` shell mode; never Escape, which interrupts a turn), types the text literally
+  (`-l`), then presses Enter. Enter is only ever
   sent after non-empty literal text, so text ending in `;` (which tmux would strip as a
   separator) is refused. Nothing else in the kit calls `send-keys`, and a test keeps it that
   way.
