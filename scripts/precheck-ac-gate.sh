@@ -59,8 +59,10 @@ POST_MERGE = [
     # A bare "tagged" is a tagged channel or the like, not a post-merge state (#1389).
     ("P5", re.compile(
         r"\b(released|deployed)\b"
-        r"|\b(v?\d+(\.\d+)+\S*|release|version|image)\s+(is |are |was |gets? |has been )?tagged\b"
-        r"|\btagged\s+(as\s+|with\s+)?(v\d|\d+\.\d|:\w)", re.I)),
+        r"|\b(v?\d+(\.\d+)+\S*|releases?|versions?|rc|images?)\s+"
+        r"(is |are |was |gets? |got |has been |is being |will be )?tagged\b"
+        r"|\btagged (release|version|rc)s?\b"
+        r"|\btagged\s+(as\s+|with\s+)?[\"'`]?(v\d|\d+\.\d|:\w)", re.I)),
     ("P6", re.compile(r"\b(in prod(uction)?|on the (live )?fleet|observed live|in the wild)\b", re.I)),
 ]
 
