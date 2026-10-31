@@ -174,22 +174,30 @@ def _cmd_flight_plan(args: argparse.Namespace) -> None:
     # wave-status read path. Normalize to the bare list at this boundary.
     if isinstance(flights_data, dict) and "flights" in flights_data:
         flights_data = flights_data["flights"]
-    store_flight_plan(flights_data, root)
-    _safe_regenerate_dashboard(root)
+    # An entry-condition refusal saves the held wave before it raises, so the
+    # dashboard is regenerated on refusal too (#1393). Same for the three below.
+    try:
+        store_flight_plan(flights_data, root)
+    finally:
+        _safe_regenerate_dashboard(root)
 
 
 def _cmd_preflight(args: argparse.Namespace) -> None:
     """Handle ``preflight``."""
     root = get_project_root()
-    preflight(root)
-    _safe_regenerate_dashboard(root)
+    try:
+        preflight(root)
+    finally:
+        _safe_regenerate_dashboard(root)
 
 
 def _cmd_planning(args: argparse.Namespace) -> None:
     """Handle ``planning``."""
     root = get_project_root()
-    planning(root)
-    _safe_regenerate_dashboard(root)
+    try:
+        planning(root)
+    finally:
+        _safe_regenerate_dashboard(root)
 
 
 def _cmd_flight(args: argparse.Namespace) -> None:
@@ -219,8 +227,10 @@ def _cmd_complete(args: argparse.Namespace) -> None:
     """Handle ``complete [wave-id]`` — target the run's explicit wave when given
     (ENG-1 / #846); default to ``current_wave`` when omitted."""
     root = get_project_root()
-    complete(root, wave_id=getattr(args, "wave_id", None) or None)
-    _safe_regenerate_dashboard(root)
+    try:
+        complete(root, wave_id=getattr(args, "wave_id", None) or None)
+    finally:
+        _safe_regenerate_dashboard(root)
 
 
 def _cmd_hold_wave(args: argparse.Namespace) -> None:

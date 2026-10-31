@@ -930,9 +930,10 @@ def _set_action(
 def _record_gate(wave: dict, gate: dict) -> bool:
     """Write *gate*'s holds onto a wave's state entry; return True if it changed.
 
-    A wave the EC gate held goes back to ``pending`` once the gate is clean,
-    unless it also carries a ``hold_detail`` (a promotion-gate hold from
-    :func:`hold_wave`, which only a run clears).
+    Holding a wave records the status it had in ``ec_held_from``, and a clean
+    gate restores it, so a wave held mid-run goes back to ``in_progress``, not
+    ``pending``. A wave that also carries a ``hold_detail`` (a promotion-gate
+    hold from :func:`hold_wave`, which only a run clears) stays ``held``.
     """
     before = dict(wave)
     for key, value in (
@@ -946,9 +947,13 @@ def _record_gate(wave: dict, gate: dict) -> bool:
             wave.pop(key, None)
     was_ec_held = bool(before.get("held_by") or before.get("held_by_depends_on"))
     if gate["held"]:
+        if not was_ec_held:
+            wave["ec_held_from"] = before.get("status", "pending")
         wave["status"] = "held"
-    elif was_ec_held and wave.get("status") == "held" and "hold_detail" not in wave:
-        wave["status"] = "pending"
+    elif was_ec_held:
+        prior = wave.pop("ec_held_from", "pending")
+        if wave.get("status") == "held" and "hold_detail" not in wave:
+            wave["status"] = prior
     return wave != before
 
 
@@ -1585,9 +1590,11 @@ def complete(root: Path, wave_id: str | None = None) -> dict:
         )
 
     # A wave the EC gate holds never completes (#1393). Any unmet EC blocks
-    # here, `delivery` included, read fresh from the plan.
+    # here, `delivery` included, read fresh from the plan. A wave already
+    # completed is past the gate: re-running complete stays idempotent even
+    # if an EC has since been reclosed.
     wave_state = state_data.get("waves", {}).get(target)
-    if wave_state is not None:
+    if wave_state is not None and wave_state.get("status") != "completed":
         gate = evaluate_wave_gate(
             plan_data.get("entry_conditions"), wave_issues(plan_data, target) or []
         )

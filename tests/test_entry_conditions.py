@@ -148,6 +148,14 @@ class TestEvaluateWaveGate:
         gate = evaluate_wave_gate(ecs, [{"number": 1, "ec": ["EC-10", "EC-2"]}])
         assert [h["ec"] for h in gate["start"]] == ["EC-2", "EC-10"]
 
+    def test_malformed_sorts_first_as_sdlc_does(self) -> None:
+        """localeCompare(numeric) puts punctuation before letters."""
+        gate = evaluate_wave_gate(
+            {"EC-2": {"status": "unmet"}},
+            [{"number": 1, "ec": ["EC-2"]}, {"number": 2, "ec": "bad"}],
+        )
+        assert [h["ec"] for h in gate["start"]] == [MALFORMED_EC, "EC-2"]
+
     def test_cross_plan_ref_holds(self) -> None:
         gate = evaluate_wave_gate(None, [{"number": 6, "depends_on": ["plan-a#12"]}])
         assert gate["held"] is True
@@ -282,6 +290,28 @@ class TestReclosed:
         assert _wave(tmp_path)["status"] == "held"
         assert _wave(tmp_path)["held_by"][0]["status"] == "reclosed"
 
+    def test_mid_run_hold_clears_back_to_in_progress(self, tmp_path: Path) -> None:
+        init_state(_plan("met"), tmp_path)
+        planning(tmp_path)
+        _sync(tmp_path, "EC-1", "reclosed")
+        with pytest.raises(ValueError):
+            store_flight_plan([{"issues": [1], "status": "pending"}], tmp_path)
+        assert _wave(tmp_path)["ec_held_from"] == "in_progress"
+        _sync(tmp_path, "EC-1", "met")
+        store_flight_plan([{"issues": [1], "status": "pending"}], tmp_path)
+        wave = _wave(tmp_path)
+        assert wave["status"] == "in_progress"
+        assert "ec_held_from" not in wave
+
+    def test_rehold_keeps_the_first_prior_status(self, tmp_path: Path) -> None:
+        init_state(_plan("met"), tmp_path)
+        planning(tmp_path)
+        _sync(tmp_path, "EC-1", "unmet")
+        for _ in range(2):
+            with pytest.raises(ValueError):
+                preflight(tmp_path)
+        assert _wave(tmp_path)["ec_held_from"] == "in_progress"
+
     def test_cached_met_in_state_is_never_read(self, tmp_path: Path) -> None:
         """Planting a met in state.json does not open the gate; the plan decides."""
         init_state(_plan("unmet"), tmp_path)
@@ -336,6 +366,17 @@ class TestComplete:
             complete(tmp_path)
         assert _wave(tmp_path)["status"] == "in_progress"
 
+    def test_recomplete_after_reclose_stays_completed(self, tmp_path: Path) -> None:
+        """complete is idempotent on a completed wave, even after an EC recloses."""
+        init_state(_plan("met"), tmp_path)
+        planning(tmp_path)
+        complete(tmp_path, wave_id="wave-1")
+        _sync(tmp_path, "EC-1", "reclosed")
+        result = complete(tmp_path, wave_id="wave-1")
+        wave = result["waves"]["wave-1"]
+        assert wave["status"] == "completed"
+        assert not ({"held_by", "delivery_held_by", "ec_held_from"} & wave.keys())
+
     def test_delivery_ec_met_completes(self, tmp_path: Path) -> None:
         init_state(_plan("unmet", gates="delivery"), tmp_path)
         planning(tmp_path)
@@ -387,6 +428,15 @@ class TestShow:
         rc, _, err = run_cli(["flight-plan", "flights.json"], temp_git_repo)
         assert rc == 1
         assert "Refusing flight-plan" in err
+
+    def test_cli_refusal_regenerates_the_dashboard(self, temp_git_repo: Path, run_cli) -> None:
+        (temp_git_repo / "plan.json").write_text(json.dumps(_plan("unmet")))
+        assert run_cli(["init", "plan.json"], temp_git_repo)[0] == 0
+        dash = status_dir(temp_git_repo) / "dashboard.html"
+        dash.unlink(missing_ok=True)
+        rc, _, _ = run_cli(["preflight"], temp_git_repo)
+        assert rc == 1
+        assert dash.exists(), "a refusal still regenerates the dashboard"
 
     def test_cli_met_control(self, temp_git_repo: Path, run_cli) -> None:
         (temp_git_repo / "plan.json").write_text(json.dumps(_plan("met")))

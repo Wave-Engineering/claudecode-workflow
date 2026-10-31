@@ -124,6 +124,24 @@ def _dep_holds(raw: object, n: object) -> list[dict]:
     return holds
 
 
+def _natural_key(s: str) -> list[tuple]:
+    """Approximate ``localeCompare(b, 'en', {numeric: true})``, sdlc's hold order.
+
+    Digit runs compare as numbers, letters case-insensitively, and punctuation
+    sorts before digits before letters, so ``(malformed ec)`` precedes
+    ``EC-2``, which precedes ``EC-10``.
+    """
+    key: list[tuple] = []
+    for run in re.findall(r"\d+|\D", s):
+        if run.isdigit():
+            key.append((1, int(run), ""))
+        elif run.isalpha():
+            key.append((2, 0, run.lower()))
+        else:
+            key.append((0, 0, run))
+    return key
+
+
 def evaluate_wave_gate(entry_conditions: dict | None, issues: list[dict]) -> dict:
     """Evaluate the EC gate for one wave's *issues*.
 
@@ -159,10 +177,7 @@ def evaluate_wave_gate(entry_conditions: dict | None, issues: list[dict]) -> dic
         deps.extend(_dep_holds(issue.get("depends_on"), n))
 
     def _sorted(bucket: dict[str, dict]) -> list[dict]:
-        def key(ec: str) -> tuple:
-            m = re.match(r"^EC-(\d+)$", ec)
-            return (0, int(m.group(1)), ec) if m else (1, 0, ec)
-        return [bucket[k] for k in sorted(bucket, key=key)]
+        return [bucket[k] for k in sorted(bucket, key=_natural_key)]
 
     start_holds = _sorted(start)
     return {
