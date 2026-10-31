@@ -203,26 +203,73 @@ def test_judge_env_points_upstream_at_the_shim_and_makes_its_package_importable(
     assert env["PYTHONPATH"].split(":") == [str(jg.OFFLINE), "/elsewhere"]
 
 
+# A stand-in for one upstream step: the module-level names upstream-step.py reaches into.
 _STEP_STUB = """\
-import sys
+import json, sys
+from pathlib import Path
 BATCH_SIZE = 40
 {deadline}
+def AsyncOpenAI(**kwargs):
+    return kwargs
+def get_model_dir():
+    return Path.cwd()
+class {cls}:
+    async def {method}(self):
+        return {result}
 async def main():
-    print(globals().get("LLM_CALL_TIMEOUT"), sys.argv[1:])
+    (Path.cwd() / "dedup_groups.json").write_text("{{}}")
+    await {cls}().{method}()
+    client = AsyncOpenAI(api_key="unused")
+    print(json.dumps([globals().get("LLM_CALL_TIMEOUT"), client, sys.argv[1:]]))
 """
 
 
-@pytest.mark.parametrize("deadline, printed", [
-    ("LLM_CALL_TIMEOUT = 30", "3000 ['--dedup-groups', 'g.json']"),  # ceil(40 / 4) * 300
-    ("", "None ['--dedup-groups', 'g.json']"),  # extract has no deadline: left alone
+def _run_step(tmp_path: Path, deadline: str = "LLM_CALL_TIMEOUT = 30", cls: str = "LLMJudge",
+              method: str = "call_llm", result: str = "{'match': True}"):
+    (tmp_path / "stubstep.py").write_text(
+        _STEP_STUB.format(deadline=deadline, cls=cls, method=method, result=result))
+    return subprocess.run([sys.executable, str(jg.STEP_RUNNER), "stubstep", "4",
+                           str(jg.SHIM_CALL_TIMEOUT), "--dedup-groups", "g.json"],
+                          cwd=tmp_path, env={**os.environ, "PYTHONPATH": str(tmp_path)},
+                          capture_output=True, text=True)
+
+
+@pytest.mark.parametrize("deadline, upstream_deadline", [
+    ("LLM_CALL_TIMEOUT = 30", 3000),  # ceil(40 / 4) * 300
+    ("", None),  # extract has no deadline of its own: only the SDK's is set
 ])
-def test_step_runner_sets_the_deadline_to_queueing_plus_one_call(tmp_path, deadline, printed):
-    (tmp_path / "stubstep.py").write_text(_STEP_STUB.format(deadline=deadline))
-    out = subprocess.run([sys.executable, "-c", jg.STEP_RUNNER, "stubstep", "4",
-                          str(jg.SHIM_CALL_TIMEOUT), "--dedup-groups", "g.json"],
-                         cwd=tmp_path, env={**os.environ, "PYTHONPATH": str(tmp_path)},
-                         capture_output=True, text=True, check=True)
-    assert out.stdout.strip() == printed
+def test_step_runner_sets_both_deadlines_to_queueing_plus_one_call(tmp_path, deadline,
+                                                                   upstream_deadline):
+    out = _run_step(tmp_path, deadline=deadline)
+    assert out.returncode == 0, out.stderr
+    upstream, client, argv = json.loads(out.stdout)
+    assert upstream == upstream_deadline
+    assert client == {"api_key": "unused", "timeout": 3000, "max_retries": 0}
+    assert argv == ["--dedup-groups", "g.json"]
+
+
+@pytest.mark.parametrize("cls, method, result", [
+    ("CandidateExtractor", "call_llm", "{'issues': [], 'error': 'Max retries exceeded'}"),
+    ("LLMJudge", "call_llm", "{'error': 'Timed out after 30s'}"),
+])
+def test_step_runner_exits_3_on_a_failed_call(tmp_path, cls, method, result):
+    out = _run_step(tmp_path, cls=cls, method=method, result=result)
+    assert out.returncode == 3
+    assert "1 call(s) failed" in out.stderr
+    assert (tmp_path / "dedup_groups.json").exists()  # only dedup's output is discarded
+
+
+def test_step_runner_discards_dedups_output_on_a_failed_call(tmp_path):
+    # a rerun skips every arm in the file, so a kept fallback would never be redone
+    out = _run_step(tmp_path, cls="DedupLLM", method="dedup_candidates", result="None")
+    assert out.returncode == 3
+    assert not (tmp_path / "dedup_groups.json").exists()
+
+
+def test_step_runner_keeps_a_clean_dedup(tmp_path):
+    out = _run_step(tmp_path, cls="DedupLLM", method="dedup_candidates", result="[[0], [1]]")
+    assert out.returncode == 0, out.stderr
+    assert (tmp_path / "dedup_groups.json").exists()
 
 
 def test_shim_call_timeout_matches_the_shims_own_cap():
@@ -250,7 +297,7 @@ def test_judge_runs_every_step_through_the_runner(tmp_path, monkeypatch):
     monkeypatch.setattr(jg.subprocess, "run", lambda argv, **k: calls.append(argv))
     monkeypatch.setattr(jg, "telemetry_env", lambda *a: {})
     jg.judge(tmp_path, "claude-sonnet-5-5", 4)
-    steps = [argv[argv.index(jg.STEP_RUNNER) + 1:] for argv in calls]
+    steps = [argv[argv.index(str(jg.STEP_RUNNER)) + 1:] for argv in calls]
     assert [s[:3] for s in steps] == [
         [f"code_review_benchmark.{m}", "4", str(jg.SHIM_CALL_TIMEOUT)]
         for m in ("step2_extract_comments", "step2_5_dedup_candidates", "step3_judge_comments")]

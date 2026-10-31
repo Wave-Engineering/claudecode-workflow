@@ -30,7 +30,8 @@ Steps, each its own subcommand:
                                              by hand, as Markdown
 
 Upstream runs from DIR, since its paths are relative to the working directory. It runs
-unmodified but for one value, its per-call client deadline (`STEP_RUNNER`).
+unmodified but for its client deadlines and its exit status on a failed call
+(scripts/bench/upstream-step.py).
 """
 
 from __future__ import annotations
@@ -60,20 +61,9 @@ REVIEW_TOOLS = "Read,Grep,Glob"
 EFFORTS = ("medium", "high", "xhigh")  # the range a /precheck session runs Job D at (#1394)
 SPLIT_LINES = 1500  # under Read's 2000-line page, as precheck-review-scope.sh gather splits
 SHIM_CALL_TIMEOUT = 300  # claude-openai-shim.py's CALL_TIMEOUT: its cap on one `claude -p`
-
-# Upstream's dedup and judge allow each call LLM_CALL_TIMEOUT (30 s) on the client, but send
-# BATCH_SIZE calls at once, and the shim serves only --workers of them. A queued call used up
-# its deadline waiting, and its match was scored as an error (#1406). The runner raises the
-# deadline to the worst case, queueing plus one call, before the step's main() reads it.
-STEP_RUNNER = """\
-import asyncio, importlib, math, sys
-step, workers, call = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
-del sys.argv[1:4]
-m = importlib.import_module(step)
-if hasattr(m, "LLM_CALL_TIMEOUT"):
-    m.LLM_CALL_TIMEOUT = math.ceil(m.BATCH_SIZE / workers) * call
-asyncio.run(m.main())
-"""
+# Every upstream step runs through this: deadlines that cover the shim's queue, and an exit
+# status that a failed call can't hide behind (#1406).
+STEP_RUNNER = ROOT / "scripts" / "bench" / "upstream-step.py"
 REVIEW_FLAGS = [
     "--setting-sources", "",
     "--strict-mcp-config",
@@ -340,7 +330,7 @@ def judge(run: Path, judge_model: str, workers: int) -> None:
             raise SystemExit(f"jobd-golden: the shim did not start: {line!r}")
         env = judge_env(line.split(" ", 1)[1], judge_model)
         model_dir = run / "results" / judge_model.replace("/", "_")
-        uv = ["uv", "run", "--project", str(OFFLINE), "python", "-c", STEP_RUNNER]
+        uv = ["uv", "run", "--project", str(OFFLINE), "python", str(STEP_RUNNER)]
         for step, *args in (["code_review_benchmark.step2_extract_comments"],
                             ["code_review_benchmark.step2_5_dedup_candidates"],
                             ["code_review_benchmark.step3_judge_comments", "--dedup-groups",
