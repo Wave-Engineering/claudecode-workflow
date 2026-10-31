@@ -194,6 +194,33 @@ def test_assemble_keeps_only_the_reviewed_prs_and_this_runs_arms(tmp_path):
     assert body["review_comments"] == [{"path": None, "line": None, "body": "1. critical: a null deref in f()"}]
 
 
+def test_report_totals_each_arm_and_splits_recall_by_golden_severity(tmp_path):
+    run = tmp_path / "run"
+    u1, u2 = "https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"
+    _review(run, u1, "claude-sonnet-5-5", "x")
+    _review(run, u2, "claude-sonnet-5-5", "y")
+    tool = jg.tool_name("claude-sonnet-5-5")
+    evals = {
+        u1: {tool: {"tp": 1, "fp": 2, "fn": 1, "precision": 1 / 3, "recall": 0.5,
+                    "true_positives": [{"severity": "Critical"}],
+                    "false_negatives": [{"severity": "High"}]}},
+        u2: {tool: {"tp": 1, "fp": 0, "fn": 0, "precision": 1.0, "recall": 1.0,
+                    "true_positives": [{"severity": "High"}], "false_negatives": []}},
+    }
+    edir = run / "results" / "claude-sonnet-5-5"
+    edir.mkdir(parents=True)
+    (edir / "evaluations.json").write_text(json.dumps(evals))
+    (run / "judge-ledger.jsonl").write_text('{"total_cost_usd": 0.25}\n{"total_cost_usd": 0.5}\n')
+    out = jg.report(run, "claude-sonnet-5-5")
+    arm = out["arms"][tool]
+    assert (arm["tp"], arm["fp"], arm["fn"]) == (2, 2, 1)
+    assert arm["precision"] == 0.5 and arm["recall"] == 2 / 3
+    assert arm["by_severity"] == {"Critical": {"tp": 1, "fn": 0, "recall": 1.0},
+                                  "High": {"tp": 1, "fn": 1, "recall": 0.5}}
+    assert arm["cost_usd_per_pass"] == 1.0 and out["judge_cost_usd"] == 0.75
+    assert out["judge_model"] == "claude-sonnet-5-5"
+
+
 def test_assemble_refuses_a_pr_outside_the_benchmark(tmp_path):
     upstream = tmp_path / "benchmark_data.json"
     upstream.write_text("{}")

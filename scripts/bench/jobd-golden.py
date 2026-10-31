@@ -307,7 +307,12 @@ def report(run: Path, judge_model: str) -> dict[str, Any]:
     arms: dict[str, Any] = {}
     for rec in reviews:
         e = evals.get(rec["golden_url"], {}).get(rec["tool"], {})
-        a = arms.setdefault(rec["tool"], {"model": rec["model"], "passes": [], "tp": 0, "fp": 0, "fn": 0})
+        a = arms.setdefault(rec["tool"], {"model": rec["model"], "passes": [], "tp": 0, "fp": 0, "fn": 0,
+                                          "by_severity": {}})
+        for key, hits in (("tp", e.get("true_positives") or []), ("fn", e.get("false_negatives") or [])):
+            for g in hits:
+                s = a["by_severity"].setdefault(g.get("severity") or "unrated", {"tp": 0, "fn": 0})
+                s[key] += 1
         a["passes"].append({"golden_url": rec["golden_url"], "cost_usd": rec["total_cost_usd"],
                             "wall_s": rec["wall_s"], "usage": rec["usage"],
                             "precision": e.get("precision"), "recall": e.get("recall")})
@@ -316,6 +321,8 @@ def report(run: Path, judge_model: str) -> dict[str, Any]:
     for a in arms.values():
         a["precision"] = a["tp"] / (a["tp"] + a["fp"]) if a["tp"] + a["fp"] else None
         a["recall"] = a["tp"] / (a["tp"] + a["fn"]) if a["tp"] + a["fn"] else None
+        for s in a["by_severity"].values():  # recall per golden severity: High and Critical apart
+            s["recall"] = s["tp"] / (s["tp"] + s["fn"])
         a["cost_usd_per_pass"] = sum(p["cost_usd"] or 0 for p in a["passes"]) / len(a["passes"])
         a["wall_s_per_pass"] = sum(p["wall_s"] for p in a["passes"]) / len(a["passes"])
     agent_shas = sorted({r["agent_sha256"] for r in reviews})

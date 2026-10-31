@@ -19,6 +19,18 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Added
+- **A bench for `/precheck` Job D on a public golden-comment set (#1195).** The question is
+  what the reviewer catches, and at what cost per pass, under each model now that #1387 lets
+  it vary. `scripts/bench/jobd-golden.py` runs Job D-full's prompt and the
+  `feature-dev:code-reviewer` persona under `--model <arm>` against
+  withmartian/code-review-benchmark (MIT), pinned by `fetch-code-review-benchmark.sh`.
+  Upstream's own pipeline judges it, through `claude-openai-shim.py`, which serves its OpenAI
+  client from `claude -p` on one fixed judge model. Every bench process runs with no settings,
+  hooks, MCP servers or CLAUDE.md. Without the last, CLAUDE.md discovery from the cwd had put
+  this repo's rules (~9k tokens) into every review of someone else's code. Method, deviations
+  and results are in `docs/bench/jobd-golden.md`. Nothing installs; it's a repo-only tool.
+
 ### Changed
 - **`/precheck`'s code reviewer no longer pins opus (#1387).** Job D passed `model: opus` on
   the `feature-dev:code-reviewer` call, which overrode both `CLAUDE_CODE_SUBAGENT_MODEL` and
