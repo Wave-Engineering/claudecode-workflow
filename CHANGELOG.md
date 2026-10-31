@@ -19,6 +19,13 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.22.0] - 2026-10-31
+
+A wave is now held, fail-closed, on its entry conditions and on cross-plan dependencies,
+on the kit's side as well as the sdlc server's. A reseed's auto-revive no longer counts a
+peer's turn as the revive. The Job D bench gains effort as an arm, paired comparisons and a
+false-positive sampler.
+
 ### Added
 - **`wave-status` holds a wave on its entry conditions, fail-closed (#1393).** This is the
   Python half of mcp-server-sdlc#613. Before it, the EC gate lived in `wave_next_pending`
@@ -77,10 +84,11 @@ are worth keeping apart:
   the agent's own `model: sonnet`. On one host over 2 hours, 13 of 14 reviewer runs were on
   opus. BJ chose sonnet, or a router's pick. Job D now names no model: today the reviewer runs
   on its agent definition's model, and a router in the request path can choose another.
-- **No rules confirmation after a compaction or a revive (#1367).** BJ ruled it out. The
+- **No rules confirmation after a compaction or a revive (#1367, #1386).** BJ ruled it out. The
   agent still re-reads `CLAUDE.md` in full, which is the safeguard, then carries on with its
   work. It sends no rules summary and no "what next?" question. `/engage reload` is the
-  re-read without the confirmation, and `/reseed revive` uses it. `CLAUDE.md`'s
+  re-read without the confirmation, and `/reseed revive` uses it, as do the getting-started
+  guide, `/engage`'s introduction and the grunt seed template (#1386). `CLAUDE.md`'s
   post-compaction section keeps its heading, so `/ccfold` replaces its body in every
   consumer instead of keeping both. Plain `/engage` at session start is unchanged.
 - **Reminders of an unanswered question go to `#call-4-bj` (#1367).** `/sqtk` rule 14: post
@@ -114,6 +122,24 @@ are worth keeping apart:
   this user with the same cwd. The older session keeps the identity. A new SessionStart hook
   (`identity-collision-warn.sh`) warns the newer one, and `/name` refuses to read or write the
   file for it. A worktree has its own cwd, so it is never a claimant.
+- **A reseed's auto-revive is no longer acked by a peer's turn (#1400).** `reseed-kick.sh`
+  counted a bare read of the seed as the revive. When a peer's message landed the same second
+  as `/clear`, the turn it woke read the seed, answered the peer and stopped, and the kicker
+  logged `acked (seed read)` with nothing revived. Now only `/reseed revive` through the Skill
+  tool counts, or a seed read followed by `/engage reload`.
+- **The EC hold messages say how to post a state line that counts (#1402).** Both
+  `wave-status` refusals showed `[ec-state EC-n] met` in backticks, and sdlc's `wave_ec_sync`
+  counts a `met` only as a bare line in a comment of its own. An agent that copied the hint
+  posted a code span the parser ignores, and the wave stayed held. The two refusals now share
+  one `EC_RECORD_HINT`: plain text, alone in its own comment, no backticks, the evidence on the
+  same line. It ends with a whole example line, and a test parses it.
+
+### Image
+
+- **MCP servers:** mcp-server-sdlc v5.3.0 (from v5.2.0; it adds `wave_ec_sync`, the server
+  half of this release's entry-condition gate). mcp-server-wtf v1.5.2, mcp-server-discord
+  v1.4.3 and mcp-server-nerf v2.1.0 are unchanged. crewchat is still not baked.
+- **trivy 0.74.0**, unchanged.
 
 ## [8.21.0] - 2026-10-31
 
