@@ -206,6 +206,20 @@ def test_every_closing_issue_is_graded(world):
     ("P3", "All story PRs merged clean into main"),
     ("P4", "CI is green on main"),
     ("P5", "v2.0 is tagged and the image pushed"),
+    ("P5", "the release is tagged"),
+    ("P5", "1.4.0 gets tagged"),
+    ("P5", "the commit is tagged v1.4.0"),
+    ("P5", "it is tagged as 2.1"),
+    ("P5", "the image is tagged :stable"),
+    ("P5", "the commit is tagged `v1.4.0`"),
+    ("P5", "the release will be tagged"),
+    ("P5", "the rc is tagged"),
+    ("P5", "a tagged release exists"),
+    ("P5", "v2 is tagged"),
+    ("P5", "the release is then tagged"),
+    ("P5", "it is tagged \"v1.4\""),
+    ("P5", "the fix is released"),
+    ("P5", "the service is deployed"),
     ("P6", "the new path is observed live"),
 ])
 @pytest.mark.parametrize("box", ["[ ]", "[x]"])
@@ -221,6 +235,11 @@ def test_each_post_merge_pattern_flags(tmp_path, pid, line, box):
     "a pre-merge review runs",
     "the mergeable state is checked",
     "a merge commit is never pushed",
+    # #1389: a tagged channel is not a release tag
+    "a public channel is tagged that neither the broker nor the bot is in",
+    "A mint adds the new bot to tagged channels as well as `default_channels`",
+    "the unreachable-tagged-channel WARNING is logged",
+    "tagged 403: one POST, one WARNING naming it",
 ])
 def test_pre_merge_phrases_do_not_flag(tmp_path, line):
     r = _run("lint", _file(tmp_path, f"- [ ] {line}\n"))

@@ -36,6 +36,12 @@ are worth keeping apart:
   until BJ answers, the first line is `⏰⏰⏰⏰`.
 
 ### Fixed
+- **The AC lint no longer reads every "tagged" as a release (#1389).** Pattern P5 flagged any
+  `tagged`, so a feature about tagged channels had four correct pre-merge criteria refused as
+  post-merge, and `/precheck` Job E could not pass. P5 now flags `tagged` only as a release
+  tag: a version or release before it (`v2.0 is tagged`, `the release is tagged`), or a version
+  or ref after it (`tagged v1.4.0`, `tagged as 2.1`, `tagged :stable`). `released` and
+  `deployed` flag as before.
 - **`CLAUDE.md` described the Stop hook as it was before #818 (#1367).** It said
   `stop-action-bias-detector.sh` blocks a turn that ends by asking permission. Since #818 that
   hook doesn't read the wording: it is the godspeed mandate model, and the only hook left that
