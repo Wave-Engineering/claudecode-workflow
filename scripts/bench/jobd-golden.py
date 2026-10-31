@@ -48,6 +48,7 @@ OFFLINE = BENCH / "code-review-benchmark" / "offline"
 PRS = BENCH / "prs"
 AGENT_GLOB = "plugins/cache/claude-plugins-official/feature-dev/*/agents/code-reviewer.md"
 REVIEW_TOOLS = "Read,Grep,Glob"
+EFFORTS = ("medium", "high", "xhigh")  # the range a /precheck session runs Job D at (#1394)
 SPLIT_LINES = 1500  # under Read's 2000-line page, as precheck-review-scope.sh gather splits
 REVIEW_FLAGS = [
     "--setting-sources", "",
@@ -203,13 +204,40 @@ def memory_files(tree: Path) -> list[str]:
                   if p.name.lower() in MEMORY_NAMES and ".git" not in p.relative_to(tree).parts)
 
 
-def review_argv(model: str, system_file: Path, diff_dir: Path) -> list[str]:
-    return ["claude", "-p", "--model", model, *REVIEW_FLAGS, "--tools", REVIEW_TOOLS,
+def review_argv(model: str, effort: str, system_file: Path, diff_dir: Path) -> list[str]:
+    return ["claude", "-p", "--model", model, "--effort", effort, *REVIEW_FLAGS, "--tools", REVIEW_TOOLS,
             "--allowedTools", REVIEW_TOOLS, "--system-prompt-file", str(system_file),
             "--add-dir", str(diff_dir)]
 
 
-def review(golden_url: str, model: str, run: Path) -> dict[str, Any]:
+def arm(model: str, effort: str) -> str:
+    """One arm is a model at an effort level. Effort is explicit because `--setting-sources ""`
+    drops `effortLevel`, and in /precheck the reviewer inherits the session's level (measured
+    2026-10-31, #1394), so no single default stands for production."""
+    if effort not in EFFORTS:
+        raise SystemExit(f"jobd-golden: effort must be one of {', '.join(EFFORTS)}, not {effort!r}")
+    return f"{model}.{effort}"
+
+
+EFFORT_PAIRS = tuple((a, b) for i, a in enumerate(EFFORTS) for b in EFFORTS[i + 1:])
+
+
+def plan(urls: list[str], models: list[str], design: str) -> list[tuple[str, str, str]]:
+    """The sweep's passes, as (url, model, effort), every model run at each (PR, effort).
+
+    rotate2: each PR at two of the three levels, the pair rotating by PR index. That is a
+      balanced incomplete block design, so every pair of levels is compared within the same
+      PRs, and PR difficulty cancels out of the effort comparison. Cost: 2 passes per PR per model.
+    round-robin: each PR at one level, rotating. 1 pass per PR per model. The effort comparison
+      is between PRs, so it detects only a large effect.
+    """
+    levels = {"rotate2": lambda i: EFFORT_PAIRS[i % len(EFFORT_PAIRS)],
+              "round-robin": lambda i: (EFFORTS[i % len(EFFORTS)],)}[design]
+    return [(url, m, e) for i, url in enumerate(urls) for e in levels(i) for m in models]
+
+
+def review(golden_url: str, model: str, run: Path, effort: str) -> dict[str, Any]:
+    variant = arm(model, effort)
     run = run.resolve()  # claude -p runs with cwd=<tree>, so every path handed to it must be absolute
     d = PRS / slug(golden_url)
     pr = json.loads((d / "pr.json").read_text())
@@ -221,8 +249,8 @@ def review(golden_url: str, model: str, run: Path) -> dict[str, Any]:
     system_file.write_text(body)
     prompt = jobd_prompt(str(d / "tree"), pr["diff_lines"], pr["diff_parts"])
     start = time.monotonic()
-    env = {**os.environ, **ISOLATION_ENV, **telemetry_env(model, case_id(golden_url))}
-    proc = subprocess.run(review_argv(model, system_file, d / "diff"), input=prompt, cwd=d / "tree",
+    env = {**os.environ, **ISOLATION_ENV, **telemetry_env(variant, case_id(golden_url))}
+    proc = subprocess.run(review_argv(model, effort, system_file, d / "diff"), input=prompt, cwd=d / "tree",
                           env=env, capture_output=True, text=True, timeout=3600)
     wall = round(time.monotonic() - start, 1)
     if proc.returncode != 0:
@@ -231,7 +259,7 @@ def review(golden_url: str, model: str, run: Path) -> dict[str, Any]:
     if out.get("is_error") or not isinstance(out.get("result"), str):
         raise SystemExit(f"jobd-golden: the review failed: {str(out.get('result'))[:500]}")
     rec = {
-        "golden_url": golden_url, "tool": tool_name(model), "model": model,
+        "golden_url": golden_url, "tool": tool_name(variant), "model": model, "effort": effort,
         "head_sha": pr["head_sha"], "agent_path": agent_path, "agent_sha256": agent_sha,
         "tools": REVIEW_TOOLS, "wall_s": wall, "total_cost_usd": out.get("total_cost_usd"),
         "usage": out.get("usage"), "model_usage": out.get("modelUsage"),
@@ -240,7 +268,7 @@ def review(golden_url: str, model: str, run: Path) -> dict[str, Any]:
     }
     rdir = run / "reviews"
     rdir.mkdir(exist_ok=True)
-    (rdir / f"{slug(golden_url)}__{tool_name(model)}.json").write_text(json.dumps(rec, indent=1))
+    (rdir / f"{slug(golden_url)}__{tool_name(variant)}.json").write_text(json.dumps(rec, indent=1))
     with open(run / "ledger.jsonl", "a") as f:
         f.write(json.dumps({k: v for k, v in rec.items() if k != "review"} | {"kind": "review"}) + "\n")
     return rec
@@ -315,7 +343,8 @@ def report(run: Path, judge_model: str) -> dict[str, Any]:
         raise SystemExit("jobd-golden: no evaluation for: " + "; ".join(unjudged))
     for rec in reviews:
         e = evals[rec["golden_url"]][rec["tool"]]
-        a = arms.setdefault(rec["tool"], {"model": rec["model"], "passes": [], "tp": 0, "fp": 0, "fn": 0,
+        a = arms.setdefault(rec["tool"], {"model": rec["model"], "effort": rec.get("effort"),
+                                          "passes": [], "tp": 0, "fp": 0, "fn": 0,
                                           "by_severity": {}})
         for key, hits in (("tp", e.get("true_positives") or []), ("fn", e.get("false_negatives") or [])):
             for g in hits:
@@ -338,6 +367,15 @@ def report(run: Path, judge_model: str) -> dict[str, Any]:
             "agent_sha256": agent_shas, "tools": REVIEW_TOOLS, "arms": arms}
 
 
+def models_arg(value: str) -> list[str]:
+    """`plan --models`: an empty entry would plan a pass that fails at `claude -p`, and a
+    repeated one would run every pass of that arm twice."""
+    models = [m.strip() for m in value.split(",")]
+    if not all(models) or len(set(models)) != len(models):
+        raise argparse.ArgumentTypeError(f"want distinct, non-empty models: {value!r}")
+    return models
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -346,7 +384,12 @@ def main(argv: list[str] | None = None) -> int:
     sr = sub.add_parser("review")
     sr.add_argument("golden_url")
     sr.add_argument("--model", required=True)
+    sr.add_argument("--effort", required=True, choices=EFFORTS)
     sr.add_argument("--run", required=True, type=Path)
+    spl = sub.add_parser("plan")
+    spl.add_argument("--design", required=True, choices=("rotate2", "round-robin"))
+    spl.add_argument("--models", required=True, type=models_arg, help="comma-separated")
+    spl.add_argument("urls", nargs="+")
     sa = sub.add_parser("assemble")
     sa.add_argument("--run", required=True, type=Path)
     sj = sub.add_parser("judge")
@@ -360,8 +403,11 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "prepare":
         print(prepare(a.golden_url))
     elif a.cmd == "review":
-        rec = review(a.golden_url, a.model, a.run)
+        rec = review(a.golden_url, a.model, a.run, a.effort)
         print(json.dumps({k: rec[k] for k in ("tool", "wall_s", "total_cost_usd", "num_turns")}))
+    elif a.cmd == "plan":
+        for url, model, effort in plan(a.urls, a.models, a.design):
+            print(f"{url}\t{model}\t{effort}")
     elif a.cmd == "assemble":
         print(assemble(a.run))
     elif a.cmd == "judge":
