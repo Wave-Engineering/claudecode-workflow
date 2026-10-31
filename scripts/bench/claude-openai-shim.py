@@ -48,6 +48,9 @@ CLAUDE_FLAGS = [
 # `--setting-sources ""` does not stop CLAUDE.md discovery from the cwd: run from a checkout,
 # each judge call loaded its CLAUDE.md (~9k tokens, 9x the cost; measured 2026-10-31).
 ISOLATION_ENV = {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1"}
+# Seconds for one `claude -p`. jobd-golden.py builds upstream's client deadlines from it
+# (SHIM_CALL_TIMEOUT there; a test pins the two).
+CALL_TIMEOUT = 300
 
 
 class ShimError(Exception):
@@ -102,7 +105,7 @@ def completion(req: dict[str, Any], model: str, run=subprocess.run) -> tuple[dic
         raise ShimError(400, f"this shim serves {model}, not {asked}")
     system, prompt = split_messages(req.get("messages"))
     start = time.monotonic()
-    proc = run(claude_argv(model, system), input=prompt, capture_output=True, text=True, timeout=300,
+    proc = run(claude_argv(model, system), input=prompt, capture_output=True, text=True, timeout=CALL_TIMEOUT,
                env={**os.environ, **ISOLATION_ENV})
     wall = round(time.monotonic() - start, 3)
     if proc.returncode != 0:

@@ -202,6 +202,7 @@ fi
 # Checked AFTER the final wait, not before it: a turn whose first entry lands
 # during that wait is live too, and must not be paged as "no ack".
 if [[ "$(state)" != fresh ]]; then
+	log "session live after ${sends} send(s); waiting up to ${LIVE_WAIT}s for the revive"
 	waited=0
 	while ((waited < LIVE_WAIT)); do
 		if acked; then
