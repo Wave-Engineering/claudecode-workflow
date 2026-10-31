@@ -61,6 +61,15 @@ are worth keeping apart:
   6-pass mini-pilot on one PR measured the cost per level: sonnet is flat to `high` and 2.6×
   at `xhigh`, and opus is 1.18× at `high` and 2.06× at `xhigh`. Sonnet's flat step is within
   run-to-run noise, and the `xhigh` step clearly isn't.
+- **Paired comparisons and a false-positive spot-check for the Job D bench (#1398).**
+  `report`'s per-arm sums mix PRs of different difficulty, while the sweep's questions are
+  paired by design. `compare` answers them on pairs that share a PR. One section compares the
+  models on each (PR, level); the other compares each level pair within a (PR, model). Each
+  cell gives TP wins, ties and losses, an exact sign test, and the geometric-mean and median
+  cost ratio. `fp-sample` draws a seeded, model-stratified sample of false positives for a
+  hand check, because the goldens aren't exhaustive and precision is otherwise only a floor.
+  The worksheet is blinded: the arm sits in a key after the table. Neither command adds a
+  dependency.
 
 ### Changed
 - **`/precheck`'s code reviewer no longer pins opus (#1387).** Job D passed `model: opus` on
