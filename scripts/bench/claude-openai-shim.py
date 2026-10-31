@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -44,6 +45,9 @@ CLAUDE_FLAGS = [
     "--no-session-persistence",
     "--output-format", "json",
 ]
+# `--setting-sources ""` does not stop CLAUDE.md discovery from the cwd: run from a checkout,
+# each judge call loaded its CLAUDE.md (~9k tokens, 9x the cost; measured 2026-10-31).
+ISOLATION_ENV = {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1"}
 
 
 class ShimError(Exception):
@@ -98,7 +102,8 @@ def completion(req: dict[str, Any], model: str, run=subprocess.run) -> tuple[dic
         raise ShimError(400, f"this shim serves {model}, not {asked}")
     system, prompt = split_messages(req.get("messages"))
     start = time.monotonic()
-    proc = run(claude_argv(model, system), input=prompt, capture_output=True, text=True, timeout=300)
+    proc = run(claude_argv(model, system), input=prompt, capture_output=True, text=True, timeout=300,
+               env={**os.environ, **ISOLATION_ENV})
     wall = round(time.monotonic() - start, 3)
     if proc.returncode != 0:
         raise ShimError(502, f"claude -p exited {proc.returncode}: {proc.stderr.strip()[:500]}")

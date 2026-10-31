@@ -56,6 +56,11 @@ REVIEW_FLAGS = [
     "--no-session-persistence",
     "--output-format", "json",
 ]
+# `--setting-sources ""` does not stop CLAUDE.md discovery, which walks up from the cwd. The PR
+# trees live under this checkout's .bench/, so without this every pass loaded this repo's
+# CLAUDE.md (~9k tokens of rules foreign to the reviewed repo; measured 2026-10-31). It also
+# drops a reviewed repo's own CLAUDE.md; `prepare` notes when a tree has one.
+ISOLATION_ENV = {"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1"}
 
 
 TELEMETRY_KEY = re.compile(r"^(OTEL_|CLAUDE_CODE_ENABLE_TELEMETRY$)")
@@ -184,8 +189,18 @@ def prepare(golden_url: str) -> Path:
         p.write_text("".join(lines[i:i + SPLIT_LINES]))
         parts.append(str(p))
     (d / "pr.json").write_text(json.dumps({**pr, "golden_url": golden_url, "diff_lines": len(lines),
-                                           "diff_parts": parts}, indent=1))
+                                           "diff_parts": parts, "memory_files": memory_files(tree)},
+                                          indent=1))
     return d
+
+
+MEMORY_NAMES = {"claude.md", "claude.local.md", "agents.md"}
+
+
+def memory_files(tree: Path) -> list[str]:
+    """The tree's own agent-memory files, which ISOLATION_ENV keeps out of the review."""
+    return sorted(str(p.relative_to(tree)) for p in tree.rglob("*")
+                  if p.name.lower() in MEMORY_NAMES and ".git" not in p.relative_to(tree).parts)
 
 
 def review_argv(model: str, system_file: Path, diff_dir: Path) -> list[str]:
@@ -205,7 +220,7 @@ def review(golden_url: str, model: str, run: Path) -> dict[str, Any]:
     system_file.write_text(body)
     prompt = jobd_prompt(str(d / "tree"), pr["diff_lines"], pr["diff_parts"])
     start = time.monotonic()
-    env = {**os.environ, **telemetry_env(model, case_id(golden_url))}
+    env = {**os.environ, **ISOLATION_ENV, **telemetry_env(model, case_id(golden_url))}
     proc = subprocess.run(review_argv(model, system_file, d / "diff"), input=prompt, cwd=d / "tree",
                           env=env, capture_output=True, text=True, timeout=3600)
     wall = round(time.monotonic() - start, 1)
@@ -248,8 +263,19 @@ def assemble(run: Path, upstream: Path = OFFLINE / "results" / "benchmark_data.j
     return out
 
 
+def judge_env(base_url: str, judge_model: str) -> dict[str, str]:
+    """The environment for upstream's steps: the shim as the endpoint, and upstream's package
+    importable. `uv run --project` syncs the project's venv but, run from the run dir, does not
+    put the project itself on sys.path, so `python -m code_review_benchmark...` would not resolve.
+    """
+    pythonpath = os.pathsep.join(p for p in (str(OFFLINE), os.environ.get("PYTHONPATH", "")) if p)
+    return {**os.environ, "MARTIAN_BASE_URL": base_url, "MARTIAN_API_KEY": "unused",
+            "MARTIAN_MODEL": judge_model, "PYTHONPATH": pythonpath}
+
+
 def judge(run: Path, judge_model: str, workers: int) -> None:
     """Upstream steps 2, 2.5 and 3 from the run dir, the judge served by the shim."""
+    run = run.resolve()  # the steps run with cwd=run, so every path handed to them must be absolute
     ledger = run / "judge-ledger.jsonl"
     shim = subprocess.Popen([sys.executable, str(ROOT / "scripts" / "bench" / "claude-openai-shim.py"),
                              "--model", judge_model, "--workers", str(workers), "--ledger", str(ledger)],
@@ -259,8 +285,7 @@ def judge(run: Path, judge_model: str, workers: int) -> None:
         line = shim.stdout.readline().strip()
         if not line.startswith("listening "):
             raise SystemExit(f"jobd-golden: the shim did not start: {line!r}")
-        env = {**os.environ, "MARTIAN_BASE_URL": line.split(" ", 1)[1], "MARTIAN_API_KEY": "unused",
-               "MARTIAN_MODEL": judge_model}
+        env = judge_env(line.split(" ", 1)[1], judge_model)
         model_dir = run / "results" / judge_model.replace("/", "_")
         uv = ["uv", "run", "--project", str(OFFLINE), "python", "-m"]
         for step in (["code_review_benchmark.step2_extract_comments"],

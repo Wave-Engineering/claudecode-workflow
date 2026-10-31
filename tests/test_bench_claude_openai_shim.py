@@ -83,6 +83,17 @@ def test_every_call_runs_without_tools_mcp_hooks_or_sessions():
     assert "--bare" not in argv  # --bare takes API-key auth only: that would spend API money
 
 
+def test_every_call_runs_with_claude_md_discovery_off():
+    seen = {}
+
+    def run(argv, input, **kw):  # noqa: A002 (subprocess.run's name)
+        seen.update(kw["env"])
+        return subprocess.CompletedProcess(argv, 0, json.dumps(CLI_OUT), "")
+
+    shim.completion(REQ, MODEL, run=run)
+    assert seen["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] == "1"
+
+
 def test_a_request_for_another_model_is_refused():
     with pytest.raises(shim.ShimError) as e:
         shim.completion({**REQ, "model": "claude-opus-5-5"}, MODEL, run=FakeRun())

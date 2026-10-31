@@ -125,6 +125,44 @@ def test_agent_system_prompt_strips_frontmatter_and_hashes_the_body(tmp_path):
     assert len(sha) == 64
 
 
+def test_review_env_keeps_every_claude_md_out(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_run(argv, **kw):
+        seen.update(kw["env"])
+        raise SystemExit("stop after the spawn")
+
+    d = tmp_path / "prs" / "o__r__1"
+    (d / "tree").mkdir(parents=True)
+    (d / "pr.json").write_text(json.dumps({"diff_lines": 1, "diff_parts": [str(d / "p.diff")]}))
+    monkeypatch.setattr(jg, "PRS", tmp_path / "prs")
+    monkeypatch.setattr(jg, "agent_system_prompt", lambda: ("body", "/a.md", "0" * 64))
+    monkeypatch.setattr(jg.subprocess, "run", fake_run)
+    with pytest.raises(SystemExit):
+        jg.review("https://github.com/o/r/pull/1", "claude-opus-5-5", tmp_path / "run")
+    assert seen["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] == "1"
+    assert seen["OTEL_RESOURCE_ATTRIBUTES"].startswith("precheck_variant=claude-opus-5-5,")
+
+
+def test_memory_files_lists_a_trees_own_but_not_gits(tmp_path):
+    (tmp_path / "sub").mkdir()
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "AGENTS.md").write_text("x")
+    (tmp_path / "sub" / "CLAUDE.md").write_text("x")
+    (tmp_path / ".git" / "CLAUDE.md").write_text("x")
+    (tmp_path / "README.md").write_text("x")
+    assert jg.memory_files(tmp_path) == ["AGENTS.md", "sub/CLAUDE.md"]
+
+
+def test_judge_env_points_upstream_at_the_shim_and_makes_its_package_importable(monkeypatch):
+    monkeypatch.setenv("PYTHONPATH", "/elsewhere")
+    env = jg.judge_env("http://127.0.0.1:5555/v1", "claude-sonnet-5-5")
+    assert env["MARTIAN_BASE_URL"] == "http://127.0.0.1:5555/v1"
+    assert env["MARTIAN_MODEL"] == "claude-sonnet-5-5"
+    assert env["MARTIAN_API_KEY"] == "unused"
+    assert env["PYTHONPATH"].split(":") == [str(jg.OFFLINE), "/elsewhere"]
+
+
 def _review(run: Path, url: str, model: str, text: str) -> None:
     (run / "reviews").mkdir(parents=True, exist_ok=True)
     rec = {"golden_url": url, "tool": jg.tool_name(model), "model": model, "review": text,
