@@ -65,11 +65,11 @@ release, and this release's image bakes v5.2.0.
 - **The test sentinel counts only a known exit status (#1361).** It read a field Claude Code
   never sends, so any matching command counted, including a failed lane run. It now writes the
   sentinel only when the test's own status is known to be 0, and a background run never counts.
-- **`uninstall.sh` removes only registered MCP servers (#1152).** It ran every listed server's
-  remote uninstaller, registered or not, and `--local` never turned MCP removal off. It now
-  skips MCPs under `--local`, removes only servers `claude mcp list` shows, and removes nothing
-  when that list can't be read. The uninstall tests are hermetic, and the vox timeout tests no
-  longer race their signal trap (#815).
+- **`uninstall.sh` removes only registered MCP servers (#1361, #815, #1152).** It ran every
+  listed server's remote uninstaller, registered or not, and `--local` never turned MCP removal
+  off (#815). It now skips MCPs under `--local`, removes only servers `claude mcp list` shows,
+  and removes nothing when that list can't be read (#1361). The uninstall tests are hermetic
+  (#1152), and the vox timeout tests no longer race their signal trap (#1361).
 - **An arrow in a squawk's own text is not an answer (#1363).** The drain, banner and doorbell
   read everything after a squawk's last `→` as BJ's answer, so an agent's own prose arrow came
   back as "answered". `sqtk-answer.jq` holds the one rule: compared against the squawk's
