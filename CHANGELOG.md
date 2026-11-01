@@ -19,6 +19,15 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Changed
+- **Code review is pinned to sonnet at medium effort (#1418).** `/precheck` Job D's full and
+  delta dispatches and `/review`'s dispatch now pass `model: sonnet` and `effort: medium`
+  explicitly. This supersedes #1387's "Job D names no model": an agent definition's default can
+  change under a plugin update (`pr-review-toolkit:code-reviewer`'s is opus), and a pin can't.
+  Sweep A (`docs/bench/jobd-golden.md`) found no detectable true-positive difference between
+  sonnet and opus at 0.33× the cost, and `high` cost 1.5× with no detectable gain. The main
+  session model is unchanged. The installed skills on malory carried this as a hotfix first.
+
 ### Added
 - **`CLAUDE.md`: never walk the whole filesystem (#1374).** A `find /` went into a
   self-recursive kio-fuse mount and held a shared host at load ~105 for about 90 minutes. The

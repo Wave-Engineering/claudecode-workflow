@@ -67,16 +67,29 @@ def test_parser_finds_every_job(jobs: dict[str, str]) -> None:
 
 
 def test_precheck_jobs_abc_not_delegated(jobs: dict[str, str]) -> None:
-    """No Agent dispatch in A, B, B-ci, B-local or C; Job D's two prompts go to the code
-    reviewer and name no model, so its agent definition or a router picks one (#1387)."""
+    """No Agent dispatch in A, B, B-ci, B-local or C. Job D's two prompts go to the code
+    reviewer, pinned to sonnet at medium effort (#1418, superseding #1387's "no model"):
+    a pin survives a plugin update that changes an agent definition's default."""
     for job in ("A", "B", "B-ci", "B-local", "C"):
         body = jobs[job]
         assert "subagent_type" not in body, f"Job {job} still dispatches a sub-agent"
         assert not re.search(r"\bmodel:\s*\w", body), f"Job {job} still names a model to dispatch"
     for job in ("D", "D-full", "D-delta"):
-        assert not re.search(r"\bmodel:\s*\w", jobs[job]), f"Job {job} pins a model again"
+        named = set(re.findall(r"\bmodel:\s*(\w+)", jobs[job]))
+        assert named <= {"sonnet"}, f"Job {job} names a model other than sonnet: {named}"
     for job in ("D-full", "D-delta"):
-        assert "subagent_type: feature-dev:code-reviewer" in jobs[job], f"Job {job} is no longer the code-reviewer agent"
+        body = jobs[job]
+        assert "subagent_type: feature-dev:code-reviewer" in body, f"Job {job} is no longer the code-reviewer agent"
+        assert "subagent_type: feature-dev:code-reviewer\nmodel: sonnet\neffort: medium\n" in body, (
+            f"Job {job}'s dispatch must pin model: sonnet and effort: medium (#1418)"
+        )
+
+
+def test_review_dispatch_pins_sonnet_medium() -> None:
+    """/review dispatches the same reviewer with the same pin as Job D (#1418)."""
+    flat = " ".join((ROOT / "skills" / "review" / "SKILL.md").read_text(encoding="utf-8").split())
+    assert "pinned to **`model: sonnet`** and **`effort: medium`**" in flat
+    assert not re.search(r"model:\s*`?opus", flat)
 
 
 def test_precheck_no_subagent_gate_rule(text: str) -> None:
