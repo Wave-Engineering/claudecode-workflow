@@ -620,6 +620,8 @@ COMMON_FORMS = [
     "Closing #9", "Fixing #9", "Resolving #9", "Implements #9", "implemented #9", "Implementing #9",
     "implement #9", "Fixed #9", "Resolved: #9", "Closes issue #9", "Closes issues #5 and #9",
     "Closes #5 #9", "closes #5  #9", "Fixes #5, issue #9",
+    "Fixes:#9", "Closes `#9`", "**Closes** #9", "Closes **#5** and _#9_", "Closes (#9).",
+    "Closes issue#9", "Closes [#5](x), [#9](y)",
 ]
 
 
@@ -629,6 +631,12 @@ COMMON_FORMS = [
     (GH, "Owner/Repo", "Closes #5\n\n```text\nFixes https://github.com/Owner/Repo/issues/9\n```"),
     (GH, "Owner/Repo", "Fixes HTTPS://GITHUB.COM/Owner/Repo/issues/9"),
     (GH, "Owner/Repo", "Closes Repo#9"),
+    (GH, "Owner/Repo", "closes GH-9"),
+    (GH, "Owner/Repo", "Closes https://github.com/Owner/Repo/issues/5#issuecomment-1, #9"),
+    (GH, "Owner/Repo", "Closes https://github.com/Owner/Repo/issues/5?x=1 and #9"),
+    (GH, "Owner/Repo", "Closes <https://github.com/Owner/Repo/issues/9>"),
+    (GH, "Owner/Repo", "Closes [#9](https://github.com/Owner/Repo/issues/9)"),
+    (GL, "group/proj", "Closes https://gitlab.example.com:8443/group/proj/-/issues/9"),
     (GL, "group/proj", "Closes https://gitlab.example.com/group/proj/-/issues/9"),
     (GL, "group/proj", "Closes https://gitlab.example.com/group/proj/-/work_items/9"),
     (GL, "group/proj", "Closes https://gitlab.example.com/group/proj/issues/9"),
@@ -662,6 +670,15 @@ def test_github_closing_reference_to_a_pr_is_info(world):
     assert r.returncode == 0, r.stdout + r.stderr
     assert "ac-gate: [info] Owner/Repo#8 is a pull request, not an issue; not graded" in r.stdout
     assert "[no-ac]" not in r.stdout
+
+
+def test_issue_n_fallback_naming_a_pr_is_still_graded(world):
+    # Nothing closes, and ISSUE_N is a PR's number: grading it fails [no-ac], so the gate
+    # never passes on the PR body alone.
+    r, _ = _gate(world, GH, "8", {}, [], FAKE_PRS="[8]")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "[no-ac] Owner/Repo#8" in r.stdout
+    assert "is a pull request" not in r.stdout
 
 
 @pytest.mark.parametrize("origin,foreign", [(GH, "Other/Proj#12"), (GL, "group/third#12")])

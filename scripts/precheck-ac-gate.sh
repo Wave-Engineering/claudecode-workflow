@@ -18,7 +18,8 @@
 #       Exit 0 or 1.
 #   precheck-ac-gate.sh pr <repo_root> <PR_NUMBER> <ISSUE_N>
 #       Fetch the PR/MR body and every issue it closes: the platform's closing list plus
-#       each Closes/Fixes/Resolves reference in the body. Run `boxes` on each (the issues by
+#       each closing reference in the body, read as a superset of both platforms' closing
+#       patterns (see CLOSES_RE). Run `boxes` on each (the issues by
 #       section, the PR/MR body --all) and `lint` on all of them. ISSUE_N (`<n>`, or
 #       `<path>#<n>` for another repository's issue) is graded as one of them, or alone
 #       when nothing closes; otherwise it is listed as
@@ -173,25 +174,31 @@ def not_closed(ref):
 # ISSUE_N no longer a backstop, a form either platform honours that this misses closes
 # unchecked, so the pattern is a SUPERSET of both (babelfish 2026-10-31): over-matching
 # costs only a false block. Keywords: GitHub's close/fix/resolve forms and GitLab's -ing
-# forms and implement(s|ed|ing). Items: `#n`, `name#n` (origin's namespace), `<path>#<n>`,
-# or an issue or work-item URL, each optionally after `issue`/`issues`. Lists: commas,
-# `and`, `, and`, or whitespace alone.
+# forms and implement(s|ed|ing). Items: `#n`, `GH-n`, `name#n` (origin's namespace),
+# `<path>#<n>`, or an issue or work-item URL (any `?query` or `#fragment` tail), each
+# optionally after `issue`/`issues` and inside markdown wrapping (`[#9](url)`, `<url>`,
+# code spans, emphasis). Lists: commas, `and`, `, and`, or whitespace alone.
 KW = r"(?:clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?)"
-URL = r"https?://[A-Za-z0-9.-]+(?::[0-9]+)?/[A-Za-z0-9._/-]+?(?:/-)?/(?:issues|work_items)/[0-9]+"
-REF = r"(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?#[0-9]+"
-ITEM = rf"(?:issues?\s+)?(?:{URL}|{REF})"
+URL = (r"https?://[A-Za-z0-9.-]+(?::[0-9]+)?/[A-Za-z0-9._/-]+?(?:/-)?/(?:issues|work_items)/[0-9]+"
+       r"/?(?:[?#][^\s,)>\]`*_]*)?")
+REF = r"(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?#[0-9]+|GH-[0-9]+"
+PRE = r"[\[<`*_(]*"
+POST = r"(?:\]\([^\s)]*\))?[\]>`*_)]*"
+ITEM = rf"{PRE}(?:issues?\s+)?(?:{URL}|{REF}){POST}"
 SEP = r"(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s+)"
-CLOSES_RE = re.compile(rf"\b{KW}\b:?\s+({ITEM}(?:{SEP}{ITEM})*)", re.I)
+CLOSES_RE = re.compile(rf"\b{KW}\b[*_`]*(?::\s*|\s+)({ITEM}(?:{SEP}{ITEM})*)", re.I)
 ITEM_RE = re.compile(
-    r"https?://(?P<host>[A-Za-z0-9.-]+(?::[0-9]+)?)/(?P<upath>[A-Za-z0-9._/-]+?)(?:/-)?/(?:issues|work_items)/(?P<un>[0-9]+)"
-    r"|(?P<rpath>[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?#(?P<rn>[0-9]+)", re.I)
+    r"https?://(?P<host>[A-Za-z0-9.-]+)(?::[0-9]+)?/(?P<upath>[A-Za-z0-9._/-]+?)(?:/-)?/(?:issues|work_items)/(?P<un>[0-9]+)"
+    r"|(?P<rpath>[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?#(?P<rn>[0-9]+)|GH-(?P<gn>[0-9]+)", re.I)
 
 
 def body_refs(body, slug, host):
     """Every `(path, n)` the body names in a closing-keyword reference, in order, resolved
     against origin. Code spans, fences and HTML comments are read too, on purpose: the
     `## Squash commit` block is plain text inside a fence, and the platform closes from
-    commit messages. A URL on another host can't be graded with origin's token: exit 4."""
+    commit messages. A URL on another host can't be graded with origin's token: exit 4.
+    An ssh alias host in origin (`github.com-work`) reads every URL as foreign: set
+    PRECHECK_HOST."""
     out = []
     for m in CLOSES_RE.finditer(body):
         for i in ITEM_RE.finditer(m.group(1)):
@@ -199,10 +206,19 @@ def body_refs(body, slug, host):
                 if i["host"].lower() != host.lower():
                     raise ValueError(f"the body closes {i[0]}, on a host other than origin's ({host})")
                 out.append((i["upath"], int(i["un"])))
-            elif i["rpath"] and "/" not in i["rpath"]:
-                out.append((f"{slug.rsplit('/', 1)[0]}/{i['rpath']}", int(i["rn"])))  # a sibling
+                continue
+            if i["gn"]:
+                out.append((slug, int(i["gn"])))
+                continue
+            rp = i["rpath"] or ""
+            if not rp.strip("_.") or rp.lower() in ("issue", "issues"):
+                rp = ""  # emphasis (`_#9_`) or the word itself (`issue#9`), not a repository
+            if "/" in rp:
+                out.append((rp, int(i["rn"])))
+            elif rp:
+                out.append((f"{slug.rsplit('/', 1)[0]}/{rp}", int(i["rn"])))  # a sibling
             else:
-                out.append((i["rpath"] or slug, int(i["rn"])))
+                out.append((slug, int(i["rn"])))
     return out
 
 
@@ -311,11 +327,13 @@ def bodies(platform, slug, files, fetch_dir, issue_ref):
     """Grade input: the plan's items plus each answer the shell read for its fetch list."""
     items, fetch, info = plan(platform, slug, files, issue_ref)
     field = ("number", "body") if platform == "github" else ("iid", "description")
-    for i, (label, _, _, _) in enumerate(fetch):
+    for i, (label, _, _, why) in enumerate(fetch):
         issue = json.load(open(f"{fetch_dir}/{i}.json"))
         if not isinstance(issue, dict) or field[0] not in issue:
             raise ValueError(f"issue {label} is not in the answer")
-        if "pull_request" in issue:  # GitHub answers a PR's number as an issue; no keyword closes a PR
+        # GitHub answers a PR's number as an issue, and no keyword closes a PR. ISSUE_N as a
+        # PR is still graded (and fails [no-ac]): the fallback must never pass on the body alone.
+        if why == "body" and "pull_request" in issue:
             info.append(f"ac-gate: [info] {label} is a pull request, not an issue; not graded")
             continue
         items.append((label, issue.get(field[1]) or "", "section"))
