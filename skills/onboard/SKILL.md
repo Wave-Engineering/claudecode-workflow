@@ -164,10 +164,13 @@ or added. If neither file is stale, go to step 8.
      `.claude/wtf/`, if `git check-ignore -q <path>` fails, add that path. Item 1 exempts both,
      but `/precheck` won't mark a PR/MR ready over any untracked file it can see, so the refresh
      must ignore them itself.
-   - A repo with no lockfiles fails `/precheck`'s dependency scan unless a
-     `.no-scannable-dependencies` file at its root declares that, with a reason. If the repo
-     has neither, add the declaration here. The declaration is documented under Job C in
-     `/precheck` (`skills/precheck/SKILL.md`) and in `scripts/ci/check-scannable.sh`.
+   - A repo with no lockfiles fails `/precheck`'s dependency scan (Job C in `/precheck`) unless
+     a `.no-scannable-dependencies` file at its root declares, with a reason, that it has nothing
+     to scan. Add that declaration only when it is true: the repo has no lockfile **and** no
+     dependency manifest or requirements file at all (`package.json`, `pyproject.toml`,
+     `go.mod`, `Cargo.toml`, `requirements*.txt` and the like). A manifest without a lockfile has
+     dependencies nobody has scanned; declaring "none" over it hides them. Then add nothing,
+     and report the missing lockfile at tag-up.
    - Judge what is left to commit with item 1's check, and never stage `.claude/wtf/`: the
      journal is the session's, not the refresh's.
    - If all that leaves nothing to commit, the files weren't stale after all. Switch back to the

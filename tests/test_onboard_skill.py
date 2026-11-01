@@ -166,8 +166,14 @@ def test_ccfold_path_opens_one_refresh_and_survives_a_missing_claude_md():
     assert "`.claude/agent-identity.json`" in ignore and "`.claude/wtf/`" in ignore
     assert "git check-ignore -q <path>" in ignore
     assert "never stage `.claude/wtf/`" in body
-    # A lockfile-free repo can't pass precheck's dependency scan without the declaration.
-    assert "`.no-scannable-dependencies`" in body and "Job C" in body
+    # A lockfile-free repo can't pass precheck's dependency scan without the declaration, but the
+    # declaration must be true: a manifest without a lockfile is unscanned, not empty.
+    declare = body[body.index("A repo with no lockfiles") :]
+    declare = declare[: declare.index(" - ")]
+    assert "Job C" in declare and "only when it is true" in declare
+    assert "no dependency manifest" in declare and "add nothing" in declare
+    # cc-workflow's scripts/ci/ isn't installed, so a pointer there is dead in other repos.
+    assert "scripts/ci/check-scannable.sh" not in body
 
 
 # --- seeds -------------------------------------------------------------------------------------
