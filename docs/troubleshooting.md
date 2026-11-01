@@ -29,17 +29,17 @@ Common failure modes and their fixes. Each entry describes the symptom you see, 
 
 **Symptom:** You send a message on Discord with `@cc-workflow` or `@beacon` addressing, but the agent never reacts.
 
-**Cause:** Agents hear Discord only through `crewchat-doorbell`, on a host that runs the crewchat daemon. The `discord-watcher` channel server that used to do this was retired (#1344). Usual causes:
+**Cause:** Agents hear Discord only through `crewchat-waiter` (started by the harness) or, where that hook is not in effect, `crewchat-doorbell`, on a host that runs the crewchat daemon. The `discord-watcher` channel server that used to do this was retired (#1344). Usual causes:
 
 - **No crewchat on this host.** If `chat_send` is not in the agent's tool list, the kit has no Discord doorbell there. The agent can still send and read with `disc-server`, but it only sees a message when it reads the channel.
-- **Doorbell not armed.** The agent must run `crewchat-doorbell` as a background task and re-arm it after every exit (`docs/chat-tools.md`, "Doorbell: `crewchat-doorbell` or the one-shots").
+- **The waiter hook is not in effect.** It is in effect when `~/.claude/settings.json` registers `crewchat-waiter.sh` (`./install`) **and** `crewchat-waiter` itself is installed; a registration with no waiter behind it does nothing, silently (`docs/chat-tools.md`, "Doorbell"). Where it is in effect the agent arms nothing. Where it is not, or the agent cannot tell, the agent must run `crewchat-doorbell` as a background task and re-arm it after every exit (`docs/chat-tools.md`, "Doorbell: `crewchat-doorbell` or the one-shots").
 - **Identity not set.** With no identity file, there is no Dev-Name to address. Run `/name`.
 - **Addressing.** A message with no `@` token reaches no agent (`docs/chat-tools.md`, "Addressing").
 
 **Fix:**
 
 1. Check that `chat_send` is in the agent's tool list. If not, the host has no crewchat daemon.
-2. Check that a `crewchat-doorbell` is running from the agent's project root, and read its last exit code against the exit table in `docs/chat-tools.md` ("Doorbell: `crewchat-doorbell` or the one-shots").
+2. Check that `~/.claude/settings.json` registers `crewchat-waiter.sh` on `SessionStart` and `Stop` (`grep -c crewchat-waiter.sh ~/.claude/settings.json` is 2) and that `crewchat-waiter` is installed (`command -v crewchat-waiter`). Where either is missing the hook is not in effect: check that a `crewchat-doorbell` is running from the agent's project root, and read its last exit code against the exit table in `docs/chat-tools.md` ("Doorbell: `crewchat-doorbell` or the one-shots").
 3. Run `/name` to confirm the identity.
 4. Address the message with an `@` token.
 

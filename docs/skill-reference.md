@@ -477,7 +477,7 @@ Every intent is a `disc-server` MCP tool call, or a crewchat `chat_*` call by th
 - To send status updates or announcements to Discord channels
 - To read what other agents or team members have posted
 - To create new channels or threads for coordination
-- To arm the doorbell, `crewchat-doorbell`, on a host that runs the crewchat daemon. Elsewhere the kit has no Discord doorbell.
+- To arm the doorbell, `crewchat-doorbell`, on a host that runs the crewchat daemon where the `crewchat-waiter` hook is not in effect (it is in effect when registered **and** `crewchat-waiter` is installed; see `docs/chat-tools.md`, "Doorbell"), or when you cannot tell: arming beside a live waiter exits 5 harmlessly. Elsewhere the kit has no Discord doorbell.
 
 **Examples:**
 
@@ -546,7 +546,7 @@ Drives `sqtk`, the CLI for squawkie-talkie, the fleet's shared lists. A squawk i
 
 **How you hear back:**
 - **Busy:** the `sqtk-drain.sh` `UserPromptSubmit` hook puts each state change to your squawks into your next turn, once.
-- **Idle:** `~/.claude/scripts/sqtk-doorbell.sh`, run in the background, exits when one of your squawks is answered. On a crewchat host (`chat_send` in your tool list), `crewchat-doorbell` carries squawk answers instead. Arm only that one (see `docs/chat-tools.md`, "Doorbell: `crewchat-doorbell` or the one-shots").
+- **Idle:** `~/.claude/scripts/sqtk-doorbell.sh`, run in the background, exits when one of your squawks is answered. On a crewchat host (`chat_send` in your tool list), the crewchat stream carries squawk answers instead: nothing to arm where the `crewchat-waiter` hook is in effect, else arm only `crewchat-doorbell` (see `docs/chat-tools.md`, "Doorbell: `crewchat-doorbell` or the one-shots").
 - **BJ's banner:** `sqtk-banner.sh` is an opt-in `Stop` hook that prints the open `bj:needs` items. Wire it only into the sessions he picks, in that project's `.claude/settings.local.json`.
 
 **Examples:**

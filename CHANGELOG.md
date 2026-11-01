@@ -19,6 +19,34 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Added
+- **Chat delivery that no agent has to arm (#1420, mattermost-crew#204).** `crewchat-doorbell` was
+  a background task each agent had to start, restart and not duplicate, so every way an agent can
+  forget (a `/clear`, a reseed, a lost notification, a re-arm through an outage, a second copy)
+  was a way for chat to fail or to double. `config/settings.template.json` now registers
+  `scripts/hooks/workflow/crewchat-waiter.sh` on `SessionStart` and `Stop` with `asyncRewake`:
+  Claude Code runs `crewchat-waiter` in the background and wakes the model when it exits 2, so an
+  idle agent is woken by a message, a busy one gets it inside the turn it is in, and nothing is
+  typed. The guard exits 0 silently on a host without `crewchat-waiter`, so the hook is safe to
+  register everywhere; the waiter is single-instance per Dev-Name and silent without an
+  identity. `docs/chat-tools.md` now says there is nothing to arm where the hook is in effect (registered
+  AND `crewchat-waiter` installed: a registration with no waiter behind it does nothing, silently,
+  so an agent that cannot tell arms the doorbell), keeps `crewchat-doorbell` as the fallback,
+  documents its new exit 5 (a waiter already delivers), and corrects the `backend.down` row (one
+  alarm for an outage over 10 minutes, mattermost-crew#202). The hook's `timeout` is 21 days:
+  measured, the harness kills a waiting hook silently at its timeout and nothing restarts it until
+  the next turn ends.
+  Merging this installs nothing: the template reaches a host's settings only when `./install` is
+  run there, and `CREWCHAT_TAG` still pins the release without the waiter.
+- **`CLAUDE.md`: never walk the whole filesystem (#1374).** A `find /` went into a
+  self-recursive kio-fuse mount and held a shared host at load ~105 for about 90 minutes. The
+  new section bans recursive searches rooted at `/` or `/run`, names the toolchain lookups to
+  use instead (`import`, `pip show -f`, `npm root -g`, `go env GOMODCACHE`), and gives the
+  fallback: `timeout 60 find <root> -xdev`, where `-xdev` keeps the walk out of `/proc`,
+  `/sys`, `/run` and any FUSE or network mount, which an absolute `-path` prune can't do from
+  any root but `/`. It also says to carry
+  the rule into subagent briefs, where the walk came from. `/ccfold` brings it into consumers.
+
 ### Fixed
 - **The squawk drain hook no longer announces an agent's own changes, and a signature is no
   longer an answer (#1421, triage #91 and #93).** An agent that retired its own squawk was told at
@@ -30,18 +58,6 @@ are worth keeping apart:
   is reported as before. `sqtk-answer.jq` returns `""` for an answer made only of the squawk's
   last editor's tags; `(ok)` from a human, or any text, is still an answer. The limit: editors
   whose first three letters coincide can't be told apart. The daemon-side half is mattermost-crew#206.
-
-### Added
-- **`CLAUDE.md`: never walk the whole filesystem (#1374).** A `find /` went into a
-  self-recursive kio-fuse mount and held a shared host at load ~105 for about 90 minutes. The
-  new section bans recursive searches rooted at `/` or `/run`, names the toolchain lookups to
-  use instead (`import`, `pip show -f`, `npm root -g`, `go env GOMODCACHE`), and gives the
-  fallback: `timeout 60 find <root> -xdev`, where `-xdev` keeps the walk out of `/proc`,
-  `/sys`, `/run` and any FUSE or network mount, which an absolute `-path` prune can't do from
-  any root but `/`. It also says to carry
-  the rule into subagent briefs, where the walk came from. `/ccfold` brings it into consumers.
-
-### Fixed
 - **The AC gate grades what the PR/MR closes, not what the branch names (#1397, #1407).** A branch
   named for an epic failed the gate on the epic's Definition of Done even though the PR closed only
   a story, and on GitLab an MR closing `group/other#12` was graded against the local `#12` too. Now

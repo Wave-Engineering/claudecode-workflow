@@ -93,7 +93,7 @@ their team's channels. Clean separation but more channels to manage.
 
 Use the existing `@<dev-team>` and `@<dev-name>` addressing convention.
 All agents share the same channels, and the doorbell delivers each agent
-only the messages addressed to it (`crewchat-doorbell`; see
+only the messages addressed to it (`crewchat-waiter`, or `crewchat-doorbell`; see
 [`chat-tools.md`](chat-tools.md), "Addressing").
 
 ### Option C: Both (Recommended for Larger Teams)

@@ -115,7 +115,10 @@ def test_disc_has_no_watcher_routes() -> None:
 
 def test_sqtk_points_at_disc_doorbell() -> None:
     sqtk = _text("sqtk")
-    assert "`crewchat-doorbell` replaces" in sqtk
+    # the crewchat stream (the waiter hook, or the doorbell where it is not in effect, #1420)
+    # replaces sqtk-doorbell.sh on a crewchat host
+    assert "replaces `sqtk-doorbell.sh`" in sqtk
+    assert "`crewchat-waiter`" in sqtk and "`crewchat-doorbell`" in sqtk
     assert "`sqtk-doorbell.sh`" in sqtk
     assert "`crewchat-doorbell` or the one-shots" in sqtk, "point at the rule, don't restate it"
 
