@@ -135,11 +135,14 @@ learned in steps 3–6 contradicts it (platform, toolchain, CI, labels), or when
 compare (its Steps 1–4, which write nothing) finds sections the upstream template has updated
 or added. If neither file is stale, go to step 8.
 
-1. **The working tree must be clean**, apart from the identity file `/name` just wrote. This
-   prints nothing when it is:
+1. **The working tree must be clean**, apart from the identity file `/name` just wrote and the
+   untracked `.claude/wtf/` journal. The wtf hook creates that journal on this session's own
+   first tool call in any repo that doesn't ignore it, so without the exemption no refresh
+   would ever run. This prints nothing when the tree is clean:
 
    ```bash
-   git status --porcelain --untracked-files=all | grep -v '^?? \.claude/agent-identity\.json$' || true
+   git status --porcelain --untracked-files=all |
+     grep -Ev '^\?\? \.claude/(agent-identity\.json$|wtf/)' || true
    ```
 
    If it prints anything, leave the tree alone and report the stale files at tag-up. Never
@@ -157,8 +160,20 @@ or added. If neither file is stale, go to step 8.
      template, or `CLAUDE.md` already matches upstream. Either way, still run its Steps 9 and 10,
      which write `.claude-project.md` and pin the committer identity. For a copied template,
      first set its `Dev-Team:` to the team `/name` used.
-   - Update `.gitignore` as part of this. If `git check-ignore -q .claude/agent-identity.json`
-     fails, add that path, so no commit can pick the identity file up.
+   - Update `.gitignore` as part of this. For each of `.claude/agent-identity.json` and
+     `.claude/wtf/`, if `git check-ignore -q <path>` fails, add that path. Item 1 exempts both,
+     but `/precheck` won't mark a PR/MR ready over any untracked file it can see, so the refresh
+     must ignore them itself.
+   - A repo with no lockfiles fails `/precheck`'s dependency scan (Job C in `/precheck`) unless
+     a `.no-scannable-dependencies` file at its root declares, with a reason, that it has nothing
+     to scan. Add that declaration only when it is true: the repo has no lockfile **and** no
+     dependency manifest or requirements file at all (`package.json`, `go.mod`, `Cargo.toml`,
+     `requirements*.txt`, a `pyproject.toml` that declares dependencies rather than only
+     configuring tools, and the like). A manifest without a lockfile has dependencies nobody has
+     scanned, and declaring "none" over it hides them. In that case, add nothing, and report the
+     missing lockfile at tag-up.
+   - Judge what is left to commit with item 1's check, and never stage `.claude/wtf/`: the
+     journal is the session's, not the refresh's.
    - If all that leaves nothing to commit, the files weren't stale after all. Switch back to the
      branch you started on, delete `chore/<N>-ccfold`, close the issue as not planned (GitHub
      `--reason "not planned"`; GitLab Status `Won't do`), and go to step 8. An open refresh issue
