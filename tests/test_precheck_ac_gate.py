@@ -11,6 +11,7 @@ import datetime
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -662,6 +663,20 @@ def test_closing_url_on_another_host_is_exit_4(world, origin, url):
     assert r.returncode == 4, r.stdout + r.stderr
     assert "on a host other than origin's" in r.stderr
     assert not _fetched(calls, "issues/9"), calls
+
+
+@pytest.mark.parametrize("body", [
+    "Closes:" + "*" * 4000, "Closes:" + "_" * 4000 + "x", "Closes " + "*" * 4000,
+    "Closes " + "_" * 4000, "Closes" + "*" * 4000 + "x", ("Closes " + "*" * 50 + " ") * 80,
+], ids=["colon-stars", "colon-unders", "space-stars", "space-unders", "kw-stars", "many-kw"])
+def test_emphasis_runs_parse_in_linear_time(world, body):
+    # The parser once split an emphasis run between overlapping stars every possible way:
+    # `Closes:` and 4000 underscores took about a minute (a 1000-character run, over 8 s).
+    # Each case now takes milliseconds; the margin is wide enough for a loaded box.
+    t = time.monotonic()
+    r, _ = _gate(world, GH, "5", {}, [{"number": 5, "body": ISSUE_DONE}], body=body)
+    assert time.monotonic() - t < 10, "the body parser backtracks super-linearly"
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 def test_url_fragment_is_not_read_as_another_reference(world):

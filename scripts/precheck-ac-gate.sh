@@ -182,11 +182,14 @@ KW = r"(?:clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:
 URL = (r"https?://[A-Za-z0-9.-]+(?::[0-9]+)?/[A-Za-z0-9._/-]+?(?:/-)?/(?:issues|work_items)/[0-9]+"
        r"/?(?:[?#][^\s,)>\]`*_]*)?")
 REF = r"(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?#[0-9]+|GH-[0-9]+"
-PRE = r"[\[<`*_(]*"
+# No two adjacent stars share characters, so a long run of `*`/`_` can't be split every
+# way before failing: PRE takes at most one `_` (REF's path may start with one), and an
+# emphasis run after the keyword's colon must end in whitespace before PRE begins.
+PRE = r"[\[<`*(]*_?"
 POST = r"(?:\]\([^\s)]*\))?[\]>`*_)]*"
 ITEM = rf"{PRE}(?:issues?\s+)?(?:{URL}|{REF}){POST}"
 SEP = r"(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s+)"
-CLOSES_RE = re.compile(rf"\b{KW}\b[*_`]*(?::[*_`]*\s*|\s+)({ITEM}(?:{SEP}{ITEM})*)", re.I)
+CLOSES_RE = re.compile(rf"\b{KW}\b[*_`]*(?::(?:[*_`]+\s+|\s*)|\s+)({ITEM}(?:{SEP}{ITEM})*)", re.I)
 # The URL branch swallows its own tail, so `issues/9#10` is not also read as `#10`.
 ITEM_RE = re.compile(
     r"https?://(?P<host>[A-Za-z0-9.-]+)(?::[0-9]+)?/(?P<upath>[A-Za-z0-9._/-]+?)(?:/-)?/(?:issues|work_items)/(?P<un>[0-9]+)"
