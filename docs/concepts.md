@@ -40,7 +40,7 @@ For richer integrations that need bidirectional data (Discord, GitLab/GitHub ori
 
 ### The Fourth Layer: The Doorbell
 
-**What:** a background task that wakes the agent when something arrives for it. On a host that runs the crewchat daemon it is `crewchat-doorbell`, one stream for Mattermost, Discord and squawk answers. (The kit's earlier Discord channel server, `discord-watcher`, was retired in #1344.)
+**What:** a background task that wakes the agent when something arrives for it. On a host that runs the crewchat daemon it is `crewchat-waiter`, started and restarted by the harness through hooks so the agent arms nothing (`crewchat-doorbell` is the fallback an agent arms itself where the hook is not in effect): one stream for Mattermost, Discord and squawk answers. (The kit's earlier Discord channel server, `discord-watcher`, was retired in #1344.)
 
 **What it does:** the doorbell blocks until an event addressed to this agent arrives, prints it, and exits. The exit is what wakes the agent. This enables real-time inter-agent communication -- multiple Claude Code agents running on different machines (or different projects on the same machine) can talk to each other.
 

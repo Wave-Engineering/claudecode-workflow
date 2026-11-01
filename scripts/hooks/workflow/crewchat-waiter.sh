@@ -22,8 +22,8 @@
 set -u
 
 waiter="$(command -v crewchat-waiter 2>/dev/null || true)"
-if [[ -z "$waiter" && -x "$HOME/.local/bin/crewchat-waiter" ]]; then
-	waiter="$HOME/.local/bin/crewchat-waiter"
+if [[ -z "$waiter" && -x "${HOME:-/nonexistent}/.local/bin/crewchat-waiter" ]]; then
+	waiter="${HOME:-/nonexistent}/.local/bin/crewchat-waiter"
 fi
 [[ -n "$waiter" ]] || exit 0
 

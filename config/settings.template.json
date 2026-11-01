@@ -93,11 +93,11 @@
         "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
-            "_comment": "Arm-free chat delivery (cc-workflow#1420, mattermost-crew#204). asyncRewake: Claude Code runs this in the background and wakes the model when it exits 2, so an idle agent is woken by a message with no doorbell for the agent to arm. Its OWN group, like the other hooks here, so merge_settings' group-signature union cannot duplicate it. The guard exits 0 silently where crewchat-waiter is not installed; the waiter is single-instance per Dev-Name and silent without an identity. The Stop entry re-arms it after each turn.",
+            "_comment": "Arm-free chat delivery (cc-workflow#1420, mattermost-crew#204). asyncRewake: Claude Code runs this in the background and wakes the model when it exits 2, so an idle agent is woken by a message with no doorbell for the agent to arm. Its OWN group, like the other hooks here, so merge_settings' group-signature union cannot duplicate it. The guard exits 0 silently where crewchat-waiter is not installed; the waiter is single-instance per Dev-Name and silent without an identity. The Stop entry re-arms it after each turn. The 1814400 s (21 days) timeout is the longest an idle agent stays reachable: measured, the harness kills a waiting hook silently at its timeout and nothing restarts it until the next Stop. Kept under 2^31 ms in case the harness arms it with one 32-bit timer.",
             "type": "command",
             "command": "~/.claude/scripts/hooks/workflow/crewchat-waiter.sh",
             "asyncRewake": true,
-            "timeout": 86400
+            "timeout": 1814400
           }
         ]
       },
@@ -201,7 +201,7 @@
             "type": "command",
             "command": "~/.claude/scripts/hooks/workflow/crewchat-waiter.sh",
             "asyncRewake": true,
-            "timeout": 86400
+            "timeout": 1814400
           }
         ]
       },

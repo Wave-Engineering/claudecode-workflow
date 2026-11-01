@@ -558,13 +558,13 @@ mcp__disc-server__disc_send({
 
 ### Step 8: Check the Doorbell
 
-Check whether this host can hear Discord. Agents hear it through `crewchat-doorbell`, which `./install` sets up only where the crewchat daemon runs:
+Check whether this host can hear Discord. Agents hear it through `crewchat-waiter` (started by the harness; no agent arms it) or, where that hook is not in effect, `crewchat-doorbell`. `./install` sets chat up only where the crewchat daemon runs:
 
 ```bash
 claude mcp list 2>/dev/null | grep -qw crewchat
 ```
 
-- **If registered:** *"crewchat is registered. Agents here hear OaW Mattermost and Discord through `crewchat-doorbell`."*
+- **If registered:** *"crewchat is registered. Agents here hear OaW Mattermost and Discord through `crewchat-waiter`, or `crewchat-doorbell` where the hook is not in effect."*
 - **If not registered:** *"This host has no crewchat daemon, so the kit gives it no Discord doorbell. Outbound `/owtx` works (it falls back to Discord here); agents see messages only when they read a channel (`/owrx`)."*
 
 This is informational — the setup is complete regardless. (The old `discord-watcher` channel server was retired in #1344.)

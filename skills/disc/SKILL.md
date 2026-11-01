@@ -47,7 +47,7 @@ The kit's chat rules live in `docs/chat-tools.md` (the repo root's, else `~/.cla
 - list → `disc_list(guild_id, type="text")` — format as clean list
 - create channel → `disc_create_channel(guild_id, name)` — confirm with created id
 - create thread → `disc_create_thread(channel_id, name)` — confirm with created id
-- doorbell → arm the doorbell exactly as "Doorbell: `crewchat-doorbell` or the one-shots" in `docs/chat-tools.md` says.
+- doorbell → do exactly what "Doorbell: `crewchat-doorbell` or the one-shots" in `docs/chat-tools.md` says: nothing where the `crewchat-waiter` hook is in effect, else arm `crewchat-doorbell`.
 
 ## Turn-taking on shared channels
 

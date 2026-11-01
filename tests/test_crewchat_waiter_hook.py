@@ -20,6 +20,11 @@ _GUARD = _REPO / "scripts" / "hooks" / "workflow" / "crewchat-waiter.sh"
 _CHAT_TOOLS = _REPO / "docs" / "chat-tools.md"
 _GUARD_CMD = "~/.claude/scripts/hooks/workflow/crewchat-waiter.sh"
 _SYSTEM_PATH = "/usr/bin:/bin"  # no uv tool dir, no crewchat-waiter
+# The harness kills a waiting hook silently at its timeout and nothing restarts it until the next
+# Stop, so the timeout is how long an idle agent stays reachable: a day is too short. Above
+# 2^31 ms (about 24.8 days) a harness that arms it with one 32-bit timer would fire it at once.
+_TIMEOUT_MIN = 7 * 86400
+_TIMEOUT_MAX = (2**31 - 1) // 1000
 
 
 def _groups(event: str) -> list[dict]:
@@ -36,23 +41,23 @@ def test_the_template_registers_the_waiter_on_start_and_stop(event: str) -> None
     [hook] = group["hooks"]
     assert hook["type"] == "command"
     assert hook["asyncRewake"] is True
-    assert hook["timeout"] >= 86400
+    assert _TIMEOUT_MIN <= hook["timeout"] <= _TIMEOUT_MAX
     if event == "SessionStart":
         # startup, resume, /clear and compact all begin a session context that needs a waiter
         assert set(group["matcher"].split("|")) == {"startup", "resume", "clear", "compact"}
 
 
-def test_the_installer_merge_keeps_the_rewake_flags_and_adds_nothing_twice(tmp_path: Path) -> None:
-    """What reaches a host is what `./install` merges, not the template: a merge that dropped
-    `asyncRewake` or `timeout` would turn the waiter into a hook that blocks the turn's end, and
-    one that appended it again would run two per event."""
-    settings = tmp_path / "settings.json"
-    settings.write_text('{"hooks": {}}')
-    for _ in range(2):
+def _merge_into(settings: Path, times: int) -> dict:
+    """Run the installer's real `merge_settings` `times` times into `settings`. The helpers it
+    expects its caller (`./install`) to define are no-ops here, so a call to an undefined one
+    can't hide behind a merge that happened to end on a successful command."""
+    for _ in range(times):
         subprocess.run(
             [
                 "bash",
                 "-c",
+                "info() { :; }; ok() { :; }; warn() { :; }; skip() { :; }; drift() { :; }; "
+                'fail() { echo "fail: $*" >&2; exit 97; }; '
                 'source "$1"; merge_settings "$2" "$3"',
                 "_",
                 str(_REPO / "scripts" / "lib" / "settings-merge.sh"),
@@ -63,16 +68,53 @@ def test_the_installer_merge_keeps_the_rewake_flags_and_adds_nothing_twice(tmp_p
             capture_output=True,
             timeout=60,
         )
-    merged = json.loads(settings.read_text())["hooks"]
+    return json.loads(settings.read_text())["hooks"]
+
+
+def _ours(merged: dict, event: str) -> list[dict]:
+    return [h for g in merged[event] for h in g["hooks"] if h.get("command") == _GUARD_CMD]
+
+
+def test_the_installer_merge_keeps_the_rewake_flags_and_adds_nothing_twice(tmp_path: Path) -> None:
+    """What reaches a host is what `./install` merges, not the template: a merge that dropped
+    `asyncRewake` or `timeout` would turn the waiter into a hook that blocks the turn's end, and
+    one that appended it again would run two per event."""
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"hooks": {}}')
+    merged = _merge_into(settings, 2)
     for event in ("SessionStart", "Stop"):
-        ours = [
-            h
-            for g in merged[event]
-            for h in g["hooks"]
-            if h.get("command") == _GUARD_CMD
-        ]
+        ours = _ours(merged, event)
         assert len(ours) == 1, event
-        assert ours[0]["asyncRewake"] is True and ours[0]["timeout"] >= 86400
+        assert ours[0]["asyncRewake"] is True
+        assert _TIMEOUT_MIN <= ours[0]["timeout"] <= _TIMEOUT_MAX
+
+
+def test_an_already_provisioned_host_gets_the_waiter_and_keeps_its_own_hooks(
+    tmp_path: Path,
+) -> None:
+    """A host that already has SessionStart and Stop groups with the same matchers (the kit's
+    own, a user's) must end up with the waiter added once beside them, nothing removed."""
+    settings = tmp_path / "settings.json"
+    settings.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "SessionStart": [
+                        {
+                            "matcher": "startup|resume|clear|compact",
+                            "hooks": [{"type": "command", "command": "~/mine/start.sh"}],
+                        }
+                    ],
+                    "Stop": [{"matcher": "*", "hooks": [{"type": "command", "command": "~/mine/stop.sh"}]}],
+                }
+            }
+        )
+    )
+    merged = _merge_into(settings, 2)
+    for event, mine in (("SessionStart", "~/mine/start.sh"), ("Stop", "~/mine/stop.sh")):
+        assert len(_ours(merged, event)) == 1, event
+        commands = [h["command"] for g in merged[event] for h in g["hooks"]]
+        assert mine in commands, event
 
 
 def test_the_guard_is_executable_and_in_the_hooks_directory() -> None:
@@ -139,8 +181,13 @@ def test_the_doorbell_doc_says_nothing_needs_arming_where_the_hook_is_in() -> No
     section = _doorbell_section()
     assert "there is nothing to arm" in section
     assert "crewchat-waiter.sh" in section and "asyncRewake" in section
-    # the fallback survives for a host without the hook, and exit 5 is documented
-    assert "hook is not installed" in section
+    # "in effect" is the hook registered AND the waiter installed: a registered hook with no
+    # waiter behind it is silent, so an agent that skipped arming on the registration alone
+    # would go deaf (review of #1420)
+    assert "command -v crewchat-waiter" in section and "**and** `crewchat-waiter` itself" in section
+    # the fallback survives, arming when unsure is safe, and exit 5 is documented
+    assert "hook is not in effect, or you cannot tell" in section
+    assert "arming when unsure is safe" in section
     assert "| 5 |" in section and "already delivers" in section
     assert "except 1 and 5" in section
 
