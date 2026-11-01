@@ -623,6 +623,8 @@ COMMON_FORMS = [
     "Closes #5 #9", "closes #5  #9", "Fixes #5, issue #9",
     "Fixes:#9", "Closes `#9`", "**Closes** #9", "Closes **#5** and _#9_", "Closes (#9).",
     "Closes issue#9", "Closes [#5](x), [#9](y)", "**Closes:** #9",
+    "Closes _**#9**_", "Closes _`#9`_", "Closes _(#9)_", "Closes: _**#9**_", "Closes:_**#9**_",
+    "Closes __#9__", "Closes *******#9",
 ]
 
 
@@ -637,6 +639,8 @@ COMMON_FORMS = [
     (GH, "Owner/Repo", "Closes https://github.com/Owner/Repo/issues/5?x=1 and #9"),
     (GH, "Owner/Repo", "Closes <https://github.com/Owner/Repo/issues/9>"),
     (GH, "Owner/Repo", "Closes [#9](https://github.com/Owner/Repo/issues/9)"),
+    (GH, "Owner/Repo", "Closes __https://github.com/Owner/Repo/issues/9__"),
+    (GH, "Owner/Repo", "Closes __[#9](https://github.com/Owner/Repo/issues/9)__"),
     (GL, "group/proj", "Closes https://gitlab.example.com:8443/group/proj/-/issues/9"),
     (GL, "group/proj", "Closes https://gitlab.example.com/group/proj/-/issues/9"),
     (GL, "group/proj", "Closes https://gitlab.example.com/group/proj/-/work_items/9"),
@@ -668,7 +672,9 @@ def test_closing_url_on_another_host_is_exit_4(world, origin, url):
 @pytest.mark.parametrize("body", [
     "Closes:" + "*" * 4000, "Closes:" + "_" * 4000 + "x", "Closes " + "*" * 4000,
     "Closes " + "_" * 4000, "Closes" + "*" * 4000 + "x", ("Closes " + "*" * 50 + " ") * 80,
-], ids=["colon-stars", "colon-unders", "space-stars", "space-unders", "kw-stars", "many-kw"])
+    "Closes " + ("https://github.com/" + "a/" * 40 + " ") * 500, "Closes " + "_*" * 2000,
+], ids=["colon-stars", "colon-unders", "space-stars", "space-unders", "kw-stars", "many-kw",
+        "urls", "alternating"])
 def test_emphasis_runs_parse_in_linear_time(world, body):
     # The parser once split an emphasis run between overlapping stars every possible way:
     # `Closes:` and 4000 underscores took about a minute (a 1000-character run, over 8 s).
