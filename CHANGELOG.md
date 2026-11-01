@@ -19,18 +19,6 @@ are worth keeping apart:
 
 ## [Unreleased]
 
-### Fixed
-- **The squawk drain hook no longer announces an agent's own changes, and a signature is no
-  longer an answer (#1421, triage #91 and #93).** An agent that retired its own squawk was told at
-  its next turn that its squawks had changed, for a change it had just made; and an answer that was
-  only the last editor's own tag (`(CER)` after the `→` slot) read as `answered "(CER)"`. squawkie
-  stores the last editor's `initials` on every change, so `sqtk-drain.sh` now takes the agent's own
-  (`SQUAWK_INITIALS`, else the identity file's `dev_name`, as `sqtk` signs) and records a change it
-  made last as seen without reporting it, in the hook and in `--pending`. A change by anyone else
-  is reported as before. `sqtk-answer.jq` returns `""` for an answer made only of the squawk's
-  last editor's tags; `(ok)` from a human, or any text, is still an answer. The limit: editors
-  whose first three letters coincide can't be told apart. The daemon-side half is mattermost-crew#206.
-
 ### Added
 - **Chat delivery that no agent has to arm (#1420, mattermost-crew#204).** `crewchat-doorbell` was
   a background task each agent had to start, restart and not duplicate, so every way an agent can
@@ -41,9 +29,13 @@ are worth keeping apart:
   idle agent is woken by a message, a busy one gets it inside the turn it is in, and nothing is
   typed. The guard exits 0 silently on a host without `crewchat-waiter`, so the hook is safe to
   register everywhere; the waiter is single-instance per Dev-Name and silent without an
-  identity. `docs/chat-tools.md` now says there is nothing to arm where the hook is installed,
-  keeps `crewchat-doorbell` as the fallback, documents its new exit 5 (a waiter already delivers),
-  and corrects the `backend.down` row (one alarm for an outage over 10 minutes, mattermost-crew#202).
+  identity. `docs/chat-tools.md` now says there is nothing to arm where the hook is in effect (registered
+  AND `crewchat-waiter` installed: a registration with no waiter behind it does nothing, silently,
+  so an agent that cannot tell arms the doorbell), keeps `crewchat-doorbell` as the fallback,
+  documents its new exit 5 (a waiter already delivers), and corrects the `backend.down` row (one
+  alarm for an outage over 10 minutes, mattermost-crew#202). The hook's `timeout` is 21 days:
+  measured, the harness kills a waiting hook silently at its timeout and nothing restarts it until
+  the next turn ends.
   Merging this installs nothing: the template reaches a host's settings only when `./install` is
   run there, and `CREWCHAT_TAG` still pins the release without the waiter.
 - **`CLAUDE.md`: never walk the whole filesystem (#1374).** A `find /` went into a
@@ -56,6 +48,16 @@ are worth keeping apart:
   the rule into subagent briefs, where the walk came from. `/ccfold` brings it into consumers.
 
 ### Fixed
+- **The squawk drain hook no longer announces an agent's own changes, and a signature is no
+  longer an answer (#1421, triage #91 and #93).** An agent that retired its own squawk was told at
+  its next turn that its squawks had changed, for a change it had just made; and an answer that was
+  only the last editor's own tag (`(CER)` after the `→` slot) read as `answered "(CER)"`. squawkie
+  stores the last editor's `initials` on every change, so `sqtk-drain.sh` now takes the agent's own
+  (`SQUAWK_INITIALS`, else the identity file's `dev_name`, as `sqtk` signs) and records a change it
+  made last as seen without reporting it, in the hook and in `--pending`. A change by anyone else
+  is reported as before. `sqtk-answer.jq` returns `""` for an answer made only of the squawk's
+  last editor's tags; `(ok)` from a human, or any text, is still an answer. The limit: editors
+  whose first three letters coincide can't be told apart. The daemon-side half is mattermost-crew#206.
 - **The AC gate grades what the PR/MR closes, not what the branch names (#1397, #1407).** A branch
   named for an epic failed the gate on the epic's Definition of Done even though the PR closed only
   a story, and on GitLab an MR closing `group/other#12` was graded against the local `#12` too. Now
