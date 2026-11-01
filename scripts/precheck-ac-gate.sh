@@ -183,9 +183,10 @@ URL = (r"https?://[A-Za-z0-9.-]+(?::[0-9]+)?/[A-Za-z0-9._/-]+?(?:/-)?/(?:issues|
        r"/?(?:[?#][^\s,)>\]`*_]*)?")
 REF = r"(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?#[0-9]+|GH-[0-9]+"
 # No two adjacent stars share characters, so a long run of `*`/`_` can't be split every
-# way before failing. PRE's `_` delimits its runs and is capped at three (`__**x**__`, or
-# REF's path taking a last one, stays a constant factor), and an emphasis run after the
-# keyword's colon must end in whitespace before PRE begins.
+# way before failing. PRE's `_` delimits its runs and is capped at three, which fits
+# `__**x**__`: REF's path may also start with `_`, and an uncapped run split between
+# the two is quadratic. An emphasis run after the keyword's colon must end in whitespace
+# before PRE begins.
 PRE = r"[\[<`*(]*(?:_[\[<`*(]*){0,3}"
 POST = r"(?:\]\([^\s)]*\))?[\]>`*_)]*"
 ITEM = rf"{PRE}(?:issues?\s+)?(?:{URL}|{REF}){POST}"

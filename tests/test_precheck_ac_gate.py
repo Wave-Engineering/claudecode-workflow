@@ -672,7 +672,7 @@ def test_closing_url_on_another_host_is_exit_4(world, origin, url):
 @pytest.mark.parametrize("body", [
     "Closes:" + "*" * 4000, "Closes:" + "_" * 4000 + "x", "Closes " + "*" * 4000,
     "Closes " + "_" * 4000, "Closes" + "*" * 4000 + "x", ("Closes " + "*" * 50 + " ") * 80,
-    "Closes " + ("https://github.com/" + "a/" * 40 + " ") * 500, "Closes " + "_*" * 2000,
+    ("Closes https://github.com/" + "a/" * 40 + " ") * 500, "Closes " + "_*" * 2000,
 ], ids=["colon-stars", "colon-unders", "space-stars", "space-unders", "kw-stars", "many-kw",
         "urls", "alternating"])
 def test_emphasis_runs_parse_in_linear_time(world, body):
