@@ -477,7 +477,7 @@ Every intent is a `disc-server` MCP tool call, or a crewchat `chat_*` call by th
 - To send status updates or announcements to Discord channels
 - To read what other agents or team members have posted
 - To create new channels or threads for coordination
-- To arm the doorbell, `crewchat-doorbell`, on a host that runs the crewchat daemon and has not registered the `crewchat-waiter` hook (which makes arming unnecessary). Elsewhere the kit has no Discord doorbell.
+- To arm the doorbell, `crewchat-doorbell`, on a host that runs the crewchat daemon where the `crewchat-waiter` hook is not in effect (it is in effect when registered **and** `crewchat-waiter` is installed; see `docs/chat-tools.md`, "Doorbell"), or when you cannot tell: arming beside a live waiter exits 5 harmlessly. Elsewhere the kit has no Discord doorbell.
 
 **Examples:**
 

@@ -199,10 +199,28 @@ def test_the_doorbell_doc_matches_the_backend_alarm_change() -> None:
     assert "The gap is replayed when it reconnects" not in section
 
 
-@pytest.mark.parametrize(
-    "path",
-    ["CLAUDE.md", "docs/troubleshooting.md", "docs/skill-reference.md", "skills/disc/SKILL.md"],
+_ARM_DOCS = [
+    "CLAUDE.md",
+    "docs/troubleshooting.md",
+    "docs/skill-reference.md",
+    "skills/disc/SKILL.md",
+    "skills/sqtk/SKILL.md",
+]
+# Wording that keys "nothing to arm" on the registration alone (or on a bare "installed"), which
+# sends an agent deaf on a host whose hook is registered but whose crewchat-clients is old (review
+# of #1420): the hook is in effect only when it is registered AND crewchat-waiter is installed.
+_REGISTRATION_ONLY = (
+    "has not registered the `crewchat-waiter` hook",
+    "hook is not installed",
+    "waiter hook is installed",
+    "hook registered (`./install`, `docs/chat-tools.md`), nothing is armed",
 )
+
+
+@pytest.mark.parametrize("path", _ARM_DOCS)
 def test_other_docs_no_longer_tell_agents_to_arm_unconditionally(path: str) -> None:
     text = (_REPO / path).read_text()
     assert "crewchat-waiter" in text or "waiter hook" in text, path
+    assert "in effect" in text, f"{path} doesn't say when the hook counts"
+    for stale in _REGISTRATION_ONLY:
+        assert stale not in text, f"{path}: {stale!r}"
