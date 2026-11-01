@@ -167,10 +167,11 @@ or added. If neither file is stale, go to step 8.
    - A repo with no lockfiles fails `/precheck`'s dependency scan (Job C in `/precheck`) unless
      a `.no-scannable-dependencies` file at its root declares, with a reason, that it has nothing
      to scan. Add that declaration only when it is true: the repo has no lockfile **and** no
-     dependency manifest or requirements file at all (`package.json`, `pyproject.toml`,
-     `go.mod`, `Cargo.toml`, `requirements*.txt` and the like). A manifest without a lockfile has
-     dependencies nobody has scanned; declaring "none" over it hides them. Then add nothing,
-     and report the missing lockfile at tag-up.
+     dependency manifest or requirements file at all (`package.json`, `go.mod`, `Cargo.toml`,
+     `requirements*.txt`, a `pyproject.toml` that declares dependencies rather than only
+     configuring tools, and the like). A manifest without a lockfile has dependencies nobody has
+     scanned, and declaring "none" over it hides them. In that case, add nothing, and report the
+     missing lockfile at tag-up.
    - Judge what is left to commit with item 1's check, and never stage `.claude/wtf/`: the
      journal is the session's, not the refresh's.
    - If all that leaves nothing to commit, the files weren't stale after all. Switch back to the
