@@ -46,8 +46,11 @@ pr_body = os.environ.get("FAKE_PR_BODY", "")
 if tool == "gh" and endpoint == "graphql":
     assert "closingIssuesReferences" in fields["query"], fields
     assert (fields["o"], fields["n"]) == ("Owner", "Repo"), fields
-    nodes = [{"number": c["number"], "body": c["body"], "repository": {"nameWithOwner": c.get("repo", "Owner/Repo")}} for c in closing]
-    print(json.dumps({"data": {"repository": {"pullRequest": {"body": pr_body, "closingIssuesReferences": {"nodes": nodes}}}}})); sys.exit(0)
+    own = os.environ.get("FAKE_REPO_NAME", "Owner/Repo")  # the repository's own name, after a rename
+    nodes = [{"number": c["number"], "body": c["body"], "repository": {"nameWithOwner": c.get("repo", own)}} for c in closing]
+    total = int(os.environ.get("FAKE_TOTAL", len(nodes)))
+    print(json.dumps({"data": {"repository": {"nameWithOwner": own, "pullRequest": {"body": pr_body,
+          "closingIssuesReferences": {"totalCount": total, "nodes": nodes}}}}})); sys.exit(0)
 if tool == "gh":
     m = re.fullmatch(r"repos/Owner/Repo/issues/([0-9]+)", endpoint)
     if m and m.group(1) in issues:
@@ -58,7 +61,7 @@ if tool == "glab":
     p = "projects/group%2Fproj/"
     if endpoint == p + "merge_requests/7":
         print(json.dumps({"iid": 7, "project_id": 11, "description": pr_body})); sys.exit(0)
-    if endpoint == p + "merge_requests/7/closes_issues":
+    if endpoint == p + "merge_requests/7/closes_issues?per_page=100":
         print(json.dumps([{"iid": c["number"], "project_id": c.get("project_id", 11), "description": c["body"],
                            **({"references": {"full": c["full"]}} if "full" in c else {})} for c in closing])); sys.exit(0)
     m = re.fullmatch(re.escape(p) + r"issues/([0-9]+)", endpoint)
@@ -337,10 +340,12 @@ GL = "git@gitlab.example.com:group/proj.git"
 GH = "git@github.com:Owner/Repo.git"
 
 
-def _gate(world, origin: str, issue_n: str, issues: dict, closing: list, pr: str = "7"):
+def _gate(world, origin: str, issue_n: str, issues: dict, closing: list, pr: str = "7",
+          body: str = "", **extra: str):
     repo, env, tmp = world
     _origin(repo, origin)
-    e = {**env, "FAKE_ISSUES": json.dumps(issues), "FAKE_CLOSING": json.dumps(closing)}
+    e = {**env, "FAKE_ISSUES": json.dumps(issues), "FAKE_CLOSING": json.dumps(closing),
+         "FAKE_PR_BODY": body, **extra}
     r = _run("pr", str(repo), pr, issue_n, env=e)
     calls = [json.loads(line) for line in (tmp / "calls.log").read_text().splitlines()]
     return r, calls
@@ -444,6 +449,79 @@ def test_malformed_issue_ref_is_exit_3(world, issue_n):
     repo, env, _ = world
     _origin(repo, GL)
     assert _run("pr", str(repo), "7", issue_n, env=env).returncode == 3
+
+
+# --- ruling A refined by babelfish 2026-10-31: the closing set includes the body's Closes
+# references to ISSUE_N, because the post-merge rule closes every `Closes #N` in the body.
+
+@pytest.mark.parametrize("origin,ref", [(GH, "Owner/Repo#6"), (GL, "group/proj#6")])
+@pytest.mark.parametrize("body", ["Closes #5, #6", "closes #5 and #6", "Fixes: #5\nResolves #6"])
+def test_body_closes_issue_n_unticked_fails(world, origin, ref, body):
+    # GitHub links only `#5` from `Closes #5, #6`; #6 still closes on merge, so it's graded.
+    r, calls = _gate(world, origin, "6", {"6": _ac("- [ ] six is open")},
+                     [{"number": 5, "body": ISSUE_DONE}], body=body)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert f"  [unchecked] {ref}:3 six is open" in r.stdout
+    assert "[info]" not in r.stdout
+    assert _fetched(calls, "issues/6"), calls
+
+
+@pytest.mark.parametrize("origin,ref", [(GH, "Owner/Repo#6"), (GL, "group/proj#6")])
+def test_body_closes_issue_n_ticked_passes_graded_once(world, origin, ref):
+    r, _ = _gate(world, origin, "6", {"6": ISSUE_DONE}, [{"number": 5, "body": ISSUE_DONE}],
+                 body="Closes #5, #6")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.count(f"ac-gate: {ref} |") == 1
+    assert "[info]" not in r.stdout
+
+
+@pytest.mark.parametrize("origin,issue_n", [(GH, "Other/Proj#12"), (GL, "group/third#12")])
+def test_body_closes_unreadable_foreign_issue_n_is_exit_4(world, origin, issue_n):
+    # The token can't read that repository: a fetch failure, never an [info] line and a pass.
+    r, _ = _gate(world, origin, issue_n, {}, [{"number": 5, "body": ISSUE_DONE}],
+                 body=f"Closes #5, {issue_n}")
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert "[info]" not in r.stdout and "VERDICT: PASS" not in r.stdout
+
+
+@pytest.mark.parametrize("origin", [GH, GL])
+def test_body_naming_issue_n_without_keyword_stays_info(world, origin):
+    # A bare mention ("see #6", "Part of #6") closes nothing, so #1397's epic case holds.
+    r, calls = _gate(world, origin, "6", {"6": EPIC}, [{"number": 5, "body": ISSUE_DONE}],
+                     body="Closes #5\n\nPart of #6; see #6")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "is not among the closing issues; not graded" in r.stdout
+    assert not _fetched(calls, "issues/6"), calls
+
+
+def test_github_decision_needs_no_jq(world):
+    # A broken jq used to skip the fetch, and the grader then crashed on a missing file.
+    (world[2] / "bin" / "jq").write_text("#!/bin/sh\nexit 127\n")
+    (world[2] / "bin" / "jq").chmod(0o755)
+    r, calls = _gate(world, GH, "5", {"5": ISSUE_DONE}, [])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "ac-gate: Owner/Repo#5 | boxes=2 checked=2" in r.stdout
+    assert _fetched(calls, "issues/5"), calls
+
+
+def test_github_more_closing_issues_than_a_page_is_exit_4(world):
+    r, _ = _gate(world, GH, "5", {"5": ISSUE_DONE}, [{"number": 5, "body": ISSUE_DONE}], FAKE_TOTAL="101")
+    assert r.returncode == 4, r.stdout + r.stderr
+
+
+def test_gitlab_full_page_of_closing_issues_is_exit_4(world):
+    closing = [{"number": i, "body": ISSUE_DONE} for i in range(1, 101)]
+    r, _ = _gate(world, GL, "500", {}, closing)
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert "VERDICT: PASS" not in r.stdout
+
+
+def test_github_renamed_repo_closing_entry_matches_origin_slug(world):
+    # origin still says Owner/Repo; the repository is now Owner/Renamed.
+    r, _ = _gate(world, GH, "5", {}, [{"number": 5, "body": ISSUE_DONE}], FAKE_REPO_NAME="Owner/Renamed")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "ac-gate: Owner/Renamed#5 | boxes=2 checked=2" in r.stdout
+    assert "[info]" not in r.stdout
 
 
 def test_precheck_skill_lists_info_lines():

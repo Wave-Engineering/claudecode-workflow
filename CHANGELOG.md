@@ -26,7 +26,9 @@ are worth keeping apart:
   `precheck-ac-gate.sh pr` grades the body plus the closing issues, each labelled by its full
   reference. An `ISSUE_N` outside that set prints `ac-gate: [info] <ref> is not among the closing
   issues; not graded`, which has no exit effect and causes no fetch. `ISSUE_N` is graded only when
-  nothing closes, and it accepts `<path>#<n>`. /precheck copies the `[info]` line to its checklist.
+  nothing closes or when the body names it in a Closes/Fixes/Resolves reference (GitHub links only
+  `#5` from `Closes #5, #6`, but the merge closes both), and it accepts `<path>#<n>`. A closing list
+  that may run past one page is exit 4. /precheck copies the `[info]` line to its checklist.
 - **The bench judge's deadline now covers the shim's queue (#1406).** Upstream's 30 s per-call
   client deadline ran out while calls waited behind the shim's 4 workers, so Sweep A's first
   judge run silently scored every candidate as a false positive. Each upstream step now runs
