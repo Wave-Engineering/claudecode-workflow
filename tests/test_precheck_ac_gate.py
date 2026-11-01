@@ -455,7 +455,9 @@ def test_malformed_issue_ref_is_exit_3(world, issue_n):
 # references to ISSUE_N, because the post-merge rule closes every `Closes #N` in the body.
 
 @pytest.mark.parametrize("origin,ref", [(GH, "Owner/Repo#6"), (GL, "group/proj#6")])
-@pytest.mark.parametrize("body", ["Closes #5, #6", "closes #5 and #6", "Fixes: #5\nResolves #6"])
+@pytest.mark.parametrize("body", ["Closes #5, #6", "closes #5 and #6", "Fixes: #5\nResolves #6",
+                                  "closes #5,#6", "Closes #5, and #6",
+                                  "Closes #4, #5, and #6", "Closes\n#6", "Resolved #5 and\n#6"])
 def test_body_closes_issue_n_unticked_fails(world, origin, ref, body):
     # GitHub links only `#5` from `Closes #5, #6`; #6 still closes on merge, so it's graded.
     r, calls = _gate(world, origin, "6", {"6": _ac("- [ ] six is open")},
@@ -522,6 +524,27 @@ def test_github_renamed_repo_closing_entry_matches_origin_slug(world):
     assert r.returncode == 0, r.stdout + r.stderr
     assert "ac-gate: Owner/Renamed#5 | boxes=2 checked=2" in r.stdout
     assert "[info]" not in r.stdout
+
+
+@pytest.mark.parametrize("origin,body", [(GH, "Closes #5, Owner/Repo#6"), (GL, "Closes #5, group/proj#6"),
+                                         (GH, "Closes #5, owner/REPO#6")])
+def test_body_closes_issue_n_by_path_is_graded(world, origin, body):
+    r, _ = _gate(world, origin, "6", {"6": _ac("- [ ] six is open")}, [{"number": 5, "body": ISSUE_DONE}], body=body)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "six is open" in r.stdout and "[info]" not in r.stdout
+
+
+@pytest.mark.parametrize("issue_n,body,code", [
+    ("6", "Closes #5, Owner/Renamed#6", 1),  # read under origin's name, and graded
+    ("Owner/Renamed#6", "Closes #5, #6", 4),  # the fake serves only Owner/Repo: a fetch failure
+])
+def test_github_renamed_repo_body_reference_is_graded(world, issue_n, body, code):
+    # origin says Owner/Repo, the repository is Owner/Renamed: either name in the body is ISSUE_N.
+    r, calls = _gate(world, GH, issue_n, {"6": _ac("- [ ] six is open")}, [{"number": 5, "body": ISSUE_DONE}],
+                     body=body, FAKE_REPO_NAME="Owner/Renamed")
+    assert r.returncode == code, r.stdout + r.stderr
+    assert "[info]" not in r.stdout
+    assert _fetched(calls, "issues/6"), calls
 
 
 def test_precheck_skill_lists_info_lines():

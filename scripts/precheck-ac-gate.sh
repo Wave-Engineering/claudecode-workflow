@@ -172,16 +172,21 @@ def not_closed(ref):
 # GitHub links only a reference with its own keyword (`Closes #5, #6` links #5 alone), and
 # GitLab's list can lag the description, so the body is read for every keyword form.
 REF = r"(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)?#[0-9]+"
+# Lists: `#5, #6`, `#5,#6`, `#5 and #6`, `#5, #6, and #7`.
+SEP = r"(?:\s*,\s*(?:and\s+)?|\s+and\s+)"
 CLOSES_RE = re.compile(
-    rf"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?\s+({REF}(?:\s*(?:,|\band\b)\s*{REF})*)", re.I)
+    rf"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?\s+({REF}(?:{SEP}{REF})*)", re.I)
 REF_RE = re.compile(r"([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)?#([0-9]+)")
 
 
-def body_closes(body, slug, path, n):
-    """Whether the body names `<path>#<n>` in a closing-keyword reference."""
+def body_closes(body, slug, path, n, aliases=()):
+    """Whether the body names `<path>#<n>` in a closing-keyword reference. `aliases` are other
+    names of `path` (a renamed repository). Only ISSUE_N is looked for, per the ruling: a
+    body-only reference to some other issue is not fetched or graded here."""
+    names = {path.lower(), *(a.lower() for a in aliases)}
     for m in CLOSES_RE.finditer(body):
         for p, num in REF_RE.findall(m.group(1)):
-            if int(num) == n and (p or slug).lower() == path.lower():
+            if int(num) == n and (p or slug).lower() in names:
                 return True
     return False
 
@@ -217,7 +222,8 @@ def gh_plan(slug, pr_path, issue_ref):
             refs.add(f"{slug}#{c['number']}".lower())
         items.append((f"{repo}#{c['number']}", c.get("body") or "", "section"))
     ref = f"{path}#{n}"
-    need = ref.lower() not in refs and (not closing or body_closes(body, slug, path, n))
+    aliases = [own, slug] if path.lower() in (slug.lower(), own) else []
+    need = ref.lower() not in refs and (not closing or body_closes(body, slug, path, n, aliases))
     return items, refs, need, ref
 
 
@@ -401,6 +407,7 @@ trap 'rm -rf "$tmp"' EXIT
 need_issue() {
 	local out
 	out="$(python3 -c "$PY" need "$platform" "$slug" "$pr_n" "$issue_n" "$@")" || {
+		[[ "$out" == *"VERDICT: FAIL"* ]] || out="${out:+$out$'\n'}VERDICT: FAIL"
 		printf '%s\n' "$out"
 		exit 4
 	}
