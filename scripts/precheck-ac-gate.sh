@@ -179,7 +179,9 @@ REF_RE = re.compile(r"([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)?#([0-9]+)")
 
 
 def body_refs(body):
-    """Every `(path or None, n)` the body names in a closing-keyword reference, in order."""
+    """Every `(path or None, n)` the body names in a closing-keyword reference, in order.
+    Code spans, fences and HTML comments are read too, on purpose: the `## Squash commit`
+    block is plain text inside a fence, and the platform closes from commit messages."""
     return [(p or None, int(num)) for m in CLOSES_RE.finditer(body) for p, num in REF_RE.findall(m.group(1))]
 
 

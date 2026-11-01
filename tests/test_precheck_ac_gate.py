@@ -592,6 +592,25 @@ def test_gitlab_body_reference_dedupes_against_full_reference(world):
     assert _fetched(calls, "issues/6"), calls
 
 
+SQUASH_BODY = ("## Summary\n\nx\n\n## Linked Issues\n\nCloses #5\n\n## Squash commit\n\n"
+               "```text\nfix(x): y\n\nCloses #5\nCloses #6\n```\n")
+
+
+@pytest.mark.parametrize("origin,ref", [(GH, "Owner/Repo#6"), (GL, "group/proj#6")])
+@pytest.mark.parametrize("body", [
+    SQUASH_BODY,  # load-bearing: the squash block is plain text inside a fence, and it lands
+    "Closes #5. Also see `Closes #6` above.",
+    "Closes #5\n<!-- Closes #6 -->",
+], ids=["squash-fence", "code-span", "html-comment"])
+def test_closing_reference_in_code_or_comment_is_graded(world, origin, ref, body):
+    # The commit message the squash lands is plain text: backticks and fences protect nothing.
+    r, calls = _gate(world, origin, "5", {"6": _ac("- [ ] six is open")},
+                     [{"number": 5, "body": ISSUE_DONE}], body=body)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert f"  [unchecked] {ref}:3 six is open" in r.stdout
+    assert _fetched(calls, "issues/6"), calls
+
+
 @pytest.mark.parametrize("origin,foreign", [(GH, "Other/Proj#12"), (GL, "group/third#12")])
 def test_body_only_reference_unreadable_is_exit_4(world, origin, foreign):
     r, _ = _gate(world, origin, "5", {}, [{"number": 5, "body": ISSUE_DONE}], body=f"Closes #5, {foreign}")
