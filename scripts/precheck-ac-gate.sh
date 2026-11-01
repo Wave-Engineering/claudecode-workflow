@@ -17,11 +17,11 @@
 #       The checkbox rule over one body: the boxes under that H2 (default), or every box.
 #       Exit 0 or 1.
 #   precheck-ac-gate.sh pr <repo_root> <PR_NUMBER> <ISSUE_N>
-#       Fetch the PR/MR body and every issue it closes; run `boxes` on each (the issues
-#       by section, the PR/MR body --all) and `lint` on all of them. ISSUE_N (`<n>`, or
-#       `<path>#<n>` for another repository's issue) is graded when the PR/MR closes
-#       nothing, or when the body names it in a Closes/Fixes/Resolves reference. Otherwise
-#       it is graded as one of the closing issues, or listed as
+#       Fetch the PR/MR body and every issue it closes: the platform's closing list plus
+#       each Closes/Fixes/Resolves reference in the body. Run `boxes` on each (the issues by
+#       section, the PR/MR body --all) and `lint` on all of them. ISSUE_N (`<n>`, or
+#       `<path>#<n>` for another repository's issue) is graded as one of them, or alone
+#       when nothing closes; otherwise it is listed as
 #       `ac-gate: [info] <ref> is not among the closing issues; not graded` (#1397, #1407).
 #       Exit with the worst code, 4 > 2 > 1 > 0.
 #
@@ -158,13 +158,12 @@ def split_ref(slug, issue_ref):
 
 # The gate grades what the merge will close: the PR/MR body and every closing issue (#1397,
 # #1407; design fork resolved by babelfish 2026-10-31, option A). What the merge closes is
-# the platform's closing list plus every Closes line in the body, because the post-merge
-# rule closes each `Closes #N` in the description (ruling A refined by babelfish
-# 2026-10-31). So ISSUE_N, the issue the branch names, is graded when the PR/MR closes
-# nothing or when the body names it in a closing reference. Otherwise it is graded as one
-# of the closing issues, or reported `[info]` and left alone: an issue the merge doesn't
-# close isn't claimed done, and grading it (an epic, a same-numbered local issue) only
-# produced false blocks.
+# the platform's closing list plus every closing reference in the body, because the
+# post-merge rule closes each `Closes #N` in the description (ruling A generalized by
+# babelfish 2026-10-31: every body closing reference is graded). ISSUE_N, the issue the
+# branch names, is graded when it is in that set, or when the set is empty. Otherwise it is
+# reported `[info]` and left alone: an issue the merge doesn't close isn't claimed done, and
+# grading it (an epic, a same-numbered local issue) only produced false blocks.
 def not_closed(ref):
     return f"ac-gate: [info] {ref} is not among the closing issues; not graded"
 
@@ -179,25 +178,44 @@ CLOSES_RE = re.compile(
 REF_RE = re.compile(r"([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)?#([0-9]+)")
 
 
-def body_closes(body, slug, path, n, aliases=()):
-    """Whether the body names `<path>#<n>` in a closing-keyword reference. `aliases` are other
-    names of `path` (a renamed repository). Only ISSUE_N is looked for, per the ruling: a
-    body-only reference to some other issue is not fetched or graded here."""
-    names = {path.lower(), *(a.lower() for a in aliases)}
-    for m in CLOSES_RE.finditer(body):
-        for p, num in REF_RE.findall(m.group(1)):
-            if int(num) == n and (p or slug).lower() in names:
-                return True
-    return False
+def body_refs(body):
+    """Every `(path or None, n)` the body names in a closing-keyword reference, in order."""
+    return [(p or None, int(num)) for m in CLOSES_RE.finditer(body) for p, num in REF_RE.findall(m.group(1))]
 
 
 # A closing list as long as the page it came on may have more on the next page, and an
-# ISSUE_N there would read as [info]. Fail closed rather than guess.
+# issue there would go ungraded. Fail closed rather than guess.
 PAGE = 100
 
 
+def finish(slug, head, body, canon, entries, issue_ref):
+    """The plan, (items, fetch, info), from the platform's closing `entries` ((keys, label,
+    body) each) and the body's closing references. `fetch` is what the shell must read, in
+    order: (label, path, n, why), why "body" (a reference the platform didn't link) or
+    "issue" (ISSUE_N, when nothing closes at all)."""
+    path, n = split_ref(slug, issue_ref)
+    items = [head] + [(label, b, "section") for _, label, b in entries]
+    keys = set().union(*(k for k, _, _ in entries))
+    fetch, named = [], False
+    for p, num in body_refs(body):
+        p = p or slug
+        if any(seg in (".", "..") for seg in p.split("/")):
+            raise ValueError(f"the body names {p}#{num}, which is not a repository path")
+        named = True
+        if canon(p, num) == canon(slug, num):
+            p = slug  # this repository under any of its names: read it by origin's
+        if canon(p, num) not in keys:
+            keys.add(canon(p, num))
+            fetch.append((f"{p}#{num}", p, num, "body"))
+    info = []
+    if not entries and not named:
+        fetch.append((f"{path}#{n}", path, n, "issue"))
+    elif canon(path, n) not in keys:
+        info.append(not_closed(f"{path}#{n}"))
+    return items, fetch, info
+
+
 def gh_plan(slug, pr_path, issue_ref):
-    """(items, refs, need, ref): the PR body and closing issues, and whether ISSUE_N is read."""
     pr = json.load(open(pr_path))
     repo_node = (pr.get("data") or {}).get("repository") or {}
     node = repo_node.get("pullRequest")
@@ -205,30 +223,27 @@ def gh_plan(slug, pr_path, issue_ref):
         raise ValueError("the PR is not in the GraphQL answer")
     # After a rename, origin's slug and the repository's own name differ; both name it.
     own = (repo_node.get("nameWithOwner") or slug).lower()
-    path, n = split_ref(slug, issue_ref)
-    body = node.get("body") or ""
-    items, refs = [(f"PR {slug}#{pr_number}", body, "all")], set()
+
+    def canon(p, num):
+        p = p.lower()
+        return f"{own if p == slug.lower() else p}#{num}"
+
     conn = node["closingIssuesReferences"]
     closing = conn["nodes"]
     if conn.get("totalCount", len(closing)) > len(closing):
         raise ValueError(f"the PR closes {conn['totalCount']} issues, more than one page holds")
+    entries, seen = [], set()
     for c in closing:
         repo = c["repository"]["nameWithOwner"]
-        key = f"{repo}#{c['number']}".lower()
-        if key in refs:
-            continue
-        refs.add(key)
-        if repo.lower() == own:
-            refs.add(f"{slug}#{c['number']}".lower())
-        items.append((f"{repo}#{c['number']}", c.get("body") or "", "section"))
-    ref = f"{path}#{n}"
-    aliases = [own, slug] if path.lower() in (slug.lower(), own) else []
-    need = ref.lower() not in refs and (not closing or body_closes(body, slug, path, n, aliases))
-    return items, refs, need, ref
+        key = canon(repo, c["number"])
+        if key not in seen:
+            seen.add(key)
+            entries.append(({key}, f"{repo}#{c['number']}", c.get("body") or ""))
+    body = node.get("body") or ""
+    return finish(slug, (f"PR {slug}#{pr_number}", body, "all"), body, canon, entries, issue_ref)
 
 
 def gl_plan(slug, mr_path, closes_path, issue_ref):
-    """(items, refs, need, ref): the MR description and closing issues, and whether ISSUE_N is read."""
     mr = json.load(open(mr_path))
     closes = json.load(open(closes_path))
     if not isinstance(mr, dict) or "iid" not in mr:
@@ -238,9 +253,8 @@ def gl_plan(slug, mr_path, closes_path, issue_ref):
     if len(closes) >= PAGE:
         raise ValueError(f"the MR closes {len(closes)} issues, a full page; there may be more")
     pid = mr.get("project_id")
-    path, n = split_ref(slug, issue_ref)
     body = mr.get("description") or ""
-    items, seen, refs = [(f"MR {slug}!{pr_number}", body, "all")], set(), set()
+    entries, seen = [], set()
     for c in closes:
         key = (c.get("project_id"), int(c["iid"]))
         if key in seen:
@@ -257,13 +271,12 @@ def gl_plan(slug, mr_path, closes_path, issue_ref):
             # No path to name it by, so a `<path>#<n>` ISSUE_N can't match it and reads as an
             # [info] line. GitLab's closes_issues carries references.full, so this is a fallback.
             ref = f"project {c.get('project_id')}#{c['iid']}"
-        refs.add(ref.lower())
+        keys = {ref.lower()}
         if c.get("project_id") == pid:
-            refs.add(f"{slug}#{c['iid']}".lower())
-        items.append((ref, c.get("description") or "", "section"))
-    ref = f"{path}#{n}"
-    need = ref.lower() not in refs and (not closes or body_closes(body, slug, path, n))
-    return items, refs, need, ref
+            keys.add(f"{slug}#{c['iid']}".lower())
+        entries.append((keys, ref, c.get("description") or ""))
+    return finish(slug, (f"MR {slug}!{pr_number}", body, "all"), body,
+                  lambda p, num: f"{p.lower()}#{num}", entries, issue_ref)
 
 
 def plan(platform, slug, files, issue_ref):
@@ -272,15 +285,16 @@ def plan(platform, slug, files, issue_ref):
     return gl_plan(slug, files[0], files[1], issue_ref)
 
 
-def bodies(platform, slug, files, issue_path, issue_ref):
-    items, refs, need, ref = plan(platform, slug, files, issue_ref)
-    if need:
-        issue = json.load(open(issue_path))
-        field = ("number", "body") if platform == "github" else ("iid", "description")
+def bodies(platform, slug, files, fetch_dir, issue_ref):
+    """Grade input: the plan's items plus each answer the shell read for its fetch list."""
+    items, fetch, info = plan(platform, slug, files, issue_ref)
+    field = ("number", "body") if platform == "github" else ("iid", "description")
+    for i, (label, _, _, _) in enumerate(fetch):
+        issue = json.load(open(f"{fetch_dir}/{i}.json"))
         if not isinstance(issue, dict) or field[0] not in issue:
-            raise ValueError(f"issue {ref} is not in the answer")
-        return items + [(ref, issue.get(field[1]) or "", "section")], []
-    return items, ([] if ref.lower() in refs else [not_closed(ref)])
+            raise ValueError(f"issue {label} is not in the answer")
+        items.append((label, issue.get(field[1]) or "", "section"))
+    return items, info
 
 
 cmd = sys.argv[1]
@@ -291,15 +305,15 @@ elif cmd == "boxes":
     label, path, mode = sys.argv[2], sys.argv[3], sys.argv[4]
     items, lint = [(label, open(path).read(), mode)], False
 elif cmd in ("need", "pr"):
-    # need: print whether ISSUE_N must be read, so the shell fetches it (or fails, exit 4)
-    # before grading. pr: grade, reading ISSUE_N's answer only when need said so.
-    platform, slug, pr_number, issue_n = sys.argv[2:6]
-    files = sys.argv[6:7] if platform == "github" else sys.argv[6:8]
+    # need: print the fetch list, one `<path>\t<n>\t<why>\t<label>` line each, so the shell
+    # reads every issue (or fails, exit 4) before grading. pr: grade, with those answers.
+    platform, slug, pr_number, issue_n, fetch_dir, *files = sys.argv[2:]
     try:
         if cmd == "need":
-            print("yes" if plan(platform, slug, files, issue_n)[2] else "no")
+            for label, p, num, why in plan(platform, slug, files, issue_n)[1]:
+                print(f"{p}\t{num}\t{why}\t{label}")
             sys.exit(0)
-        items, info = bodies(platform, slug, files, sys.argv[-1], issue_n)
+        items, info = bodies(platform, slug, files, fetch_dir, issue_n)
     except (ValueError, KeyError, TypeError, AttributeError, OSError, json.JSONDecodeError) as e:
         print(f"ac-gate: cannot read the PR/MR and its issues: {e}", file=sys.stderr)
         print("VERDICT: FAIL")
@@ -355,7 +369,6 @@ esac
 repo="$2" pr_n="$3" issue_n="$4"
 [[ "$pr_n" =~ ^[0-9]+$ && "$issue_n" =~ ^([A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+#)?[0-9]+$ ]] || usage
 # ISSUE_N as `<path>#<n>` names another repository's issue; a bare `<n>` is origin's.
-issue_num="${issue_n##*#}"
 issue_path=""
 [[ "$issue_n" == *#* ]] && issue_path="${issue_n%#*}"
 # A `.` or `..` segment would walk the API path out of the repository it names.
@@ -402,16 +415,30 @@ gl_api() {
 tmp="$(mktemp -d)" || exit 4
 trap 'rm -rf "$tmp"' EXIT
 
-# Whether ISSUE_N must be read: the PR/MR closes nothing, or its body names ISSUE_N in a
-# closing reference (#1397). An unreadable answer is exit 4, never a skipped fetch.
-need_issue() {
-	local out
-	out="$(python3 -c "$PY" need "$platform" "$slug" "$pr_n" "$issue_n" "$@")" || {
+mkdir "$tmp/f" || exit 4
+
+# Read every issue the plan names besides the platform's closing list: each closing
+# reference in the body the platform didn't link, and ISSUE_N when nothing closes at all
+# (#1397, #1407). Any unreadable answer is exit 4, never a skipped issue.
+fetch_planned() {
+	local out i=0 path n why label
+	out="$(python3 -c "$PY" need "$platform" "$slug" "$pr_n" "$issue_n" "$tmp/f" "$@")" || {
 		[[ "$out" == *"VERDICT: FAIL"* ]] || out="${out:+$out$'\n'}VERDICT: FAIL"
 		printf '%s\n' "$out"
 		exit 4
 	}
-	[[ "$out" == yes ]]
+	while IFS=$'\t' read -r path n why label; do
+		[[ -n "$path" ]] || continue
+		if [[ "$platform" == github ]]; then
+			gh api "repos/$path/issues/$n" </dev/null >"$tmp/f/$i.json" 2>/dev/null
+		else
+			gl_api "projects/$(printf '%s' "$path" | jq -sRr @uri)/issues/$n" >"$tmp/f/$i.json"
+		fi || {
+			[[ "$why" == body ]] && fetch_fail "read issue $label (named in the body; the platform didn't link it)"
+			fetch_fail "read issue $label"
+		}
+		i=$((i + 1))
+	done <<<"$out"
 }
 
 case "$platform" in
@@ -420,23 +447,16 @@ github)
 	q='query($o: String!, $n: String!, $num: Int!) { repository(owner: $o, name: $n) { nameWithOwner pullRequest(number: $num) { body closingIssuesReferences(first: 100) { totalCount nodes { number body repository { nameWithOwner } } } } } }'
 	gh api graphql -f query="$q" -f o="${slug%%/*}" -f n="${slug#*/}" -F num="$pr_n" </dev/null >"$tmp/pr.json" 2>/dev/null ||
 		fetch_fail "read PR #$pr_n"
-	if need_issue "$tmp/pr.json"; then
-		gh api "repos/${issue_path:-$slug}/issues/$issue_num" </dev/null >"$tmp/issue.json" 2>/dev/null ||
-			fetch_fail "read issue $issue_n"
-	fi
-	python3 -c "$PY" pr github "$slug" "$pr_n" "$issue_n" "$tmp/pr.json" "$tmp/issue.json"
+	fetch_planned "$tmp/pr.json"
+	python3 -c "$PY" pr github "$slug" "$pr_n" "$issue_n" "$tmp/f" "$tmp/pr.json"
 	;;
 gitlab)
 	gl_api "projects/$enc/merge_requests/$pr_n" >"$tmp/mr.json" || fetch_fail "read MR !$pr_n"
 	gl_api "projects/$enc/merge_requests/$pr_n/closes_issues?per_page=100" >"$tmp/closes.json" ||
 		fetch_fail "read the issues MR !$pr_n closes"
-	# A same-numbered local issue is not the closing one (#1407): read ISSUE_N only when need says.
-	if need_issue "$tmp/mr.json" "$tmp/closes.json"; then
-		ienc="$enc"
-		[[ -n "$issue_path" ]] && ienc="$(printf '%s' "$issue_path" | jq -sRr @uri)"
-		gl_api "projects/$ienc/issues/$issue_num" >"$tmp/issue.json" || fetch_fail "read issue $issue_n"
-	fi
-	python3 -c "$PY" pr gitlab "$slug" "$pr_n" "$issue_n" "$tmp/mr.json" "$tmp/closes.json" "$tmp/issue.json"
+	# A same-numbered local issue is not the closing one (#1407): the plan says what to read.
+	fetch_planned "$tmp/mr.json" "$tmp/closes.json"
+	python3 -c "$PY" pr gitlab "$slug" "$pr_n" "$issue_n" "$tmp/f" "$tmp/mr.json" "$tmp/closes.json"
 	;;
 *)
 	echo "unknown PRECHECK_PLATFORM '$platform'" >&2

@@ -460,7 +460,7 @@ def test_malformed_issue_ref_is_exit_3(world, issue_n):
                                   "Closes #4, #5, and #6", "Closes\n#6", "Resolved #5 and\n#6"])
 def test_body_closes_issue_n_unticked_fails(world, origin, ref, body):
     # GitHub links only `#5` from `Closes #5, #6`; #6 still closes on merge, so it's graded.
-    r, calls = _gate(world, origin, "6", {"6": _ac("- [ ] six is open")},
+    r, calls = _gate(world, origin, "6", {"4": ISSUE_DONE, "6": _ac("- [ ] six is open")},
                      [{"number": 5, "body": ISSUE_DONE}], body=body)
     assert r.returncode == 1, r.stdout + r.stderr
     assert f"  [unchecked] {ref}:3 six is open" in r.stdout
@@ -534,17 +534,67 @@ def test_body_closes_issue_n_by_path_is_graded(world, origin, body):
     assert "six is open" in r.stdout and "[info]" not in r.stdout
 
 
-@pytest.mark.parametrize("issue_n,body,code", [
-    ("6", "Closes #5, Owner/Renamed#6", 1),  # read under origin's name, and graded
-    ("Owner/Renamed#6", "Closes #5, #6", 4),  # the fake serves only Owner/Repo: a fetch failure
+@pytest.mark.parametrize("issue_n,body", [
+    ("6", "Closes #5, Owner/Renamed#6"),
+    ("Owner/Renamed#6", "Closes #5, #6"),
+    ("6", "Closes #5, owner/REPO#6"),
 ])
-def test_github_renamed_repo_body_reference_is_graded(world, issue_n, body, code):
-    # origin says Owner/Repo, the repository is Owner/Renamed: either name in the body is ISSUE_N.
+def test_github_renamed_repo_body_reference_is_graded(world, issue_n, body):
+    # origin says Owner/Repo, the repository is Owner/Renamed: either name, in any case, is
+    # this repository, so the reference is read once, by origin's name, and graded.
     r, calls = _gate(world, GH, issue_n, {"6": _ac("- [ ] six is open")}, [{"number": 5, "body": ISSUE_DONE}],
                      body=body, FAKE_REPO_NAME="Owner/Renamed")
-    assert r.returncode == code, r.stdout + r.stderr
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "  [unchecked] Owner/Repo#6:3 six is open" in r.stdout
     assert "[info]" not in r.stdout
-    assert _fetched(calls, "issues/6"), calls
+    assert [c[-1] for c in calls if c[-1].endswith("issues/6")] == ["repos/Owner/Repo/issues/6"], calls
+
+
+# --- ruling A generalized by babelfish 2026-10-31: every body closing reference is graded.
+
+@pytest.mark.parametrize("origin,ref", [(GH, "Owner/Repo#6"), (GL, "group/proj#6")])
+def test_body_only_reference_is_graded_beside_issue_n(world, origin, ref):
+    # ISSUE_N=5 is linked; the platform didn't link #6, but the merge closes it too.
+    r, calls = _gate(world, origin, "5", {"6": _ac("- [ ] six is open")},
+                     [{"number": 5, "body": ISSUE_DONE}], body="Closes #5, #6")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert f"  [unchecked] {ref}:3 six is open" in r.stdout
+    assert "[info]" not in r.stdout
+
+
+@pytest.mark.parametrize("origin,refs", [(GH, ("Owner/Repo#5", "Owner/Repo#6")), (GL, ("group/proj#5", "group/proj#6"))])
+def test_body_only_reference_ticked_passes_each_graded_once(world, origin, refs):
+    r, calls = _gate(world, origin, "5", {"6": ISSUE_DONE}, [{"number": 5, "body": ISSUE_DONE}],
+                     body="Closes #5, #6\n\nFixes #6")
+    assert r.returncode == 0, r.stdout + r.stderr
+    for ref in refs:
+        assert r.stdout.count(f"ac-gate: {ref} |") == 1, r.stdout
+    assert not _fetched(calls, "issues/5"), "linked by the platform, so never read again"
+    assert sum(c[-1].endswith("issues/6") for c in calls) == 1, calls
+
+
+@pytest.mark.parametrize("origin,foreign", [(GH, "Other/Proj#12"), (GL, "group/third#12")])
+def test_body_only_reference_unreadable_is_exit_4(world, origin, foreign):
+    r, _ = _gate(world, origin, "5", {}, [{"number": 5, "body": ISSUE_DONE}], body=f"Closes #5, {foreign}")
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert f"read issue {foreign} (named in the body; the platform didn't link it)" in r.stderr
+    assert "VERDICT: PASS" not in r.stdout
+
+
+@pytest.mark.parametrize("origin", [GH, GL])
+def test_body_reference_with_empty_platform_list_replaces_the_fallback(world, origin):
+    # Nothing linked, the body closes #6: #6 is the closing set, so ISSUE_N=5 is [info].
+    r, calls = _gate(world, origin, "5", {"5": _ac("- [ ] five is open"), "6": ISSUE_DONE}, [], body="Closes #6")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "#5 is not among the closing issues; not graded" in r.stdout
+    assert not _fetched(calls, "issues/5"), calls
+
+
+@pytest.mark.parametrize("ref", ["../x#1", "a/../b#1", "./x#2"])
+def test_body_reference_with_dot_segment_is_exit_4(world, ref):
+    r, calls = _gate(world, GH, "5", {}, [{"number": 5, "body": ISSUE_DONE}], body=f"Closes {ref}")
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert not any(".." in c[-1] or "/./" in c[-1] for c in calls), calls
 
 
 def test_precheck_skill_lists_info_lines():
