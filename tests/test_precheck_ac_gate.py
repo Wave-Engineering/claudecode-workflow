@@ -573,6 +573,25 @@ def test_body_only_reference_ticked_passes_each_graded_once(world, origin, refs)
     assert sum(c[-1].endswith("issues/6") for c in calls) == 1, calls
 
 
+@pytest.mark.parametrize("origin,p", [(GH, "Owner/Repo"), (GL, "group/proj")])
+def test_several_body_only_references_keep_their_own_bodies(world, origin, p):
+    # Two reads: each answer is graded under its own label, never shifted by one.
+    r, _ = _gate(world, origin, "5", {"6": ISSUE_DONE, "7": _ac("- [ ] seven is open")},
+                 [{"number": 5, "body": ISSUE_DONE}], body="Closes #5, #6, #7")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert f"ac-gate: {p}#6 | boxes=2 checked=2 waived=0 unchecked=0" in r.stdout
+    assert f"  [unchecked] {p}#7:3 seven is open" in r.stdout
+
+
+def test_gitlab_body_reference_dedupes_against_full_reference(world):
+    closing = [{"number": 5, "body": ISSUE_DONE, "full": "group/proj#5"}]
+    r, calls = _gate(world, GL, "5", {"6": ISSUE_DONE}, closing, body="Closes #5, group/proj#5, #6")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.count("ac-gate: group/proj#5 |") == 1
+    assert not _fetched(calls, "issues/5"), calls
+    assert _fetched(calls, "issues/6"), calls
+
+
 @pytest.mark.parametrize("origin,foreign", [(GH, "Other/Proj#12"), (GL, "group/third#12")])
 def test_body_only_reference_unreadable_is_exit_4(world, origin, foreign):
     r, _ = _gate(world, origin, "5", {}, [{"number": 5, "body": ISSUE_DONE}], body=f"Closes #5, {foreign}")
