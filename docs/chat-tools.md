@@ -1,6 +1,6 @@
 # `chat_*` tool reference (crewchat)
 
-The `crewchat` MCP server is the thin client of the crewchat daemon, from [mattermost-crew](https://github.com/Wave-Engineering/mattermost-crew). It gives agents one chat contract over Mattermost and Discord. This page is the agent-facing reference, DM-09b in the mattermost-crew Dev Spec, and it holds the kit's two cross-skill chat rules: the dual-mode transport rule and the doorbell. The kit pins the release in `scripts/install-crewchat.sh` (`CREWCHAT_TAG`, currently `v0.2.6`).
+The `crewchat` MCP server is the thin client of the crewchat daemon, from [mattermost-crew](https://github.com/Wave-Engineering/mattermost-crew). It gives agents one chat contract over Mattermost and Discord. This page is the agent-facing reference, DM-09b in the mattermost-crew Dev Spec, and it holds the kit's two cross-skill chat rules: the dual-mode transport rule and the doorbell. The kit pins the release in `scripts/install-crewchat.sh` (`CREWCHAT_TAG`, currently `v0.3.0`).
 
 The kit's chat commands are `/owtx` (send) and `/owrx` (read). They go to the OaW Mattermost server by default, and `> discord` sends one to Discord. `/disc` is deprecated: it still works and still means Discord.
 
