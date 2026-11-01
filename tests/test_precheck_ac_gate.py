@@ -66,6 +66,10 @@ if tool == "glab":
         print(json.dumps({"iid": int(m.group(1)), "project_id": 11, "description": issues[m.group(1)]})); sys.exit(0)
     if m:
         print(json.dumps({"message": "404 Not found"})); sys.exit(0)
+    m = re.fullmatch(r"projects/group%2Fother/issues/([0-9]+)", endpoint)
+    foreign = json.loads(os.environ.get("FAKE_FOREIGN", "{}"))  # group/other's issues
+    if m and m.group(1) in foreign:
+        print(json.dumps({"iid": int(m.group(1)), "project_id": 22, "description": foreign[m.group(1)]})); sys.exit(0)
 print("fake: unexpected call", tool, endpoint, file=sys.stderr)
 sys.exit(97)
 '''
@@ -421,7 +425,21 @@ def test_path_form_with_empty_closing_set_reads_that_repo(world):
     assert _fetched(calls, "repos/Owner/Repo/issues/5"), calls
 
 
-@pytest.mark.parametrize("issue_n", ["group#12", "#12", "group/other#", "group/other#x", "a b/c#1"])
+def test_gitlab_path_form_with_empty_closing_set_reads_that_project(world):
+    # The local #12 is unfinished; the named project's #12 is done. Only the named one is read.
+    repo, env, tmp = world
+    _origin(repo, GL)
+    e = {**env, "FAKE_ISSUES": json.dumps({"12": _ac("- [ ] open locally")}),
+         "FAKE_FOREIGN": json.dumps({"12": ISSUE_DONE}), "FAKE_CLOSING": "[]"}
+    r = _run("pr", str(repo), "7", "group/other#12", env=e)
+    calls = [json.loads(line) for line in (tmp / "calls.log").read_text().splitlines()]
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "ac-gate: group/other#12 | boxes=2 checked=2" in r.stdout
+    assert _fetched(calls, "group%2Fother/issues/12") and not _fetched(calls, "group%2Fproj/issues/12"), calls
+
+
+@pytest.mark.parametrize("issue_n", ["group#12", "#12", "group/other#", "group/other#x", "a b/c#1",
+                                     "../x#1", "group/../x#1", "./x#1"])
 def test_malformed_issue_ref_is_exit_3(world, issue_n):
     repo, env, _ = world
     _origin(repo, GL)

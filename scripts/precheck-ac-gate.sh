@@ -212,6 +212,8 @@ def gl_bodies(slug, mr_path, closes_path, issue_path, issue_ref):
         elif c.get("project_id") == pid:
             ref = f"{slug}#{c['iid']}"
         else:
+            # No path to name it by, so a `<path>#<n>` ISSUE_N can't match it and reads as an
+            # [info] line. GitLab's closes_issues carries references.full, so this is a fallback.
             ref = f"project {c.get('project_id')}#{c['iid']}"
         refs.add(ref.lower())
         if c.get("project_id") == pid:
@@ -299,6 +301,8 @@ repo="$2" pr_n="$3" issue_n="$4"
 issue_num="${issue_n##*#}"
 issue_path=""
 [[ "$issue_n" == *#* ]] && issue_path="${issue_n%#*}"
+# A `.` or `..` segment would walk the API path out of the repository it names.
+[[ "/$issue_path/" =~ /\.\.?/ ]] && usage
 
 fetch_fail() {
 	echo "precheck-ac-gate: ${platform:-?} API call failed: $*" >&2
