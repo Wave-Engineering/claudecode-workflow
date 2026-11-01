@@ -46,7 +46,7 @@ usage() {
 
 PY=$(
 	cat <<'PYEOF'
-import datetime, json, re, sys
+import datetime, json, os, re, sys
 
 CHECKBOX = re.compile(r"^\s*[-*+]\s+\[( |x|X)\]\s+(.*)$")
 FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
@@ -169,20 +169,41 @@ def not_closed(ref):
 
 
 # GitHub links only a reference with its own keyword (`Closes #5, #6` links #5 alone), and
-# GitLab's list can lag the description, so the body is read for every keyword form.
-REF = r"(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)?#[0-9]+"
-# Lists: `#5, #6`, `#5,#6`, `#5 and #6`, `#5, #6, and #7`.
-SEP = r"(?:\s*,\s*(?:and\s+)?|\s+and\s+)"
-CLOSES_RE = re.compile(
-    rf"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b:?\s+({REF}(?:{SEP}{REF})*)", re.I)
-REF_RE = re.compile(r"([A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+)?#([0-9]+)")
+# GitLab's list can lag the description, so the body is read for every keyword form. With
+# ISSUE_N no longer a backstop, a form either platform honours that this misses closes
+# unchecked, so the pattern is a SUPERSET of both (babelfish 2026-10-31): over-matching
+# costs only a false block. Keywords: GitHub's close/fix/resolve forms and GitLab's -ing
+# forms and implement(s|ed|ing). Items: `#n`, `name#n` (origin's namespace), `<path>#<n>`,
+# or an issue or work-item URL, each optionally after `issue`/`issues`. Lists: commas,
+# `and`, `, and`, or whitespace alone.
+KW = r"(?:clos(?:e[sd]?|ing)|fix(?:e[sd]|ing)?|resolv(?:e[sd]?|ing)|implement(?:s|ed|ing)?)"
+URL = r"https?://[A-Za-z0-9.-]+(?::[0-9]+)?/[A-Za-z0-9._/-]+?(?:/-)?/(?:issues|work_items)/[0-9]+"
+REF = r"(?:[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?#[0-9]+"
+ITEM = rf"(?:issues?\s+)?(?:{URL}|{REF})"
+SEP = r"(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s+)"
+CLOSES_RE = re.compile(rf"\b{KW}\b:?\s+({ITEM}(?:{SEP}{ITEM})*)", re.I)
+ITEM_RE = re.compile(
+    r"https?://(?P<host>[A-Za-z0-9.-]+(?::[0-9]+)?)/(?P<upath>[A-Za-z0-9._/-]+?)(?:/-)?/(?:issues|work_items)/(?P<un>[0-9]+)"
+    r"|(?P<rpath>[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?#(?P<rn>[0-9]+)", re.I)
 
 
-def body_refs(body):
-    """Every `(path or None, n)` the body names in a closing-keyword reference, in order.
-    Code spans, fences and HTML comments are read too, on purpose: the `## Squash commit`
-    block is plain text inside a fence, and the platform closes from commit messages."""
-    return [(p or None, int(num)) for m in CLOSES_RE.finditer(body) for p, num in REF_RE.findall(m.group(1))]
+def body_refs(body, slug, host):
+    """Every `(path, n)` the body names in a closing-keyword reference, in order, resolved
+    against origin. Code spans, fences and HTML comments are read too, on purpose: the
+    `## Squash commit` block is plain text inside a fence, and the platform closes from
+    commit messages. A URL on another host can't be graded with origin's token: exit 4."""
+    out = []
+    for m in CLOSES_RE.finditer(body):
+        for i in ITEM_RE.finditer(m.group(1)):
+            if i["un"]:
+                if i["host"].lower() != host.lower():
+                    raise ValueError(f"the body closes {i[0]}, on a host other than origin's ({host})")
+                out.append((i["upath"], int(i["un"])))
+            elif i["rpath"] and "/" not in i["rpath"]:
+                out.append((f"{slug.rsplit('/', 1)[0]}/{i['rpath']}", int(i["rn"])))  # a sibling
+            else:
+                out.append((i["rpath"] or slug, int(i["rn"])))
+    return out
 
 
 # A closing list as long as the page it came on may have more on the next page, and an
@@ -199,8 +220,7 @@ def finish(slug, head, body, canon, entries, issue_ref):
     items = [head] + [(label, b, "section") for _, label, b in entries]
     keys = set().union(*(k for k, _, _ in entries))
     fetch, named = [], False
-    for p, num in body_refs(body):
-        p = p or slug
+    for p, num in body_refs(body, slug, os.environ.get("ACGATE_HOST", "")):
         if any(seg in (".", "..") for seg in p.split("/")):
             raise ValueError(f"the body names {p}#{num}, which is not a repository path")
         named = True
@@ -295,6 +315,9 @@ def bodies(platform, slug, files, fetch_dir, issue_ref):
         issue = json.load(open(f"{fetch_dir}/{i}.json"))
         if not isinstance(issue, dict) or field[0] not in issue:
             raise ValueError(f"issue {label} is not in the answer")
+        if "pull_request" in issue:  # GitHub answers a PR's number as an issue; no keyword closes a PR
+            info.append(f"ac-gate: [info] {label} is a pull request, not an issue; not graded")
+            continue
         items.append((label, issue.get(field[1]) or "", "section"))
     return items, info
 
@@ -401,6 +424,7 @@ if [[ -z "$platform" ]]; then
 	esac
 fi
 [[ "$platform" == gitlab && -z "$host" ]] && host=gitlab.com
+export ACGATE_HOST="$host" # the grader refuses a closing URL on any other host
 enc="$(printf '%s' "$slug" | jq -sRr @uri)"
 
 # glab exits 0 on an HTTP error and prints the error body (precheck-status.sh gl_api).

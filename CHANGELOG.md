@@ -34,9 +34,12 @@ are worth keeping apart:
   named for an epic failed the gate on the epic's Definition of Done even though the PR closed only
   a story, and on GitLab an MR closing `group/other#12` was graded against the local `#12` too. Now
   `precheck-ac-gate.sh pr` grades the body plus every issue the merge closes, each labelled by its
-  full reference: the platform's closing list and each Closes/Fixes/Resolves reference in the body
-  (GitHub links only `#5` from `Closes #5, #6`, but the merge closes both). A body reference that
-  can't be read is exit 4. An `ISSUE_N` outside that set prints `ac-gate: [info] <ref> is not among
+  full reference: the platform's closing list and each closing reference in the body (GitHub links
+  only the first reference of a comma list, but the merge closes them all). The body is read as a
+  superset of both platforms' closing patterns: every keyword form (GitLab's `-ing` and `implement`
+  forms too), `issue #n`, sibling `name#n`, issue and work-item URLs, and comma, `and` or
+  space-separated lists, inside code and the squash block's fence too. A body reference that can't
+  be read, or a closing URL on another host, is exit 4; one that names a pull request is `[info]`. An `ISSUE_N` outside that set prints `ac-gate: [info] <ref> is not among
   the closing issues; not graded`, which has no exit effect and causes no fetch; `ISSUE_N` is graded
   alone only when nothing closes, and it accepts `<path>#<n>`. A closing list that may run past one
   page is exit 4. /precheck copies the `[info]` line to its checklist.

@@ -53,6 +53,9 @@ if tool == "gh" and endpoint == "graphql":
           "closingIssuesReferences": {"totalCount": total, "nodes": nodes}}}}})); sys.exit(0)
 if tool == "gh":
     m = re.fullmatch(r"repos/Owner/Repo/issues/([0-9]+)", endpoint)
+    prs = json.loads(os.environ.get("FAKE_PRS", "[]"))  # numbers that are PRs, which /issues answers too
+    if m and int(m.group(1)) in prs:
+        print(json.dumps({"number": int(m.group(1)), "body": "", "pull_request": {"url": "x"}})); sys.exit(0)
     if m and m.group(1) in issues:
         print(json.dumps({"number": int(m.group(1)), "body": issues[m.group(1)]})); sys.exit(0)
     if m:
@@ -609,6 +612,56 @@ def test_closing_reference_in_code_or_comment_is_graded(world, origin, ref, body
     assert r.returncode == 1, r.stdout + r.stderr
     assert f"  [unchecked] {ref}:3 six is open" in r.stdout
     assert _fetched(calls, "issues/6"), calls
+
+
+# --- babelfish 2026-10-31: the body parser is a superset of both platforms' closing patterns.
+
+COMMON_FORMS = [
+    "Closing #9", "Fixing #9", "Resolving #9", "Implements #9", "implemented #9", "Implementing #9",
+    "implement #9", "Fixed #9", "Resolved: #9", "Closes issue #9", "Closes issues #5 and #9",
+    "Closes #5 #9", "closes #5  #9", "Fixes #5, issue #9",
+]
+
+
+@pytest.mark.parametrize("origin,p,body", [
+    *[(GH, "Owner/Repo", b) for b in COMMON_FORMS],
+    *[(GL, "group/proj", b) for b in COMMON_FORMS],
+    (GH, "Owner/Repo", "Closes #5\n\n```text\nFixes https://github.com/Owner/Repo/issues/9\n```"),
+    (GH, "Owner/Repo", "Fixes HTTPS://GITHUB.COM/Owner/Repo/issues/9"),
+    (GH, "Owner/Repo", "Closes Repo#9"),
+    (GL, "group/proj", "Closes https://gitlab.example.com/group/proj/-/issues/9"),
+    (GL, "group/proj", "Closes https://gitlab.example.com/group/proj/-/work_items/9"),
+    (GL, "group/proj", "Closes https://gitlab.example.com/group/proj/issues/9"),
+    (GL, "group/proj", "Closes proj#9"),
+])
+def test_every_platform_closing_form_is_graded(world, origin, p, body):
+    # The platform linked #5 alone; each of these forms still closes #9 on merge.
+    r, calls = _gate(world, origin, "9", {"9": _ac("- [ ] nine is open")},
+                     [{"number": 5, "body": ISSUE_DONE}], body=body)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert f"  [unchecked] {p}#9:3 nine is open" in r.stdout
+    assert "[info]" not in r.stdout
+
+
+@pytest.mark.parametrize("origin,url", [
+    (GH, "https://gitlab.com/Owner/Repo/-/issues/9"),
+    (GH, "https://github.example.com/Owner/Repo/issues/9"),
+    (GL, "https://gitlab.com/group/proj/-/issues/9"),
+])
+def test_closing_url_on_another_host_is_exit_4(world, origin, url):
+    r, calls = _gate(world, origin, "5", {"9": ISSUE_DONE}, [{"number": 5, "body": ISSUE_DONE}],
+                     body=f"Closes #5\nFixes {url}")
+    assert r.returncode == 4, r.stdout + r.stderr
+    assert "on a host other than origin's" in r.stderr
+    assert not _fetched(calls, "issues/9"), calls
+
+
+def test_github_closing_reference_to_a_pr_is_info(world):
+    # /issues/8 answers a PR, and no closing keyword closes a PR: [info], never [no-ac].
+    r, _ = _gate(world, GH, "5", {}, [{"number": 5, "body": ISSUE_DONE}], body="Closes #5, #8", FAKE_PRS="[8]")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "ac-gate: [info] Owner/Repo#8 is a pull request, not an issue; not graded" in r.stdout
+    assert "[no-ac]" not in r.stdout
 
 
 @pytest.mark.parametrize("origin,foreign", [(GH, "Other/Proj#12"), (GL, "group/third#12")])
