@@ -72,6 +72,19 @@ eq "prose with O keeps the author's arrows" "issue #23 → 2979849633" \
 eq "legacy prose is all but the last part" "a → b" '{text: "a → b → c"} | sq_prose(null)'
 eq "no text is empty, not an error" "|" '{} | "\(sq_answer(null))|\(sq_prose(null))"'
 
+# The last editor's own tag is a signature, not an answer (#1421). It lands after the arrow when
+# `sqtk show`'s display suffix is copied back into --text. The tag must be the squawk's last
+# editor's, so a human's "(ok)" is still an answer.
+signed() { printf '{text: %s, initials: %s, created_at: "t", updated_at: "u"} | sq_answer(null)' "$(jq -n --arg t "$1" '$t')" "$(jq -n --arg i "$2" '$i')"; }
+eq "the editor's own tag alone is no answer" "" "$(signed "deploy now? →  (CER)" CER)"
+eq "the editor's tag repeated is no answer" "" "$(signed "deploy now? →  (CER)  (CER)" CER)"
+eq "another editor's short tag is an answer" "(ok)" "$(signed "deploy now? → (ok)" BJ)"
+eq "text with the editor's tag is an answer" "yes (CER)" "$(signed "deploy now? → yes (CER)" CER)"
+eq "someone else's initials as a tag are an answer" "(CER)" "$(signed "deploy now? → (CER)" BJ)"
+eq "no recorded editor: no tag rule" "(CER)" \
+	'{text: "deploy now? → (CER)", created_at: "t", updated_at: "u"} | sq_answer(null)'
+eq "initials that are not initials are never a tag rule" "(a.b)" "$(signed "deploy now? → (a.b)" a.b)"
+
 echo
 if [[ $FAILS -eq 0 ]]; then
 	echo "  All sqtk-answer checks passed."

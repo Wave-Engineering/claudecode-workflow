@@ -19,6 +19,18 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Fixed
+- **The squawk drain hook no longer announces an agent's own changes, and a signature is no
+  longer an answer (#1421, triage #91 and #93).** An agent that retired its own squawk was told at
+  its next turn that its squawks had changed, for a change it had just made; and an answer that was
+  only the last editor's own tag (`(CER)` after the `→` slot) read as `answered "(CER)"`. squawkie
+  stores the last editor's `initials` on every change, so `sqtk-drain.sh` now takes the agent's own
+  (`SQUAWK_INITIALS`, else the identity file's `dev_name`, as `sqtk` signs) and records a change it
+  made last as seen without reporting it, in the hook and in `--pending`. A change by anyone else
+  is reported as before. `sqtk-answer.jq` returns `""` for an answer made only of the squawk's
+  last editor's tags; `(ok)` from a human, or any text, is still an answer. The limit: editors
+  whose first three letters coincide can't be told apart. The daemon-side half is mattermost-crew#206.
+
 ### Added
 - **`CLAUDE.md`: never walk the whole filesystem (#1374).** A `find /` went into a
   self-recursive kio-fuse mount and held a shared host at load ~105 for about 90 minutes. The
