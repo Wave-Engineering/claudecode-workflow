@@ -159,7 +159,21 @@ def test_ccfold_path_opens_one_refresh_and_survives_a_missing_claude_md():
     empty = empty[: empty.index("5. **Run `/scpmr`.**")]
     assert empty.index("Switch back") < empty.index("delete `chore/<N>-ccfold`")
     assert "not planned" in empty and "go to step 8" in empty
-    assert "git check-ignore -q .claude/agent-identity.json" in body
+    # Both session files are exempt in item 1's check itself (it runs before any .gitignore edit),
+    # and the refresh then ignores both, because /precheck won't mark ready over an untracked file.
+    ignore = body[body.index("Update `.gitignore`") :]
+    ignore = ignore[: ignore.index(" - ")]
+    assert "`.claude/agent-identity.json`" in ignore and "`.claude/wtf/`" in ignore
+    assert "git check-ignore -q <path>" in ignore
+    assert "never stage `.claude/wtf/`" in body
+    # A lockfile-free repo can't pass precheck's dependency scan without the declaration, but the
+    # declaration must be true: a manifest without a lockfile is unscanned, not empty.
+    declare = body[body.index("A repo with no lockfiles") :]
+    declare = declare[: declare.index(" - ")]
+    assert "Job C" in declare and "only when it is true" in declare
+    assert "no dependency manifest" in declare and "add nothing" in declare
+    # cc-workflow's scripts/ci/ isn't installed, so a pointer there is dead in other repos.
+    assert "scripts/ci/check-scannable.sh" not in body
 
 
 # --- seeds -------------------------------------------------------------------------------------
@@ -352,7 +366,7 @@ def test_issue_listing_on_another_forge_says_so(temp_git_repo, tmp_path_factory)
     assert out.stderr == ""
 
 
-def test_clean_tree_check_tolerates_only_the_identity_file(temp_git_repo):
+def test_clean_tree_check_tolerates_only_the_session_files(temp_git_repo):
     repo = temp_git_repo
     _commit(repo, "a.md")
     check = _block("--untracked-files=all")
@@ -367,7 +381,12 @@ def test_clean_tree_check_tolerates_only_the_identity_file(temp_git_repo):
     (repo / ".claude").mkdir()
     (repo / ".claude" / "agent-identity.json").write_text("{}\n", encoding="utf-8")
     assert dirt() == "", "the identity /name writes in step 2 must not block step 7"
-    for stray in (".claude/notes.txt", "notes.txt"):
+    # The wtf hook journals the session's own tool calls here from its first call (#1239 check c).
+    (repo / ".claude" / "wtf").mkdir()
+    (repo / ".claude" / "wtf" / "hook-queue.jsonl").write_text("{}\n", encoding="utf-8")
+    assert dirt() == "", "the wtf journal the session itself writes must not block step 7"
+    for stray in (".claude/notes.txt", "notes.txt", ".claude/wtf.txt", "wtf/hook-queue.jsonl"):
+        (repo / stray).parent.mkdir(exist_ok=True)
         (repo / stray).write_text("x\n", encoding="utf-8")
         assert stray in dirt()
         (repo / stray).unlink()
