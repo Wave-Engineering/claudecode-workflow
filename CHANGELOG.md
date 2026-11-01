@@ -30,6 +30,21 @@ are worth keeping apart:
   the rule into subagent briefs, where the walk came from. `/ccfold` brings it into consumers.
 
 ### Fixed
+- **The AC gate grades what the PR/MR closes, not what the branch names (#1397, #1407).** A branch
+  named for an epic failed the gate on the epic's Definition of Done even though the PR closed only
+  a story, and on GitLab an MR closing `group/other#12` was graded against the local `#12` too. Now
+  `precheck-ac-gate.sh pr` grades the body plus every issue the merge closes, each labelled by its
+  full reference: the platform's closing list and each closing reference in the body (GitHub links
+  only the first reference of a comma list, but the merge closes them all). The body is read as a
+  superset of both platforms' closing patterns: every keyword form (GitLab's `-ing` and `implement`
+  forms too), `issue #n`, `GH-n`, sibling `name#n`, issue and work-item URLs with any query or
+  fragment, markdown links, code spans and emphasis, and comma, `and` or space-separated lists,
+  inside the squash block's fence too. A body reference that can't be read, or a closing URL on
+  another host, is exit 4; one that names a pull request is `[info]`. An `ISSUE_N` outside that set
+  prints `ac-gate: [info] <ref> is not among the closing issues; not graded`, which has no exit
+  effect and causes no fetch; `ISSUE_N` is graded
+  alone only when nothing closes, and it accepts `<path>#<n>`. A closing list that may run past one
+  page is exit 4. /precheck copies the `[info]` line to its checklist.
 - **The bench judge's deadline now covers the shim's queue (#1406).** Upstream's 30 s per-call
   client deadline ran out while calls waited behind the shim's 4 workers, so Sweep A's first
   judge run silently scored every candidate as a false positive. Each upstream step now runs
