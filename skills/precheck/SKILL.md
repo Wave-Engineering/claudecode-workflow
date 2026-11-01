@@ -364,7 +364,7 @@ Reading `name` is immune to all four **because it never asks the path a question
 
 **Job D — Code review**
 
-Job D names no model (#1387). The reviewer runs on its agent definition's model, and a router in the request path may pick another. A per-call `model` would override both.
+Job D **pins `model: sonnet` and `effort: medium`** on every dispatch (#1418, BJ 2026-10-31). This supersedes #1387's "name no model": an agent definition's default can change under a plugin update (`pr-review-toolkit:code-reviewer`'s is opus), and a pin can't. Sweep A (`docs/bench/jobd-golden.md`) found no detectable true-positive difference between sonnet and opus, at 0.33× the cost, and `high` cost 1.5× with no detectable gain.
 
 Job D has **two** prompts: a **full** pass and a **delta** re-run. Which one you use is not a judgment call — it is decided by the rule below.
 
@@ -388,6 +388,8 @@ Job D has **two** prompts: a **full** pass and a **delta** re-run. Which one you
 
 ```
 subagent_type: feature-dev:code-reviewer
+model: sonnet
+effort: medium
 prompt: "Review this changeset in <repo_root>.
 
          ### Diff — <N> lines total, read ALL of these files before reviewing
@@ -470,6 +472,8 @@ The ordering is load-bearing: the snapshot must equal *what the reviewer saw*. R
 **Job D-delta** — used when `resolve` printed `delta <ref>`. Same rule: the parent runs the command, the reviewer receives the content.
 ```
 subagent_type: feature-dev:code-reviewer
+model: sonnet
+effort: medium
 prompt: "Re-review after fixes in <repo_root>.
 
          ### Changes since the last completed review — <N> lines, read ALL these files

@@ -34,7 +34,7 @@ If the diff is empty, stop and tell the user there's nothing to review — but f
 
 ## Dispatch Reviewer
 
-Launch a `feature-dev:code-reviewer` subagent with this prompt:
+Launch a `feature-dev:code-reviewer` subagent pinned to **`model: sonnet`** and **`effort: medium`** (#1418, BJ 2026-10-31), with this prompt:
 
 ```
 ## Code Review Request
