@@ -93,6 +93,18 @@
         "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
+            "_comment": "Arm-free chat delivery (cc-workflow#1420, mattermost-crew#204). asyncRewake: Claude Code runs this in the background and wakes the model when it exits 2, so an idle agent is woken by a message with no doorbell for the agent to arm. Its OWN group, like the other hooks here, so merge_settings' group-signature union cannot duplicate it. The guard exits 0 silently where crewchat-waiter is not installed; the waiter is single-instance per Dev-Name and silent without an identity. The Stop entry re-arms it after each turn.",
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/crewchat-waiter.sh",
+            "asyncRewake": true,
+            "timeout": 86400
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
             "_comment": "Kit hook-wiring liveness beacon (cc-workflow#1086). Its OWN group, like the context-freshness pair, so merge_settings' group-signature union cannot append-and-duplicate a neighbouring hook. Writes ~/.claude/.kit-hooks-alive by EXECUTING — the one assertion that a settings file cannot fake. Silent (no additionalContext), always exits 0.",
             "type": "command",
             "command": "~/.claude/scripts/hooks/workflow/kit-hooks-alive.sh"
@@ -181,6 +193,18 @@
       }
     ],
     "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "_comment": "Arm-free chat delivery, the re-arm half (cc-workflow#1420): see the SessionStart entry. Fires at the end of every turn; while a waiter still waits it finds the Dev-Name's lock held and exits 0 without a sound, and after a wake it starts the next one. asyncRewake, so it never blocks the turn's end.",
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/crewchat-waiter.sh",
+            "asyncRewake": true,
+            "timeout": 86400
+          }
+        ]
+      },
       {
         "matcher": "*",
         "hooks": [

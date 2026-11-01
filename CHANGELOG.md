@@ -20,6 +20,20 @@ are worth keeping apart:
 ## [Unreleased]
 
 ### Added
+- **Chat delivery that no agent has to arm (#1420, mattermost-crew#204).** `crewchat-doorbell` was
+  a background task each agent had to start, restart and not duplicate, so every way an agent can
+  forget (a `/clear`, a reseed, a lost notification, a re-arm through an outage, a second copy)
+  was a way for chat to fail or to double. `config/settings.template.json` now registers
+  `scripts/hooks/workflow/crewchat-waiter.sh` on `SessionStart` and `Stop` with `asyncRewake`:
+  Claude Code runs `crewchat-waiter` in the background and wakes the model when it exits 2, so an
+  idle agent is woken by a message, a busy one gets it inside the turn it is in, and nothing is
+  typed. The guard exits 0 silently on a host without `crewchat-waiter`, so the hook is safe to
+  register everywhere; the waiter is single-instance per Dev-Name and silent without an
+  identity. `docs/chat-tools.md` now says there is nothing to arm where the hook is installed,
+  keeps `crewchat-doorbell` as the fallback, documents its new exit 5 (a waiter already delivers),
+  and corrects the `backend.down` row (one alarm for an outage over 10 minutes, mattermost-crew#202).
+  Merging this installs nothing: the template reaches a host's settings only when `./install` is
+  run there, and `CREWCHAT_TAG` still pins the release without the waiter.
 - **`CLAUDE.md`: never walk the whole filesystem (#1374).** A `find /` went into a
   self-recursive kio-fuse mount and held a shared host at load ~105 for about 90 minutes. The
   new section bans recursive searches rooted at `/` or `/run`, names the toolchain lookups to

@@ -259,7 +259,7 @@ MCP scopes are additive — all sources merge into one tool list. Per-project ex
 
 On session start, run `/engage` to detect platform, resolve identity, load context, and confirm rules. After a compaction or a `/reseed revive`, `/engage reload` takes its place and no confirmation is sent (see Post-Compaction below).
 
-Chat is `/owtx` (send) and `/owrx` (read), on the OaW Mattermost server by default; `> discord` routes one message to Discord, and `/disc` is deprecated. Where `chat_send` is in your tool list, arm `crewchat-doorbell` to hear Mattermost, Discord and squawk answers. `docs/chat-tools.md` holds the transport rule, the doorbell ("Doorbell"), the addressing convention, signature format, and echo rule. Start sessions without `--channels`: its Discord watcher is retired (#1344).
+Chat is `/owtx` (send) and `/owrx` (read), on the OaW Mattermost server by default; `> discord` routes one message to Discord, and `/disc` is deprecated. Where `chat_send` is in your tool list you hear Mattermost, Discord and squawk answers without arming anything: the `crewchat-waiter` hook delivers them (`./install` registers it), and only a host without the hook has you arm `crewchat-doorbell` yourself. `docs/chat-tools.md` holds the transport rule, the doorbell ("Doorbell"), the addressing convention, signature format, and echo rule. Start sessions without `--channels`: its Discord watcher is retired (#1344).
 
 The MCP fleet writes a unified structured-event log to `~/.claude/logs/mcp.jsonl`. Rotation policy and operational commands: `docs/operations/log-rotation.md`.
 
