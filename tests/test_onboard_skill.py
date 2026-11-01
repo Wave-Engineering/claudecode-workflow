@@ -159,10 +159,13 @@ def test_ccfold_path_opens_one_refresh_and_survives_a_missing_claude_md():
     empty = empty[: empty.index("5. **Run `/scpmr`.**")]
     assert empty.index("Switch back") < empty.index("delete `chore/<N>-ccfold`")
     assert "not planned" in empty and "go to step 8" in empty
-    assert "git check-ignore -q .claude/agent-identity.json" in body
-    # The wtf journal is exempt in the check itself, never by asking for a .gitignore edit,
-    # and never rides along in the refresh commit.
-    assert "`.claude/wtf/`" in body and "never stage `.claude/wtf/`" in body
+    # Both session files are exempt in item 1's check itself (it runs before any .gitignore edit),
+    # and the refresh then ignores both, because /precheck won't mark ready over an untracked file.
+    ignore = body[body.index("Update `.gitignore`") :]
+    ignore = ignore[: ignore.index(" - ")]
+    assert "`.claude/agent-identity.json`" in ignore and "`.claude/wtf/`" in ignore
+    assert "git check-ignore -q <path>" in ignore
+    assert "never stage `.claude/wtf/`" in body
     # A lockfile-free repo can't pass precheck's dependency scan without the declaration.
     assert "`.no-scannable-dependencies`" in body and "Job C" in body
 

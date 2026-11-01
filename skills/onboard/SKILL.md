@@ -160,12 +160,14 @@ or added. If neither file is stale, go to step 8.
      template, or `CLAUDE.md` already matches upstream. Either way, still run its Steps 9 and 10,
      which write `.claude-project.md` and pin the committer identity. For a copied template,
      first set its `Dev-Team:` to the team `/name` used.
-   - Update `.gitignore` as part of this. If `git check-ignore -q .claude/agent-identity.json`
-     fails, add that path, so no commit can pick the identity file up.
+   - Update `.gitignore` as part of this. For each of `.claude/agent-identity.json` and
+     `.claude/wtf/`, if `git check-ignore -q <path>` fails, add that path. Item 1 exempts both,
+     but `/precheck` won't mark a PR/MR ready over any untracked file it can see, so the refresh
+     must ignore them itself.
    - A repo with no lockfiles fails `/precheck`'s dependency scan unless a
      `.no-scannable-dependencies` file at its root declares that, with a reason. If the repo
-     has neither, add the declaration here. The declaration is documented under Job C in `/precheck`
-     (`skills/precheck/SKILL.md`) and in `scripts/ci/check-scannable.sh`.
+     has neither, add the declaration here. The declaration is documented under Job C in
+     `/precheck` (`skills/precheck/SKILL.md`) and in `scripts/ci/check-scannable.sh`.
    - Judge what is left to commit with item 1's check, and never stage `.claude/wtf/`: the
      journal is the session's, not the refresh's.
    - If all that leaves nothing to commit, the files weren't stale after all. Switch back to the
