@@ -84,6 +84,18 @@ GONE_AFTER="${SQTK_DRAIN_GONE_AFTER:-86400}"
 [[ "$GONE_MISSES" =~ ^[0-9]+$ ]] || GONE_MISSES=3
 [[ "$GONE_AFTER" =~ ^[0-9]+$ ]] || GONE_AFTER=86400
 
+# My own initials, as sqtk signs my changes: SQUAWK_INITIALS, else the identity file's
+# dev_name, uppercase alphanumerics, at most 3. squawkie records the last editor on every
+# change, so a squawk whose `.initials` are mine was last changed by me, and I already know
+# (#1421). Empty when there is neither, and then nothing is skipped. The limit: two editors
+# whose initials coincide (the same first three letters) can't be told apart, and a change by
+# the other would be taken for mine.
+OWN="${SQUAWK_INITIALS:-}"
+if [[ -z "$OWN" && -r "$ROOT/.claude/agent-identity.json" ]]; then
+	OWN=$(jq -r '.dev_name // empty' "$ROOT/.claude/agent-identity.json" 2>/dev/null || true)
+fi
+OWN=$(printf '%s' "$OWN" | tr '[:lower:]' '[:upper:]' | tr -cd 'A-Z0-9' | cut -c1-3)
+
 [[ -s "$MINE" && -n "$BASE" ]] || none
 command -v curl >/dev/null 2>&1 || none
 jq -e 'type == "array" and length > 0' "$MINE" >/dev/null 2>&1 || none
@@ -161,7 +173,8 @@ jq -R . "$WORK/done.txt" | jq -s . >"$WORK/done.json" 2>/dev/null || none
 now=$(date +%s)
 jq -c -L "$LIB" --slurpfile seen "$WORK/seen.json" --slurpfile sq "$WORK/sq.json" \
 	--slurpfile got "$WORK/done.json" --slurpfile baseline "$WORK/baseline.json" \
-	--argjson now "$now" --argjson misses "$GONE_MISSES" --argjson after "$GONE_AFTER" '
+	--argjson now "$now" --argjson misses "$GONE_MISSES" --argjson after "$GONE_AFTER" \
+	--arg own "$OWN" '
 	include "sqtk-answer";
 	def terminal: test("^(confirmed|rejected|retired|recorded|gone)\\|");
 	[.[] as $m
@@ -182,7 +195,8 @@ jq -c -L "$LIB" --slurpfile seen "$WORK/seen.json" --slurpfile sq "$WORK/sq.json
 	     | "\($s.state)|\($a)" as $key
 	     | if ($s.state != "open" or $a != "") and $prev != $key then
 	         {id: $m.id, list: $m.list, seq: $s.seq, state: $s.state, answer: $a, text: $s.text,
-	          o: $o, key: $key, report: true}
+	          o: $o, key: $key,
+	          report: ($own == "" or ($s.initials // "") != $own)}
 	       elif ($prev | startswith("missing|")) then {id: $m.id, key: null, report: false}
 	       else empty end
 	   end]

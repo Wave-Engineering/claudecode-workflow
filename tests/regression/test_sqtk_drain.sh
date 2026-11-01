@@ -360,6 +360,54 @@ rc=$?
 [[ $rc -eq 3 && -z "$out" ]] && grep -q 'cannot load sqtk-answer.jq' "$WORK/nolib.err" &&
 	pass "no module: --pending exits 3, says so" || fail "no module, --pending (rc=$rc out='$out' err=$(cat "$WORK/nolib.err"))"
 
+# 21. A change I made last is not news to me (#1421). squawkie records the last editor's
+#     initials on every change; the hook knows mine (SQUAWK_INITIALS, else the identity file's
+#     dev_name). My own retire is recorded as seen but never announced, in the hook and in
+#     --pending; someone else's change after it is announced as usual.
+mine '[{"list":"bj:needs","seq":3,"id":31,"created_at":"t"}]'
+reset
+unset SQUAWK_INITIALS # a caller's own must not leak into the cases that mean "unknown"
+own_run() { jq -cn --arg c "$REPO" '{cwd: $c, prompt: "x"}' | SQUAWK_INITIALS=BAB PATH="$WORK/bin:$PATH" bash "$HOOK"; }
+own_pending() { (cd "$REPO" && SQUAWK_INITIALS=BAB PATH="$WORK/bin:$PATH" bash "$HOOK" --pending) >"$WORK/pending.out"; }
+body '{"name":"bj:needs","squawks":[{"id":31,"seq":3,"state":"retired","text":"tag v9? →","initials":"BAB"}]}'
+own_pending
+rc=$?
+[[ $rc -eq 1 && ! -s "$WORK/pending.out" ]] && pass "own retire: --pending rings nothing" ||
+	fail "own retire, --pending (rc=$rc out=$(cat "$WORK/pending.out"))"
+out=$(own_run)
+[[ -z "$out" ]] && pass "own retire: not announced" || fail "own retire announced (out='$out')"
+[[ "$(jq -r '."31"' "$SEEN" 2>/dev/null)" == "retired|" ]] && pass "own retire: still recorded as seen" ||
+	fail "own retire not recorded (seen=$(cat "$SEEN" 2>/dev/null))"
+# The lost-answer guard: the agent records an item on an OPEN squawk ("→ #N", an answer to the
+# parser), which is silent and recorded as "open|#9"; BJ then confirms it, and that is news.
+reset
+body '{"name":"bj:needs","squawks":[{"id":31,"seq":3,"state":"open","text":"tag v9? → #9","initials":"BAB"}]}'
+out=$(own_run)
+[[ -z "$out" && "$(jq -r '."31"' "$SEEN" 2>/dev/null)" == "open|#9" ]] &&
+	pass "own answer-bearing edit: silent, recorded" || fail "own edit (out='$out' seen=$(cat "$SEEN" 2>/dev/null))"
+body '{"name":"bj:needs","squawks":[{"id":31,"seq":3,"state":"confirmed","text":"tag v9? → #9","initials":"BJ"}]}'
+c=$(ctx "$(own_run)")
+[[ "$c" == *"✓ confirmed"* ]] && pass "then BJ confirms: announced" || fail "BJ change after own edit (ctx='$c')"
+
+# 21b. Someone else's change first is announced, and so is mine with no initials known.
+reset
+body '{"name":"bj:needs","squawks":[{"id":31,"seq":3,"state":"confirmed","text":"tag v9? →","initials":"BJ"}]}'
+c=$(ctx "$(own_run)")
+[[ "$c" == *"✓ confirmed"* ]] && pass "another editor's change: announced" || fail "other editor (ctx='$c')"
+reset
+body '{"name":"bj:needs","squawks":[{"id":31,"seq":3,"state":"retired","text":"tag v9? →","initials":"BAB"}]}'
+c=$(ctx "$(run)")
+[[ "$c" == *"retired"* ]] && pass "no own initials known: nothing is skipped" || fail "unknown own initials (ctx='$c')"
+
+# 21c. With no SQUAWK_INITIALS the identity file's dev_name stands in: "babelfish" is BAB.
+reset
+printf '{"dev_name":"babelfish"}\n' >"$REPO/.claude/agent-identity.json"
+body '{"name":"bj:needs","squawks":[{"id":31,"seq":3,"state":"retired","text":"tag v9? →","initials":"BAB"}]}'
+out=$(run)
+[[ -z "$out" ]] && pass "identity file: dev_name babelfish is BAB, its own retire is not announced" ||
+	fail "identity-derived initials (out='$out')"
+rm -f "$REPO/.claude/agent-identity.json"
+
 echo
 if [[ $FAILS -eq 0 ]]; then
 	echo "  All sqtk-drain checks passed."

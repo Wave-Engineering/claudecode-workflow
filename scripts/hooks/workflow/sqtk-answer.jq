@@ -48,12 +48,23 @@ def kept_arrows($o):
 	  if (head | length) == $p and head == ($o | head) then $p else null end
 	end;
 
+# Input: an answer; $i is the squawk's last editor's initials. True when the answer is nothing
+# but that editor's own tag, "(CER)" or "(CER) (CER)": a signature, not an answer (#1421). It
+# shows up when `sqtk show`'s display suffix is copied back into `--text`. A different tag
+# ("(ok)") or any other text is an answer, and a human's "(ok)" is safe because the editor
+# whose tag it must be is the squawk's last one.
+def only_editor_tags($i):
+	($i | type) == "string" and ($i | test("^[A-Za-z0-9]{1,3}$"))
+	and test("^(\\(" + $i + "\\)\\s*)+$");
+
 # Input: a squawk; $o is its original text, or null. Its answer, or "".
 def sq_answer($o):
 	(.text // "") as $t
+	| .initials as $i
 	| if pristine then ""
-	  else ($t | kept_arrows($o)) as $p
-	  | if $p != null then $t | answer_after($p) else $t | legacy_answer end
+	  else ((($t | kept_arrows($o)) as $p
+	  | if $p != null then $t | answer_after($p) else $t | legacy_answer end)
+	  | if only_editor_tags($i) then "" else . end)
 	  end;
 
 # Input: a squawk; $o as above. The author's text, for display.
