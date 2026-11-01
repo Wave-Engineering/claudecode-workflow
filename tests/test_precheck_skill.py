@@ -633,7 +633,8 @@ def test_precheck_job_e_gates_the_pass() -> None:
     rearm = flat.split("### `/precheck rearm`")[1].split("## Dependency Vulnerability Scan")[0]
     assert "Then run Job E yourself at `HEAD_SHA`" in rearm
     assert "every lane `exit=0`, and Job E exit 0, and no `[waived]`/`[override]` line in the Job E log." in rearm
-    assert "AC gate (precheck-ac-gate.sh exit=<n>: <C>/<T> checked, <W> waived, <P> post-merge)" in flat
+    assert ("AC gate (precheck-ac-gate.sh exit=<n>: <C>/<T> checked, <W> waived, <P> post-merge;"
+            " any `[info]` not-graded line verbatim)") in flat
     assert "Implementation (AC verified)" not in flat
 
 
