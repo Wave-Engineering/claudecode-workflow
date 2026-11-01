@@ -621,7 +621,7 @@ COMMON_FORMS = [
     "implement #9", "Fixed #9", "Resolved: #9", "Closes issue #9", "Closes issues #5 and #9",
     "Closes #5 #9", "closes #5  #9", "Fixes #5, issue #9",
     "Fixes:#9", "Closes `#9`", "**Closes** #9", "Closes **#5** and _#9_", "Closes (#9).",
-    "Closes issue#9", "Closes [#5](x), [#9](y)",
+    "Closes issue#9", "Closes [#5](x), [#9](y)", "**Closes:** #9",
 ]
 
 
@@ -662,6 +662,14 @@ def test_closing_url_on_another_host_is_exit_4(world, origin, url):
     assert r.returncode == 4, r.stdout + r.stderr
     assert "on a host other than origin's" in r.stderr
     assert not _fetched(calls, "issues/9"), calls
+
+
+def test_url_fragment_is_not_read_as_another_reference(world):
+    # `issues/9#10`: the fragment is part of the URL, so #10 is never fetched (it would 404).
+    r, calls = _gate(world, GH, "5", {"9": ISSUE_DONE}, [{"number": 5, "body": ISSUE_DONE}],
+                     body="Closes #5\nFixes https://github.com/Owner/Repo/issues/9#10")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not _fetched(calls, "issues/10"), calls
 
 
 def test_github_closing_reference_to_a_pr_is_info(world):

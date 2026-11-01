@@ -186,9 +186,11 @@ PRE = r"[\[<`*_(]*"
 POST = r"(?:\]\([^\s)]*\))?[\]>`*_)]*"
 ITEM = rf"{PRE}(?:issues?\s+)?(?:{URL}|{REF}){POST}"
 SEP = r"(?:\s*,\s*(?:and\s+)?|\s+and\s+|\s+)"
-CLOSES_RE = re.compile(rf"\b{KW}\b[*_`]*(?::\s*|\s+)({ITEM}(?:{SEP}{ITEM})*)", re.I)
+CLOSES_RE = re.compile(rf"\b{KW}\b[*_`]*(?::[*_`]*\s*|\s+)({ITEM}(?:{SEP}{ITEM})*)", re.I)
+# The URL branch swallows its own tail, so `issues/9#10` is not also read as `#10`.
 ITEM_RE = re.compile(
     r"https?://(?P<host>[A-Za-z0-9.-]+)(?::[0-9]+)?/(?P<upath>[A-Za-z0-9._/-]+?)(?:/-)?/(?:issues|work_items)/(?P<un>[0-9]+)"
+    r"/?(?:[?#][^\s,)>\]`*_]*)?"
     r"|(?P<rpath>[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)?#(?P<rn>[0-9]+)|GH-(?P<gn>[0-9]+)", re.I)
 
 
