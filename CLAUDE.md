@@ -219,6 +219,16 @@ The hard block is mechanical: `secret-scan-gate.sh` runs gitleaks before every `
 
 ---
 
+## Never Walk the Whole Filesystem
+
+**Never run `find /`, `bfs /`, `fd . /`, `du /`, `grep -r` / `rg` from `/`, or any recursive search rooted at `/` or `/run`.** FUSE mounts (kio-fuse, sshfs, rclone, CephFS) can be unbounded or self-recursive, and a shared host has no headroom for it. On 2026-10-30 one `find /` went into a self-recursive kio-fuse mount under `/run/user/<uid>/`, outlived the session that started it, and held a shared workstation at load ~105 on 12 cores for about 90 minutes (#1374).
+
+- **To find an installed package, ask its toolchain:** `python3 -c 'import pkg, os; print(os.path.dirname(pkg.__file__))'`, `pip show -f <pkg>`, `npm root -g`, `go env GOMODCACHE`. Otherwise search named roots only: `~/.local`, `~/.cache`, `/usr/lib/python3*`, `/opt`.
+- **If a wider search is unavoidable:** `timeout 60 find <root> -xdev … -print`, with a named `<root>`, never `/`. `-xdev` is the protection: it keeps the walk on `<root>`'s own filesystem, so it never enters `/proc`, `/sys`, `/run`, `/mnt`, `/media`, or a FUSE, network or removable mount below `<root>` (an sshfs or kio-fuse mount under `~` is the realistic one). Never drop it. A `-path /proc -prune` clause does not replace it: `-path` matches the path as `find` builds it from `<root>`, so that prune only fires when `<root>` is `/`. Prune by `<root>`-relative path (`-path '<root>/node_modules' -prune -o …`) only for same-filesystem trees you also want skipped. `timeout 60` bounds the rest.
+- **Carry this rule into every subagent brief that may search for files.** A subagent knows only what its brief says, and the 2026-10-30 walk came from one.
+
+---
+
 ## Commit Message Format
 
 ```
