@@ -19,6 +19,15 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.23.0] - 2026-11-02
+
+The statusline is rebuilt as two rows of divider-separated panels: absolute context, a runway
+that names the real reseed trigger, a context floor, the next nerf dart, API spend since a marker
+you set, and an ask indicator for every open `bj:needs` item. The ask markers come with sqtk
+v0.13.0 (`--kind`, `--blocking`). Chat delivery no longer needs an agent to arm anything, and the
+kit now pins mattermost-crew v0.4.0, whose waiter wakes an agent once with every event that queued
+while it was busy. `/precheck` gains one mechanical exception to "re-review after any fix".
+
 ### Added
 - **API spend since a begin marker, in the statusline (#1429, story 3 of #1426).** A `$12.34` panel at
   the end of row 1 shows what API or Bedrock sessions have cost since a moment you set with the new
@@ -166,6 +175,14 @@ are worth keeping apart:
   `session live after <N> send(s); waiting up to <N>s for the revive` on entering the live
   wait, and "live then read" appends its revive on that line. "late live" has its entry
   written by a fake `sleep` on its 5th call, the final wait.
+
+### Image
+
+- **MCP servers:** mcp-server-sdlc v5.4.0 (from v5.3.0; `pr_wait_ci` takes a bounded, resumable
+  `max_wait_sec`, and on GitLab only the head pipeline bound to the MR head is graded).
+  mcp-server-wtf v1.5.2, mcp-server-discord v1.4.3 and mcp-server-nerf v2.1.0 are unchanged.
+  crewchat is still not baked.
+- **trivy 0.74.0**, unchanged. No container source changed since v8.22.0.
 
 ## [8.22.0] - 2026-10-31
 
