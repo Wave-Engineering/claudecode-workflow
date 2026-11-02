@@ -51,8 +51,10 @@
 #   ceiling_tokens, ceiling_by   the window the percentage is measured against, and the words for it
 #   usable_tokens      ceiling less buffer: what is usable before autocompact fires
 #   remaining_pct      the integer percent of usable_tokens left, or empty when it can't be computed
-#   soft_at_tokens, hard_at_tokens, reseed_at_tokens   the darts as token positions of context size
-#                      (usable * dart / 100); reseed_at is the ouch dart. Empty without usable or dart.
+#   soft_at_tokens, hard_at_tokens, ouch_at_tokens   the darts as token positions of context size
+#                      (usable * dart / 100); empty without usable or that dart
+#   reseed_at_tokens   where the gate acts: usable * (100 - threshold_pct) / 100. It is the ouch dart's
+#                      position when nerf has one, and 85% of usable with none. Empty without usable.
 #   autocompact_at_tokens   usable_tokens, the size at which autocompact fires (empty without it)
 #   runway_tokens      tokens left until the nearer of reseed and autocompact
 #   runway_by          which one: reseed | autocompact (empty with runway_tokens)
@@ -91,17 +93,20 @@ context_math() {
 	local reading="${1:-}" nerf="${2:-}" settings="${3:-${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.json}}"
 	local nerf_mode=ultraviolence nerf_soft="" nerf_hard="" nerf_ouch="" m d
 	local threshold used="" window="" model="" acw="" keys="" raw="" filed="" buffer
-	local ceil="" by="" usable="" pct="" soft_at="" hard_at="" reseed_at="" ac_at=""
+	local ceil="" by="" usable="" pct="" soft_at="" hard_at="" ouch_at="" reseed_at="" ac_at=""
 	local runway="" runway_by=""
 
 	# nerf's config: the mode picks what happens at the threshold, the darts set where.
 	if [[ -n "$nerf" && -f "$nerf" ]]; then
-		m="$(jq -r '.mode // empty' "$nerf" 2>/dev/null || true)"
+		# One jq for the mode and the three darts (a dart that isn't a number reads as empty).
+		IFS=$'\x1f' read -r m nerf_soft nerf_hard nerf_ouch < <(jq -r '
+			def dart: if type == "number" then tostring else "" end;
+			[(.mode // ""), (.darts_pct.soft | dart), (.darts_pct.hard | dart), (.darts_pct.ouch | dart)]
+			| join("\u001f")' "$nerf" 2>/dev/null)
 		case "$m" in hurt-me-plenty | not-too-rough) nerf_mode="$m" ;; esac
 		for d in soft hard ouch; do
-			m="$(jq -r --arg d "$d" '.darts_pct[$d] | numbers' "$nerf" 2>/dev/null || true)"
-			[[ "$m" =~ ^[0-9]{1,3}$ ]] || m=""
-			printf -v "nerf_$d" '%s' "$m"
+			printf -v m '%s' "nerf_$d"
+			[[ "${!m}" =~ ^[0-9]{1,3}$ ]] || printf -v "$m" '%s' ""
 		done
 	fi
 
@@ -114,9 +119,9 @@ context_math() {
 	fi
 
 	if [[ -n "$reading" && -f "$reading" ]]; then
-		used="$(jq -r '.used_tokens // empty' "$reading" 2>/dev/null || true)"
-		window="$(jq -r '.window_tokens // empty' "$reading" 2>/dev/null || true)"
-		model="$(jq -r '.model_id // empty' "$reading" 2>/dev/null || true)"
+		IFS=$'\x1f' read -r used window model < <(jq -r \
+			'[(.used_tokens // ""), (.window_tokens // ""), (.model_id // "")] | map(tostring) | join("\u001f")' \
+			"$reading" 2>/dev/null)
 	fi
 
 	if ! acw="$(_cm_acw_tokens "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}")"; then
@@ -152,18 +157,20 @@ context_math() {
 			usable=$((ceil - buffer))
 			pct=$(((usable - used) * 100 / usable))
 			((pct < 0)) && pct=0
-			# Where each marker sits, as a context size: autocompact fires at `usable`, and a dart
-			# at <percent used> of it (the gate acts when the remaining percent falls to
-			# 100 - ouch, which is the same point).
+			# Where each marker sits, as a context size. Autocompact fires at `usable`. The gate acts
+			# when the remaining percent falls to the threshold, i.e. at usable * (100 - threshold) / 100
+			# (the ouch dart's position when nerf has one; 85% of usable by default). A nerf dart sits
+			# at <percent used> of usable.
 			ac_at="$usable"
-			runway=$((usable - used)) runway_by=autocompact
+			reseed_at="$(awk -v u="$usable" -v t="$threshold" 'BEGIN { r = u * (100 - t) / 100; printf "%d", (r < 0 ? 0 : r) }')"
 			if [[ "$nerf_soft" =~ ^[0-9]+$ ]]; then soft_at=$((usable * 10#$nerf_soft / 100)); fi
 			if [[ "$nerf_hard" =~ ^[0-9]+$ ]]; then hard_at=$((usable * 10#$nerf_hard / 100)); fi
-			if [[ "$nerf_ouch" =~ ^[0-9]+$ ]]; then
-				reseed_at=$((usable * 10#$nerf_ouch / 100))
-				# The runway is the distance to the nearer of reseed and autocompact.
-				if ((reseed_at - used < runway)); then runway=$((reseed_at - used)) runway_by=reseed; fi
-			fi
+			if [[ "$nerf_ouch" =~ ^[0-9]+$ ]]; then ouch_at=$((usable * 10#$nerf_ouch / 100)); fi
+			# The runway is the distance to the nearer of reseed and autocompact. Both are measured in
+			# the same usable window (#1297), so reseed is nearer for any threshold above 0; at 0 the
+			# two coincide and autocompact is named, since a reseed that waits for it is no earlier.
+			runway=$((usable - used)) runway_by=autocompact
+			if ((reseed_at - used < runway)); then runway=$((reseed_at - used)) runway_by=reseed; fi
 			if ((runway < 0)); then runway=0; fi
 		fi
 	fi
@@ -173,6 +180,6 @@ context_math() {
 		threshold_pct "$threshold" used_tokens "$used" window_tokens "$window" model_id "$model" \
 		acw_tokens "$acw" acw_keys "$keys" acw_filed "$filed" buffer_tokens "$buffer" \
 		ceiling_tokens "$ceil" ceiling_by "$by" usable_tokens "$usable" remaining_pct "$pct" \
-		soft_at_tokens "$soft_at" hard_at_tokens "$hard_at" reseed_at_tokens "$reseed_at" \
+		soft_at_tokens "$soft_at" hard_at_tokens "$hard_at" ouch_at_tokens "$ouch_at" reseed_at_tokens "$reseed_at" \
 		autocompact_at_tokens "$ac_at" runway_tokens "$runway" runway_by "$runway_by"
 }

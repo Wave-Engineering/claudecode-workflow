@@ -574,7 +574,9 @@ class TestStatuslinePersistsContext:
         payload["context_window"]["total_input_tokens"] = 7000
         output = _run_statusline(payload, cwd=tmp_path,
                                  env_override={"CLAUDE_CONTEXT_STATE_DIR": str(blocker / "sub")})
-        assert _strip_ansi(output).split("\n")[0] == "7K"
+        # The render survives the failed writes; the floor (session s2 has no identity) is still
+        # worked out in memory and shown, though it could not be saved.
+        assert _strip_ansi(output).split("\n")[0] == "7K │ floor 7K"
         assert output.count("\n") == 2
 
 
@@ -732,7 +734,7 @@ class TestStatuslineLayout:
         assert out.count("\n") == 2
         assert DIM_BAR in out  # a dim │, not a plain one
         rows = _rows(out)
-        assert rows[0] == "● REC │ Sonnet 5.5-medium │ 38K │ Session:12% │ Weekly:92%"
+        assert rows[0] == "● REC │ Sonnet 5.5-medium │ 38K │ floor 38K │ Session:12% │ Weekly:92%"
         parts = rows[1].split(" │ ")
         assert len(parts) == 3, rows[1]
         assert parts[0] == f"{dev} 🧠"
@@ -740,13 +742,13 @@ class TestStatuslineLayout:
         assert parts[2] == str(proj)
 
     @pytest.mark.parametrize("remove, row1", [
-        ([], "● REC │ Sonnet 5.5-medium │ 38K │ Session:12% │ Weekly:92%"),
-        (["model"], "● REC │ 38K │ Session:12% │ Weekly:92%"),
-        (["effort"], "● REC │ Sonnet 5.5 │ 38K │ Session:12% │ Weekly:92%"),
+        ([], "● REC │ Sonnet 5.5-medium │ 38K │ floor 38K │ Session:12% │ Weekly:92%"),
+        (["model"], "● REC │ 38K │ floor 38K │ Session:12% │ Weekly:92%"),
+        (["effort"], "● REC │ Sonnet 5.5 │ 38K │ floor 38K │ Session:12% │ Weekly:92%"),
         (["context_window"], "● REC │ Sonnet 5.5-medium │ Session:12% │ Weekly:92%"),
-        (["rate_limits.five_hour"], "● REC │ Sonnet 5.5-medium │ 38K │ Weekly:92%"),
-        (["rate_limits.seven_day"], "● REC │ Sonnet 5.5-medium │ 38K │ Session:12%"),
-        (["rate_limits"], "● REC │ Sonnet 5.5-medium │ 38K"),
+        (["rate_limits.five_hour"], "● REC │ Sonnet 5.5-medium │ 38K │ floor 38K │ Weekly:92%"),
+        (["rate_limits.seven_day"], "● REC │ Sonnet 5.5-medium │ 38K │ floor 38K │ Session:12%"),
+        (["rate_limits"], "● REC │ Sonnet 5.5-medium │ 38K │ floor 38K"),
         (["model", "effort", "context_window", "rate_limits"], "● REC"),
     ])
     def test_each_panel_empty_in_turn_leaves_no_stray_divider(self, tmp_path: Path, remove, row1):
@@ -762,7 +764,7 @@ class TestStatuslineLayout:
     def test_no_panel_icons_means_no_leading_divider(self, tmp_path: Path):
         self._setup(tmp_path)
         assert _rows(_run_statusline(self._payload(tmp_path), cwd=tmp_path))[0] == \
-            "Sonnet 5.5-medium │ 38K │ Session:12% │ Weekly:92%"
+            "Sonnet 5.5-medium │ 38K │ floor 38K │ Session:12% │ Weekly:92%"
 
     def test_nothing_to_show_gives_two_empty_rows_not_dividers(self, tmp_path: Path):
         out = _run_statusline({"cwd": ""}, cwd=tmp_path)
@@ -904,12 +906,16 @@ class TestStatuslineLayout:
         stub_dir = tmp_path / "stubbin"
         stub_dir.mkdir()
         stub = stub_dir / "jq"
-        # An invocation whose last argument is not a readable file reads its input from stdin: the payload.
+        # An invocation whose last argument is a path reads that file. One that reads stdin is
+        # logged as `payload` when what it reads is the statusline payload (it has a "cwd"), else
+        # as `other` (the helper pipes a model name through jq).
         stub.write_text(
             "#!/usr/bin/env bash\n"
             'last="${*: -1}"\n'
-            f'if [ -f "$last" ]; then echo file >> "{log}"; else echo stdin >> "{log}"; fi\n'
-            f'exec "{real}" "$@"\n')
+            f'if [ -e "$last" ]; then echo file >> "{log}"; exec "{real}" "$@"; fi\n'
+            'in=$(cat)\n'
+            f'case "$in" in *\'"cwd"\'*) echo payload >> "{log}" ;; *) echo other >> "{log}" ;; esac\n'
+            f'printf "%s\\n" "$in" | "{real}" "$@"\n')
         stub.chmod(0o755)
         proj = _repo(tmp_path / "alpha")
         dev, files = TestStatuslineLayout()._setup(proj, indicators=["● REC"])
@@ -923,4 +929,247 @@ class TestStatuslineLayout:
             for f in files:
                 f.unlink(missing_ok=True)
         calls = log.read_text().split()
-        assert calls.count("stdin") == 1, calls
+        assert calls.count("payload") == 1, calls
+
+
+# --- #1428: nerf, runway and floor panels ---------------------------------------------------------
+
+SOFT_SET = ["🪶", "🧸", "🍬", "🫧", "🧁"]
+HARD_SET = ["🔨", "🪨", "🧱", "🥊", "🏏"]
+PAINFUL_SET = ["🔥", "💀", "🧨", "🦂", "🌋", "👹"]
+# A 1M-token model, no autocompact window: 967,000 usable. Darts 51/63/85 sit at 493,170 / 609,210 /
+# 821,950 tokens, and the gate's reseed point is the ouch dart's.
+DARTS = {"mode": "ultraviolence", "darts_pct": {"soft": 51, "hard": 63, "ouch": 85}}
+
+
+class TestStatuslineContextPanels:
+    """Nerf, runway and floor: they read the shared helper and nerf's per-session config."""
+
+    def _env(self, tmp_path: Path, **extra: str) -> dict[str, str]:
+        (tmp_path / "nerf").mkdir(exist_ok=True)
+        (tmp_path / "state").mkdir(exist_ok=True)
+        env = {
+            "NERF_CONFIG_DIR": str(tmp_path / "nerf"),
+            "CLAUDE_CONTEXT_STATE_DIR": str(tmp_path / "state"),
+            "CLAUDE_SETTINGS_FILE": str(tmp_path / "no-settings.json"),
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "",
+            "RESEED_CONTEXT_THRESHOLD_PCT": "",
+            "RESEED_AUTOCOMPACT_BUFFER_TOKENS": "",
+        }
+        env.update(extra)
+        return env
+
+    def _render(self, tmp_path: Path, tokens: int, *, nerf=DARTS, sid: str = "sess-a", window: int | None = 1_000_000,
+                cwd: Path | None = None, raw_nerf: str | None = None, **extra: str) -> str:
+        env = self._env(tmp_path, **extra)
+        cfg = tmp_path / "nerf" / f"nerf-{sid}.json"
+        if raw_nerf is not None:
+            cfg.write_text(raw_nerf)
+        elif nerf is not None:
+            cfg.write_text(json.dumps(nerf))
+        else:
+            cfg.unlink(missing_ok=True)
+        ctx: dict = {"total_input_tokens": tokens, "remaining_percentage": 60}
+        if window is not None:
+            ctx["context_window_size"] = window
+        where = cwd or tmp_path
+        return _run_statusline({"cwd": str(where), "session_id": sid, "model": {"id": "claude-opus-5-5"},
+                                "context_window": ctx}, cwd=where, env_override=env)
+
+    @staticmethod
+    def _panels(out: str) -> list[str]:
+        return _rows(out)[0].split(" │ ")
+
+    def _panel(self, out: str, startswith: tuple[str, ...]) -> str | None:
+        for p in self._panels(out):
+            if p.startswith(startswith) or any(e in p for e in startswith):
+                return p
+        return None
+
+    # --- nerf ---
+    @pytest.mark.parametrize("tokens, name, pset, bar", [
+        (100_000, "soft", SOFT_SET, "▰▱▱▱▱"),        # below soft: progress 0 -> soft
+        (246_585, "soft", SOFT_SET, "▰▰▱▱▱"),        # half way to soft (2.5 cells, floored)
+        (493_169, "soft", SOFT_SET, "▰▰▰▰▱"),        # one token short of soft
+        (493_170, "hard", HARD_SET, "▱▱▱▱▱"),        # at soft: the next dart is hard, from soft
+        (550_000, "hard", HARD_SET, "▰▰▱▱▱"),        # between soft and hard
+        (700_000, "ouch", PAINFUL_SET, "▰▰▱▱▱"),     # between hard and ouch
+        (821_950, "ouch", PAINFUL_SET, "▰▰▰▰▰"),     # at ouch: full
+        (900_000, "ouch", PAINFUL_SET, "▰▰▰▰▰"),     # past ouch
+    ])
+    def test_nerf_panel_shows_the_next_unreached_dart(self, tmp_path: Path, tokens, name, pset, bar):
+        out = self._render(tmp_path, tokens)
+        panel = self._panels(out)[0]
+        emoji, dart, cells = panel.split(" ")
+        assert emoji in pset and dart == name and cells == bar, panel
+
+    def test_nerf_panel_colour_follows_the_zones(self, tmp_path: Path):
+        GREEN, YELLOW, ORANGE, RED = "\033[01;32m", "\033[33m", "\033[38;5;208m", "\033[31m"
+        for tokens, color in ((100_000, GREEN), (550_000, YELLOW), (700_000, ORANGE), (900_000, RED)):
+            out = self._render(tmp_path, tokens)
+            assert color in out.split("\n")[0].split(" \033[2m")[0], (tokens, out)
+
+    def test_no_nerf_file_means_no_nerf_panel(self, tmp_path: Path):
+        out = self._render(tmp_path, 400_000, nerf=None)
+        assert not any(w in out for w in ("soft", "hard", "ouch"))
+        assert self._panel(out, ("↻",)) is not None  # the runway doesn't need nerf
+
+    @pytest.mark.parametrize("raw", ["{not json", "[]", '{"darts_pct": "x"}', '{"darts_pct": {"soft": 51}}'])
+    def test_a_malformed_nerf_file_means_no_nerf_panel(self, tmp_path: Path, raw):
+        out = self._render(tmp_path, 400_000, raw_nerf=raw)
+        assert not any(w in out for w in ("soft", "hard", "ouch")), out
+
+    def test_without_a_window_there_is_no_nerf_or_runway(self, tmp_path: Path):
+        out = self._render(tmp_path, 400_000, window=None)
+        assert _rows(out)[0].startswith("400K")
+
+    def test_the_emoji_is_stable_per_session_and_dart_and_comes_from_the_right_set(self, tmp_path: Path):
+        first = self._panels(self._render(tmp_path, 100_000, sid="stable-1"))[0].split(" ")[0]
+        again = self._panels(self._render(tmp_path, 100_000, sid="stable-1"))[0].split(" ")[0]
+        assert first == again and first in SOFT_SET
+        seen = {self._panels(self._render(tmp_path, 100_000, sid=f"s{i}"))[0].split(" ")[0] for i in range(24)}
+        assert seen <= set(SOFT_SET) and len(seen) > 1  # different sessions can differ
+        # the same session picks per dart: its hard and ouch emoji come from their own sets
+        hard = self._panels(self._render(tmp_path, 550_000, sid="stable-1"))[0].split(" ")[0]
+        ouch = self._panels(self._render(tmp_path, 700_000, sid="stable-1"))[0].split(" ")[0]
+        assert hard in HARD_SET and ouch in PAINFUL_SET
+
+    # --- runway ---
+    def test_reseed_nearer_shows_a_circle_arrow_and_the_mode(self, tmp_path: Path):
+        out = self._render(tmp_path, 400_000)
+        assert self._panel(out, ("↻",)) == "↻ 422K auto"  # 821,950 - 400,000
+
+    @pytest.mark.parametrize("mode, tag", [("ultraviolence", "auto"), ("hurt-me-plenty", "ask"), ("not-too-rough", "nudge"),
+                                           ("gentle", "auto"), (None, "auto")])
+    def test_the_reseed_tag_is_mode_aware_and_an_unknown_mode_is_ultraviolence(self, tmp_path: Path, mode, tag):
+        cfg = {"darts_pct": DARTS["darts_pct"]}
+        if mode is not None:
+            cfg["mode"] = mode
+        out = self._render(tmp_path, 400_000, nerf=cfg)
+        assert self._panel(out, ("↻",)) == f"↻ 422K {tag}"
+
+    def test_an_unreadable_nerf_file_reads_as_ultraviolence(self, tmp_path: Path):
+        out = self._render(tmp_path, 400_000, raw_nerf="{not json")
+        # no darts, so the gate's default 15% sets the reseed point: 85% of 967,000
+        assert self._panel(out, ("↻",)) == "↻ 422K auto"
+
+    def test_autocompact_nearer_shows_the_compress_icon_without_a_mode(self, tmp_path: Path):
+        # Threshold 0: the gate would act only when autocompact does, so autocompact is named.
+        out = self._render(tmp_path, 400_000, RESEED_CONTEXT_THRESHOLD_PCT="0")
+        assert self._panel(out, ("🗜",)) == "🗜 567K"
+
+    def test_a_smaller_autocompact_window_shrinks_the_runway(self, tmp_path: Path):
+        (tmp_path / "s.json").write_text(json.dumps({"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": "200k"}}}))
+        out = self._render(tmp_path, 100_000, nerf=None, CLAUDE_SETTINGS_FILE=str(tmp_path / "s.json"))
+        assert self._panel(out, ("↻",)) == "↻ 42K auto"  # 85% of 167,000 = 141,950
+
+    def test_past_the_trigger_the_runway_reads_0k_in_red(self, tmp_path: Path):
+        out = self._render(tmp_path, 900_000)
+        assert self._panel(out, ("↻",)) == "↻ 0K auto"
+        assert "\033[31m↻ 0K auto" in out
+
+    # --- floor ---
+    def _floors(self, tmp_path: Path, key: str) -> list[int]:
+        data = json.loads((tmp_path / "state" / f"{key}.floor.json").read_text())
+        return [f["size"] for f in data["floors"]]
+
+    def _floor_panel(self, out: str) -> str | None:
+        return self._panel(out, ("floor ",))
+
+    def _ident(self, root: Path, dev: str) -> Path:
+        (root / ".claude").mkdir(parents=True, exist_ok=True)
+        (root / ".claude" / "agent-identity.json").write_text(json.dumps({"dev_name": dev, "dev_avatar": "🧠"}))
+        return root
+
+    def test_a_sessions_first_render_records_a_floor_and_shows_it_without_an_arrow(self, tmp_path: Path):
+        proj = self._ident(tmp_path / "p", "floor-a")
+        out = self._render(tmp_path, 91_000, nerf=None, cwd=proj)
+        assert self._floor_panel(out) == "floor 91K"
+        assert self._floors(tmp_path, "floor-a") == [91_000]
+
+    def test_a_40_percent_drop_of_100k_records_with_a_down_arrow(self, tmp_path: Path):
+        proj = self._ident(tmp_path / "p", "floor-b")
+        self._render(tmp_path, 100_000, nerf=None, cwd=proj)
+        out = self._render(tmp_path, 60_000, nerf=None, cwd=proj)
+        assert self._floor_panel(out) == "floor 60K ▼"
+        assert self._floors(tmp_path, "floor-b") == [100_000, 60_000]
+
+    @pytest.mark.parametrize("before, after, why", [
+        (15_000, 9_000, "a 40% drop of 15K is under 20K tokens"),
+        (100_000, 90_000, "a 10% drop is under 30%"),
+        (100_000, 75_000, "25K tokens but only 25%"),
+        (100_000, 100_000, "no drop"),
+        (50_000, 90_000, "a rise"),
+    ])
+    def test_a_small_drop_does_not_record(self, tmp_path: Path, before, after, why):
+        proj = self._ident(tmp_path / "p", "floor-c")
+        self._render(tmp_path, before, nerf=None, cwd=proj)
+        out = self._render(tmp_path, after, nerf=None, cwd=proj)
+        assert self._floors(tmp_path, "floor-c") == [before], why
+        assert self._floor_panel(out) == f"floor {round(before / 1000)}K"
+
+    def test_the_arrows_for_higher_lower_and_equal(self, tmp_path: Path):
+        proj = self._ident(tmp_path / "p", "floor-d")
+        seq = [(100_000, "floor 100K"), (50_000, "floor 50K ▼"), (120_000, "floor 50K ▼"),
+               (70_000, "floor 70K ▲"),  # a 41% drop, to a floor above the last one
+               (200_000, "floor 70K ▲"), (71_900, "floor 72K =")]  # within 2K of the last floor
+        for tokens, want in seq:
+            assert self._floor_panel(self._render(tmp_path, tokens, nerf=None, cwd=proj)) == want, (tokens, want)
+
+    def test_five_floors_are_kept_and_the_sixth_evicts_the_oldest(self, tmp_path: Path):
+        proj = self._ident(tmp_path / "p", "floor-e")
+        self._render(tmp_path, 100_000, nerf=None, cwd=proj)  # floor 1
+        for low in (60_000, 61_000, 62_000, 63_000, 64_000):  # floors 2..6
+            self._render(tmp_path, 100_000, nerf=None, cwd=proj)
+            self._render(tmp_path, low, nerf=None, cwd=proj)
+        assert self._floors(tmp_path, "floor-e") == [60_000, 61_000, 62_000, 63_000, 64_000]
+        data = json.loads((tmp_path / "state" / "floor-e.floor.json").read_text())
+        assert all(isinstance(f["ts"], int) and f["ts"] > 0 for f in data["floors"])
+
+    def test_two_dev_names_keep_separate_floors(self, tmp_path: Path):
+        a = self._ident(tmp_path / "pa", "floor-f1")
+        b = self._ident(tmp_path / "pb", "floor-f2")
+        self._render(tmp_path, 100_000, nerf=None, cwd=a)
+        self._render(tmp_path, 40_000, nerf=None, cwd=b)
+        assert self._floors(tmp_path, "floor-f1") == [100_000]
+        assert self._floors(tmp_path, "floor-f2") == [40_000]
+
+    def test_a_new_session_of_the_same_dev_records_its_first_render(self, tmp_path: Path):
+        proj = self._ident(tmp_path / "p", "floor-g")
+        self._render(tmp_path, 100_000, nerf=None, cwd=proj, sid="old")
+        out = self._render(tmp_path, 95_000, nerf=None, cwd=proj, sid="new")  # only a 5% drop
+        assert self._floors(tmp_path, "floor-g") == [100_000, 95_000]
+        assert self._floor_panel(out) == "floor 95K ▼"  # 5K below the previous floor: past the 2K band
+
+    def test_without_an_identity_the_session_id_keys_the_floor(self, tmp_path: Path):
+        out = self._render(tmp_path, 91_000, nerf=None, sid="solo-1")
+        assert self._floor_panel(out) == "floor 91K"
+        assert (tmp_path / "state" / "solo-1.floor.json").exists()
+
+    def test_no_context_size_means_no_floor_and_no_state(self, tmp_path: Path):
+        env = self._env(tmp_path)
+        out = _run_statusline({"cwd": str(tmp_path), "session_id": "none-1"}, cwd=tmp_path, env_override=env)
+        assert self._floor_panel(out) is None
+        assert not (tmp_path / "state" / "none-1.floor.json").exists()
+
+    def test_an_unwritable_state_dir_still_renders_the_panels(self, tmp_path: Path):
+        blocker = tmp_path / "file-not-dir"
+        blocker.write_text("x")
+        out = self._render(tmp_path, 400_000, CLAUDE_CONTEXT_STATE_DIR=str(blocker / "sub"))
+        panels = self._panels(out)
+        assert panels[1] == "↻ 422K auto" and panels[3] == "floor 400K", panels
+        assert out.count("\n") == 2
+
+    def test_a_corrupt_floor_file_is_replaced_not_fatal(self, tmp_path: Path):
+        proj = self._ident(tmp_path / "p", "floor-h")
+        (tmp_path / "state").mkdir()
+        (tmp_path / "state" / "floor-h.floor.json").write_text("{not json")
+        out = self._render(tmp_path, 80_000, nerf=None, cwd=proj)
+        assert self._floor_panel(out) == "floor 80K"
+        assert self._floors(tmp_path, "floor-h") == [80_000]
+
+    def test_the_panels_sit_in_the_documented_order(self, tmp_path: Path):
+        proj = self._ident(tmp_path / "p", "floor-i")
+        out = self._render(tmp_path, 400_000, cwd=proj)
+        p = self._panels(out)
+        assert p[0].split(" ")[1] == "soft" and p[1] == "↻ 422K auto" and p[2] == "400K" and p[3] == "floor 400K", p

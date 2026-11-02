@@ -69,7 +69,7 @@ DARTS='{"mode": "ultraviolence", "darts_pct": {"soft": 51, "hard": 63, "ouch": 8
 # 1. Every key is always printed, empty when it can't be worked out.
 reset
 out=$(cm)
-want_keys="nerf_mode nerf_soft nerf_hard nerf_ouch threshold_pct used_tokens window_tokens model_id acw_tokens acw_keys acw_filed buffer_tokens ceiling_tokens ceiling_by usable_tokens remaining_pct soft_at_tokens hard_at_tokens reseed_at_tokens autocompact_at_tokens runway_tokens runway_by"
+want_keys="nerf_mode nerf_soft nerf_hard nerf_ouch threshold_pct used_tokens window_tokens model_id acw_tokens acw_keys acw_filed buffer_tokens ceiling_tokens ceiling_by usable_tokens remaining_pct soft_at_tokens hard_at_tokens ouch_at_tokens reseed_at_tokens autocompact_at_tokens runway_tokens runway_by"
 have_keys=$(cut -d= -f1 <<<"$out" | tr '\n' ' ' | sed 's/ $//')
 [[ "$have_keys" == "$want_keys" ]] && pass "every key, always, in a fixed order" || fail "keys (got: $have_keys)"
 expect "no files at all: ultraviolence, threshold 15, nothing computed" "$out" \
@@ -81,7 +81,7 @@ reading 400000 1000000
 out=$(cm)
 expect "1M model, no autocompact window" "$out" \
 	acw_tokens= ceiling_tokens=1000000 ceiling_by=autocompact usable_tokens=967000 remaining_pct=58 \
-	autocompact_at_tokens=967000 runway_tokens=567000 runway_by=autocompact
+	autocompact_at_tokens=967000 reseed_at_tokens=821950 runway_tokens=421950 runway_by=reseed
 
 # 3. The same model with a 400k autocompact window (settings, keyed by the canonical model name).
 settings '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": "400k"}}}'
@@ -89,7 +89,7 @@ reading 150000 1000000 us.anthropic.claude-opus-5-5
 out=$(cm)
 expect "1M model, 400k autocompact window from settings (canonical key)" "$out" \
 	acw_tokens=400000 ceiling_tokens=400000 "ceiling_by=the 400k autocompact" usable_tokens=367000 remaining_pct=59 \
-	runway_tokens=217000 runway_by=autocompact acw_filed=
+	reseed_at_tokens=311950 runway_tokens=161950 runway_by=reseed acw_filed=
 out=$(cm CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000)
 expect "the env window beats settings" "$out" acw_tokens=200000 usable_tokens=167000 remaining_pct=10
 out=$(cm CLAUDE_CODE_AUTO_COMPACT_WINDOW=50k)
@@ -124,12 +124,25 @@ nerf "$DARTS"
 reading 400000 1000000
 out=$(cm)
 expect "dart positions in tokens (of 967k usable)" "$out" \
-	nerf_soft=51 nerf_hard=63 nerf_ouch=85 soft_at_tokens=493170 hard_at_tokens=609210 reseed_at_tokens=821950 \
+	nerf_soft=51 nerf_hard=63 nerf_ouch=85 soft_at_tokens=493170 hard_at_tokens=609210 ouch_at_tokens=821950 reseed_at_tokens=821950 \
 	autocompact_at_tokens=967000 runway_tokens=421950 runway_by=reseed
 reading 900000 1000000
 expect "past the reseed point the runway is 0 and still reseed" "$(cm)" runway_tokens=0 runway_by=reseed
+reading 400000 1000000
 nerf '{"darts_pct": {"soft": 51, "hard": 63}}'
-expect "no ouch dart: the runway is to autocompact" "$(cm)" reseed_at_tokens= runway_by=autocompact runway_tokens=67000
+expect "no ouch dart: the gate's default 15% threshold sets the reseed point (85% of usable)" "$(cm)" \
+	reseed_at_tokens=821950 runway_by=reseed runway_tokens=421950
+expect "an env threshold moves the reseed point" "$(cm RESEED_CONTEXT_THRESHOLD_PCT=40)" \
+	reseed_at_tokens=580200 runway_tokens=180200 runway_by=reseed
+expect "threshold 0: reseed and autocompact coincide, autocompact is named" "$(cm RESEED_CONTEXT_THRESHOLD_PCT=0)" \
+	reseed_at_tokens=967000 runway_tokens=567000 runway_by=autocompact
+settings '{"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": "200k"}}}'
+reading 100000 1000000
+expect "a small autocompact window shrinks both, reseed stays the nearer" "$(cm)" \
+	usable_tokens=167000 reseed_at_tokens=141950 runway_tokens=41950 runway_by=reseed
+reset
+reading 400000 1000000
+nerf '{"darts_pct": {"soft": 51, "hard": 63}}'
 
 # 6. The nerf mode: only the two known names change it; anything unreadable is ultraviolence.
 for mode in hurt-me-plenty not-too-rough; do

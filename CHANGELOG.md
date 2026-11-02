@@ -20,6 +20,17 @@ are worth keeping apart:
 ## [Unreleased]
 
 ### Added
+- **Nerf, runway and floor panels in the statusline (#1428, story 2 of #1426).** Nerf shows the next
+  dart the context has not reached, with its emoji (picked per session and dart by a stable hash), its
+  name and a five-cell bar (`🪶 soft ▰▰▰▱▱`); no nerf config, no panel. Runway shows the tokens left
+  until the nearer of reseed and autocompact (`↻ 88K auto`, `🗜 62K`), the reseed tag following nerf's
+  mode (`auto`, `ask`, `nudge`), and reads `0K` in red at or past the trigger. Floor records the context
+  size after each sharp drop (30% and 20K tokens or more; a session's first render too), keeps five, and
+  shows `floor 91K` with ▲ ▼ = against the previous one. All three work from `scripts/lib/context-math.sh`,
+  which now takes the reseed point from the gate's threshold (the ouch dart's position when nerf has one,
+  85% of the usable window with none) and reads nerf's file with one `jq` instead of four. Reseed and
+  autocompact are measured in the same usable window (#1297), so reseed is always the nearer trigger
+  unless the threshold is 0. The context panel's colour now honours `NERF_CONFIG_DIR`, as the gate does.
 - **The statusline is two rows of divider-separated panels (#1427, story 1 of #1426).** Row 1 is
   `<panel icons> │ <Model-Effort> │ … │ <context> │ … │ <Session> │ <Weekly> │ …`, row 2 is
   `<dev-name> <avatar> │ <project>-<branch> (<worktree>) │ <cwd>`, divided by one dim `│`; a panel with
