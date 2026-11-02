@@ -286,8 +286,10 @@ def test_install_pins_crewchat_v030() -> None:
     # #1348 needs v0.2.6: Mattermost channel names resolve (mattermost-crew #145), and
     # `crewchat-send` lets the kit's page scripts post through crewchat (#146). #1420 needs
     # v0.3.0: it carries `crewchat-waiter` (mattermost-crew #204), which the kit's hooks run,
-    # and a hook registered with no waiter behind it is a silent dead channel.
-    assert _TAG == "v0.3.0"
+    # and a hook registered with no waiter behind it is a silent dead channel. #1440 needs
+    # v0.4.0: the waiter batches (mattermost-crew #212), so one wake carries every event that
+    # queued while the agent was busy; v0.3.0 wakes once per event.
+    assert _TAG == "v0.4.0"
 
 
 def test_install_without_doorbell_does_not_register(stubs: Path, live_socket: Path) -> None:
