@@ -142,8 +142,8 @@ nerf_emoji_painful=(🔥 💀 🧨 🦂 🌋 👹)
 pick_emoji() {
 	local -n set="nerf_emoji_$3"
 	local h
-	h=$(printf '%s' "$1:$2" | cksum | cut -d' ' -f1)
-	printf '%s' "${set[$((h % ${#set[@]}))]}"
+	read -r h _ < <(printf '%s' "$1:$2" | cksum)
+	printf '%s' "${set[$((${h:-0} % ${#set[@]}))]}"
 }
 
 # usage_panel LABEL PCT — "Session:12%", green below 50, yellow from 50, red from 80.
@@ -474,23 +474,32 @@ if [ -n "$floor_key" ]; then
 	floor_file="$ctx_state_dir/${floor_key}.floor.json"
 	floor_src=/dev/null
 	if [ -f "$floor_file" ] && [ -O "$floor_file" ] && [ ! -L "$floor_file" ]; then floor_src="$floor_file"; fi
+	# A size of 0 is Claude Code before its first response, not a context that shrank to nothing:
+	# it records nothing, or the floor would be pinned at 0.
 	floor_size=null
-	if [[ "${ctx_in_tokens%.*}" =~ ^[0-9]+$ ]]; then floor_size="${ctx_in_tokens%.*}"; fi
+	if [[ "${ctx_in_tokens%.*}" =~ ^[0-9]+$ ]] && ((10#${ctx_in_tokens%.*} > 0)); then floor_size="${ctx_in_tokens%.*}"; fi
+	# The "previous render" is per SESSION (`last` maps session id to its last size), so two sessions
+	# of one dev-name rendering alternately each compare with themselves and do not thrash the shared
+	# floors. A session new to the file records a floor on its first render. The file is rewritten only
+	# when something changed that matters: a floor, a new session, or a size 1K or more from `last`.
 	# shellcheck disable=SC2016  # a jq program: the $vars are jq's
 	floor_jq='
+		def abs: if . < 0 then -. else . end;
 		(([inputs] | first // {}) | if type == "object" then . else {} end) as $st
-		| ($st.floors // []) as $fl
-		| ($st.last // null) as $last
+		| (($st.floors // []) | if type == "array" then .[-5:] else [] end) as $fl
+		| (($st.last // {}) | if type == "object" then . else {} end) as $lasts
+		| ($lasts[$sid] // null) as $prev
 		| (if $size == null then false
-		   elif ($fl | length) == 0 then true
-		   elif ($st.session // "") != $sid then true
-		   elif $last != null and ($last - $size) >= 20000 and (($last - $size) * 100 >= $last * 30) then true
-		   else false end) as $rec
+		   elif ($fl | length) == 0 or $prev == null then true
+		   else ($prev - $size) >= 20000 and (($prev - $size) * 100 >= $prev * 30) end) as $rec
 		| (if $rec then (($fl + [{size: $size, ts: $now}]) | .[-5:]) else $fl end) as $nfl
-		| {floors: $nfl, last: (if $size == null then $last else $size end),
-		   session: (if $size == null then ($st.session // "") else $sid end)} as $new
+		| (if $size == null then $lasts else (($lasts + {($sid): $size}) | to_entries | .[-8:] | from_entries) end) as $nlasts
+		| {floors: $nfl, last: $nlasts} as $new
 		| [($nfl | last | .size // ""), ($nfl | if length > 1 then .[-2].size else "" end),
-		   (if $size == null or $new == $st then 0 else 1 end), ($new | tojson)] | map(tostring) | join("\u001f")'
+		   (if $size == null then 0
+		    elif $rec or $prev == null or (($prev - $size) | abs) >= 1000 or ($st.floors | type) != "array" then 1
+		    else 0 end),
+		   ($new | tojson)] | map(tostring) | join("\u001f")'
 	floor_out=$(jq -nr --argjson size "$floor_size" --argjson now "$now" --arg sid "$session_id" "$floor_jq" "$floor_src" 2>/dev/null) ||
 		floor_out=$(jq -nr --argjson size "$floor_size" --argjson now "$now" --arg sid "$session_id" "$floor_jq" /dev/null 2>/dev/null)
 	IFS=$'\x1f' read -r f_size f_prev f_changed f_state <<<"$floor_out"

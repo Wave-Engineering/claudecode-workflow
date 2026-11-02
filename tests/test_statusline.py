@@ -1037,7 +1037,8 @@ class TestStatuslineContextPanels:
     # --- runway ---
     def test_reseed_nearer_shows_a_circle_arrow_and_the_mode(self, tmp_path: Path):
         out = self._render(tmp_path, 400_000)
-        assert self._panel(out, ("↻",)) == "↻ 422K auto"  # 821,950 - 400,000
+        # The gate acts at the first size whose floored remaining percent is <= 15: 812,281 of 967,000
+        assert self._panel(out, ("↻",)) == "↻ 412K auto"  # 812,281 - 400,000
 
     @pytest.mark.parametrize("mode, tag", [("ultraviolence", "auto"), ("hurt-me-plenty", "ask"), ("not-too-rough", "nudge"),
                                            ("gentle", "auto"), (None, "auto")])
@@ -1046,22 +1047,27 @@ class TestStatuslineContextPanels:
         if mode is not None:
             cfg["mode"] = mode
         out = self._render(tmp_path, 400_000, nerf=cfg)
-        assert self._panel(out, ("↻",)) == f"↻ 422K {tag}"
+        assert self._panel(out, ("↻",)) == f"↻ 412K {tag}"
 
     def test_an_unreadable_nerf_file_reads_as_ultraviolence(self, tmp_path: Path):
         out = self._render(tmp_path, 400_000, raw_nerf="{not json")
-        # no darts, so the gate's default 15% sets the reseed point: 85% of 967,000
-        assert self._panel(out, ("↻",)) == "↻ 422K auto"
+        # no darts, so the gate's default 15% sets the reseed point
+        assert self._panel(out, ("↻",)) == "↻ 412K auto"
 
-    def test_autocompact_nearer_shows_the_compress_icon_without_a_mode(self, tmp_path: Path):
-        # Threshold 0: the gate would act only when autocompact does, so autocompact is named.
-        out = self._render(tmp_path, 400_000, RESEED_CONTEXT_THRESHOLD_PCT="0")
-        assert self._panel(out, ("🗜",)) == "🗜 567K"
+    def test_autocompact_is_named_only_when_it_coincides_with_reseed(self, tmp_path: Path):
+        # Reseed and autocompact are measured in the same usable window, so reseed comes first at any
+        # real window size, even with the threshold at 0. They coincide only in a window of a few
+        # tokens (here 50 usable); then autocompact is named, and there is no mode tag.
+        out = self._render(tmp_path, 10, window=1_000_000, RESEED_CONTEXT_THRESHOLD_PCT="0",
+                           RESEED_AUTOCOMPACT_BUFFER_TOKENS="999950")
+        assert self._panel(out, ("🗜",)) == "🗜 0K"
+        real = self._render(tmp_path, 400_000, RESEED_CONTEXT_THRESHOLD_PCT="0")
+        assert self._panel(real, ("↻",)) == "↻ 557K auto"  # threshold 0 on a real window: still reseed
 
     def test_a_smaller_autocompact_window_shrinks_the_runway(self, tmp_path: Path):
         (tmp_path / "s.json").write_text(json.dumps({"modelSettings": {"claude-opus-5-5": {"autoCompactWindow": "200k"}}}))
         out = self._render(tmp_path, 100_000, nerf=None, CLAUDE_SETTINGS_FILE=str(tmp_path / "s.json"))
-        assert self._panel(out, ("↻",)) == "↻ 42K auto"  # 85% of 167,000 = 141,950
+        assert self._panel(out, ("↻",)) == "↻ 40K auto"  # the gate acts at 140,281 of 167,000
 
     def test_past_the_trigger_the_runway_reads_0k_in_red(self, tmp_path: Path):
         out = self._render(tmp_path, 900_000)
@@ -1157,7 +1163,7 @@ class TestStatuslineContextPanels:
         blocker.write_text("x")
         out = self._render(tmp_path, 400_000, CLAUDE_CONTEXT_STATE_DIR=str(blocker / "sub"))
         panels = self._panels(out)
-        assert panels[1] == "↻ 422K auto" and panels[3] == "floor 400K", panels
+        assert panels[1] == "↻ 412K auto" and panels[3] == "floor 400K", panels
         assert out.count("\n") == 2
 
     def test_a_corrupt_floor_file_is_replaced_not_fatal(self, tmp_path: Path):
@@ -1172,4 +1178,46 @@ class TestStatuslineContextPanels:
         proj = self._ident(tmp_path / "p", "floor-i")
         out = self._render(tmp_path, 400_000, cwd=proj)
         p = self._panels(out)
-        assert p[0].split(" ")[1] == "soft" and p[1] == "↻ 422K auto" and p[2] == "400K" and p[3] == "floor 400K", p
+        assert p[0].split(" ")[1] == "soft" and p[1] == "↻ 412K auto" and p[2] == "400K" and p[3] == "floor 400K", p
+
+    def test_two_sessions_of_one_dev_name_do_not_thrash_the_floor(self, tmp_path: Path):
+        """The previous size is per session: alternating renders each compare with their own last."""
+        proj = self._ident(tmp_path / "p", "floor-j")
+        a = self._render(tmp_path, 100_000, nerf=None, cwd=proj, sid="alpha")
+        b = self._render(tmp_path, 300_000, nerf=None, cwd=proj, sid="beta")
+        for _ in range(3):  # alternate: no drop within either session
+            self._render(tmp_path, 101_000, nerf=None, cwd=proj, sid="alpha")
+            self._render(tmp_path, 301_000, nerf=None, cwd=proj, sid="beta")
+        assert self._floors(tmp_path, "floor-j") == [100_000, 300_000]  # one per session's first render
+        # ...and a real drop in one session still records, against that session's own size
+        self._render(tmp_path, 40_000, nerf=None, cwd=proj, sid="alpha")  # 101K -> 40K
+        assert self._floors(tmp_path, "floor-j") == [100_000, 300_000, 40_000]
+        assert self._floor_panel(a) == "floor 100K" and self._floor_panel(b) == "floor 300K ▲"
+
+    def test_a_zero_context_size_records_no_floor(self, tmp_path: Path):
+        """Zero is Claude Code before its first response, not a context that shrank to nothing."""
+        proj = self._ident(tmp_path / "p", "floor-k")
+        out = self._render(tmp_path, 0, nerf=None, cwd=proj)
+        assert self._floor_panel(out) is None
+        assert not (tmp_path / "state" / "floor-k.floor.json").exists()
+        out = self._render(tmp_path, 55_000, nerf=None, cwd=proj)  # the first real size becomes the floor
+        assert self._floor_panel(out) == "floor 55K"
+
+    def test_the_state_file_is_not_rewritten_for_a_small_drift(self, tmp_path: Path):
+        proj = self._ident(tmp_path / "p", "floor-l")
+        self._render(tmp_path, 100_000, nerf=None, cwd=proj)
+        state = tmp_path / "state" / "floor-l.floor.json"
+        before = state.read_text()
+        mtime = state.stat().st_mtime_ns
+        self._render(tmp_path, 100_400, nerf=None, cwd=proj)  # under 1K from `last`: nothing to save
+        assert state.read_text() == before and state.stat().st_mtime_ns == mtime
+        self._render(tmp_path, 102_000, nerf=None, cwd=proj)  # 2K from `last`: saved
+        assert json.loads(state.read_text())["last"]["sess-a"] == 102_000
+
+    def test_a_hand_edited_floors_list_is_trimmed_to_five(self, tmp_path: Path):
+        proj = self._ident(tmp_path / "p", "floor-m")
+        (tmp_path / "state").mkdir()
+        many = [{"size": 1000 * i, "ts": i} for i in range(1, 12)]
+        (tmp_path / "state" / "floor-m.floor.json").write_text(json.dumps({"floors": many, "last": {"sess-a": 60_000}}))
+        self._render(tmp_path, 61_000, nerf=None, cwd=proj)
+        assert self._floors(tmp_path, "floor-m") == [7000, 8000, 9000, 10000, 11000]

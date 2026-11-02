@@ -53,8 +53,10 @@
 #   remaining_pct      the integer percent of usable_tokens left, or empty when it can't be computed
 #   soft_at_tokens, hard_at_tokens, ouch_at_tokens   the darts as token positions of context size
 #                      (usable * dart / 100); empty without usable or that dart
-#   reseed_at_tokens   where the gate acts: usable * (100 - threshold_pct) / 100. It is the ouch dart's
-#                      position when nerf has one, and 85% of usable with none. Empty without usable.
+#   reseed_at_tokens   the first context size at which the gate acts: the first size where remaining_pct
+#                      (floored) is at or below threshold_pct, i.e. just above usable * (99 - ti) / 100 for
+#                      ti = the threshold's integer part. It sits up to 1% of usable below the ouch dart's
+#                      position, because the gate compares a floored percentage. Empty without usable.
 #   autocompact_at_tokens   usable_tokens, the size at which autocompact fires (empty without it)
 #   runway_tokens      tokens left until the nearer of reseed and autocompact
 #   runway_by          which one: reseed | autocompact (empty with runway_tokens)
@@ -98,10 +100,12 @@ context_math() {
 
 	# nerf's config: the mode picks what happens at the threshold, the darts set where.
 	if [[ -n "$nerf" && -f "$nerf" ]]; then
-		# One jq for the mode and the three darts (a dart that isn't a number reads as empty).
+		# One jq for the mode and the three darts. A dart that isn't a number, or a darts_pct that
+		# isn't an object, reads as empty WITHOUT losing the mode: a malformed darts_pct must not
+		# turn hurt-me-plenty into ultraviolence (the gate reads this too).
 		IFS=$'\x1f' read -r m nerf_soft nerf_hard nerf_ouch < <(jq -r '
-			def dart: if type == "number" then tostring else "" end;
-			[(.mode // ""), (.darts_pct.soft | dart), (.darts_pct.hard | dart), (.darts_pct.ouch | dart)]
+			def dart(f): try (f | if type == "number" then tostring else "" end) catch "";
+			[(.mode // ""), dart(.darts_pct.soft), dart(.darts_pct.hard), dart(.darts_pct.ouch)]
 			| join("\u001f")' "$nerf" 2>/dev/null)
 		case "$m" in hurt-me-plenty | not-too-rough) nerf_mode="$m" ;; esac
 		for d in soft hard ouch; do
@@ -157,18 +161,26 @@ context_math() {
 			usable=$((ceil - buffer))
 			pct=$(((usable - used) * 100 / usable))
 			((pct < 0)) && pct=0
-			# Where each marker sits, as a context size. Autocompact fires at `usable`. The gate acts
-			# when the remaining percent falls to the threshold, i.e. at usable * (100 - threshold) / 100
-			# (the ouch dart's position when nerf has one; 85% of usable by default). A nerf dart sits
-			# at <percent used> of usable.
+			# Where each marker sits, as a context size. Autocompact fires at `usable`. The gate acts at
+			# the first size where the integer remaining percent (remaining_pct, floored) is at or below
+			# the threshold: with ti = the threshold's integer part, that is the first `used` above
+			# usable * (99 - ti) / 100. (Not usable * (100 - threshold) / 100: the gate compares the
+			# FLOORED percentage, so it acts up to 1% of usable sooner, and a panel built on the exact
+			# fraction would show runway left after the gate had already fired.) A nerf dart sits at
+			# <percent used> of usable.
 			ac_at="$usable"
-			reseed_at="$(awk -v u="$usable" -v t="$threshold" 'BEGIN { r = u * (100 - t) / 100; printf "%d", (r < 0 ? 0 : r) }')"
+			reseed_at="$(awk -v u="$usable" -v t="$threshold" 'BEGIN {
+				ti = int(t); r = (ti >= 100) ? 0 : int(u * (99 - ti) / 100) + 1
+				if (r > u) r = u
+				if (r < 0) r = 0
+				printf "%d", r }')"
 			if [[ "$nerf_soft" =~ ^[0-9]+$ ]]; then soft_at=$((usable * 10#$nerf_soft / 100)); fi
 			if [[ "$nerf_hard" =~ ^[0-9]+$ ]]; then hard_at=$((usable * 10#$nerf_hard / 100)); fi
 			if [[ "$nerf_ouch" =~ ^[0-9]+$ ]]; then ouch_at=$((usable * 10#$nerf_ouch / 100)); fi
 			# The runway is the distance to the nearer of reseed and autocompact. Both are measured in
-			# the same usable window (#1297), so reseed is nearer for any threshold above 0; at 0 the
-			# two coincide and autocompact is named, since a reseed that waits for it is no earlier.
+			# the same usable window (#1297), so reseed comes first at any real window size; autocompact
+			# is named only when the two coincide (a usable window of a few tokens), since a reseed that
+			# waits for it is no earlier.
 			runway=$((usable - used)) runway_by=autocompact
 			if ((reseed_at - used < runway)); then runway=$((reseed_at - used)) runway_by=reseed; fi
 			if ((runway < 0)); then runway=0; fi
