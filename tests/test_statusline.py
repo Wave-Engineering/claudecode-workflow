@@ -1221,3 +1221,18 @@ class TestStatuslineContextPanels:
         (tmp_path / "state" / "floor-m.floor.json").write_text(json.dumps({"floors": many, "last": {"sess-a": 60_000}}))
         self._render(tmp_path, 61_000, nerf=None, cwd=proj)
         assert self._floors(tmp_path, "floor-m") == [7000, 8000, 9000, 10000, 11000]
+
+    def test_the_most_recently_rendered_sessions_are_kept_not_the_first_started(self, tmp_path: Path):
+        """Eight sessions are remembered. An active session keeps its place by rendering: it is not
+        evicted by newer ones, which would make its next render look like a first render and record a
+        spurious floor."""
+        proj = self._ident(tmp_path / "p", "floor-n")
+        self._render(tmp_path, 100_000, nerf=None, cwd=proj, sid="long-lived")
+        for i in range(8):  # eight newer sessions...
+            self._render(tmp_path, 200_000 + i * 5_000, nerf=None, cwd=proj, sid=f"new-{i}")
+            self._render(tmp_path, 101_000 + i, nerf=None, cwd=proj, sid="long-lived")  # ...while it keeps rendering
+        data = json.loads((tmp_path / "state" / "floor-n.floor.json").read_text())
+        assert "long-lived" in data["last"] and len(data["last"]) == 8
+        assert "new-0" not in data["last"]  # the one that stopped rendering went instead
+        # Had it been evicted, its next render (101,00x) would count as a first render and record a floor.
+        assert not any(101_000 <= s <= 101_007 for s in self._floors(tmp_path, "floor-n"))

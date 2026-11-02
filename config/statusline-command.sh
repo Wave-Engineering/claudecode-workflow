@@ -456,10 +456,11 @@ if [[ "${CM[runway_tokens]:-}" =~ ^[0-9]+$ ]]; then
 fi
 
 # --- Floor: the context size right after the last sharp drop (a reseed, clear or compact) ---
-# A drop of at least 30% AND at least 20K tokens against the previous render records the new size
-# as the floor; a session's first render records one too. State is ~/.claude/state/context/
+# A drop of at least 30% AND at least 20K tokens against the same session's previous render records
+# the new size as a floor; a session's first render records one too. State is ~/.claude/state/context/
 # <key>.floor.json, keyed by dev-name (the session id when there is none): {floors: [{size, ts}] (the
-# last five), last: the size at the previous render, session}. Shown as "floor 91K" with an arrow
+# last five), last: {<session id>: the size at that session's previous render} (the eight most
+# recently rendered sessions)}. Shown as "floor 91K" with an arrow
 # against the previous floor: ▲ above it, ▼ below, = within 2K. No floor yet: no panel. Writes are
 # atomic and best-effort: a failed one never costs the render. One jq reads the state and works
 # out the new one (the state file is its last argument, /dev/null when there is none).
@@ -493,7 +494,7 @@ if [ -n "$floor_key" ]; then
 		   elif ($fl | length) == 0 or $prev == null then true
 		   else ($prev - $size) >= 20000 and (($prev - $size) * 100 >= $prev * 30) end) as $rec
 		| (if $rec then (($fl + [{size: $size, ts: $now}]) | .[-5:]) else $fl end) as $nfl
-		| (if $size == null then $lasts else (($lasts + {($sid): $size}) | to_entries | .[-8:] | from_entries) end) as $nlasts
+		| (if $size == null then $lasts else ((($lasts | del(.[$sid])) + {($sid): $size}) | to_entries | .[-8:] | from_entries) end) as $nlasts
 		| {floors: $nfl, last: $nlasts} as $new
 		| [($nfl | last | .size // ""), ($nfl | if length > 1 then .[-2].size else "" end),
 		   (if $size == null then 0
