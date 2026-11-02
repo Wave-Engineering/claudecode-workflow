@@ -482,7 +482,9 @@ if [ -n "$floor_key" ]; then
 	# The "previous render" is per SESSION (`last` maps session id to its last size), so two sessions
 	# of one dev-name rendering alternately each compare with themselves and do not thrash the shared
 	# floors. A session new to the file records a floor on its first render. The file is rewritten only
-	# when something changed that matters: a floor, a new session, or a size 1K or more from `last`.
+	# when something changed that matters: a floor, a new session, a size 1K or more from `last`, or
+	# the session no longer being the most recently rendered one (so a session sitting at a steady size
+	# still moves to the end of the eight and is not evicted by newer ones).
 	# shellcheck disable=SC2016  # a jq program: the $vars are jq's
 	floor_jq='
 		def abs: if . < 0 then -. else . end;
@@ -498,7 +500,8 @@ if [ -n "$floor_key" ]; then
 		| {floors: $nfl, last: $nlasts} as $new
 		| [($nfl | last | .size // ""), ($nfl | if length > 1 then .[-2].size else "" end),
 		   (if $size == null then 0
-		    elif $rec or $prev == null or (($prev - $size) | abs) >= 1000 or ($st.floors | type) != "array" then 1
+		    elif $rec or $prev == null or (($prev - $size) | abs) >= 1000 or ($st.floors | type) != "array"
+		         or (($lasts | keys_unsorted | last) != $sid) then 1
 		    else 0 end),
 		   ($new | tojson)] | map(tostring) | join("\u001f")'
 	floor_out=$(jq -nr --argjson size "$floor_size" --argjson now "$now" --arg sid "$session_id" "$floor_jq" "$floor_src" 2>/dev/null) ||

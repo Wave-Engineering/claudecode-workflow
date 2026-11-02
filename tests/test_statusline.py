@@ -1230,9 +1230,11 @@ class TestStatuslineContextPanels:
         self._render(tmp_path, 100_000, nerf=None, cwd=proj, sid="long-lived")
         for i in range(8):  # eight newer sessions...
             self._render(tmp_path, 200_000 + i * 5_000, nerf=None, cwd=proj, sid=f"new-{i}")
-            self._render(tmp_path, 101_000 + i, nerf=None, cwd=proj, sid="long-lived")  # ...while it keeps rendering
+            # ...while it keeps rendering at the SAME size (nothing to save but its place in line)
+            self._render(tmp_path, 100_000, nerf=None, cwd=proj, sid="long-lived")
         data = json.loads((tmp_path / "state" / "floor-n.floor.json").read_text())
         assert "long-lived" in data["last"] and len(data["last"]) == 8
         assert "new-0" not in data["last"]  # the one that stopped rendering went instead
-        # Had it been evicted, its next render (101,00x) would count as a first render and record a floor.
-        assert not any(101_000 <= s <= 101_007 for s in self._floors(tmp_path, "floor-n"))
+        # The 100,000 floor from its first render has aged out of the five. Had the session been
+        # evicted, its next render would count as a first render and record 100,000 again.
+        assert 100_000 not in self._floors(tmp_path, "floor-n")
