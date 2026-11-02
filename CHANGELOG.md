@@ -105,8 +105,11 @@ are worth keeping apart:
   finding, the non-test hunks lie inside the functions those findings cite, an added or changed test
   fails by its own assertion with the non-test files reverted and passes with them (both exit codes and
   the assertion line on the checklist), CI is green on the new head, and every finding is answered.
-  At most one skip per reviewed pass, never on `rearm`, and a finding answered this way counts as
-  resolved for the "zero unresolved findings" definition the merge paths read. Anything else still
+  At most one skip per reviewed pass and never on `rearm`. A finding answered this way counts as
+  resolved when the status is posted, but not on the auto-approval paths (kahuna sandbox, autochain,
+  standing merge grant, lead-agent grant): there only a reviewer's RESOLVED verdict does, because
+  CLAUDE.md defines that pass and no skill text can widen it, so a cycle that took the skip ends in
+  the human STOP with the skip line on the checklist. Anything else still
   gets the delta, the first pass is always full, and the skip is never keyed on issue type or on how
   small the fix looks (#1191 stays the reason). The skipped fix is not reviewed: its test is the proof.
 - **The kit's pinned `sqtk` is v0.13.0 (#1431, the last step of #1426).** The client now takes
