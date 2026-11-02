@@ -1283,7 +1283,15 @@ class TestStatuslineSpend:
     def test_a_recorded_cost_without_rate_limits_renders_dollars_and_two_decimals(self, tmp_path: Path):
         assert self._row1(self._render(tmp_path, "s1", 5.0)) == "$5.00"
         assert self._row1(self._render(tmp_path, "s1", 5.126)) == "$5.13"
-        assert self._row1(self._render(tmp_path, "s1", 0)) == "$0.00"
+
+    def test_a_zero_cost_shows_and_records_nothing(self, tmp_path: Path):
+        """A fresh session, and a subscriber's first render before rate_limits arrives, both report 0.
+        Nothing is known yet, so the panel must not flash `$0.00` or leave a zero-cost file behind."""
+        out = self._render(tmp_path, "s1", 0)
+        assert "$" not in self._row1(out)
+        assert self._files(tmp_path) == []
+        # ...and the same session's next render, with rate_limits now present, still records nothing.
+        assert self._files(tmp_path) == [] and "$" not in self._row1(self._render(tmp_path, "s1", 0.4, limits=True))
 
     def test_rate_limits_hide_the_panel_and_record_nothing(self, tmp_path: Path):
         out = self._render(tmp_path, "s1", 5.0, limits=True)
@@ -1358,11 +1366,33 @@ class TestStatuslineSpend:
 
     # --- unsafe ids and failures ---
     @pytest.mark.parametrize("sid", ["../escape", "a/b", "..", "a b", "x;y", "begin", ""])
-    def test_an_unsafe_or_reserved_session_id_writes_nothing(self, tmp_path: Path, sid: str):
+    def test_an_unsafe_or_reserved_session_id_writes_nothing_but_its_cost_still_counts(
+        self, tmp_path: Path, sid: str
+    ):
         out = self._render(tmp_path, sid, 5.0)
         assert self._files(tmp_path) == []
         assert not (tmp_path / "escape.json").exists()
         assert out.count("\n") == 2
+        assert self._row1(out) == "$5.00"  # it cannot be filed, but the panel does not drop it
+        # ...and it is added to what other sessions have already recorded
+        self._render(tmp_path, "other", 2.0)
+        assert self._row1(self._render(tmp_path, sid, 5.0)) == "$7.00"
+        assert self._files(tmp_path) == ["other.json"]
+
+    def test_begin_skips_a_valid_json_file_that_is_not_an_object(self, tmp_path: Path):
+        """`begin` must skip it, as the panel does, not die silently with no marker."""
+        spend = tmp_path / "spend"
+        spend.mkdir()
+        (spend / "arr.json").write_text("[1, 2]")
+        (spend / "num.json").write_text("5")
+        (spend / "str.json").write_text('"x"')
+        (spend / "nocost.json").write_text('{"ts": 1}')
+        (spend / "ok.json").write_text(json.dumps({"cost_usd": 2.5, "ts": 1}))
+        r = self._cli(tmp_path, "begin")
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.startswith("spend marker set: 1 session, since ")
+        assert json.loads((spend / "begin.json").read_text())["baselines"] == {"ok": 2.5}
+        assert self._row1(self._render(tmp_path, "ok", 2.5)) == "$0.00"
 
     def test_an_unwritable_state_dir_still_renders_the_rest_and_the_own_spend(self, tmp_path: Path):
         blocker = tmp_path / "file-not-dir"
@@ -1419,7 +1449,16 @@ class TestStatuslineSpend:
         shown = self._cli(tmp_path, "show").stdout
         assert panel == "$2.33" and "$2.33 across 1 session" in shown
 
-    def test_install_would_put_it_on_path(self):
-        """./install --scripts links every executable at the top level of scripts/."""
-        assert os.access(SPEND_CLI, os.X_OK) and SPEND_CLI.parent.name == "scripts"
+    def test_install_puts_it_on_path_and_ships_its_library(self, tmp_path: Path):
+        """`./install --scripts --dry-run` (into a throwaway HOME) lists the symlink onto PATH, and the
+        library the script sources sits beside it in the Cellar layout (scripts/lib)."""
+        install = SPEND_CLI.parent.parent / "install"
+        home = tmp_path / "home"
+        home.mkdir()
+        r = subprocess.run([str(install), "--scripts", "--dry-run"], capture_output=True, text=True,
+                           env={**os.environ, "HOME": str(home)}, cwd=str(install.parent))
+        # The exit code is not checked: in a bare HOME the installer ends with its own "N required
+        # dependencies/secrets missing" summary, which says nothing about the scripts step.
+        assert f"symlink {home}/.local/bin/statusline-spend → {home}/.claude/scripts/statusline-spend" in r.stdout
+        assert os.access(SPEND_CLI, os.X_OK)
         assert (SPEND_CLI.parent / "lib" / "spend-math.sh").is_file()

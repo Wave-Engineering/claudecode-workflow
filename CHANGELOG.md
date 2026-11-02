@@ -29,8 +29,10 @@ are worth keeping apart:
   session's latest cost in `~/.claude/state/spend/<session_id>.json` when it changes (atomic,
   best-effort, files over 30 days old pruned); the panel is the sum of cost less baseline over every
   session, and a session first seen after the marker counts in full. An unsafe session id (or `begin`,
-  the marker's own name) writes nothing. The arithmetic is `scripts/lib/spend-math.sh`'s, shared by the
-  panel and the CLI.
+  the marker's own name) writes nothing, though its cost still counts in the sum shown. A cost of 0
+  shows and records nothing (a fresh session, and a subscriber's first render before `rate_limits`
+  arrives, both report 0). The arithmetic is `scripts/lib/spend-math.sh`'s, shared by the panel and the
+  CLI.
 - **Nerf, runway and floor panels in the statusline (#1428, story 2 of #1426).** Nerf shows the next
   dart the context has not reached, with its emoji (picked per session and dart by a stable hash), its
   name and a five-cell bar (`🪶 soft ▰▰▰▱▱`); no nerf config, no panel. Runway shows the tokens left

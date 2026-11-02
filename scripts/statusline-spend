@@ -51,7 +51,10 @@ cmd_begin() {
 	for f in "${files[@]}"; do jq -e . "$f" >/dev/null 2>&1 && good+=("$f"); done
 	if ((${#good[@]})); then
 		# shellcheck disable=SC2016  # a jq program
-		snap="$(jq -nc '[inputs | {key: (input_filename | split("/")[-1] | sub("\\.json$"; "")), value: .cost_usd}
+		# A file that is valid JSON but not an object (a number, an array) has no cost: skipped, as
+		# the panel skips it, rather than aborting the whole snapshot.
+		snap="$(jq -nc '[inputs | {key: (input_filename | split("/")[-1] | sub("\\.json$"; "")),
+			value: (if type == "object" then .cost_usd else null end)}
 			| select(.value | type == "number")] | from_entries' "${good[@]}")"
 	else
 		snap='{}'

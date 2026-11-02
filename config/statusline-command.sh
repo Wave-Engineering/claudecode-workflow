@@ -29,7 +29,7 @@ IFS=$'\x1f' read -r cwd model effort remaining_pct session_id ctx_in_tokens ctx_
 	  (.context_window.total_output_tokens // ""),
 	  (.rate_limits.five_hour.used_percentage // ""),
 	  (.rate_limits.seven_day.used_percentage // ""),
-	  (.cost.total_cost_usd | if type == "number" then . else "" end),
+	  (.cost.total_cost_usd | if type == "number" and . > 0 then . else "" end),
 	  (if (.rate_limits // null) != null then 1 else 0 end),
 	  ({session_id: (.session_id // ""),
 	    remaining_percentage: .context_window.remaining_percentage,
@@ -535,7 +535,9 @@ fi
 
 # === SPEND (#1429): API or Bedrock spend since the begin marker ===
 # A subscription session reports a notional cost that means nothing, so the panel appears only when
-# the payload has NO rate_limits and carries a cost. This session's latest cost is recorded in
+# the payload has NO rate_limits and carries a cost above zero (a fresh session, and a subscriber's
+# first render before rate_limits arrives, both report 0: nothing is known yet, so nothing is shown or
+# recorded). This session's latest cost is recorded in
 # ~/.claude/state/spend/<session_id>.json ({"cost_usd", "ts"}), only when it changed, atomically and
 # best-effort; files older than 30 days are pruned then. The panel is the sum over every session file
 # of (its cost less its baseline from `statusline-spend begin`), "$12.34". The arithmetic is
@@ -549,7 +551,9 @@ if [ "$has_limits" = 0 ] && [[ "$cost_usd" =~ ^[0-9]+([.][0-9]+)?([eE][-+]?[0-9]
 	spend_state_dir="$(spend_dir)"
 	spend_sid=""
 	if spend_session_id_ok "$session_id"; then spend_sid="$session_id"; fi
-	IFS=$'\x1f' read -r spend_sum _ spend_saved _ < <(spend_summary "$spend_state_dir" "$spend_sid" "$cost_usd")
+	# An unsafe or missing id can't name a file, but its cost still counts in the sum it shows: it
+	# goes in under a placeholder key and is never written.
+	IFS=$'\x1f' read -r spend_sum _ spend_saved _ < <(spend_summary "$spend_state_dir" "${spend_sid:-unkeyed-session}" "$cost_usd")
 	if [[ "$spend_sum" =~ ^[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$ ]]; then
 		spend_panel="$(spend_money "$spend_sum")"
 	fi
