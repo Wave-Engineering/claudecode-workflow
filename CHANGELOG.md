@@ -20,6 +20,18 @@ are worth keeping apart:
 ## [Unreleased]
 
 ### Added
+- **The statusline is two rows of divider-separated panels (#1427, story 1 of #1426).** Row 1 is
+  `<panel icons> │ <Model-Effort> │ … │ <context> │ … │ <Session> │ <Weekly> │ …`, row 2 is
+  `<dev-name> <avatar> │ <project>-<branch> (<worktree>) │ <cwd>`, divided by one dim `│`; a panel with
+  nothing to show leaves no divider. The context panel is now the absolute size (`38K`, `1.2M`, no bar,
+  no percent), Model-Effort shows `Sonnet 5.5-medium`, and Session and Weekly show the payload's
+  `rate_limits` when it has them, yellow from 50% and red from 80%. Row 2's project is the main repo's
+  folder even in a linked worktree, which gets its own `(dir)`. The payload is read with one `jq` pass
+  and git lookups are cached for a few seconds per cwd. Places for nerf, runway, floor and spend are
+  reserved for #1428 and #1429. The context arithmetic the reseed gate used to carry now lives in
+  `scripts/lib/context-math.sh` (`context_math`, printing `key=value` lines), which the gate sources and
+  the statusline will use, so the two cannot disagree; the gate's behaviour and tests are unchanged.
+  The remaining-context state file (#1225) is written exactly as before.
 - **Ask indicators in the statusline (#1430, story 4 of #1426).** An agent with an open ask on
   `bj:needs` now lights icons at the start of line 1, by kind and blocking (`⛔2 ✅❗ ❓3`: two
   blockers, a blocking approval, three non-blocking questions), at no model cost. A new hook,

@@ -89,7 +89,6 @@
 [[ "${RESEED_CONTEXT_GATE_DISABLED:-0}" == "1" ]] && exit 0
 
 MISS_TURNS=3
-DEFAULT_THRESHOLD=15
 
 INPUT=$(cat 2>/dev/null || true)
 field() { printf '%s' "$INPUT" | jq -r "$1" 2>/dev/null || true; }
@@ -103,26 +102,30 @@ HOOK_CWD="${HOOK_CWD:-$(pwd)}"
 STATE_DIR="${CLAUDE_CONTEXT_STATE_DIR:-$HOME/.claude/state/context}"
 SESSION_ID="$(field '.session_id // empty')"
 
-# nerf's per-session config: the mode picks what happens at the threshold, and the
-# ouch dart sets it. Anything unreadable is ultraviolence: this gate never weakens
-# because it can't read nerf.
-NERF_MODE=ultraviolence NERF_OUCH=""
+# THE ARITHMETIC lives in scripts/lib/context-math.sh (#1427), shared with the statusline so the
+# two cannot disagree: nerf's mode and darts, the threshold, the autocompact window, and the
+# percentage measured against what is usable. It is read here once, from the session's reading
+# and nerf's per-session config. Anything unreadable is ultraviolence: this gate never weakens
+# because it can't read nerf. The helper is part of the install; without it the gate cannot do
+# its sums, and says so rather than go quiet.
+CM_LIB="$(dirname "$(readlink -f "$0")")/../../lib/context-math.sh"
+if [[ ! -r "$CM_LIB" ]]; then
+	jq -cn --arg m "Context reseed gate: cannot load scripts/lib/context-math.sh ($CM_LIB) — the auto-reseed cannot fire until the kit is reinstalled." \
+		'{systemMessage: $m}'
+	exit 0
+fi
+# shellcheck source=scripts/lib/context-math.sh
+source "$CM_LIB"
+READING=""
+NERF_FILE=""
 if [[ "$SESSION_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
+	READING="$STATE_DIR/${SESSION_ID}.json"
 	NERF_FILE="${NERF_CONFIG_DIR:-/tmp}/nerf-${SESSION_ID}.json"
-	if [[ -f "$NERF_FILE" ]]; then
-		m="$(jq -r '.mode // empty' "$NERF_FILE" 2>/dev/null || true)"
-		case "$m" in hurt-me-plenty | not-too-rough) NERF_MODE="$m" ;; esac
-		NERF_OUCH="$(jq -r '.darts_pct.ouch | numbers' "$NERF_FILE" 2>/dev/null || true)"
-	fi
 fi
-
-if [[ "${RESEED_CONTEXT_THRESHOLD_PCT:-}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
-	THRESHOLD="$RESEED_CONTEXT_THRESHOLD_PCT"
-elif [[ "$NERF_OUCH" =~ ^[0-9]{1,2}$ ]] && ((10#$NERF_OUCH >= 1)); then
-	THRESHOLD=$((100 - 10#$NERF_OUCH))
-else
-	THRESHOLD="$DEFAULT_THRESHOLD"
-fi
+declare -A CM=()
+while IFS='=' read -r k v; do CM[$k]="$v"; done < <(context_math "$READING" "$NERF_FILE" "${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.json}")
+NERF_MODE="${CM[nerf_mode]:-ultraviolence}"
+THRESHOLD="${CM[threshold_pct]:-15}"
 
 # A miss: count it, and report once per session after MISS_TURNS consecutive
 # misses. Without a usable session id there is nowhere to count, so report at once.
@@ -147,85 +150,27 @@ unavailable() {
 }
 
 [[ "$SESSION_ID" =~ ^[A-Za-z0-9_-]+$ ]] || unavailable "no usable session id"
-READING="$STATE_DIR/${SESSION_ID}.json"
 [[ -f "$READING" ]] || unavailable "none written for this session after $MISS_TURNS turns"
 
 PCT="$(jq -r '.remaining_percentage // empty' "$READING" 2>/dev/null || true)"
 [[ "$PCT" =~ ^[0-9]+([.][0-9]+)?$ ]] || unavailable "the reading is malformed"
 rm -f "$STATE_DIR/${SESSION_ID}.misses" # a good reading resets the run of misses
 
-# Recompute against what is usable before autocompact fires.
-is_tokens() { [[ "$1" =~ ^[1-9][0-9]*$ ]]; }
-# An autocompact window as Claude Code reads it: "400000", "400k", "1M" or "0.4m";
-# a value under 100k is raised to 100k. Prints the token count, or fails.
-acw_tokens() {
-	local v="${1,,}" n
-	if [[ "$v" =~ ^[0-9]+$ ]]; then
-		n=$((10#$v))
-	elif [[ "$v" =~ ^([0-9]+([.][0-9]+)?)([km])$ ]]; then
-		n=$(awk -v x="${BASH_REMATCH[1]}" -v u="${BASH_REMATCH[3]}" \
-			'BEGIN { printf "%d", x * (u == "k" ? 1000 : 1000000) }')
-	else
-		return 1
-	fi
-	((n > 0)) || return 1
-	((n < 100000)) && n=100000
-	echo "$n"
-}
-USED="$(jq -r '.used_tokens // empty' "$READING" 2>/dev/null || true)"
-WINDOW="$(jq -r '.window_tokens // empty' "$READING" 2>/dev/null || true)"
-MODEL="$(jq -r '.model_id // empty' "$READING" 2>/dev/null || true)"
-# The settings keys a model_id may be filed under, most specific first: as given,
-# without "[1m]", then canonical. Canonical strips a provider prefix (Bedrock's
-# "us." / "eu." / "apac." / "global." / "us-gov." inference profiles, or a bare "anthropic."),
-# a Bedrock "-vN:M", a Vertex "@version" and a "-YYYYMMDD" date (#1318: the
-# statusline says "us.anthropic.claude-opus-5-5" where settings say "claude-opus-5-5").
-model_keys() {
-	local m="$1" c
-	c="$(sed -E 's/\[1m\]$//; s/^([a-z]{2,8}(-[a-z]+)?\.)?anthropic\.//; s/-v[0-9]+(:[0-9]+)?$//; s/@.*$//; s/-[0-9]{8}$//' <<<"$m")"
-	printf '%s\n' "$m" "${m%\[1m\]}" "$c"
-}
-SETTINGS="${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.json}"
+# Recompute against what is usable before autocompact fires (the helper did the sums).
 NOTE=""
-if ! ACW="$(acw_tokens "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}")"; then
-	ACW=""
-	if [[ -n "$MODEL" ]]; then
-		KEYS="$(model_keys "$MODEL" | jq -Rsc 'split("\n") | map(select(length > 0))')"
-		RAW="$(jq -r --argjson ks "$KEYS" \
-			'(.modelSettings // {}) as $ms | first($ks[] | ($ms[.]?.autoCompactWindow? // empty)) // .autoCompactWindow // empty' \
-			"$SETTINGS" 2>/dev/null)"
-		ACW="$(acw_tokens "$RAW")" || ACW=""
-		# A window is configured for some model but none of this model's keys: say
-		# so once, or a key mismatch reads exactly like no window at all.
-		if [[ -z "$RAW" ]]; then
-			FILED="$(jq -r '[.modelSettings // {} | to_entries[]? | select(.value.autoCompactWindow? != null) | .key] | join(", ")' \
-				"$SETTINGS" 2>/dev/null)"
-			MARK="$STATE_DIR/${SESSION_ID}.acw-unmatched-noted"
-			if [[ -n "$FILED" && ! -e "$MARK" ]]; then
-				mkdir -p "$STATE_DIR" 2>/dev/null
-				: >"$MARK" 2>/dev/null
-				NOTE="Context reseed gate: no autoCompactWindow for model \"$MODEL\" (tried $(jq -r 'join(", ")' <<<"$KEYS"); settings have one for: $FILED) — measuring against the model's own window, which autocompact may beat."
-			fi
-		fi
-	fi
-fi
-# Autocompact fires a fixed buffer BELOW its window (~33k: ~367k of 400k, ~967k
-# of 1M), on a configured window and the model's own alike. So the percentage is
-# of what is usable before it fires: measured against the raw window, a 200k
-# window's gate (170k) would lose to autocompact (~167k).
-BUFFER="${RESEED_AUTOCOMPACT_BUFFER_TOKENS:-33000}"
-[[ "$BUFFER" =~ ^[0-9]+$ ]] || BUFFER=33000
 OF=""
-if [[ "$USED" =~ ^[0-9]+$ ]] && is_tokens "$WINDOW"; then
-	CEIL="$WINDOW" BY="autocompact"
-	if [[ -n "$ACW" ]] && ((ACW < WINDOW)); then
-		CEIL="$ACW" BY="the $((ACW / 1000))k autocompact"
-	fi
-	if ((CEIL > BUFFER)); then
-		USABLE=$((CEIL - BUFFER))
-		PCT=$(((USABLE - USED) * 100 / USABLE))
-		((PCT < 0)) && PCT=0
-		OF=" of the $((USABLE / 1000))k usable before $BY"
+if [[ -n "${CM[remaining_pct]}" ]]; then
+	PCT="${CM[remaining_pct]}"
+	OF=" of the $((CM[usable_tokens] / 1000))k usable before ${CM[ceiling_by]}"
+fi
+# A window is configured for some model but none of this model's keys: say so once, or a key
+# mismatch reads exactly like no window at all.
+if [[ -n "${CM[acw_filed]}" ]]; then
+	MARK="$STATE_DIR/${SESSION_ID}.acw-unmatched-noted"
+	if [[ ! -e "$MARK" ]]; then
+		mkdir -p "$STATE_DIR" 2>/dev/null
+		: >"$MARK" 2>/dev/null
+		NOTE="Context reseed gate: no autoCompactWindow for model \"${CM[model_id]}\" (tried ${CM[acw_keys]}; settings have one for: ${CM[acw_filed]}) — measuring against the model's own window, which autocompact may beat."
 	fi
 fi
 

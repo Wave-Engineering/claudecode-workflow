@@ -1,13 +1,34 @@
-# Statusline Per-Session Indicators
+# Statusline Layout and Per-Session Indicators
 
-The statusline supports per-session indicators — short strings that appear on Line 1, left of the working directory, rendered in yellow. Any skill or script can publish indicators to communicate state at a glance.
+The statusline is two rows of panels, divided by a dim `│` (#1426, #1427). Any skill or script can publish indicators to the first panel to communicate state at a glance.
 
 ```
-Line 1: [asks]  [indicators]  [pwd]  [dev-name] [dev-avatar]
-Line 2: [repo @ branch] [status] [ctx remaining] [model]
+Row 1: <panel icons> │ <Model-Effort> │ <nerf> │ <runway> │ <context> │ <floor> │ <Session> │ <Weekly> │ <spend>
+Row 2: <dev-name> <avatar> │ <project>-<branch> (<worktree>) │ <cwd>
 ```
 
-The asks panel (see [Ask indicators](#ask-indicators-1430)) comes first when an agent has an open ask on `bj:needs`, and is absent otherwise.
+A panel with nothing to show is not rendered, and neither is its divider, on either row. The nerf, runway, floor and spend positions are reserved and print nothing yet.
+
+## Panels
+
+| Panel | Source | Rendering |
+|---|---|---|
+| Panel icons | the asks file (see [Ask indicators](#ask-indicators-1430)), then the per-session indicators file (below), then the wavemachine marker | asks first, then the indicators, in yellow, unchanged |
+| Model-Effort | `model.display_name`, `effort.level` | `Sonnet 5.5-medium`; the `-effort` part is left out when the payload has none |
+| Context | `context_window.total_input_tokens` | the absolute size: `999`, `1K`, `38K` (for 37,542), `312K`, `1M`, `1.2M`. No bar and no percent sign. Coloured by nerf's darts when nerf has a config for the session, else green, yellow at 25% remaining, red at 13% |
+| Session | `rate_limits.five_hour.used_percentage` | `Session:12%`, only when the payload has it |
+| Weekly | `rate_limits.seven_day.used_percentage` | `Weekly:92%`, only when the payload has it |
+| dev-name avatar | `.claude/agent-identity.json` | as before |
+| project-branch (worktree) | git | the project is the main repo's folder (taken from the git common directory, so a linked worktree shows its project, not its own folder); `-<branch>`, or the short commit when the head is detached; ` (<worktree-dir>)` only in a linked worktree. The existing `✓`/`✗` (clean or dirty), `+N` staged and `↑N`/`↓N` marks follow it |
+| cwd | the payload | with `$HOME` shortened to `~` |
+
+Session and Weekly turn yellow from 50% and red from 80%.
+
+**One `jq` pass reads the whole payload** on each render, and git lookups are cached for a few seconds per cwd (`CLAUDE_STATUSLINE_GIT_TTL`, default 5; 0 turns the cache off). The remaining-context reading the reseed gate and nerf depend on (`~/.claude/state/context/<session>.json`, #1225) is written exactly as before.
+
+## Shared window math
+
+The reseed gate and (from #1428) the statusline's runway and floor panels do their context arithmetic in one place, `scripts/lib/context-math.sh`, so they cannot disagree. `context_math <reading.json> <nerf.json> [<settings.json>]` prints `key=value` lines: nerf's mode and darts, the reseed threshold, the autocompact window, the usable window (the smaller of the model window and the autocompact window, less the ~33k buffer), the remaining percent of it, the darts as token positions, and the runway to the nearer of reseed and autocompact. It writes nothing. See the header of that file for every key.
 
 ## How It Works
 
