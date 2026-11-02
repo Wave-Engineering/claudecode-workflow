@@ -98,6 +98,13 @@ are worth keeping apart:
   the rule into subagent briefs, where the walk came from. `/ccfold` brings it into consumers.
 
 ### Changed
+- **The kit pins crewchat clients to mattermost-crew v0.4.0, the batching waiter (#1440).**
+  `CREWCHAT_TAG` in `scripts/install-crewchat.sh` moves from v0.3.0, so a host that runs the
+  installer gets a `crewchat-waiter` that wakes an agent once with every event that queued while it
+  was busy (a numbered list, oldest first), instead of one wake per event. The pin test and
+  `docs/chat-tools.md` name the new tag. Merging installs nothing; the pin reaches a host when the
+  installer runs there. `CREWCHAT_WAITER_BATCH_WINDOW_S=0` keeps v0.4.0 but restores one event per
+  wake, and the waiter is a per-arm client, so it needs no daemon restart.
 - **`/precheck` skips the Job D re-run after a fix only on a mechanical, test-proven predicate (#1438).**
   Step 3 said to re-run the reviewer after any fix, which turned a fix that only answers a finding
   into another full review and CI cycle (four of them on #1428, about 90 minutes). A re-run is now
