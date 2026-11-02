@@ -381,9 +381,11 @@ git_lookup() {
 	branch="${branch_line#\#\# }"
 	branch="${branch%%...*}"
 	branch="${branch%% \[*}"
-	if [[ "$branch" == "HEAD (no branch)"* || "$branch" == "No commits yet on "* ]]; then
+	if [[ "$branch" == "HEAD (no branch)"* || "$branch" == "No commits yet on "* || "$branch" == "Initial commit on "* ]]; then
 		if [[ "$branch" == "No commits yet on "* ]]; then
 			branch="${branch#No commits yet on }"
+		elif [[ "$branch" == "Initial commit on "* ]]; then # git before 2.28
+			branch="${branch#Initial commit on }"
 		else
 			branch=$(GIT_OPTIONAL_LOCKS=0 git -C "$cwd" rev-parse --short HEAD 2>/dev/null)
 		fi
@@ -404,8 +406,12 @@ git_info=""
 if [ -n "$cwd" ]; then
 	git_ttl="${CLAUDE_STATUSLINE_GIT_TTL:-5}"
 	[[ "$git_ttl" =~ ^[0-9]+$ ]] || git_ttl=5
-	git_cache="${CLAUDE_STATUSLINE_CACHE_DIR:-${TMPDIR:-/tmp}}/claude-statusline-git-$(echo -n "$cwd" | md5sum | cut -d' ' -f1)"
-	if ((git_ttl > 0)) && [ -f "$git_cache" ] && cache_mtime=$(stat -c %Y "$git_cache" 2>/dev/null) && ((now - cache_mtime < git_ttl)); then
+	# The cache is this user's own: the file name carries the uid, and a file that is not ours (or is
+	# a link) is never read. The directory is often a shared /tmp, so a file there could have been
+	# planted by anyone, and what is read back ends up in arithmetic and on the terminal.
+	git_cache="${CLAUDE_STATUSLINE_CACHE_DIR:-${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}}/claude-statusline-git-$(id -u)-$(echo -n "$cwd" | md5sum | cut -d' ' -f1)"
+	if ((git_ttl > 0)) && [ -f "$git_cache" ] && [ -O "$git_cache" ] && [ ! -L "$git_cache" ] &&
+		cache_mtime=$(stat -c %Y "$git_cache" 2>/dev/null) && ((now - cache_mtime < git_ttl)); then
 		git_info=$(cat "$git_cache" 2>/dev/null)
 	else
 		if git_info=$(git_lookup); then
@@ -431,6 +437,14 @@ if [ -n "$git_info" ]; then
 		IFS= read -r g_ahead
 		IFS= read -r g_behind
 	} <<<"$git_info"
+	# Whatever the lines hold, they are text for the terminal and numbers for arithmetic: strip
+	# control characters from the text and take anything that is not a number as 0.
+	g_project="${g_project//[[:cntrl:]]/}"
+	g_branch="${g_branch//[[:cntrl:]]/}"
+	g_worktree="${g_worktree//[[:cntrl:]]/}"
+	for n in g_dirty g_staged g_ahead g_behind; do
+		[[ "${!n}" =~ ^[0-9]+$ ]] || printf -v "$n" 0
+	done
 	project_text="${g_project}-${g_branch}"
 	[ -n "$g_worktree" ] && project_text+=" (${g_worktree})"
 	project_panel=$(paint "$c_cyan" "$project_text")

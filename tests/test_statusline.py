@@ -851,6 +851,33 @@ class TestStatuslineLayout:
         fresh = _rows(_run_statusline({"cwd": str(proj)}, cwd=proj))[1]  # default test env: no cache
         assert "alpha-other" in fresh
 
+    def test_a_planted_git_cache_cannot_run_commands_or_inject_escapes(self, tmp_path: Path):
+        """The cache sits in a directory other users may write to, and what it holds is used in
+        arithmetic and printed: a hostile value must be read as text or as 0, never evaluated."""
+        import hashlib
+
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        marker = tmp_path / "pwned"
+        digest = hashlib.md5(str(tmp_path).encode()).hexdigest()
+        planted = cache_dir / f"claude-statusline-git-{os.getuid()}-{digest}"
+        planted.write_text(f"proj\x1b[31mX\nmain\n\na[$(touch {marker})]\n$(touch {marker})\n7\nb[`touch {marker}`]\n")
+        out = _run_statusline({"cwd": str(tmp_path)}, cwd=tmp_path, env_override={
+            "CLAUDE_STATUSLINE_GIT_TTL": "60", "CLAUDE_STATUSLINE_CACHE_DIR": str(cache_dir)})
+        assert not marker.exists()
+        row2 = _rows(out)[1]
+        assert "\x1b" not in row2 and "proj[31mX-main" in row2  # control characters stripped, text kept
+        assert "↑7" in row2 and "↓" not in row2 and "+" not in row2  # non-numbers read as 0
+
+    def test_the_git_cache_file_is_per_user(self, tmp_path: Path):
+        proj = _repo(tmp_path / "alpha")
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        _run_statusline({"cwd": str(proj)}, cwd=proj, env_override={
+            "CLAUDE_STATUSLINE_GIT_TTL": "60", "CLAUDE_STATUSLINE_CACHE_DIR": str(cache_dir)})
+        names = [p.name for p in cache_dir.iterdir()]
+        assert len(names) == 1 and names[0].startswith(f"claude-statusline-git-{os.getuid()}-"), names
+
     # --- the #1225 state file ---
     def test_context_state_file_has_exactly_the_same_content_as_before(self, tmp_path: Path):
         state = tmp_path / "state"

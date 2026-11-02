@@ -31,7 +31,7 @@ are worth keeping apart:
   reserved for #1428 and #1429. The context arithmetic the reseed gate used to carry now lives in
   `scripts/lib/context-math.sh` (`context_math`, printing `key=value` lines), which the gate sources and
   the statusline will use, so the two cannot disagree; the gate's behaviour and tests are unchanged.
-  The remaining-context state file (#1225) is written exactly as before.
+  The remaining-context state file (#1225) is written with the same content as before (compact JSON now).
 - **Ask indicators in the statusline (#1430, story 4 of #1426).** An agent with an open ask on
   `bj:needs` now lights icons at the start of line 1, by kind and blocking (`⛔2 ✅❗ ❓3`: two
   blockers, a blocking approval, three non-blocking questions), at no model cost. A new hook,
