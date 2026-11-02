@@ -50,6 +50,9 @@ def _run_statusline(
     # every test that passes a session_id would write into the REAL
     # ~/.claude/state/context of whoever runs the suite.
     env["CLAUDE_CONTEXT_STATE_DIR"] = _CTX_STATE.name
+    # No git cache unless a test asks for one: a test that changes a repo between two renders
+    # must see the change (#1427).
+    env["CLAUDE_STATUSLINE_GIT_TTL"] = "0"
     if env_override:
         env.update(env_override)
 
@@ -119,7 +122,7 @@ class TestStatuslineTwoLines:
             {
                 "cwd": str(tmp_path),
                 "model": {"display_name": "Claude Sonnet"},
-                "context_window": {"remaining_percentage": 72.5},
+                "context_window": {"remaining_percentage": 72.5, "total_input_tokens": 37542},
             },
             cwd=tmp_path,
         )
@@ -130,15 +133,15 @@ class TestStatuslineTwoLines:
         clean = _strip_ansi(output)
         lines = clean.split("\n")
 
-        # Line 1 should contain the path
-        assert str(tmp_path) in lines[0] or "~" in lines[0]
+        # Row 1 carries the model and the absolute context size (#1427)
+        assert lines[0] == "Claude Sonnet │ 38K", lines[0]
 
-        # Line 2 should contain git info, context remaining, and model
-        assert "ctx remaining:" in lines[1]
-        assert "Claude Sonnet" in lines[1]
+        # Row 2 carries the project-branch and the path
+        assert lines[1].startswith(f"{tmp_path.name}-"), lines[1]
+        assert str(tmp_path) in lines[1] or "~" in lines[1]
 
-    def test_line1_has_path_line2_has_git(self, tmp_path: Path):
-        """Path is on line 1, git info is on line 2."""
+    def test_line2_has_path_and_git(self, tmp_path: Path):
+        """The project-branch and the path are both on row 2 (#1427); row 1 has neither."""
         subprocess.run(
             ["git", "init"], cwd=str(tmp_path), capture_output=True, check=True
         )
@@ -170,12 +173,12 @@ class TestStatuslineTwoLines:
         lines = clean.split("\n")
 
         repo_name = tmp_path.name
-        # Line 1: path present
-        assert str(tmp_path) in lines[0] or tmp_path.name in lines[0]
-        # Line 2: git repo @ branch
-        assert f"{repo_name} @" in lines[1] or "@ " in lines[1]
-        # Line 1 should NOT have git repo info
-        assert f"{repo_name} @" not in lines[0]
+        # Row 2: project-branch, then the path, divided
+        assert lines[1].startswith(f"{repo_name}-"), lines[1]
+        assert " │ " in lines[1]
+        assert lines[1].endswith(str(tmp_path)), lines[1]
+        # Row 1 has nothing here: no model, no context, no panel icons
+        assert lines[0] == ""
 
 
 class TestStatuslineSessionIndicator:
@@ -220,15 +223,15 @@ class TestStatuslineSessionIndicator:
             session_file.unlink(missing_ok=True)
 
     def test_no_session_file_no_indicators(self, tmp_path: Path):
-        """When no session file exists, line 1 starts with the path."""
+        """When no session file exists, row 1 has no panel icons and the path is on row 2."""
         output = _run_statusline({"cwd": str(tmp_path)}, cwd=tmp_path)
         clean = _strip_ansi(output)
         lines = clean.split("\n")
 
-        # Should start with the path (or ~-substituted path), not indicators
         assert "● REC" not in lines[0]
-        # The path should be the first visible content
-        assert str(tmp_path) in lines[0] or "~" in lines[0] or tmp_path.name in lines[0]
+        assert lines[0] == ""
+        # The path is row 2's content
+        assert str(tmp_path) in lines[1] or "~" in lines[1] or tmp_path.name in lines[1]
 
 
 class TestStatuslineUnicodeAvatar:
@@ -258,12 +261,11 @@ class TestStatuslineUnicodeAvatar:
             clean = _strip_ansi(output)
             lines = clean.split("\n")
 
-            # Unicode emoji should be present on line 1
-            assert "📡" in lines[0], (
-                f"Expected Unicode emoji 📡 on line 1, got: {lines[0]!r}"
+            # Unicode emoji should be present on row 2 (#1427), after the dev-name
+            assert "📡" in lines[1], (
+                f"Expected Unicode emoji 📡 on row 2, got: {lines[1]!r}"
             )
-            # Dev name should also be on line 1
-            assert "beacon" in lines[0]
+            assert lines[1].startswith("beacon 📡"), lines[1]
             # No colon notation should appear
             assert ":satellite:" not in output
         finally:
@@ -338,28 +340,29 @@ class TestStatuslineColors:
         output = _run_statusline(
             {
                 "cwd": str(tmp_path),
-                "context_window": {"remaining_percentage": 50.0},
+                "context_window": {"remaining_percentage": 50.0, "total_input_tokens": 312000},
             },
             cwd=tmp_path,
         )
         # Green = \033[01;32m
-        assert "\033[01;32m" in output, (
-            f"Expected green ANSI code for safe ctx remaining, got: {output!r}"
+        assert "\033[01;32m312K" in output, (
+            f"Expected green ANSI code for safe context, got: {output!r}"
         )
-        # Should NOT contain cyan for ctx remaining
+        # The context panel is the absolute size: no bar, no percent (#1427)
         clean = _strip_ansi(output)
-        assert "ctx remaining: 50%" in clean
+        assert clean.split("\n")[0] == "312K"
+        assert "%" not in clean.split("\n")[0]
 
     def test_ctx_remaining_yellow_when_low(self, tmp_path: Path):
         """Context remaining <=25% renders yellow (33)."""
         output = _run_statusline(
             {
                 "cwd": str(tmp_path),
-                "context_window": {"remaining_percentage": 20.0},
+                "context_window": {"remaining_percentage": 20.0, "total_input_tokens": 800000},
             },
             cwd=tmp_path,
         )
-        assert "\033[33m" in output, (
+        assert "\033[33m800K" in output, (
             f"Expected yellow ANSI code for low ctx remaining, got: {output!r}"
         )
 
@@ -368,11 +371,11 @@ class TestStatuslineColors:
         output = _run_statusline(
             {
                 "cwd": str(tmp_path),
-                "context_window": {"remaining_percentage": 10.0},
+                "context_window": {"remaining_percentage": 10.0, "total_input_tokens": 900000},
             },
             cwd=tmp_path,
         )
-        assert "\033[31m" in output, (
+        assert "\033[31m900K" in output, (
             f"Expected red ANSI code for critical ctx remaining, got: {output!r}"
         )
 
@@ -396,7 +399,7 @@ class TestStatuslineNerfDarts:
                     "session_id": sid,
                     "context_window": {
                         "remaining_percentage": remaining,
-                        "total_input_tokens": used_tokens,
+                        "total_input_tokens": used_tokens or 1000,
                         "total_output_tokens": 0,
                     },
                 },
@@ -404,8 +407,10 @@ class TestStatuslineNerfDarts:
             )
         finally:
             cfg.unlink(missing_ok=True)
-        # The ctx segment is the color code immediately before "ctx remaining".
-        return output.split("ctx remaining")[0][-16:]
+        # The context panel is the absolute size ("1K", "140K"); its color code is the
+        # one immediately before it.
+        size = f"{round((used_tokens or 1000) / 1000)}K"
+        return output.split(size)[0][-16:]
 
     PCT = {"darts_pct": {"soft": 51, "hard": 63, "ouch": 85}}
 
@@ -554,18 +559,22 @@ class TestStatuslinePersistsContext:
         """The session id becomes a filename — a traversal-shaped one must write
         nothing anywhere, and the statusline must still render."""
         state = tmp_path / "state"
-        output = _run_statusline(self._payload(tmp_path, "../../escape", 50), cwd=tmp_path,
+        payload = self._payload(tmp_path, "../../escape", 50)
+        payload["context_window"]["total_input_tokens"] = 5000
+        output = _run_statusline(payload, cwd=tmp_path,
                                  env_override={"CLAUDE_CONTEXT_STATE_DIR": str(state)})
         assert not state.exists() or not any(state.iterdir())
         assert not (tmp_path / "escape.json").exists()
-        assert "ctx remaining: 50%" in _strip_ansi(output)
+        assert _strip_ansi(output).split("\n")[0] == "5K"
 
     def test_unwritable_state_dir_does_not_break_the_render(self, tmp_path: Path):
         blocker = tmp_path / "file-not-dir"
         blocker.write_text("x")
-        output = _run_statusline(self._payload(tmp_path, "s2", 33), cwd=tmp_path,
+        payload = self._payload(tmp_path, "s2", 33)
+        payload["context_window"]["total_input_tokens"] = 7000
+        output = _run_statusline(payload, cwd=tmp_path,
                                  env_override={"CLAUDE_CONTEXT_STATE_DIR": str(blocker / "sub")})
-        assert "ctx remaining: 33%" in _strip_ansi(output)
+        assert _strip_ansi(output).split("\n")[0] == "7K"
         assert output.count("\n") == 2
 
 
@@ -597,7 +606,7 @@ class TestStatuslineAskIndicators:
                 self._ask("blocker", True, 5), self._ask("question", seq=6),
             ], "synced_at": 1}))
             line = self._line1(tmp_path)
-            assert line.startswith("⛔2 ✅❗ ❓3 "), line
+            assert line == "⛔2 ✅❗ ❓3", line
         finally:
             asks.unlink(missing_ok=True)
 
@@ -610,7 +619,7 @@ class TestStatuslineAskIndicators:
                 self._ask("unspecified", True, 5), self._ask("action", True, 6),
             ]}))
             # Blocking asks, then non-blocking; approval, action, question, unspecified.
-            assert self._line1(tmp_path).startswith("🔧❗ 🔔❗ ✅ 🔧 ❓ 🔔 "), self._line1(tmp_path)
+            assert self._line1(tmp_path) == "🔧❗ 🔔❗ ✅ 🔧 ❓ 🔔", self._line1(tmp_path)
         finally:
             asks.unlink(missing_ok=True)
 
@@ -618,7 +627,7 @@ class TestStatuslineAskIndicators:
         dev, asks = self._setup(tmp_path)
         try:
             asks.write_text(json.dumps({"asks": [self._ask("blocker", True)]}))
-            assert self._line1(tmp_path).startswith("⛔ "), self._line1(tmp_path)
+            assert self._line1(tmp_path) == "⛔", self._line1(tmp_path)
             assert "⛔❗" not in self._line1(tmp_path)
         finally:
             asks.unlink(missing_ok=True)
@@ -629,7 +638,7 @@ class TestStatuslineAskIndicators:
         try:
             asks.write_text(json.dumps({"asks": [self._ask("approval", True)]}))
             session.write_text(json.dumps({"indicators": ["● REC", "W2 3/5"]}))
-            assert self._line1(tmp_path).startswith("✅❗ ● REC W2 3/5"), self._line1(tmp_path)
+            assert self._line1(tmp_path) == "✅❗ ● REC W2 3/5", self._line1(tmp_path)
         finally:
             asks.unlink(missing_ok=True)
             session.unlink(missing_ok=True)
@@ -649,3 +658,269 @@ class TestStatuslineAskIndicators:
         """Without a dev_name the file cannot be found, so nothing renders and nothing breaks."""
         out = _strip_ansi(_run_statusline({"cwd": str(tmp_path)}, cwd=tmp_path))
         assert out.count("\n") == 2
+
+
+# --- #1427: the two-row layout ---------------------------------------------------------------
+
+DIM_BAR = "\033[2m│\033[00m"
+
+
+def _git(cwd: Path, *args: str) -> str:
+    r = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
+                       env={**os.environ, "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@t",
+                            "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@t"})
+    return r.stdout.strip()
+
+
+def _repo(path: Path, *, branch: str = "main") -> Path:
+    """A git repo with one commit, on `branch`."""
+    path.mkdir(parents=True, exist_ok=True)
+    _git(path, "init", "-q", "-b", branch)
+    (path / "README.md").write_text("x")
+    _git(path, "add", ".")
+    _git(path, "commit", "-q", "-m", "init")
+    return path
+
+
+def _rows(output: str) -> list[str]:
+    return _strip_ansi(output).split("\n")
+
+
+class TestStatuslineLayout:
+    """#1427: row 1 is `icons │ Model-Effort │ nerf │ runway │ context │ floor │ Session │ Weekly │
+    spend`, row 2 is `dev-name avatar │ project-branch (worktree) │ cwd`. A panel with nothing to
+    show leaves no divider."""
+
+    FULL = {
+        "model": {"display_name": "Sonnet 5.5", "id": "claude-sonnet-5-5"},
+        "effort": {"level": "medium"},
+        "context_window": {"total_input_tokens": 37542, "remaining_percentage": 61},
+        "rate_limits": {"five_hour": {"used_percentage": 12}, "seven_day": {"used_percentage": 92}},
+    }
+
+    def _setup(self, tmp_path: Path, *, indicators: list[str] | None = None) -> tuple[str, list[Path]]:
+        dev = f"layout-{uuid.uuid4().hex[:8]}"
+        (tmp_path / ".claude").mkdir(exist_ok=True)
+        (tmp_path / ".claude" / "agent-identity.json").write_text(
+            json.dumps({"dev_name": dev, "dev_avatar": "🧠"}))
+        files: list[Path] = []
+        if indicators is not None:
+            f = Path(f"/tmp/claude-statusline-{dev}.json")
+            f.write_text(json.dumps({"indicators": indicators}))
+            files.append(f)
+        return dev, files
+
+    def _payload(self, tmp_path: Path, **drop) -> dict:
+        p = json.loads(json.dumps(self.FULL))
+        p["cwd"] = str(tmp_path)
+        for path in drop.get("remove", []):
+            node = p
+            *parents, last = path.split(".")
+            for k in parents:
+                node = node[k]
+            del node[last]
+        return p
+
+    def test_all_panels_two_rows_with_a_dim_divider(self, tmp_path: Path):
+        proj = _repo(tmp_path / "myproj")
+        dev, files = self._setup(proj, indicators=["● REC"])
+        try:
+            out = _run_statusline(self._payload(proj), cwd=proj)
+        finally:
+            for f in files:
+                f.unlink(missing_ok=True)
+        assert out.count("\n") == 2
+        assert DIM_BAR in out  # a dim │, not a plain one
+        rows = _rows(out)
+        assert rows[0] == "● REC │ Sonnet 5.5-medium │ 38K │ Session:12% │ Weekly:92%"
+        parts = rows[1].split(" │ ")
+        assert len(parts) == 3, rows[1]
+        assert parts[0] == f"{dev} 🧠"
+        assert parts[1].startswith("myproj-main"), parts[1]
+        assert parts[2] == str(proj)
+
+    @pytest.mark.parametrize("remove, row1", [
+        ([], "● REC │ Sonnet 5.5-medium │ 38K │ Session:12% │ Weekly:92%"),
+        (["model"], "● REC │ 38K │ Session:12% │ Weekly:92%"),
+        (["effort"], "● REC │ Sonnet 5.5 │ 38K │ Session:12% │ Weekly:92%"),
+        (["context_window"], "● REC │ Sonnet 5.5-medium │ Session:12% │ Weekly:92%"),
+        (["rate_limits.five_hour"], "● REC │ Sonnet 5.5-medium │ 38K │ Weekly:92%"),
+        (["rate_limits.seven_day"], "● REC │ Sonnet 5.5-medium │ 38K │ Session:12%"),
+        (["rate_limits"], "● REC │ Sonnet 5.5-medium │ 38K"),
+        (["model", "effort", "context_window", "rate_limits"], "● REC"),
+    ])
+    def test_each_panel_empty_in_turn_leaves_no_stray_divider(self, tmp_path: Path, remove, row1):
+        dev, files = self._setup(tmp_path, indicators=["● REC"])
+        try:
+            rows = _rows(_run_statusline(self._payload(tmp_path, remove=remove), cwd=tmp_path))
+        finally:
+            for f in files:
+                f.unlink(missing_ok=True)
+        assert rows[0] == row1
+        assert "│ │" not in rows[0] and not rows[0].startswith("│") and not rows[0].endswith("│")
+
+    def test_no_panel_icons_means_no_leading_divider(self, tmp_path: Path):
+        self._setup(tmp_path)
+        assert _rows(_run_statusline(self._payload(tmp_path), cwd=tmp_path))[0] == \
+            "Sonnet 5.5-medium │ 38K │ Session:12% │ Weekly:92%"
+
+    def test_nothing_to_show_gives_two_empty_rows_not_dividers(self, tmp_path: Path):
+        out = _run_statusline({"cwd": ""}, cwd=tmp_path)
+        assert _strip_ansi(out) == "\n\n"
+
+    def test_row_two_without_an_identity_still_renders_the_rest(self, tmp_path: Path):
+        proj = _repo(tmp_path / "noid")
+        rows = _rows(_run_statusline({"cwd": str(proj)}, cwd=proj))
+        parts = rows[1].split(" │ ")
+        assert len(parts) == 2 and parts[0].startswith("noid-main") and parts[1] == str(proj)
+
+    # --- payload variants ---
+    def test_effort_is_dropped_when_the_payload_has_none(self, tmp_path: Path):
+        rows = _rows(_run_statusline({"cwd": str(tmp_path), "model": {"display_name": "Opus 5.5"}}, cwd=tmp_path))
+        assert rows[0] == "Opus 5.5"
+
+    def test_seven_day_only_and_both_and_neither(self, tmp_path: Path):
+        def row1(limits):
+            p = {"cwd": str(tmp_path)}
+            if limits is not None:
+                p["rate_limits"] = limits
+            return _rows(_run_statusline(p, cwd=tmp_path))[0]
+        assert row1({"seven_day": {"used_percentage": 40}}) == "Weekly:40%"
+        assert row1({"five_hour": {"used_percentage": 3}, "seven_day": {"used_percentage": 40}}) == "Session:3% │ Weekly:40%"
+        assert row1(None) == ""
+        assert row1({}) == ""
+
+    # --- context formatting ---
+    @pytest.mark.parametrize("tokens, text", [
+        (0, "0"), (999, "999"), (1000, "1K"), (37542, "38K"), (312000, "312K"),
+        (999499, "999K"), (999999, "1M"), (1000000, "1M"), (1200000, "1.2M"), (1949999, "1.9M"),
+    ])
+    def test_context_is_absolute_tokens_with_no_percent(self, tmp_path: Path, tokens, text):
+        rows = _rows(_run_statusline(
+            {"cwd": str(tmp_path), "context_window": {"total_input_tokens": tokens}}, cwd=tmp_path))
+        assert rows[0] == text
+        assert "%" not in rows[0]
+
+    # --- Session / Weekly colours ---
+    @pytest.mark.parametrize("pct, color", [
+        (0, "\033[01;32m"), (49, "\033[01;32m"), (50, "\033[33m"), (79, "\033[33m"),
+        (80, "\033[31m"), (100, "\033[31m"), (49.9, "\033[01;32m"), (79.9, "\033[33m"),
+    ])
+    def test_usage_colours_green_yellow_red(self, tmp_path: Path, pct, color):
+        shown = int(pct)
+        for key, label in (("five_hour", "Session"), ("seven_day", "Weekly")):
+            out = _run_statusline({"cwd": str(tmp_path), "rate_limits": {key: {"used_percentage": pct}}}, cwd=tmp_path)
+            assert f"{color}{label}:{shown}%" in out, out
+
+    # --- git ---
+    def test_main_checkout_shows_project_and_branch_only(self, tmp_path: Path):
+        proj = _repo(tmp_path / "alpha", branch="feature/x")
+        parts = _rows(_run_statusline({"cwd": str(proj)}, cwd=proj))[1].split(" │ ")
+        assert parts[0].startswith("alpha-feature/x") and "(" not in parts[0]
+
+    def test_linked_worktree_shows_its_project_and_the_worktree_dir(self, tmp_path: Path):
+        proj = _repo(tmp_path / "alpha")
+        wt = tmp_path / "alpha-wt-7"
+        _git(proj, "worktree", "add", "-q", "-b", "fix/7-thing", str(wt))
+        parts = _rows(_run_statusline({"cwd": str(wt)}, cwd=wt))[1].split(" │ ")
+        assert parts[0].startswith("alpha-fix/7-thing (alpha-wt-7)"), parts[0]
+        # ...and the main checkout, same repo, has no (worktree) part
+        parts = _rows(_run_statusline({"cwd": str(proj)}, cwd=proj))[1].split(" │ ")
+        assert "(" not in parts[0]
+
+    def test_detached_head_shows_the_short_commit(self, tmp_path: Path):
+        proj = _repo(tmp_path / "alpha")
+        short = _git(proj, "rev-parse", "--short", "HEAD")
+        _git(proj, "checkout", "-q", "--detach")
+        parts = _rows(_run_statusline({"cwd": str(proj)}, cwd=proj))[1].split(" │ ")
+        assert parts[0].startswith(f"alpha-{short}"), parts[0]
+
+    def test_no_repo_means_no_project_panel(self, tmp_path: Path):
+        d = tmp_path / "plain"
+        d.mkdir()
+        assert _rows(_run_statusline({"cwd": str(d)}, cwd=d))[1] == str(d)
+
+    def test_git_lookups_are_cached_for_a_few_seconds(self, tmp_path: Path):
+        proj = _repo(tmp_path / "alpha")
+        cache = {"CLAUDE_STATUSLINE_GIT_TTL": "60", "CLAUDE_STATUSLINE_CACHE_DIR": str(tmp_path / "cache")}
+        (tmp_path / "cache").mkdir()
+        first = _rows(_run_statusline({"cwd": str(proj)}, cwd=proj, env_override=cache))[1]
+        _git(proj, "checkout", "-q", "-b", "other")
+        again = _rows(_run_statusline({"cwd": str(proj)}, cwd=proj, env_override=cache))[1]
+        assert again == first and "alpha-main" in again  # still the cached branch
+        fresh = _rows(_run_statusline({"cwd": str(proj)}, cwd=proj))[1]  # default test env: no cache
+        assert "alpha-other" in fresh
+
+    def test_a_planted_git_cache_cannot_run_commands_or_inject_escapes(self, tmp_path: Path):
+        """The cache sits in a directory other users may write to, and what it holds is used in
+        arithmetic and printed: a hostile value must be read as text or as 0, never evaluated."""
+        import hashlib
+
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        marker = tmp_path / "pwned"
+        digest = hashlib.md5(str(tmp_path).encode()).hexdigest()
+        planted = cache_dir / f"claude-statusline-git-{os.getuid()}-{digest}"
+        planted.write_text(f"proj\x1b[31mX\nmain\n\na[$(touch {marker})]\n$(touch {marker})\n7\nb[`touch {marker}`]\n")
+        out = _run_statusline({"cwd": str(tmp_path)}, cwd=tmp_path, env_override={
+            "CLAUDE_STATUSLINE_GIT_TTL": "60", "CLAUDE_STATUSLINE_CACHE_DIR": str(cache_dir)})
+        assert not marker.exists()
+        row2 = _rows(out)[1]
+        assert "\x1b" not in row2 and "proj[31mX-main" in row2  # control characters stripped, text kept
+        assert "↑7" in row2 and "↓" not in row2 and "+" not in row2  # non-numbers read as 0
+
+    def test_the_git_cache_file_is_per_user(self, tmp_path: Path):
+        proj = _repo(tmp_path / "alpha")
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        _run_statusline({"cwd": str(proj)}, cwd=proj, env_override={
+            "CLAUDE_STATUSLINE_GIT_TTL": "60", "CLAUDE_STATUSLINE_CACHE_DIR": str(cache_dir)})
+        names = [p.name for p in cache_dir.iterdir()]
+        assert len(names) == 1 and names[0].startswith(f"claude-statusline-git-{os.getuid()}-"), names
+
+    # --- the #1225 state file ---
+    def test_context_state_file_has_exactly_the_same_content_as_before(self, tmp_path: Path):
+        state = tmp_path / "state"
+        payload = {
+            "cwd": str(tmp_path), "session_id": "gold-1", "model": {"id": "claude-opus-5-5", "display_name": "Opus"},
+            "context_window": {"remaining_percentage": 80, "total_input_tokens": 202373,
+                               "total_output_tokens": 379, "context_window_size": 1000000},
+        }
+        before = int(__import__("time").time())
+        _run_statusline(payload, cwd=tmp_path, env_override={"CLAUDE_CONTEXT_STATE_DIR": str(state)})
+        data = json.loads((state / "gold-1.json").read_text())
+        ts = data.pop("ts")
+        assert before <= ts <= before + 5
+        assert data == {"session_id": "gold-1", "remaining_percentage": 80, "used_tokens": 202373,
+                        "window_tokens": 1000000, "model_id": "claude-opus-5-5"}
+
+    # --- one jq per payload ---
+    def test_the_payload_is_read_with_one_jq_invocation(self, tmp_path: Path):
+        import shutil
+
+        real = shutil.which("jq")
+        assert real
+        log = tmp_path / "jq-calls.log"
+        stub_dir = tmp_path / "stubbin"
+        stub_dir.mkdir()
+        stub = stub_dir / "jq"
+        # An invocation whose last argument is not a readable file reads its input from stdin: the payload.
+        stub.write_text(
+            "#!/usr/bin/env bash\n"
+            'last="${*: -1}"\n'
+            f'if [ -f "$last" ]; then echo file >> "{log}"; else echo stdin >> "{log}"; fi\n'
+            f'exec "{real}" "$@"\n')
+        stub.chmod(0o755)
+        proj = _repo(tmp_path / "alpha")
+        dev, files = TestStatuslineLayout()._setup(proj, indicators=["● REC"])
+        try:
+            payload = TestStatuslineLayout()._payload(proj)
+            payload["session_id"] = "one-jq"
+            _run_statusline(payload, cwd=proj, env_override={
+                "PATH": f"{stub_dir}:{os.environ['PATH']}",
+                "CLAUDE_CONTEXT_STATE_DIR": str(tmp_path / "state")})
+        finally:
+            for f in files:
+                f.unlink(missing_ok=True)
+        calls = log.read_text().split()
+        assert calls.count("stdin") == 1, calls
