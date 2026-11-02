@@ -50,16 +50,18 @@ ctx_used_tokens=$((ctx_in_int + ctx_out_int)) # the legacy nerf `darts` compare 
 # reader never sees a half-written file. The session id becomes a filename, so
 # anything outside [A-Za-z0-9_-] is refused rather than sanitised. Best-effort:
 # a failure here must never cost the statusline its render.
+ctx_state_dir="${CLAUDE_CONTEXT_STATE_DIR:-$HOME/.claude/state/context}"
+persisted_reading=""
 if [ -n "$remaining_pct" ] && [[ "$session_id" =~ ^[A-Za-z0-9_-]+$ ]] && [ -n "$reading_json" ]; then
 	{
-		ctx_state_dir="${CLAUDE_CONTEXT_STATE_DIR:-$HOME/.claude/state/context}"
 		ctx_tmp=""
 		# The raw numbers (#1297) let the gate measure against an autocompact
 		# window: Claude Code computes remaining_percentage against the model's.
 		if mkdir -p "$ctx_state_dir" &&
 			ctx_tmp="$(mktemp "$ctx_state_dir/.${session_id}.XXXXXX")" &&
 			printf '%s\n' "$reading_json" >"$ctx_tmp"; then
-			mv -f "$ctx_tmp" "$ctx_state_dir/${session_id}.json"
+			mv -f "$ctx_tmp" "$ctx_state_dir/${session_id}.json" &&
+				persisted_reading="$ctx_state_dir/${session_id}.json"
 		else
 			[ -n "$ctx_tmp" ] && rm -f "$ctx_tmp"
 		fi
@@ -117,6 +119,31 @@ fmt_tokens() {
 	else
 		printf '%s.%sM' "$((tenths / 10))" "$((tenths % 10))"
 	fi
+}
+
+# runway_fmt N — tokens left, always with a unit: 0K, 1K, 88K, 1.2M.
+runway_fmt() {
+	if (($1 < 1000)); then
+		printf '%sK' "$((($1 + 500) / 1000))"
+	else
+		fmt_tokens "$1"
+	fi
+}
+
+# Nerf's emoji sets (#1428): single code points, no variation selector. One is picked per
+# (session, dart) by a stable hash, so it does not change between renders.
+# shellcheck disable=SC2034  # read through the nameref in pick_emoji
+nerf_emoji_soft=(🪶 🧸 🍬 🫧 🧁)
+# shellcheck disable=SC2034
+nerf_emoji_hard=(🔨 🪨 🧱 🥊 🏏)
+# shellcheck disable=SC2034
+nerf_emoji_painful=(🔥 💀 🧨 🦂 🌋 👹)
+# pick_emoji SESSION DART SET — the emoji for DART from the set named SET (soft|hard|painful).
+pick_emoji() {
+	local -n set="nerf_emoji_$3"
+	local h
+	read -r h _ < <(printf '%s' "$1:$2" | cksum)
+	printf '%s' "${set[$((${h:-0} % ${#set[@]}))]}"
 }
 
 # usage_panel LABEL PCT — "Session:12%", green below 50, yellow from 50, red from 80.
@@ -280,7 +307,7 @@ if ctx_text=$(fmt_tokens "$ctx_in_tokens"); then
 
 		nerf_config=""
 		if [ -n "$session_id" ]; then
-			candidate="/tmp/nerf-${session_id}.json"
+			candidate="${NERF_CONFIG_DIR:-/tmp}/nerf-${session_id}.json"
 			[ -f "$candidate" ] && nerf_config="$candidate"
 		fi
 
@@ -343,10 +370,168 @@ fi
 session_panel=$(usage_panel "Session" "$five_hour_pct")
 weekly_panel=$(usage_panel "Weekly" "$seven_day_pct")
 
-# Reserved places (they print nothing yet): #1428 fills these three, #1429 the last.
+# === NERF, RUNWAY, FLOOR (#1428) ===
+# The context arithmetic is scripts/lib/context-math.sh's, shared with the reseed gate so the
+# two cannot disagree. It reads the reading this render just persisted (or a temp copy when the
+# state directory can't be written) and nerf's per-session config.
+declare -A CM=()
+cm_lib=""
+for d in "${CLAUDE_STATUSLINE_LIB:-}" "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib" "$HOME/.claude/scripts/lib"; do
+	if [ -n "$d" ] && [ -r "$d/context-math.sh" ]; then
+		cm_lib="$d/context-math.sh"
+		break
+	fi
+done
+nerf_file=""
+if [[ "$session_id" =~ ^[A-Za-z0-9_-]+$ ]]; then nerf_file="${NERF_CONFIG_DIR:-/tmp}/nerf-${session_id}.json"; fi
+cm_tmp=""
+if [ -n "$cm_lib" ] && [ -n "$reading_json" ] && [[ "${ctx_in_tokens%.*}" =~ ^[0-9]+$ ]]; then
+	cm_reading="$persisted_reading"
+	if [ -z "$cm_reading" ] && cm_tmp=$(mktemp 2>/dev/null) && printf '%s\n' "$reading_json" >"$cm_tmp" 2>/dev/null; then
+		cm_reading="$cm_tmp"
+	fi
+	if [ -n "$cm_reading" ]; then
+		# shellcheck source=scripts/lib/context-math.sh
+		source "$cm_lib"
+		while IFS='=' read -r k v; do CM[$k]="$v"; done < <(context_math "$cm_reading" "$nerf_file" 2>/dev/null)
+	fi
+	[ -n "$cm_tmp" ] && rm -f "$cm_tmp"
+fi
+
+# --- Nerf: the next dart not yet reached, with its emoji, its name and a five-cell bar ---
+# The bar is the progress from the previous dart (from 0 for soft) to the next one. Past ouch it is
+# full and the name stays "ouch". Colours follow the zones: green below soft, yellow to hard, orange
+# to ouch, red from ouch. No nerf config for the session (or none the helper can place): no panel.
 nerf_panel=""
+if [ -n "$nerf_file" ] && [ -f "$nerf_file" ] && [[ "${CM[used_tokens]:-}" =~ ^[0-9]+$ ]] &&
+	[[ "${CM[soft_at_tokens]:-}" =~ ^[0-9]+$ && "${CM[hard_at_tokens]:-}" =~ ^[0-9]+$ && "${CM[ouch_at_tokens]:-}" =~ ^[0-9]+$ ]]; then
+	n_used="${CM[used_tokens]}"
+	n_soft="${CM[soft_at_tokens]}" n_hard="${CM[hard_at_tokens]}" n_ouch="${CM[ouch_at_tokens]}"
+	if ((n_used < n_soft)); then
+		n_dart=soft n_set=soft n_prev=0 n_target=$n_soft n_color="$c_green"
+	elif ((n_used < n_hard)); then
+		n_dart=hard n_set=hard n_prev=$n_soft n_target=$n_hard n_color="$c_yellow"
+	elif ((n_used < n_ouch)); then
+		n_dart=ouch n_set=painful n_prev=$n_hard n_target=$n_ouch n_color="$c_orange"
+	else
+		n_dart=ouch n_set=painful n_prev=$n_hard n_target=$n_ouch n_color="$c_red"
+	fi
+	if ((n_used >= n_ouch)); then
+		n_cells=5
+	elif ((n_target > n_prev)); then
+		n_cells=$(((n_used - n_prev) * 5 / (n_target - n_prev)))
+		if ((n_cells < 0)); then n_cells=0; elif ((n_cells > 5)); then n_cells=5; fi
+	else
+		n_cells=0
+	fi
+	n_bar=""
+	for ((i = 0; i < 5; i++)); do
+		if ((i < n_cells)); then n_bar+="▰"; else n_bar+="▱"; fi
+	done
+	nerf_panel=$(paint "$n_color" "$(pick_emoji "$session_id" "$n_dart" "$n_set") $n_dart $n_bar")
+fi
+
+# --- Runway: tokens left until the nearer of reseed and autocompact ---
+# "↻ 88K auto" when reseed is nearer (the tag is nerf's mode: auto = ultraviolence, ask =
+# hurt-me-plenty, nudge = not-too-rough; an unreadable mode counts as ultraviolence, as in the
+# gate), "🗜 62K" when autocompact is. At or past the trigger it reads 0K and the panel turns red.
 runway_panel=""
+if [[ "${CM[runway_tokens]:-}" =~ ^[0-9]+$ ]]; then
+	r_text="$(runway_fmt "${CM[runway_tokens]}")"
+	if [ "${CM[runway_by]:-}" = reseed ]; then
+		case "${CM[nerf_mode]:-}" in
+		hurt-me-plenty) r_mode=ask ;;
+		not-too-rough) r_mode=nudge ;;
+		*) r_mode=auto ;;
+		esac
+		r_text="↻ $r_text $r_mode"
+	else
+		r_text="🗜 $r_text"
+	fi
+	if [ "${CM[runway_tokens]}" -eq 0 ]; then
+		runway_panel=$(paint "$c_red" "$r_text")
+	else
+		runway_panel="$r_text"
+	fi
+fi
+
+# --- Floor: the context size right after the last sharp drop (a reseed, clear or compact) ---
+# A drop of at least 30% AND at least 20K tokens against the same session's previous render records
+# the new size as a floor; a session's first render records one too. State is ~/.claude/state/context/
+# <key>.floor.json, keyed by dev-name (the session id when there is none): {floors: [{size, ts}] (the
+# last five), last: {<session id>: the size at that session's previous render} (the eight most
+# recently rendered sessions)}. Shown as "floor 91K" with an arrow
+# against the previous floor: ▲ above it, ▼ below, = within 2K. No floor yet: no panel. Writes are
+# atomic and best-effort: a failed one never costs the render. One jq reads the state and works
+# out the new one (the state file is its last argument, /dev/null when there is none).
 floor_panel=""
+floor_key=""
+if [[ "$dev_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+	floor_key="$dev_name"
+elif [[ "$session_id" =~ ^[A-Za-z0-9_-]+$ ]]; then
+	floor_key="$session_id"
+fi
+if [ -n "$floor_key" ]; then
+	floor_file="$ctx_state_dir/${floor_key}.floor.json"
+	floor_src=/dev/null
+	if [ -f "$floor_file" ] && [ -O "$floor_file" ] && [ ! -L "$floor_file" ]; then floor_src="$floor_file"; fi
+	# A size of 0 is Claude Code before its first response, not a context that shrank to nothing:
+	# it records nothing, or the floor would be pinned at 0.
+	floor_size=null
+	if [[ "${ctx_in_tokens%.*}" =~ ^[0-9]+$ ]] && ((10#${ctx_in_tokens%.*} > 0)); then floor_size="${ctx_in_tokens%.*}"; fi
+	# The "previous render" is per SESSION (`last` maps session id to its last size), so two sessions
+	# of one dev-name rendering alternately each compare with themselves and do not thrash the shared
+	# floors. A session new to the file records a floor on its first render. The file is rewritten only
+	# when something changed that matters: a floor, a new session, a size 1K or more from `last`, or
+	# the session no longer being the most recently rendered one (so a session sitting at a steady size
+	# still moves to the end of the eight and is not evicted by newer ones).
+	# shellcheck disable=SC2016  # a jq program: the $vars are jq's
+	floor_jq='
+		def abs: if . < 0 then -. else . end;
+		(([inputs] | first // {}) | if type == "object" then . else {} end) as $st
+		| (($st.floors // []) | if type == "array" then .[-5:] else [] end) as $fl
+		| (($st.last // {}) | if type == "object" then . else {} end) as $lasts
+		| ($lasts[$sid] // null) as $prev
+		| (if $size == null then false
+		   elif ($fl | length) == 0 or $prev == null then true
+		   else ($prev - $size) >= 20000 and (($prev - $size) * 100 >= $prev * 30) end) as $rec
+		| (if $rec then (($fl + [{size: $size, ts: $now}]) | .[-5:]) else $fl end) as $nfl
+		| (if $size == null then $lasts else ((($lasts | del(.[$sid])) + {($sid): $size}) | to_entries | .[-8:] | from_entries) end) as $nlasts
+		| {floors: $nfl, last: $nlasts} as $new
+		| [($nfl | last | .size // ""), ($nfl | if length > 1 then .[-2].size else "" end),
+		   (if $size == null then 0
+		    elif $rec or $prev == null or (($prev - $size) | abs) >= 1000 or ($st.floors | type) != "array"
+		         or (($lasts | keys_unsorted | last) != $sid) then 1
+		    else 0 end),
+		   ($new | tojson)] | map(tostring) | join("\u001f")'
+	floor_out=$(jq -nr --argjson size "$floor_size" --argjson now "$now" --arg sid "$session_id" "$floor_jq" "$floor_src" 2>/dev/null) ||
+		floor_out=$(jq -nr --argjson size "$floor_size" --argjson now "$now" --arg sid "$session_id" "$floor_jq" /dev/null 2>/dev/null)
+	IFS=$'\x1f' read -r f_size f_prev f_changed f_state <<<"$floor_out"
+	if [[ "$f_changed" == 1 && -n "$f_state" ]]; then
+		{
+			f_tmp=""
+			if mkdir -p "$ctx_state_dir" && f_tmp=$(mktemp "$ctx_state_dir/.floor.XXXXXX") && printf '%s\n' "$f_state" >"$f_tmp"; then
+				mv -f "$f_tmp" "$floor_file"
+			else
+				[ -n "$f_tmp" ] && rm -f "$f_tmp"
+			fi
+		} 2>/dev/null
+	fi
+	if [[ "$f_size" =~ ^[0-9]+$ ]]; then
+		floor_panel="floor $(fmt_tokens "$f_size")"
+		if [[ "$f_prev" =~ ^[0-9]+$ ]]; then
+			if ((f_size - f_prev > 2000)); then
+				floor_panel+=" $(paint "$c_yellow" "▲")"
+			elif ((f_prev - f_size > 2000)); then
+				floor_panel+=" $(paint "$c_green" "▼")"
+			else
+				floor_panel+=" ="
+			fi
+		fi
+	fi
+fi
+
+# Reserved place (it prints nothing yet): #1429 fills it.
 spend_panel=""
 
 # === ROW 2 ===

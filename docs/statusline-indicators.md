@@ -7,7 +7,7 @@ Row 1: <panel icons> │ <Model-Effort> │ <nerf> │ <runway> │ <context> �
 Row 2: <dev-name> <avatar> │ <project>-<branch> (<worktree>) │ <cwd>
 ```
 
-A panel with nothing to show is not rendered, and neither is its divider, on either row. The nerf, runway, floor and spend positions are reserved and print nothing yet.
+A panel with nothing to show is not rendered, and neither is its divider, on either row. The spend position is reserved and prints nothing yet.
 
 ## Panels
 
@@ -15,7 +15,10 @@ A panel with nothing to show is not rendered, and neither is its divider, on eit
 |---|---|---|
 | Panel icons | the asks file (see [Ask indicators](#ask-indicators-1430)), then the per-session indicators file (below), then the wavemachine marker | asks first, then the indicators, in yellow, unchanged |
 | Model-Effort | `model.display_name`, `effort.level` | `Sonnet 5.5-medium`; the `-effort` part is left out when the payload has none |
+| Nerf | `${NERF_CONFIG_DIR:-/tmp}/nerf-<session_id>.json` (`mode`, `darts_pct`) and the context size | the next dart not yet reached, with its emoji, its name and a five-cell bar: `🪶 soft ▰▰▰▱▱`. See [Nerf, runway and floor](#nerf-runway-and-floor-1428) |
+| Runway | the shared helper | tokens left until the nearer of reseed and autocompact: `↻ 88K auto` or `🗜 62K` |
 | Context | `context_window.total_input_tokens` | the absolute size: `999`, `1K`, `38K` (for 37,542), `312K`, `1M`, `1.2M`. No bar and no percent sign. Coloured by nerf's darts when nerf has a config for the session, else green, yellow at 25% remaining, red at 13% |
+| Floor | `~/.claude/state/context/<key>.floor.json` | `floor 91K ▼`: the context size right after the last sharp drop, with an arrow against the previous floor |
 | Session | `rate_limits.five_hour.used_percentage` | `Session:12%`, only when the payload has it |
 | Weekly | `rate_limits.seven_day.used_percentage` | `Weekly:92%`, only when the payload has it |
 | dev-name avatar | `.claude/agent-identity.json` | as before |
@@ -26,9 +29,21 @@ Session and Weekly turn yellow from 50% and red from 80%.
 
 **One `jq` pass reads the whole payload** on each render, and git lookups are cached for a few seconds per cwd (`CLAUDE_STATUSLINE_GIT_TTL`, default 5; 0 turns the cache off). The remaining-context reading the reseed gate and nerf depend on (`~/.claude/state/context/<session>.json`, #1225) is written exactly as before.
 
+## Nerf, runway and floor (#1428)
+
+All three work from the context size and, for nerf and runway, the shared window math below. They need the model's `context_window_size` in the payload to place anything; without it nerf and runway are not rendered.
+
+**Nerf.** Reads nerf's per-session config. The darts are percentages of the *usable* window (the gate's frame), so with a 1M model and no autocompact window (967,000 usable) darts of 51/63/85 sit at 493,170 / 609,210 / 821,950 tokens. The panel names the next dart the size has not reached: `soft`, then `hard`, then `ouch`; at or past `ouch` it stays on `ouch` with a full bar. The bar is five cells of progress from the previous dart (from 0 for `soft`) to the next one. The colour follows the zones the context panel uses: green below soft, yellow to hard, orange to ouch, red from ouch. No nerf config for the session, or one without all three darts: no panel.
+
+The emoji comes from a set per dart, picked by a stable hash (`cksum` of `<session_id>:<dart>`) so it does not change between renders: soft `🪶 🧸 🍬 🫧 🧁`, hard `🔨 🪨 🧱 🥊 🏏`, and the `ouch` dart (before and after it is reached) `🔥 💀 🧨 🦂 🌋 👹`. All are single code points with no variation selector.
+
+**Runway.** The tokens left until the nearer of the reseed trigger and the autocompact trigger, tagged with which: `↻ 88K auto` when reseed is nearer, `🗜 62K` when autocompact is. The reseed tag is nerf's mode: `auto` (ultraviolence), `ask` (hurt-me-plenty), `nudge` (not-too-rough); an unreadable or missing mode counts as ultraviolence, as the gate treats it. At or past the trigger the number reads `0K` and the panel turns red. The reseed trigger is the first size at which the gate acts: where the integer remaining percent (floored, as the gate compares it) falls to the threshold, which is `100 - ouch` with nerf, else 15, or `RESEED_CONTEXT_THRESHOLD_PCT`. That is up to 1% of the usable window sooner than the ouch dart's own position (`usable * ouch / 100`), and a test runs the real gate at the token before and at the trigger to hold them together. The gate measures it against the same usable window autocompact fires from (#1297), so reseed comes first at any real window size, even with the threshold at 0. `🗜` appears only when the two coincide (a usable window of a few tokens); the branch exists so the panel names autocompact if a future window or threshold ever puts it first.
+
+**Floor.** State is `~/.claude/state/context/<key>.floor.json`, where `<key>` is the dev-name (the session id when there is no identity): `{"floors": [{"size", "ts"}, ...], "last": {"<session id>": <size at that session's previous render>, ...}}`. A drop of at least 30% **and** at least 20,000 tokens against the same session's previous render records the new size as a floor; a session's first render records one too. The previous size is per session, so two sessions of one dev-name rendering alternately do not thrash the shared floors. The last five floors are kept, a size of 0 (Claude Code before its first response) records nothing, and the file is rewritten only when something that matters changed (a floor, a new session, a size 1K or more from `last`, or the session no longer being the most recently rendered of the eight, so a session at a steady size is not evicted by newer ones). The panel shows the latest as `floor 91K`, with ▲ when it is above the previous floor, ▼ below it, `=` within 2K (nothing with a single floor). Writes are atomic and best-effort: a failed one never costs the render, and the panel is still worked out from what is in memory.
+
 ## Shared window math
 
-The reseed gate and (from #1428) the statusline's runway and floor panels do their context arithmetic in one place, `scripts/lib/context-math.sh`, so they cannot disagree. `context_math <reading.json> <nerf.json> [<settings.json>]` prints `key=value` lines: nerf's mode and darts, the reseed threshold, the autocompact window, the usable window (the smaller of the model window and the autocompact window, less the ~33k buffer), the remaining percent of it, the darts as token positions, and the runway to the nearer of reseed and autocompact. It writes nothing. See the header of that file for every key.
+The reseed gate and the statusline's nerf, runway and floor panels do their context arithmetic in one place, `scripts/lib/context-math.sh`, so they cannot disagree. `context_math <reading.json> <nerf.json> [<settings.json>]` prints `key=value` lines: nerf's mode and darts, the reseed threshold, the autocompact window, the usable window (the smaller of the model window and the autocompact window, less the ~33k buffer), the remaining percent of it, the darts as token positions, and the runway to the nearer of reseed and autocompact. It writes nothing. See the header of that file for every key.
 
 ## How It Works
 
