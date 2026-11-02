@@ -85,6 +85,49 @@ eq "no recorded editor: no tag rule" "(CER)" \
 	'{text: "deploy now? → (CER)", created_at: "t", updated_at: "u"} | sq_answer(null)'
 eq "initials that are not initials are never a tag rule" "(a.b)" "$(signed "deploy now? → (a.b)" a.b)"
 
+# Ask markers (#1430): the leading icon[❗] is not the author's prose.
+# ask_split <text> -> "kind blocking marker|rest".
+split() { jq -nrj -L "$LIB" --arg t "$1" 'include "sqtk-answer"; $t | ask_split | "\(.kind) \(.blocking) [\(.marker)]|\(.rest)"'; }
+chk() {
+	local got
+	got=$(split "$2")
+	if [[ "$got" == "$3" ]]; then pass "$1"; else fail "$1 (want '$3', got '$got')"; fi
+}
+chk "ask_split: ❓" "❓ [a·r] q" "question false [❓ ]|[a·r] q"
+chk "ask_split: ❓❗" "❓❗ [a·r] q" "question true [❓❗ ]|[a·r] q"
+chk "ask_split: 🔧" "🔧 x" "action false [🔧 ]|x"
+chk "ask_split: ✅❗" "✅❗ x" "approval true [✅❗ ]|x"
+chk "ask_split: ⛔ is always blocking" "⛔ x" "blocker true [⛔ ]|x"
+chk "ask_split: ⛔❗ is the same blocker" "⛔❗ x" "blocker true [⛔❗ ]|x"
+chk "ask_split: 🔔" "🔔 x" "unspecified false [🔔 ]|x"
+chk "ask_split: no marker is 🔔, non-blocking, text intact" "[a·r] plain" "unspecified false []|[a·r] plain"
+chk "ask_split: an icon later in the line is no marker" "[a·r] ✅ done ⛔" "unspecified false []|[a·r] ✅ done ⛔"
+chk "ask_split: an icon with no space after it is no marker" "✅done" "unspecified false []|✅done"
+chk "ask_split: ❗ alone is no marker" "❗ x" "unspecified false []|❗ x"
+chk "ask_split: empty text" "" "unspecified false []|"
+
+M='"🔔 [a·r] ship it? →"'
+eq "marker: pristine is still no answer" "" \
+	'{text: "🔔 [a·r] ship it? → yes", created_at: "t", updated_at: "t"} | sq_answer(null)'
+eq "marker: an appended answer is read against O with the same marker" "yes" \
+	"{text: \"🔔 [a·r] ship it? → yes\", created_at: \"t\", updated_at: \"u\"} | sq_answer($M)"
+eq "marker: an answer on an ask that was reclassified (O had a different marker)" "yes" \
+	"{text: \"❓❗ [a·r] ship it? → yes\", created_at: \"t\", updated_at: \"u\"} | sq_answer($M)"
+eq "marker: reclassifying alone (no answer) is no answer" "" \
+	"{text: \"❓❗ [a·r] ship it? →\", created_at: \"t\", updated_at: \"u\"} | sq_answer($M)"
+eq "marker: reclassifying an ask with a prose arrow is no answer" "" \
+	'{text: "⛔ [a·r] v65→v66 broke it →", created_at: "t", updated_at: "u"} | sq_answer("🔔 [a·r] v65→v66 broke it →")'
+eq "marker: the editor's own tag after a marked ask is no answer" "" \
+	'{text: "✅❗ [a·r] ok? →  (CER)", initials: "CER", created_at: "t", updated_at: "u"} | sq_answer("✅❗ [a·r] ok? →")'
+eq "marker: an answer with no O (legacy) still reads the last arrow" "yes" \
+	'{text: "❓ [a·r] ok? → yes"} | sq_answer(null)'
+eq "marker: sq_prose keeps the marker in front" "❓❗ [a·r] ok?" \
+	'{text: "❓❗ [a·r] ok? → yes"} | sq_prose("❓❗ [a·r] ok? →")'
+eq "marker: sq_prose of a pristine marked ask" "🔔 [a·r] ok?" \
+	'{text: "🔔 [a·r] ok? →", created_at: "t", updated_at: "t"} | sq_prose(null)'
+eq "marker: sq_prose keeps the author's arrows after a reclassify" "⛔ [a·r] v65→v66" \
+	'{text: "⛔ [a·r] v65→v66 → yes"} | sq_prose("🔔 [a·r] v65→v66")'
+
 echo
 if [[ $FAILS -eq 0 ]]; then
 	echo "  All sqtk-answer checks passed."

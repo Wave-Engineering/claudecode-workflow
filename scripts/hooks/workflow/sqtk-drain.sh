@@ -75,6 +75,19 @@ RUNG="$ROOT/.claude/sqtk-rung.json"
 BASELINE="$ROOT/.claude/sqtk-baseline.json"
 # sqtk-answer.jq sits beside this hook, in the repo and in the install.
 LIB=$(dirname "$(readlink -f "$0")")
+# However this run ends, a prompt hook also rebuilds the statusline's asks cache from the open
+# bj:needs squawks (sqtk-asks-sync.sh, #1430): it prints nothing and always exits 0, so it
+# can neither change what is printed above nor this hook's exit status. The doorbell's
+# --pending check leaves it alone.
+WORK=""
+# shellcheck disable=SC2329  # run by the EXIT trap below
+finish() {
+	[[ -z "$WORK" ]] || rm -rf "$WORK"
+	if [[ $MODE == hook && -x "$LIB/sqtk-asks-sync.sh" ]]; then
+		"$LIB/sqtk-asks-sync.sh" --sync "$ROOT" </dev/null >/dev/null 2>&1 || true
+	fi
+}
+trap finish EXIT
 BASE="${SQUAWK_URL:-}"
 TIMEOUT="${SQTK_DRAIN_TIMEOUT:-2}"
 MAX_LISTS="${SQTK_DRAIN_MAX_LISTS:-5}"
@@ -106,7 +119,6 @@ jq -n -L "$LIB" 'include "sqtk-answer"; 1' >/dev/null 2>&1 || {
 }
 
 WORK=$(mktemp -d 2>/dev/null) || none
-trap 'rm -rf "$WORK"' EXIT
 
 # Read a JSON object state file into $WORK, or start from {} if it is missing or malformed.
 load_obj() {

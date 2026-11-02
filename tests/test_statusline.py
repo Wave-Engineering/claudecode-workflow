@@ -567,3 +567,85 @@ class TestStatuslinePersistsContext:
                                  env_override={"CLAUDE_CONTEXT_STATE_DIR": str(blocker / "sub")})
         assert "ctx remaining: 33%" in _strip_ansi(output)
         assert output.count("\n") == 2
+
+
+class TestStatuslineAskIndicators:
+    """#1430: the asks panel renders from /tmp/claude-statusline-<dev>.asks.json, first on
+    line 1, grouped by kind and blocking, blockers first."""
+
+    def _setup(self, tmp_path: Path) -> tuple[str, Path]:
+        dev = f"asks-{uuid.uuid4().hex[:8]}"
+        (tmp_path / ".claude").mkdir()
+        (tmp_path / ".claude" / "agent-identity.json").write_text(
+            json.dumps({"dev_name": dev, "dev_avatar": "🧠"}))
+        subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True, check=True)
+        return dev, Path(f"/tmp/claude-statusline-{dev}.asks.json")
+
+    def _line1(self, tmp_path: Path) -> str:
+        return _strip_ansi(_run_statusline({"cwd": str(tmp_path)}, cwd=tmp_path)).split("\n")[0]
+
+    @staticmethod
+    def _ask(kind: str, blocking: bool = False, seq: int = 1) -> dict:
+        return {"list": "bj:needs", "seq": seq, "kind": kind, "blocking": blocking}
+
+    def test_grouping_blockers_first_counts_above_one(self, tmp_path: Path):
+        dev, asks = self._setup(tmp_path)
+        try:
+            asks.write_text(json.dumps({"asks": [
+                self._ask("question", seq=1), self._ask("blocker", True, 2),
+                self._ask("question", seq=3), self._ask("approval", True, 4),
+                self._ask("blocker", True, 5), self._ask("question", seq=6),
+            ], "synced_at": 1}))
+            line = self._line1(tmp_path)
+            assert line.startswith("⛔2 ✅❗ ❓3 "), line
+        finally:
+            asks.unlink(missing_ok=True)
+
+    def test_each_kind_and_the_order_inside_a_tier(self, tmp_path: Path):
+        dev, asks = self._setup(tmp_path)
+        try:
+            asks.write_text(json.dumps({"asks": [
+                self._ask("unspecified", seq=1), self._ask("question", seq=2),
+                self._ask("action", seq=3), self._ask("approval", seq=4),
+                self._ask("unspecified", True, 5), self._ask("action", True, 6),
+            ]}))
+            # Blocking asks, then non-blocking; approval, action, question, unspecified.
+            assert self._line1(tmp_path).startswith("🔧❗ 🔔❗ ✅ 🔧 ❓ 🔔 "), self._line1(tmp_path)
+        finally:
+            asks.unlink(missing_ok=True)
+
+    def test_a_blocker_never_shows_the_blocking_mark(self, tmp_path: Path):
+        dev, asks = self._setup(tmp_path)
+        try:
+            asks.write_text(json.dumps({"asks": [self._ask("blocker", True)]}))
+            assert self._line1(tmp_path).startswith("⛔ "), self._line1(tmp_path)
+            assert "⛔❗" not in self._line1(tmp_path)
+        finally:
+            asks.unlink(missing_ok=True)
+
+    def test_asks_come_before_the_existing_indicators(self, tmp_path: Path):
+        dev, asks = self._setup(tmp_path)
+        session = Path(f"/tmp/claude-statusline-{dev}.json")
+        try:
+            asks.write_text(json.dumps({"asks": [self._ask("approval", True)]}))
+            session.write_text(json.dumps({"indicators": ["● REC", "W2 3/5"]}))
+            assert self._line1(tmp_path).startswith("✅❗ ● REC W2 3/5"), self._line1(tmp_path)
+        finally:
+            asks.unlink(missing_ok=True)
+            session.unlink(missing_ok=True)
+
+    def test_missing_empty_or_malformed_renders_nothing(self, tmp_path: Path):
+        dev, asks = self._setup(tmp_path)
+        try:
+            baseline = self._line1(tmp_path)
+            for content in ["", "not json", "[]", '{"asks": "x"}', '{"asks": []}',
+                            '{"asks": [1, null, {"kind": "bogus"}, {"kind": 5}]}', '{"synced_at": 1}']:
+                asks.write_text(content)
+                assert self._line1(tmp_path) == baseline, content
+        finally:
+            asks.unlink(missing_ok=True)
+
+    def test_no_identity_no_panel(self, tmp_path: Path):
+        """Without a dev_name the file cannot be found, so nothing renders and nothing breaks."""
+        out = _strip_ansi(_run_statusline({"cwd": str(tmp_path)}, cwd=tmp_path))
+        assert out.count("\n") == 2
