@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Claude Code status line — two-line layout with per-session indicators
 #
-# Line 1: [per-session indicators] [pwd] [dev-name] [dev-avatar]
+# Line 1: [asks] [per-session indicators] [pwd] [dev-name] [dev-avatar]
 # Line 2: [git repo @ branch] [git status emoji] [ctx remain] [model]
 
 input=$(cat)
@@ -137,6 +137,30 @@ if [ -n "$dev_name" ]; then
 	fi
 fi
 
+# --- Ask indicators (#1430) ---
+# sqtk-asks-sync.sh keeps /tmp/claude-statusline-<dev_name>.asks.json, a cache of this
+# agent's open asks on bj:needs: {"asks": [{"kind": "approval", "blocking": true, ...}], ...}.
+# Render it as the first panel icons, grouped by kind: blockers first, then blocking asks, then
+# non-blocking, each as <icon>[❗][count] ("⛔2 ✅❗ ❓3"). Within a tier: approval, action,
+# question, then an unspecified ask. A missing, empty or malformed file renders nothing. One jq
+# call; the squawk text is the source of truth and the sync hook rebuilds this file from it.
+asks_str=""
+if [ -n "$dev_name" ] && [ -f "/tmp/claude-statusline-${dev_name}.asks.json" ]; then
+	asks=$(jq -r '
+		{blocker: ["⛔", 0, 0], approval: ["✅", 1, 0], action: ["🔧", 1, 1],
+		 question: ["❓", 1, 2], unspecified: ["🔔", 1, 3]} as $k
+		| [(.asks // [])[]
+		   | select(type == "object" and (.kind | type) == "string" and $k[.kind] != null)
+		   | {icon: $k[.kind][0], tier: (if .kind == "blocker" then 0 elif .blocking == true then 1 else 2 end),
+		      rank: $k[.kind][2]}]
+		| group_by([.tier, .rank])
+		| map(.[0].icon + (if .[0].tier == 1 then "❗" else "" end) + (if length > 1 then "\(length)" else "" end))
+		| join(" ")' "/tmp/claude-statusline-${dev_name}.asks.json" 2>/dev/null)
+	if [ -n "$asks" ]; then
+		asks_str="${asks} "
+	fi
+fi
+
 # --- Wavemachine indicator ---
 # /wavemachine writes wavemachine_active:true to .claude/status/state.json at
 # launch and clears it on completion/abort. Display 🌊 while active.
@@ -165,6 +189,7 @@ if [ -n "$dev_name" ]; then
 fi
 
 # === LINE 1: [indicators] [wavemachine] [pwd] [dev-name] [dev-avatar] ===
+printf "%s" "$asks_str"
 printf "%s" "$indicators_str"
 printf "%s" "$wave_str"
 printf '%b' "${c_blue}${short_cwd}${c_reset}"

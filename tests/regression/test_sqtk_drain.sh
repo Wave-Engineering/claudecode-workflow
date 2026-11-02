@@ -408,6 +408,54 @@ out=$(run)
 	fail "identity-derived initials (out='$out')"
 rm -f "$REPO/.claude/agent-identity.json"
 
+# 22. Ask markers (#1430): an item whose text leads with a marker drains like any other.
+mine '[{"list":"bj:needs","seq":3,"id":31,"created_at":"t"}]'
+reset
+body '{"name":"bj:needs","squawks":[{"id":31,"seq":3,"state":"open","text":"✅❗ [bf·cc] tag v9? →","created_at":"t","updated_at":"t"}]}'
+out=$(run)
+[[ -z "$out" && ! -s "$SEEN" ]] && pass "marker: a pristine ask is silent" || fail "marker pristine (out='$out')"
+body '{"name":"bj:needs","squawks":[{"id":31,"seq":3,"state":"open","text":"✅❗ [bf·cc] tag v9? → yes, cut it","created_at":"t","updated_at":"u","initials":"BJ"}]}'
+c=$(ctx "$(run)")
+[[ "$c" == *'answered "yes, cut it"'* && "$c" == *"✅❗ [bf·cc] tag v9?"* ]] && pass "marker: an answer is detected, and the marker is shown" ||
+	fail "marker answer (ctx='$c')"
+[[ -z "$(run)" ]] && pass "marker: reported once" || fail "marker repeated"
+# Reclassified by the author (a different marker, same words, no answer): not an answer.
+reset
+body '{"name":"bj:needs","squawks":[{"id":31,"seq":3,"state":"open","text":"🔔 [bf·cc] v65→v66 broke it →","created_at":"t","updated_at":"t"}]}'
+run >/dev/null
+body '{"name":"bj:needs","squawks":[{"id":31,"seq":3,"state":"open","text":"⛔ [bf·cc] v65→v66 broke it →","created_at":"t","updated_at":"u","initials":"BF"}]}'
+out=$(run)
+[[ -z "$out" ]] && pass "marker: a reclassified ask with a prose arrow is not an answer" || fail "marker reclassify (out='$out')"
+# The author's own tag, copied back from `sqtk show`, on a marked ask: still not an answer.
+body '{"name":"bj:needs","squawks":[{"id":31,"seq":3,"state":"open","text":"⛔ [bf·cc] v65→v66 broke it →  (BF)","created_at":"t","updated_at":"u2","initials":"BF"}]}'
+out=$(run)
+[[ -z "$out" ]] && pass "marker: the author's own tag is not an answer" || fail "marker own tag (out='$out')"
+
+# 23. Every prompt also rebuilds the statusline's asks cache (#1430): the hook ends by running
+# sqtk-asks-sync.sh, whatever its own outcome, and that adds nothing to what it prints.
+ASKS_DIR="$WORK/asks"
+mkdir -p "$ASKS_DIR"
+cat >"$WORK/sqtk" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$SQTK_LOG"
+cat "$FAKE_BODY"
+EOF
+chmod +x "$WORK/sqtk"
+export SQTK_LOG="$WORK/sqtk.log" SQTK_ASKS_SQTK="$WORK/sqtk" SQTK_ASKS_DIR="$ASKS_DIR"
+printf '{"dev_name":"drainer"}\n' >"$REPO/.claude/agent-identity.json"
+reset
+rm -f "$SQTK_LOG"
+body '{"name":"bj:needs","squawks":[{"id":31,"seq":3,"state":"open","text":"❓❗ [bf·cc] tag v9? →","created_at":"t","updated_at":"t"}]}'
+out=$(run)
+[[ -z "$out" && "$(jq -c '[.asks[] | "\(.kind):\(.blocking)"]' "$ASKS_DIR/claude-statusline-drainer.asks.json" 2>/dev/null)" == '["question:true"]' ]] &&
+	pass "drain: ends by syncing the asks file, and prints nothing extra" || fail "drain sync (out='$out')"
+rm -f "$ASKS_DIR"/*.asks.json "$SQTK_LOG"
+out=$(bash -c 'jq -cn --arg c "$1" "{cwd: \$c}" | PATH="$2/bin:$PATH" bash "$3" --pending; echo "rc=$?"' _ "$REPO" "$WORK" "$HOOK")
+[[ ! -e "$ASKS_DIR/claude-statusline-drainer.asks.json" && ! -s "$SQTK_LOG" ]] && pass "drain --pending (the doorbell's check): no sync" ||
+	fail "pending synced (out='$out')"
+rm -f "$REPO/.claude/agent-identity.json"
+unset SQTK_ASKS_SQTK SQTK_ASKS_DIR SQTK_LOG
+
 echo
 if [[ $FAILS -eq 0 ]]; then
 	echo "  All sqtk-drain checks passed."

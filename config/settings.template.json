@@ -86,6 +86,17 @@
             "command": "~/.claude/scripts/hooks/workflow/post-tool-context-tracker.sh"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "_comment": "Statusline ask indicators (cc-workflow#1430). Its OWN group, like the hooks around it, so merge_settings' group-signature union cannot duplicate it. Rebuilds /tmp/claude-statusline-<dev_name>.asks.json from the open bj:needs squawks, but only when the Bash command contains `sqtk add` or `sqtk set`; any other command exits at once. Prints nothing, never blocks, always exits 0.",
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/sqtk-asks-sync.sh --post-tool",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "SessionStart": [
@@ -241,6 +252,17 @@
             "_comment": "FlightDeck session-idle emit (cc-workflow#857 / S1.7). Fire-and-forget heartbeat: emits a session 'idle' step when a turn ends. Never blocks, always exits 0, never emits a block decision.",
             "type": "command",
             "command": "~/.local/bin/flightdeck-session-emit.sh idle"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "_comment": "Statusline ask indicators (cc-workflow#1430), the Stop trigger. Rebuilds the asks file only when it already exists, so a session with no asks pays nothing: that keeps a changed or answered ask from lingering after the last sqtk call. Prints nothing, never blocks, always exits 0.",
+            "type": "command",
+            "command": "~/.claude/scripts/hooks/workflow/sqtk-asks-sync.sh --stop",
+            "timeout": 10
           }
         ]
       },

@@ -20,6 +20,16 @@ are worth keeping apart:
 ## [Unreleased]
 
 ### Added
+- **Ask indicators in the statusline (#1430, story 4 of #1426).** An agent with an open ask on
+  `bj:needs` now lights icons at the start of line 1, by kind and blocking (`⛔2 ✅❗ ❓3`: two
+  blockers, a blocking approval, three non-blocking questions), at no model cost. A new hook,
+  `sqtk-asks-sync.sh`, rebuilds a cache (`/tmp/claude-statusline-<dev_name>.asks.json`) from the
+  squawk text, which stays the source of truth; the statusline only reads it. It runs after
+  `sqtk add` and `sqtk set` Bash calls, at the end of each `sqtk-drain.sh` prompt hook, and at Stop
+  when the cache exists. It prints nothing, never blocks, and a failed fetch leaves the cache alone.
+  The marker contract (❓ 🔧 ✅ ⛔ 🔔, `❗` for a blocking non-blocker) is shared with
+  squawkie-talkie#163, and `sqtk-answer.jq` now reads answers past a leading marker, so
+  reclassifying an ask is not mistaken for an answer. Documented in `docs/statusline-indicators.md`.
 - **Chat delivery that no agent has to arm (#1420, mattermost-crew#204).** `crewchat-doorbell` was
   a background task each agent had to start, restart and not duplicate, so every way an agent can
   forget (a `/clear`, a reseed, a lost notification, a re-arm through an outage, a second copy)

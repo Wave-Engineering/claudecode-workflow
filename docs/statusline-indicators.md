@@ -3,9 +3,11 @@
 The statusline supports per-session indicators — short strings that appear on Line 1, left of the working directory, rendered in yellow. Any skill or script can publish indicators to communicate state at a glance.
 
 ```
-Line 1: [indicators]  [pwd]  [dev-name] [dev-avatar]
+Line 1: [asks]  [indicators]  [pwd]  [dev-name] [dev-avatar]
 Line 2: [repo @ branch] [status] [ctx remaining] [model]
 ```
+
+The asks panel (see [Ask indicators](#ask-indicators-1430)) comes first when an agent has an open ask on `bj:needs`, and is absent otherwise.
 
 ## How It Works
 
@@ -95,6 +97,55 @@ rm -f "/tmp/claude-statusline-${dev_name}.json"
 | Timer | `⏱ 12m` | Time remaining on a task |
 | Build status | `✓ BUILD` | Last build passed |
 | Blocked | `⛔ KILL` | Kill switch engaged |
+
+## Ask indicators (#1430)
+
+When an agent has an open ask on the shared `bj:needs` squawk list, the statusline lights an icon for it, by kind and by whether it blocks. It costs no model tokens: a hook rebuilds a small cache from the squawk text, and the statusline only reads the cache.
+
+### The contract (shared with squawkie-talkie#163; change both or neither)
+
+An open `bj:needs` item's text starts with an ask marker: a kind icon, then `❗` exactly when the item is blocking and not a blocker, then a space.
+
+| icon | kind |
+|---|---|
+| ❓ | question |
+| 🔧 | action |
+| ✅ | approval |
+| ⛔ | blocker (always blocking, no `❗`) |
+| 🔔 | unspecified |
+
+An item whose text starts with none of these (an older client's, say) counts as 🔔, non-blocking, and so does one that only has an icon later in the line. The icons are single code points with no variation selector. `sqtk add needs "<text>" --kind approval --blocking` writes the marker; the parser is `ask_split` in `scripts/hooks/workflow/sqtk-answer.jq`, shared by the sync hook and the drain and banner hooks (the answer rules strip the marker first, so reclassifying an ask is never read as an answer).
+
+### The asks file
+
+`/tmp/claude-statusline-<dev_name>.asks.json`, keyed by `dev_name` like the indicators file, and a different file from it:
+
+```json
+{"asks": [{"list": "bj:needs", "seq": 12, "kind": "approval", "blocking": true}], "synced_at": 1793000000}
+```
+
+It is a cache. The squawk text is the source of truth, so a lost or stale file is rebuilt by the next sync. `scripts/hooks/workflow/sqtk-asks-sync.sh` writes it, atomically.
+
+### What the sync does
+
+It reads this checkout's squawks from `.claude/sqtk-mine.json`, keeps those on `bj:needs`, fetches the list once with `sqtk show bj:needs --json` (the CLI handles the URL and auth), keeps the ones still open, parses each marker, and writes the file.
+
+- A failed fetch (no `SQUAWK_URL`, a dead server, a bad body) leaves the file exactly as it is.
+- No open `bj:needs` items removes the file.
+- No `.claude/agent-identity.json` does nothing.
+- It prints nothing, never blocks, and always exits 0.
+
+### When it runs
+
+| Trigger | Registered in | Runs the sync |
+|---|---|---|
+| `PostToolUse` on `Bash` | `config/settings.template.json`, its own group | only when the command contains `sqtk add` or `sqtk set` (read from the hook's stdin); any other command exits at once |
+| `UserPromptSubmit` | `sqtk-drain.sh` calls it as it ends | at every prompt, whatever the drain did |
+| `Stop` | `config/settings.template.json`, its own group | only when the asks file already exists, so a session with no asks pays nothing |
+
+### How it renders
+
+The panel is the first thing on line 1. Asks are grouped and each group shows `<icon>[❗][count]` (the count only above one): blockers first, then blocking asks, then non-blocking ones; inside a tier, approval, action, question, then unspecified. For example `⛔2 ✅❗ ❓3` is two blockers, one blocking approval and three non-blocking questions. A missing, empty or malformed file renders nothing.
 
 ## Design Notes
 

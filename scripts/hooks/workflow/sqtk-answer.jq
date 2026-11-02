@@ -23,6 +23,26 @@
 # <repo>/.claude/sqtk-baseline.json, which sqtk-drain.sh fills while the squawk is pristine.
 # Any value there but a string (an older numeric entry) is unknown: rule 3.
 
+# Ask markers (#1430). The contract is squawkie-talkie#163's: change both or neither. An item on
+# `bj:needs` starts with a kind icon, then `❗` exactly when it is blocking and not a blocker,
+# then a space, then the rest of the text. No marker means an unspecified, non-blocking ask. The
+# icons are single code points with no variation selector.
+def ask_icons: {"❓": "question", "🔧": "action", "✅": "approval", "⛔": "blocker", "🔔": "unspecified"};
+
+# Input: text. {kind, blocking, marker, rest}: `marker` is the leading marker with its
+# separating space ("" when there is none) and `rest` the text after it. A blocker is always
+# blocking. An icon not followed (after an optional `❗`) by a space is just text.
+def ask_split:
+	(.[0:1]) as $c
+	| ask_icons[$c] as $kind
+	| (.[1:]) as $a
+	| ($a[0:1] == "❗") as $b
+	| (if $b then $a[1:] else $a end) as $r
+	| if $kind != null and $r[0:1] == " " then
+		{kind: $kind, blocking: ($b or $kind == "blocker"),
+		 marker: ($c + (if $b then "❗" else "" end) + " "), rest: $r[1:]}
+	  else {kind: "unspecified", blocking: false, marker: "", rest: .} end;
+
 # Input: an author's original text. Its arrows, less a closing `→` (the answer slot).
 def prose_arrows:
 	((split("→") | length - 1) - (if gsub("\\s+$"; "") | endswith("→") then 1 else 0 end))
@@ -57,9 +77,12 @@ def only_editor_tags($i):
 	($i | type) == "string" and ($i | test("^[A-Za-z0-9]{1,3}$"))
 	and test("^(\\(" + $i + "\\)\\s*)+$");
 
-# Input: a squawk; $o is its original text, or null. Its answer, or "".
+# Input: a squawk; $o is its original text, or null. Its answer, or "". The ask marker is not
+# part of the author's prose (#1430): it is stripped from both texts first, so reclassifying an
+# ask (`sqtk set --kind`) is never read as an edit to a segment left of an arrow.
 def sq_answer($o):
-	(.text // "") as $t
+	((.text // "") | ask_split.rest) as $t
+	| ($o | if type == "string" then ask_split.rest else . end) as $o
 	| .initials as $i
 	| if pristine then ""
 	  else ((($t | kept_arrows($o)) as $p
@@ -67,12 +90,15 @@ def sq_answer($o):
 	  | if only_editor_tags($i) then "" else . end)
 	  end;
 
-# Input: a squawk; $o as above. The author's text, for display.
+# Input: a squawk; $o as above. The author's text, for display, with its ask marker kept
+# in front (the icon is worth showing) but out of the arrow comparison.
 def sq_prose($o):
-	(.text // "") as $t
-	| if pristine then $t | sub("\\s*(→\\s*)?$"; "")
+	((.text // "") | ask_split) as $s
+	| $s.rest as $t
+	| ($o | if type == "string" then ask_split.rest else . end) as $o
+	| $s.marker + (if pristine then $t | sub("\\s*(→\\s*)?$"; "")
 	  else ($t | kept_arrows($o)) as $p
 	  | if $p != null then $t | split("→") | .[:$p + 1] | join("→") | gsub("\\s+$"; "")
 	    else $t | split("→") | (if length > 1 then .[:-1] | join("→") else .[0] // "" end)
 	      | gsub("\\s+$"; "") end
-	  end;
+	  end);
