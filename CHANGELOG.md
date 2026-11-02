@@ -101,11 +101,14 @@ are worth keeping apart:
 - **`/precheck` skips the Job D re-run after a fix only on a mechanical, test-proven predicate (#1438).**
   Step 3 said to re-run the reviewer after any fix, which turned a fix that only answers a finding
   into another full review and CI cycle (four of them on #1428, about 90 minutes). A re-run is now
-  skipped when the commits since the reviewed ref touch only files a finding cites plus test files,
-  a new or changed test fails with the fix reverted and passes with it (both exit codes on the
-  checklist), CI is green on the new head, and every finding is answered. Anything else still gets
-  the delta, the first pass is always full, and the skip is never keyed on issue type or on how small
-  the fix looks (#1191 stays the reason).
+  skipped only when `resolve` printed a delta ref, every commit since it fixes a critical or important
+  finding, the non-test hunks lie inside the functions those findings cite, an added or changed test
+  fails by its own assertion with the non-test files reverted and passes with them (both exit codes and
+  the assertion line on the checklist), CI is green on the new head, and every finding is answered.
+  At most one skip per reviewed pass, never on `rearm`, and a finding answered this way counts as
+  resolved for the "zero unresolved findings" definition the merge paths read. Anything else still
+  gets the delta, the first pass is always full, and the skip is never keyed on issue type or on how
+  small the fix looks (#1191 stays the reason). The skipped fix is not reviewed: its test is the proof.
 - **The kit's pinned `sqtk` is v0.13.0 (#1431, the last step of #1426).** The client now takes
   `--kind` and `--blocking` on `sqtk add`, and `--kind`, `--blocking` and `--no-blocking` on
   `sqtk set`, so an ask on `bj:needs` carries its marker (❓ 🔧 ✅ ⛔ 🔔, plus `❗` when blocking) in
