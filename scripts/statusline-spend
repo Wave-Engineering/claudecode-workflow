@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# statusline-spend — set or read the begin marker behind the statusline's spend panel. (#1429)
+#
+#   statusline-spend begin   snapshot every session's current cost as its baseline and record the time;
+#                            from now on the spend panel shows only what is spent after this moment.
+#                            Running it again replaces the marker and the sum restarts at $0.00.
+#                            Prints: spend marker set: N sessions, since <local time and zone>
+#   statusline-spend show    print the current sum and the marker time, for use outside the statusline.
+#                            Prints: spend since <local time and zone>: $12.34 across N sessions
+#                            or, with no marker: spend (no begin marker; all recorded sessions): $12.34 across N sessions
+#   statusline-spend         with no or an unknown argument: usage, exit 2
+#
+# The statusline records each session's latest cost in ~/.claude/state/spend/<session_id>.json
+# (override: CLAUDE_SPEND_STATE_DIR) and shows the spend panel only when the payload has NO
+# rate_limits (API or Bedrock use; a subscription session reports a notional cost). See
+# docs/statusline-indicators.md. The arithmetic is scripts/lib/spend-math.sh's, shared with the panel.
+set -euo pipefail
+
+LIB="$(dirname "$(readlink -f "$0")")/lib/spend-math.sh"
+if [[ ! -r "$LIB" ]]; then
+	echo "statusline-spend: cannot load $LIB; reinstall the kit (./install --scripts)" >&2
+	exit 1
+fi
+# shellcheck source=scripts/lib/spend-math.sh
+source "$LIB"
+
+usage() {
+	cat >&2 <<'EOF'
+usage: statusline-spend begin | show
+  begin   set the spend marker now: spend is counted from this moment
+  show    print the spend since the marker
+EOF
+	exit 2
+}
+
+# stamp EPOCH — the local time with its zone abbreviation, e.g. 2026-11-02 03:41 EST.
+stamp() { date -d "@$1" +'%Y-%m-%d %H:%M %Z'; }
+
+plural() { if (($1 == 1)); then printf '1 session'; else printf '%s sessions' "$1"; fi; }
+
+cmd_begin() {
+	local dir now tmp snap
+	dir="$(spend_dir)"
+	mkdir -p "$dir"
+	now="$(date +%s)"
+	# Every session file's cost: {"<session_id>": <cost>}. A corrupt file is skipped.
+	local files=() f good=()
+	shopt -s nullglob
+	for f in "$dir"/*.json; do [[ "$f" != */begin.json && -f "$f" && ! -L "$f" ]] && files+=("$f"); done
+	shopt -u nullglob
+	for f in "${files[@]}"; do jq -e . "$f" >/dev/null 2>&1 && good+=("$f"); done
+	if ((${#good[@]})); then
+		# shellcheck disable=SC2016  # a jq program
+		snap="$(jq -nc '[inputs | {key: (input_filename | split("/")[-1] | sub("\\.json$"; "")), value: .cost_usd}
+			| select(.value | type == "number")] | from_entries' "${good[@]}")"
+	else
+		snap='{}'
+	fi
+	tmp="$(mktemp "$dir/.begin.XXXXXX")"
+	if jq -nc --argjson ts "$now" --argjson b "$snap" '{ts: $ts, baselines: $b}' >"$tmp" && mv -f "$tmp" "$dir/begin.json"; then
+		printf 'spend marker set: %s, since %s\n' "$(plural "$(jq 'length' <<<"$snap")")" "$(stamp "$now")"
+	else
+		rm -f "$tmp"
+		echo "statusline-spend: could not write $dir/begin.json" >&2
+		exit 1
+	fi
+}
+
+cmd_show() {
+	local dir out sum count marker
+	dir="$(spend_dir)"
+	out="$(spend_summary "$dir")"
+	IFS=$'\x1f' read -r sum count _ marker <<<"$out"
+	if [[ "$marker" =~ ^[0-9]+$ ]]; then
+		printf 'spend since %s: %s across %s\n' "$(stamp "$marker")" "$(spend_money "$sum")" "$(plural "$count")"
+	else
+		printf 'spend (no begin marker; all recorded sessions): %s across %s\n' "$(spend_money "$sum")" "$(plural "$count")"
+	fi
+}
+
+case "${1:-}" in
+begin)
+	(($# == 1)) || usage
+	cmd_begin
+	;;
+show)
+	(($# == 1)) || usage
+	cmd_show
+	;;
+*) usage ;;
+esac

@@ -20,6 +20,17 @@ are worth keeping apart:
 ## [Unreleased]
 
 ### Added
+- **API spend since a begin marker, in the statusline (#1429, story 3 of #1426).** A `$12.34` panel at
+  the end of row 1 shows what API or Bedrock sessions have cost since a moment you set with the new
+  `statusline-spend begin` (`statusline-spend show` prints the same sum elsewhere; installed on `PATH`
+  by `./install --scripts`). It appears only when the payload has no `rate_limits`: a subscription
+  session reports a notional cost that means nothing, so it is not shown and, deliberately, not
+  recorded either, or it would pollute the sum an API session shows. The statusline records each
+  session's latest cost in `~/.claude/state/spend/<session_id>.json` when it changes (atomic,
+  best-effort, files over 30 days old pruned); the panel is the sum of cost less baseline over every
+  session, and a session first seen after the marker counts in full. An unsafe session id (or `begin`,
+  the marker's own name) writes nothing. The arithmetic is `scripts/lib/spend-math.sh`'s, shared by the
+  panel and the CLI.
 - **Nerf, runway and floor panels in the statusline (#1428, story 2 of #1426).** Nerf shows the next
   dart the context has not reached, with its emoji (picked per session and dart by a stable hash), its
   name and a five-cell bar (`🪶 soft ▰▰▰▱▱`); no nerf config, no panel. Runway shows the tokens left

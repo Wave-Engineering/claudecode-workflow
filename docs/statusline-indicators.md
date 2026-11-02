@@ -7,7 +7,7 @@ Row 1: <panel icons> │ <Model-Effort> │ <nerf> │ <runway> │ <context> �
 Row 2: <dev-name> <avatar> │ <project>-<branch> (<worktree>) │ <cwd>
 ```
 
-A panel with nothing to show is not rendered, and neither is its divider, on either row. The spend position is reserved and prints nothing yet.
+A panel with nothing to show is not rendered, and neither is its divider, on either row.
 
 ## Panels
 
@@ -21,6 +21,7 @@ A panel with nothing to show is not rendered, and neither is its divider, on eit
 | Floor | `~/.claude/state/context/<key>.floor.json` | `floor 91K ▼`: the context size right after the last sharp drop, with an arrow against the previous floor |
 | Session | `rate_limits.five_hour.used_percentage` | `Session:12%`, only when the payload has it |
 | Weekly | `rate_limits.seven_day.used_percentage` | `Weekly:92%`, only when the payload has it |
+| Spend | `cost.total_cost_usd` of every session, less the `statusline-spend begin` baselines | `$12.34`: API or Bedrock spend since the begin marker, only when the payload has **no** `rate_limits`. See [Spend](#spend-1429) |
 | dev-name avatar | `.claude/agent-identity.json` | as before |
 | project-branch (worktree) | git | the project is the main repo's folder (taken from the git common directory, so a linked worktree shows its project, not its own folder); `-<branch>`, or the short commit when the head is detached; ` (<worktree-dir>)` only in a linked worktree. The existing `✓`/`✗` (clean or dirty), `+N` staged and `↑N`/`↓N` marks follow it |
 | cwd | the payload | with `$HOME` shortened to `~` |
@@ -40,6 +41,32 @@ The emoji comes from a set per dart, picked by a stable hash (`cksum` of `<sessi
 **Runway.** The tokens left until the nearer of the reseed trigger and the autocompact trigger, tagged with which: `↻ 88K auto` when reseed is nearer, `🗜 62K` when autocompact is. The reseed tag is nerf's mode: `auto` (ultraviolence), `ask` (hurt-me-plenty), `nudge` (not-too-rough); an unreadable or missing mode counts as ultraviolence, as the gate treats it. At or past the trigger the number reads `0K` and the panel turns red. The reseed trigger is the first size at which the gate acts: where the integer remaining percent (floored, as the gate compares it) falls to the threshold, which is `100 - ouch` with nerf, else 15, or `RESEED_CONTEXT_THRESHOLD_PCT`. That is up to 1% of the usable window sooner than the ouch dart's own position (`usable * ouch / 100`), and a test runs the real gate at the token before and at the trigger to hold them together. The gate measures it against the same usable window autocompact fires from (#1297), so reseed comes first at any real window size, even with the threshold at 0. `🗜` appears only when the two coincide (a usable window of a few tokens); the branch exists so the panel names autocompact if a future window or threshold ever puts it first.
 
 **Floor.** State is `~/.claude/state/context/<key>.floor.json`, where `<key>` is the dev-name (the session id when there is no identity): `{"floors": [{"size", "ts"}, ...], "last": {"<session id>": <size at that session's previous render>, ...}}`. A drop of at least 30% **and** at least 20,000 tokens against the same session's previous render records the new size as a floor; a session's first render records one too. The previous size is per session, so two sessions of one dev-name rendering alternately do not thrash the shared floors. The last five floors are kept, a size of 0 (Claude Code before its first response) records nothing, and the file is rewritten only when something that matters changed (a floor, a new session, a size 1K or more from `last`, or the session no longer being the most recently rendered of the eight, so a session at a steady size is not evicted by newer ones). The panel shows the latest as `floor 91K`, with ▲ when it is above the previous floor, ▼ below it, `=` within 2K (nothing with a single floor). Writes are atomic and best-effort: a failed one never costs the render, and the panel is still worked out from what is in memory.
+
+## Spend (#1429)
+
+The spend panel shows what an API or Bedrock session has cost since a moment you choose. A subscription session reports a notional cost that means nothing, so the panel appears only when the payload has **no** `rate_limits` and has a cost; it is the last panel on row 1.
+
+**State**, in `~/.claude/state/spend/` (override: `CLAUDE_SPEND_STATE_DIR`):
+
+| File | Content | Written by |
+|---|---|---|
+| `<session_id>.json` | `{"cost_usd": <number>, "ts": <epoch>}`: that session's latest cost | the statusline, on a render whose cost differs from the file's |
+| `begin.json` | `{"ts": <epoch>, "baselines": {"<session_id>": <cost>, ...}}` | `statusline-spend begin` |
+
+The panel is the sum, over every session file, of that session's cost less its baseline (floored at 0); a session with no baseline, such as one first seen after the marker, counts in full. With no marker the sum is everything recorded. It is printed with two decimals, `$12.34`.
+
+**Rules.** The session id is used as a file name only if it matches `^[A-Za-z0-9_-]+$` and is not `begin` (the marker's name); anything else writes nothing. Only a session with no `rate_limits` is recorded, so a subscription's notional cost never lands in the sum an API session shows. Writes are atomic (a temp file, then a move) and best-effort: a failed one never costs the render, and the panel still includes this session's own cost. Session files older than 30 days are pruned whenever one is written; `begin.json` is never pruned. A corrupt state file is skipped, not fatal.
+
+**`statusline-spend`** (installed on `PATH` by `./install --scripts`, like the other scripts):
+
+```
+statusline-spend begin   spend marker set: 2 sessions, since 2026-11-02 03:41 EST
+statusline-spend show    spend since 2026-11-02 03:41 EST: $12.34 across 3 sessions
+                         spend (no begin marker; all recorded sessions): $12.34 across 3 sessions
+statusline-spend         (no or an unknown argument) usage on stderr, exit 2
+```
+
+`begin` snapshots every existing session file's current cost as its baseline and records the time; running it again replaces the marker and the sum restarts at `$0.00`. The times are local, with the zone abbreviation. The arithmetic is `scripts/lib/spend-math.sh`'s, shared by the panel and the CLI so they cannot disagree.
 
 ## Shared window math
 
