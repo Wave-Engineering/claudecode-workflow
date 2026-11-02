@@ -97,6 +97,15 @@ are worth keeping apart:
   any root but `/`. It also says to carry
   the rule into subagent briefs, where the walk came from. `/ccfold` brings it into consumers.
 
+### Changed
+- **The kit's pinned `sqtk` is v0.13.0 (#1431, the last step of #1426).** The client now takes
+  `--kind` and `--blocking` on `sqtk add`, and `--kind`, `--blocking` and `--no-blocking` on
+  `sqtk set`, so an ask on `bj:needs` carries its marker (❓ 🔧 ✅ ⛔ 🔔, plus `❗` when blocking) in
+  the item text, which the ask indicators of #1430 read. `scripts/ci/sqtk.pin` names the tag and the
+  checksum of the raw `sqtk` there, and the vendored `scripts/sqtk` is that file byte for byte.
+  Agents get the flags once the kit is installed; an item without a marker still counts as an
+  unspecified ask.
+
 ### Fixed
 - **The squawk drain hook no longer announces an agent's own changes, and a signature is no
   longer an answer (#1421, triage #91 and #93).** An agent that retired its own squawk was told at

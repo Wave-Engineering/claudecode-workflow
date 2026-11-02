@@ -4,9 +4,9 @@
 #
 #   sqtk lists                                     list all squawk lists
 #   sqtk show   <list>                             show a list + its squawks + glyph counts
-#   sqtk add    <list> "<text>" [--no-prefix] [--force]
+#   sqtk add    <list> "<text>" [--no-prefix] [--force] [--kind K] [--blocking]
 #                                                  log a squawk (creates the list if new)
-#   sqtk set    <list> <seq> [--state S] [--text T] [--force]
+#   sqtk set    <list> <seq> [--state S] [--text T] [--force] [--kind K] [--blocking | --no-blocking]
 #                                                  update a squawk (S: open|confirmed|rejected|retired|recorded)
 #   sqtk attach <list> <seq> <file>…               attach images (jpeg/png/webp, ≤2 MB each, ≤5 per squawk)
 #   sqtk mine                                      this checkout's squawks, with their current state + text
@@ -46,6 +46,29 @@
 #     `**/.claude/sqtk-*.json` (once) to the clone's info/exclude — per-clone, so no diff. The
 #     drain hook does the same for its .claude/sqtk-seen.json, with the same pattern.
 #
+# Ask markers (#163) — a CONTRACT with claudecode-workflow's statusline (claudecode-workflow#1426):
+#   An item on "bj:needs" says what kind of ask it is, and whether it blocks the agent, with a
+#   marker as the FIRST characters of its text, ahead of the context prefix:
+#       <kind-icon>[❗] [<dev-name>·<repo>] <text>
+#     --kind          icon   blocking
+#     question        ❓     optional, with --blocking
+#     action          🔧     optional, with --blocking
+#     approval        ✅     optional, with --blocking
+#     blocker         ⛔     always (--blocking is accepted and changes nothing)
+#     (none given)    🔔     optional, with --blocking
+#   ❗ follows the kind icon, with no space, exactly when the item is blocking and not a blocker.
+#   Every icon is one code point with no variation selector. The table is the ASK_ICONS array
+#   below, the only place the icons live. The flags are valid only on "bj:needs" (elsewhere:
+#   exit 2, nothing changes); other lists carry no marker. Never change the table or this shape
+#   without changing the statusline's parser.
+#   add: --kind/--blocking build the marker; with neither, a marker already leading the text is
+#   kept, and a text with none gets 🔔. set --kind/--blocking/--no-blocking rewrite ONLY the
+#   marker (a "→ answer" is untouched); set --text keeps the item's marker unless the new text
+#   brings its own or --kind/--blocking is also given. A blocker has no ❗ to carry over, so
+#   reclassifying one with --kind X (X not blocker) and no --blocking leaves X non-blocking.
+#   An item with no marker (an older client's)
+#   is left alone by everything but an explicit --kind/--blocking on it.
+#
 # set --text refuses a new text that drops the existing text's trailing "→ …" answer (the new
 # text must still contain it); --force overrides.
 #
@@ -61,6 +84,9 @@ set -euo pipefail
 JSON_OUT=0
 
 die() { printf 'sqtk: %s\n' "$*" >&2; exit 1; }
+# die2: a refused flag (a bad --kind, or an ask flag on a list that takes none) exits 2, so a
+# caller can tell "you asked for something sqtk will not do" from a failure.
+die2() { printf 'sqtk: %s\n' "$*" >&2; exit 2; }
 # one_arg CMD WHAT N -> die for a command handed N words where its one <WHAT> goes (#157): an
 # unquoted name with a space splits in the shell, and acting on one word of it would be silent
 # and wrong. Commands check this before any request, so a refusal changes nothing.
@@ -124,6 +150,69 @@ prefix_text() {
   dev="$(resolve_dev_name)"
   repo="$(repo_name)"
   if [[ "$text" == "[$dev·"* ]]; then printf '%s' "$text"; else printf '[%s·%s] %s' "$dev" "$repo" "$text"; fi
+}
+
+# Ask markers (#163; the contract is in the header). ASK_ICONS is the one table: "<kind>:<icon>",
+# the entry with an empty kind being the default ask. ASK_BLOCKING follows the icon of a
+# blocking item that is not a blocker. Only "bj:needs" carries markers.
+ASK_NEEDS='bj:needs'
+ASK_BLOCKING='❗'
+ASK_ICONS=("question:❓" "action:🔧" "approval:✅" "blocker:⛔" ":🔔")
+ASK_KINDS='question|action|approval|blocker'
+
+# ask_icon KIND -> KIND's icon ("" is the default ask); fails for an unknown kind.
+ask_icon() {
+  local e
+  for e in "${ASK_ICONS[@]}"; do
+    if [[ "${e%%:*}" == "$1" ]]; then printf '%s' "${e#*:}"; return 0; fi
+  done
+  return 1
+}
+
+# ask_kind_of ICON -> the kind an icon stands for ("" for the default ask); fails for a non-icon.
+ask_kind_of() {
+  local e
+  for e in "${ASK_ICONS[@]}"; do
+    if [[ "${e#*:}" == "$1" ]]; then printf '%s' "${e%%:*}"; return 0; fi
+  done
+  return 1
+}
+
+# build_marker KIND BLOCKING(0|1) -> "<icon>[❗] " (the marker and its separating space).
+build_marker() {
+  local icon; icon="$(ask_icon "$1")"
+  if [[ "$1" != blocker && "$2" == 1 ]]; then icon+="$ASK_BLOCKING"; fi
+  printf '%s ' "$icon"
+}
+
+# split_marker TEXT -> sets MARK_ICON ("" when TEXT carries no marker), MARK_BLOCK (0|1) and
+# MARK_REST (TEXT without its marker). A marker is a table icon, an optional ❗, then a space.
+MARK_ICON="" MARK_BLOCK=0 MARK_REST=""
+split_marker() {
+  MARK_ICON=""; MARK_BLOCK=0; MARK_REST="$1"
+  local e icon rest
+  for e in "${ASK_ICONS[@]}"; do
+    icon="${e#*:}"
+    [[ "$1" == "$icon"* ]] || continue
+    rest="${1#"$icon"}"
+    local blk=0
+    if [[ "$rest" == "$ASK_BLOCKING"* ]]; then rest="${rest#"$ASK_BLOCKING"}"; blk=1; fi
+    [[ "$rest" == " "* ]] || return 0   # an icon not followed by a space is just text
+    MARK_ICON="$icon"; MARK_BLOCK=$blk; MARK_REST="${rest# }"
+    return 0
+  done
+}
+
+# check_ask_flags CMD LIST KIND_GIVEN KIND ANY : refuse (exit 2) a bad --kind, and any ask flag
+# (ANY=1) on a list that is not bj:needs. Runs before any request, so a refusal changes nothing.
+check_ask_flags() {
+  local cmd="$1" list="$2" given="$3" kind="$4" any="$5"
+  if (( given )) && { [[ -z "$kind" ]] || ! ask_icon "$kind" >/dev/null; }; then
+    die2 "$cmd: unknown --kind \"$kind\" (one of: ${ASK_KINDS//|/, })"
+  fi
+  if (( any )) && [[ "$list" != "$ASK_NEEDS" ]]; then
+    die2 "$cmd: --kind and --blocking apply only to $ASK_NEEDS, not \"$list\""
+  fi
 }
 
 # The record of mine (see the header — its shape is a contract).
@@ -302,22 +391,43 @@ cmd_show() {
 }
 
 cmd_add() {
-  local pos=() prefix=1 force=0
+  local pos=() prefix=1 force=0 kind="" kind_given=0 blocking=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --no-prefix) prefix=0 ;;
       --force)     force=1 ;;
+      --kind)      [[ $# -ge 2 ]] || die2 "add: --kind needs a value (one of: ${ASK_KINDS//|/, })"
+                   kind="$2"; kind_given=1; shift ;;
+      --blocking)  blocking=1 ;;
       *)           pos+=("$1") ;;
     esac
     shift
   done
-  [[ ${#pos[@]} -ge 2 && -n "${pos[0]}" ]] || die "usage: sqtk add <list> \"<text>\" [--no-prefix] [--force]"
+  [[ ${#pos[@]} -ge 2 && -n "${pos[0]}" ]] \
+    || die "usage: sqtk add <list> \"<text>\" [--no-prefix] [--force] [--kind $ASK_KINDS] [--blocking]"
   # More than one word of text is a quoting slip that split it (#157); posting only the first
   # word would land a truncated squawk with exit 0.
   (( ${#pos[@]} == 2 )) || die "add: $(( ${#pos[@]} - 1 )) arguments after the list; quote the text as ONE argument (an apostrophe inside single quotes splits it)"
   local list text="${pos[1]}"
   list="$(list_arg "${pos[0]}" 1)"
-  if (( prefix )); then text="$(prefix_text "$text")"; fi
+  check_ask_flags add "$list" "$kind_given" "$kind" $(( kind_given || blocking ))
+  if [[ "$list" == "$ASK_NEEDS" ]]; then
+    # An ask: [marker] [context prefix] text. The prefix goes after any marker the text already
+    # leads with, so a repeated add (marker and prefix both there) never doubles either.
+    split_marker "$text"
+    local marker body="$MARK_REST"
+    if (( kind_given || blocking )); then
+      marker="$(build_marker "$kind" "$blocking")"        # the flags decide
+    elif [[ -n "$MARK_ICON" ]]; then
+      marker="$MARK_ICON"; if (( MARK_BLOCK )); then marker+="$ASK_BLOCKING"; fi; marker+=" "
+    else
+      marker="$(build_marker "" 0)"                       # no flags, no marker: the default ask
+    fi
+    if (( prefix )); then body="$(prefix_text "$body")"; fi
+    text="$marker$body"
+  elif (( prefix )); then
+    text="$(prefix_text "$text")"
+  fi
   if (( ! force )); then
     local existing; existing="$(find_list "$list")"
     if [[ -n "$existing" ]]; then
@@ -345,24 +455,49 @@ ANSWER_JQ='(.text | split("→")) as $p
 
 cmd_set() {
   [[ $# -ge 2 && -n "${1:-}" && "${2:-}" =~ ^[0-9]+$ ]] \
-    || die "usage: sqtk set <list> <seq> [--state open|confirmed|rejected|retired|recorded] [--text \"<t>\"] [--force]"
+    || die "usage: sqtk set <list> <seq> [--state open|confirmed|rejected|retired|recorded] [--text \"<t>\"] [--force] [--kind $ASK_KINDS] [--blocking | --no-blocking]"
   local list seq="$2"; list="$(list_arg "$1" 0)"; shift 2
-  local state="" text="" have=0 force=0
+  local state="" text="" have=0 force=0 kind="" kind_given=0 blocking=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --state) [[ $# -ge 2 ]] || die "--state needs a value"; state="$2"; shift 2; [[ -z "$state" ]] || have=1 ;;
       --text)  [[ $# -ge 2 ]] || die "--text needs a value";  text="$2";  shift 2; [[ -z "$text" ]]  || have=1 ;;
       --force) force=1; shift ;;
+      --kind)  [[ $# -ge 2 ]] || die2 "set: --kind needs a value (one of: ${ASK_KINDS//|/, })"
+               kind="$2"; kind_given=1; have=1; shift 2 ;;
+      --blocking)    blocking=1; have=1; shift ;;
+      --no-blocking) blocking=0; have=1; shift ;;
       *) die "unknown flag for set: $1" ;;
     esac
   done
-  (( have )) || die "provide --state and/or --text"
+  (( have )) || die "provide --state, --text, --kind and/or --blocking"
+  check_ask_flags set "$list" "$kind_given" "$kind" $(( kind_given || ${#blocking} ))
   local sq; sq="$(squawk_at "$list" "$seq")"
   if [[ -n "$text" ]] && (( ! force )); then
     local answer; answer="$(jq -r "$ANSWER_JQ" <<<"$sq")"
     if [[ -n "$answer" && "$text" != *"$answer"* ]]; then
       die "set: the new --text drops #$seq's answer \"$answer\" — keep it in the text, or re-run with --force"
     fi
+  fi
+  if [[ "$list" == "$ASK_NEEDS" ]] && { [[ -n "$text" ]] || (( kind_given )) || [[ -n "$blocking" ]]; }; then
+    # Rewrite only the leading marker; everything after it (a "→ answer" included) stays as is.
+    # The "x" guard keeps trailing newlines, which $(...) would strip.
+    local cur; cur="$(jq -j '.text + "x"' <<<"$sq")"; cur="${cur%x}"
+    split_marker "$cur"
+    local icon="$MARK_ICON" blk="$MARK_BLOCK" rest="$MARK_REST" marker=""
+    if [[ -n "$text" ]]; then
+      split_marker "$text"
+      rest="$MARK_REST"
+      if [[ -n "$MARK_ICON" ]]; then icon="$MARK_ICON"; blk="$MARK_BLOCK"; fi   # the new text's own marker
+    fi
+    if (( kind_given )) || [[ -n "$blocking" ]]; then
+      local k="$kind"
+      if (( ! kind_given )); then k=""; if [[ -n "$icon" ]]; then k="$(ask_kind_of "$icon")"; fi; fi
+      marker="$(build_marker "$k" "${blocking:-$blk}")"
+    elif [[ -n "$icon" ]]; then
+      marker="$icon"; if (( blk )); then marker+="$ASK_BLOCKING"; fi; marker+=" "
+    fi
+    text="$marker$rest"
   fi
   local id; id="$(jq -r '.id' <<<"$sq")"
   local ini; ini="$(resolve_initials)"
@@ -482,9 +617,9 @@ sqtk — client CLI for Squawkie-Talkie
 
   sqtk lists                                       list all squawk lists
   sqtk show   <list>                               show a list + its squawks + glyph counts
-  sqtk add    <list> "<text>" [--no-prefix] [--force]
+  sqtk add    <list> "<text>" [--no-prefix] [--force] [--kind K] [--blocking]
                                                    log a squawk (creates the list if new)
-  sqtk set    <list> <seq> [--state S] [--text T] [--force]
+  sqtk set    <list> <seq> [--state S] [--text T] [--force] [--kind K] [--blocking | --no-blocking]
                                                    update a squawk
                                                    (S: open|confirmed|rejected|retired|recorded)
   sqtk attach <list> <seq> <file>…                 attach images: jpeg/png/webp, ≤2 MB each, ≤5 per squawk
@@ -499,6 +634,11 @@ sqtk — client CLI for Squawkie-Talkie
 add prefixes the text "[<dev-name>·<repo>] " (--no-prefix skips it), refuses an open duplicate
   (exit 3; --force adds anyway) and records the squawk in .claude/sqtk-mine.json, which `mine` reads.
 set --text refuses to drop the existing text's trailing "→ …" answer, unless --force.
+ask markers (bj:needs only; elsewhere --kind/--blocking exit 2): the text starts "<icon>[❗] [prefix] …"
+  --kind question ❓ · action 🔧 · approval ✅ · blocker ⛔ (always blocking) · none 🔔
+  --blocking adds ❗ after the icon (set --no-blocking removes it). set --kind/--blocking rewrite only
+  the marker, so a "→ answer" survives; set --text keeps the item's marker unless the new text has one.
+  A blocker has no ❗ to carry over: set --kind X on one makes X non-blocking unless --blocking is given.
 env: SQUAWK_URL (REQUIRED — e.g. http://localhost:7700) · SQUAWK_INITIALS (else from agent identity)
 squawks are referenced by their per-list #seq (what show/add print), and change state, never delete.
 states: ○ open · ✓ confirmed · ✗ rejected · ◌ retired · ↗ recorded
