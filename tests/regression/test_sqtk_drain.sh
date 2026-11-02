@@ -48,6 +48,10 @@ chmod +x "$WORK/bin/curl"
 
 export CURL_LOG="$WORK/curl.log" FAKE_BODY="$WORK/body.json" FAKE_RC=0
 export SQUAWK_URL="http://squawk.test"
+# The hook ends by running sqtk-asks-sync.sh (#1430). Keep it off the real /tmp asks file of
+# whatever agent's dev_name a fixture borrows, and off the real sqtk: /bin/false is a failed fetch.
+mkdir -p "$WORK/asks"
+export SQTK_ASKS_DIR="$WORK/asks" SQTK_ASKS_SQTK=/bin/false
 MINE="$REPO/.claude/sqtk-mine.json"
 SEEN="$REPO/.claude/sqtk-seen.json"
 
@@ -454,7 +458,8 @@ out=$(bash -c 'jq -cn --arg c "$1" "{cwd: \$c}" | PATH="$2/bin:$PATH" bash "$3" 
 [[ ! -e "$ASKS_DIR/claude-statusline-drainer.asks.json" && ! -s "$SQTK_LOG" ]] && pass "drain --pending (the doorbell's check): no sync" ||
 	fail "pending synced (out='$out')"
 rm -f "$REPO/.claude/agent-identity.json"
-unset SQTK_ASKS_SQTK SQTK_ASKS_DIR SQTK_LOG
+export SQTK_ASKS_SQTK=/bin/false
+unset SQTK_LOG
 
 echo
 if [[ $FAILS -eq 0 ]]; then
