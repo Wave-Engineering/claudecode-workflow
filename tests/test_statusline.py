@@ -28,6 +28,8 @@ STATUSLINE_SCRIPT = (
 # the script persists per-session readings, and a test must never write into
 # the real ~/.claude/state/context.
 _CTX_STATE = tempfile.TemporaryDirectory(prefix="statusline-ctx-")
+# The same for the spend panel's per-session cost files (#1429): never the real ~/.claude/state/spend.
+_SPEND_STATE = tempfile.TemporaryDirectory(prefix="statusline-spend-")
 
 
 def _strip_ansi(text: str) -> str:
@@ -50,6 +52,7 @@ def _run_statusline(
     # every test that passes a session_id would write into the REAL
     # ~/.claude/state/context of whoever runs the suite.
     env["CLAUDE_CONTEXT_STATE_DIR"] = _CTX_STATE.name
+    env["CLAUDE_SPEND_STATE_DIR"] = _SPEND_STATE.name
     # No git cache unless a test asks for one: a test that changes a repo between two renders
     # must see the change (#1427).
     env["CLAUDE_STATUSLINE_GIT_TTL"] = "0"
@@ -1238,3 +1241,224 @@ class TestStatuslineContextPanels:
         # The 100,000 floor from its first render has aged out of the five. Had the session been
         # evicted, its next render would count as a first render and record 100,000 again.
         assert 100_000 not in self._floors(tmp_path, "floor-n")
+
+
+# --- #1429: the spend panel and statusline-spend ---------------------------------------------------
+
+SPEND_CLI = Path(__file__).resolve().parent.parent / "scripts" / "statusline-spend"
+
+
+class TestStatuslineSpend:
+    """API or Bedrock spend since a begin marker: shown only when the payload has no rate_limits."""
+
+    def _env(self, tmp_path: Path, **extra: str) -> dict[str, str]:
+        return {"CLAUDE_SPEND_STATE_DIR": str(tmp_path / "spend"), "CLAUDE_CONTEXT_STATE_DIR": str(tmp_path / "ctx"),
+                "TZ": "UTC", **extra}
+
+    def _render(self, tmp_path: Path, sid: str | None, cost: float | None, *, limits: bool = False,
+                tokens: int | None = None, **extra: str) -> str:
+        payload: dict = {"cwd": str(tmp_path)}
+        if sid is not None:
+            payload["session_id"] = sid
+        if cost is not None:
+            payload["cost"] = {"total_cost_usd": cost}
+        if limits:
+            payload["rate_limits"] = {"five_hour": {"used_percentage": 3}}
+        if tokens is not None:
+            payload["context_window"] = {"total_input_tokens": tokens}
+        return _run_statusline(payload, cwd=tmp_path, env_override=self._env(tmp_path, **extra))
+
+    def _row1(self, out: str) -> str:
+        return _rows(out)[0]
+
+    def _cli(self, tmp_path: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([str(SPEND_CLI), *args], capture_output=True, text=True,
+                              env={**os.environ, **self._env(tmp_path)})
+
+    def _files(self, tmp_path: Path) -> list[str]:
+        d = tmp_path / "spend"
+        return sorted(p.name for p in d.iterdir()) if d.exists() else []
+
+    # --- when the panel shows ---
+    def test_a_recorded_cost_without_rate_limits_renders_dollars_and_two_decimals(self, tmp_path: Path):
+        assert self._row1(self._render(tmp_path, "s1", 5.0)) == "$5.00"
+        assert self._row1(self._render(tmp_path, "s1", 5.126)) == "$5.13"
+
+    def test_a_zero_cost_shows_and_records_nothing(self, tmp_path: Path):
+        """A fresh session, and a subscriber's first render before rate_limits arrives, both report 0.
+        Nothing is known yet, so the panel must not flash `$0.00` or leave a zero-cost file behind."""
+        out = self._render(tmp_path, "s1", 0)
+        assert "$" not in self._row1(out)
+        assert self._files(tmp_path) == []
+        # ...and the same session's next render, with rate_limits now present, still records nothing.
+        assert self._files(tmp_path) == [] and "$" not in self._row1(self._render(tmp_path, "s1", 0.4, limits=True))
+
+    def test_rate_limits_hide_the_panel_and_record_nothing(self, tmp_path: Path):
+        out = self._render(tmp_path, "s1", 5.0, limits=True)
+        assert "$" not in self._row1(out)
+        assert self._files(tmp_path) == []  # a subscription's notional cost is never recorded
+
+    def test_no_cost_means_no_panel(self, tmp_path: Path):
+        assert "$" not in self._row1(self._render(tmp_path, "s1", None, tokens=40_000))
+        assert self._files(tmp_path) == []
+
+    def test_the_panel_is_the_last_one_on_row_one(self, tmp_path: Path):
+        out = self._render(tmp_path, "s1", 2.5, tokens=40_000)
+        assert self._row1(out) == "40K │ floor 40K │ $2.50"
+
+    # --- baselines and the marker ---
+    def test_spend_since_the_marker_counts_new_sessions_in_full(self, tmp_path: Path):
+        self._render(tmp_path, "a", 5.00)
+        self._render(tmp_path, "b", 3.00)
+        assert self._row1(self._render(tmp_path, "b", 3.00)) == "$8.00"  # no marker: everything
+        r = self._cli(tmp_path, "begin")
+        assert r.returncode == 0 and r.stdout.startswith("spend marker set: 2 sessions, since ")
+        assert self._row1(self._render(tmp_path, "b", 3.00)) == "$0.00"
+        self._render(tmp_path, "a", 5.75)
+        out = self._render(tmp_path, "c", 1.25)  # first seen after the marker: counts in full
+        assert self._row1(out) == "$2.00"  # 0.75 + 0 + 1.25
+
+    def test_begin_twice_replaces_the_marker_and_the_sum_restarts(self, tmp_path: Path):
+        self._render(tmp_path, "a", 5.0)
+        self._cli(tmp_path, "begin")
+        assert self._row1(self._render(tmp_path, "a", 9.0)) == "$4.00"
+        self._cli(tmp_path, "begin")
+        assert self._row1(self._render(tmp_path, "a", 9.0)) == "$0.00"
+
+    def test_a_cost_below_its_baseline_never_counts_negative(self, tmp_path: Path):
+        self._render(tmp_path, "a", 5.0)
+        self._cli(tmp_path, "begin")
+        assert self._row1(self._render(tmp_path, "a", 2.0)) == "$0.00"
+
+    def test_the_state_files_have_the_documented_shape(self, tmp_path: Path):
+        self._render(tmp_path, "a", 5.25)
+        rec = json.loads((tmp_path / "spend" / "a.json").read_text())
+        assert rec["cost_usd"] == 5.25 and isinstance(rec["ts"], int) and rec["ts"] > 0
+        self._cli(tmp_path, "begin")
+        marker = json.loads((tmp_path / "spend" / "begin.json").read_text())
+        assert marker["baselines"] == {"a": 5.25} and isinstance(marker["ts"], int)
+
+    def test_an_unchanged_cost_is_not_rewritten(self, tmp_path: Path):
+        self._render(tmp_path, "a", 5.0)
+        f = tmp_path / "spend" / "a.json"
+        before = f.stat().st_mtime_ns
+        self._render(tmp_path, "a", 5.0)
+        assert f.stat().st_mtime_ns == before
+        self._render(tmp_path, "a", 5.5)
+        assert json.loads(f.read_text())["cost_usd"] == 5.5
+
+    # --- pruning ---
+    def test_session_files_older_than_30_days_are_pruned_and_younger_kept(self, tmp_path: Path):
+        import time
+
+        spend = tmp_path / "spend"
+        spend.mkdir()
+        old, young, marker = spend / "old.json", spend / "young.json", spend / "begin.json"
+        for f, cost in ((old, 1.0), (young, 2.0)):
+            f.write_text(json.dumps({"cost_usd": cost, "ts": 1}))
+        marker.write_text(json.dumps({"ts": 1, "baselines": {}}))
+        ancient = time.time() - 31 * 86400
+        os.utime(old, (ancient, ancient))
+        os.utime(marker, (ancient, ancient))  # the marker is never pruned
+        os.utime(young, (time.time() - 29 * 86400,) * 2)
+        self._render(tmp_path, "now", 3.0)  # a write triggers the prune
+        assert self._files(tmp_path) == ["begin.json", "now.json", "young.json"]
+
+    # --- unsafe ids and failures ---
+    @pytest.mark.parametrize("sid", ["../escape", "a/b", "..", "a b", "x;y", "begin", ""])
+    def test_an_unsafe_or_reserved_session_id_writes_nothing_but_its_cost_still_counts(
+        self, tmp_path: Path, sid: str
+    ):
+        out = self._render(tmp_path, sid, 5.0)
+        assert self._files(tmp_path) == []
+        assert not (tmp_path / "escape.json").exists()
+        assert out.count("\n") == 2
+        assert self._row1(out) == "$5.00"  # it cannot be filed, but the panel does not drop it
+        # ...and it is added to what other sessions have already recorded
+        self._render(tmp_path, "other", 2.0)
+        assert self._row1(self._render(tmp_path, sid, 5.0)) == "$7.00"
+        assert self._files(tmp_path) == ["other.json"]
+
+    def test_begin_skips_a_valid_json_file_that_is_not_an_object(self, tmp_path: Path):
+        """`begin` must skip it, as the panel does, not die silently with no marker."""
+        spend = tmp_path / "spend"
+        spend.mkdir()
+        (spend / "arr.json").write_text("[1, 2]")
+        (spend / "num.json").write_text("5")
+        (spend / "str.json").write_text('"x"')
+        (spend / "nocost.json").write_text('{"ts": 1}')
+        (spend / "ok.json").write_text(json.dumps({"cost_usd": 2.5, "ts": 1}))
+        r = self._cli(tmp_path, "begin")
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.startswith("spend marker set: 1 session, since ")
+        assert json.loads((spend / "begin.json").read_text())["baselines"] == {"ok": 2.5}
+        assert self._row1(self._render(tmp_path, "ok", 2.5)) == "$0.00"
+
+    def test_an_unwritable_state_dir_still_renders_the_rest_and_the_own_spend(self, tmp_path: Path):
+        blocker = tmp_path / "file-not-dir"
+        blocker.write_text("x")
+        out = self._render(tmp_path, "s1", 4.0, tokens=40_000, CLAUDE_SPEND_STATE_DIR=str(blocker / "sub"))
+        assert self._row1(out) == "40K │ floor 40K │ $4.00"
+        assert out.count("\n") == 2
+
+    def test_a_corrupt_session_file_or_marker_does_not_blank_the_panel(self, tmp_path: Path):
+        spend = tmp_path / "spend"
+        spend.mkdir()
+        (spend / "bad.json").write_text("{not json")
+        (spend / "begin.json").write_text("[1, 2")
+        (spend / "good.json").write_text(json.dumps({"cost_usd": 2.0, "ts": 1}))
+        assert self._row1(self._render(tmp_path, "s1", 1.0)) == "$3.00"
+
+    def test_a_non_numeric_cost_is_no_cost(self, tmp_path: Path):
+        out = _run_statusline({"cwd": str(tmp_path), "session_id": "s1", "cost": {"total_cost_usd": "lots"}},
+                              cwd=tmp_path, env_override=self._env(tmp_path))
+        assert "$" not in self._row1(out) and self._files(tmp_path) == []
+
+    # --- statusline-spend ---
+    def test_show_and_begin_print_the_documented_lines(self, tmp_path: Path):
+        self._render(tmp_path, "a", 5.0)
+        self._render(tmp_path, "b", 3.0)
+        shown = self._cli(tmp_path, "show")
+        assert shown.returncode == 0
+        assert shown.stdout == "spend (no begin marker; all recorded sessions): $8.00 across 2 sessions\n"
+        began = self._cli(tmp_path, "begin")
+        assert re.fullmatch(r"spend marker set: 2 sessions, since \d{4}-\d\d-\d\d \d\d:\d\d UTC\n", began.stdout)
+        self._render(tmp_path, "a", 6.5)
+        shown = self._cli(tmp_path, "show")
+        assert re.fullmatch(r"spend since \d{4}-\d\d-\d\d \d\d:\d\d UTC: \$1\.50 across 2 sessions\n", shown.stdout)
+
+    def test_one_session_is_singular(self, tmp_path: Path):
+        self._render(tmp_path, "a", 5.0)
+        assert self._cli(tmp_path, "begin").stdout.startswith("spend marker set: 1 session, since ")
+
+    def test_begin_with_no_sessions_sets_an_empty_marker(self, tmp_path: Path):
+        r = self._cli(tmp_path, "begin")
+        assert r.returncode == 0 and r.stdout.startswith("spend marker set: 0 sessions, since ")
+        assert json.loads((tmp_path / "spend" / "begin.json").read_text())["baselines"] == {}
+
+    @pytest.mark.parametrize("args", [(), ("bogus",), ("begin", "extra"), ("show", "x"), ("--help",)])
+    def test_no_or_an_unknown_argument_prints_usage_and_exits_2(self, tmp_path: Path, args):
+        r = self._cli(tmp_path, *args)
+        assert r.returncode == 2 and "usage: statusline-spend begin | show" in r.stderr and r.stdout == ""
+        assert self._files(tmp_path) == []
+
+    def test_the_cli_and_the_panel_agree(self, tmp_path: Path):
+        self._render(tmp_path, "a", 5.0)
+        self._cli(tmp_path, "begin")
+        panel = self._row1(self._render(tmp_path, "a", 7.33))
+        shown = self._cli(tmp_path, "show").stdout
+        assert panel == "$2.33" and "$2.33 across 1 session" in shown
+
+    def test_install_puts_it_on_path_and_ships_its_library(self, tmp_path: Path):
+        """`./install --scripts --dry-run` (into a throwaway HOME) lists the symlink onto PATH, and the
+        library the script sources sits beside it in the Cellar layout (scripts/lib)."""
+        install = SPEND_CLI.parent.parent / "install"
+        home = tmp_path / "home"
+        home.mkdir()
+        r = subprocess.run([str(install), "--scripts", "--dry-run"], capture_output=True, text=True,
+                           env={**os.environ, "HOME": str(home)}, cwd=str(install.parent))
+        # The exit code is not checked: in a bare HOME the installer ends with its own "N required
+        # dependencies/secrets missing" summary, which says nothing about the scripts step.
+        assert f"symlink {home}/.local/bin/statusline-spend → {home}/.claude/scripts/statusline-spend" in r.stdout
+        assert os.access(SPEND_CLI, os.X_OK)
+        assert (SPEND_CLI.parent / "lib" / "spend-math.sh").is_file()

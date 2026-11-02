@@ -18,7 +18,7 @@ now=$(date +%s)
 # Fields are joined with the unit separator (not whitespace, so an empty field stays an empty
 # field). The last field is the remaining-context reading, ready to persist (#1225).
 IFS=$'\x1f' read -r cwd model effort remaining_pct session_id ctx_in_tokens ctx_out_tokens \
-	five_hour_pct seven_day_pct reading_json < <(printf '%s' "$input" | jq -r --argjson t "$now" '
+	five_hour_pct seven_day_pct cost_usd has_limits reading_json < <(printf '%s' "$input" | jq -r --argjson t "$now" '
 	def num: if type == "number" then . else null end;
 	[ (.cwd // .workspace.current_dir // ""),
 	  (.model.display_name // ""),
@@ -29,6 +29,8 @@ IFS=$'\x1f' read -r cwd model effort remaining_pct session_id ctx_in_tokens ctx_
 	  (.context_window.total_output_tokens // ""),
 	  (.rate_limits.five_hour.used_percentage // ""),
 	  (.rate_limits.seven_day.used_percentage // ""),
+	  (.cost.total_cost_usd | if type == "number" and . > 0 then . else "" end),
+	  (if (.rate_limits // null) != null then 1 else 0 end),
 	  ({session_id: (.session_id // ""),
 	    remaining_percentage: .context_window.remaining_percentage,
 	    ts: $t,
@@ -531,8 +533,43 @@ if [ -n "$floor_key" ]; then
 	fi
 fi
 
-# Reserved place (it prints nothing yet): #1429 fills it.
+# === SPEND (#1429): API or Bedrock spend since the begin marker ===
+# A subscription session reports a notional cost that means nothing, so the panel appears only when
+# the payload has NO rate_limits and carries a cost above zero (a fresh session, and a subscriber's
+# first render before rate_limits arrives, both report 0: nothing is known yet, so nothing is shown or
+# recorded). This session's latest cost is recorded in
+# ~/.claude/state/spend/<session_id>.json ({"cost_usd", "ts"}), only when it changed, atomically and
+# best-effort; files older than 30 days are pruned then. The panel is the sum over every session file
+# of (its cost less its baseline from `statusline-spend begin`), "$12.34". The arithmetic is
+# scripts/lib/spend-math.sh's, shared with the CLI. This session's own cost is passed in, so a render
+# that cannot write still shows it. An unsafe session id (or "begin", the marker's name) writes nothing.
 spend_panel=""
+if [ "$has_limits" = 0 ] && [[ "$cost_usd" =~ ^[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$ ]] && [ -n "$cm_lib" ] &&
+	[ -r "${cm_lib%/*}/spend-math.sh" ]; then
+	# shellcheck source=scripts/lib/spend-math.sh
+	source "${cm_lib%/*}/spend-math.sh"
+	spend_state_dir="$(spend_dir)"
+	spend_sid=""
+	if spend_session_id_ok "$session_id"; then spend_sid="$session_id"; fi
+	# An unsafe or missing id can't name a file, but its cost still counts in the sum it shows: it
+	# goes in under a placeholder key and is never written.
+	IFS=$'\x1f' read -r spend_sum _ spend_saved _ < <(spend_summary "$spend_state_dir" "${spend_sid:-unkeyed-session}" "$cost_usd")
+	if [[ "$spend_sum" =~ ^[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$ ]]; then
+		spend_panel="$(spend_money "$spend_sum")"
+	fi
+	if [ -n "$spend_sid" ] && [ "$spend_saved" = 0 ]; then
+		{
+			spend_tmp=""
+			if mkdir -p "$spend_state_dir" && spend_tmp=$(mktemp "$spend_state_dir/.spend.XXXXXX") &&
+				printf '{"cost_usd": %s, "ts": %s}\n' "$cost_usd" "$now" >"$spend_tmp"; then
+				mv -f "$spend_tmp" "$spend_state_dir/${spend_sid}.json"
+				find "$spend_state_dir" -maxdepth 1 -type f -name '*.json' ! -name begin.json -mtime +30 -delete
+			else
+				[ -n "$spend_tmp" ] && rm -f "$spend_tmp"
+			fi
+		} 2>/dev/null
+	fi
+fi
 
 # === ROW 2 ===
 agent_panel=""
