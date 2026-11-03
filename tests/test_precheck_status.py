@@ -107,6 +107,30 @@ if tool == "glab" and method == "GET":
             state["post_reads"] = state.get("post_reads", 0) + 1
             save()
         print(json.dumps(gl_mr(m.group(2), pr))); sys.exit(0)
+    # #1444: does the project run CI at all? The default is "yes" (a file at the head, no custom
+    # path), so every test that predates the question keeps its guard.
+    m = re.fullmatch(r"projects/([^/]+)", endpoint)
+    if m:
+        if os.environ.get("FAKE_PROJECT_FAIL") == "1":
+            print(json.dumps({"message": "500 Internal Server Error"})); sys.exit(0)
+        print(os.environ.get("FAKE_PROJECT", json.dumps({"id": 7, "ci_config_path": None, "auto_devops_enabled": False}))); sys.exit(0)
+    m = re.fullmatch(r"projects/([^/]+)/repository/files/([^?]+)\?ref=([0-9a-f]{40})", endpoint)
+    if m:
+        from urllib.parse import unquote
+        mode = os.environ.get("FAKE_CI_FILE", "present")
+        if mode == "absent":
+            print(json.dumps({"message": "404 File Not Found"}))
+        elif mode == "error":
+            print(json.dumps({"message": "500 Internal Server Error"}))
+        elif mode == "forbidden":
+            print(json.dumps({"message": "403 Forbidden"}))
+        elif mode == "project-gone":
+            print(json.dumps({"message": "404 Project Not Found"}))
+        elif mode == "empty":
+            print("")
+        else:
+            print(json.dumps({"file_name": unquote(m.group(2)), "file_path": unquote(m.group(2)), "blob_id": "abc"}))
+        sys.exit(0)
     m = re.fullmatch(r"projects/([^/]+)/repository/commits/([0-9a-f]{40})/merge_requests", endpoint)
     if m:
         if os.environ.get("FAKE_COMMIT_MRS_ERROR") == "1":
@@ -521,6 +545,119 @@ def test_gitlab_post_with_a_pipeline_skips_the_guard(world):
     r = _run(env, "post", str(repo), shas[-1], "ok", FAKE_PIPELINE="77", **_merged_results_mr(shas))
     assert r.returncode == 0, r.stderr
     assert not any("merge_requests" in c[-1] for c in _calls(tmp))
+
+
+# #1444: the guard keeps an external pipeline from hiding an MR's CI verdict. A project with no
+# CI has no verdict to hide, and the external pipeline its bare post creates is expected. The
+# guard is skipped only when "no CI" is positively established; anything else keeps it.
+def _ci_reads(tmp: Path) -> list[str]:
+    """Calls that ask whether the project runs CI: the project itself, or a file in it."""
+    return [c[-1] for c in _calls(tmp) if c[-1] == "projects/group%2Fsub%2Fproj" or "/repository/files/" in c[-1]]
+
+
+@pytest.mark.parametrize("ci_config_path", [None, "", ".gitlab-ci.yml"])
+def test_gitlab_no_ci_post_passes_though_the_post_creates_an_external_pipeline(world, ci_config_path):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = {
+        **_merged_results_mr(shas),
+        "FAKE_PROJECT": json.dumps({"id": 7, "ci_config_path": ci_config_path, "auto_devops_enabled": False}),
+        "FAKE_CI_FILE": "absent",
+        "FAKE_HEAD_PIPELINE_AFTER_POST": "3022863125",  # what the repro saw: none -> the external pipeline
+    }
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == f"success {shas[-1]}"
+    assert "no CI" in r.stderr, "a reader is told why the guard was skipped"
+    assert not any("merge_requests/3" in c[-1] for c in _calls(tmp)), "no head_pipeline pre-check, no poll"
+    assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "success"
+    assert any(c.endswith("/repository/files/.gitlab-ci.yml?ref=" + shas[-1]) for c in _ci_reads(tmp))
+
+
+def test_gitlab_no_ci_post_replaces_a_failed_left_by_the_old_guard(world):
+    """The state cerberus found: `failed` on the head, and head_pipeline already on our own
+    external pipeline. A later post must end in `success`, with nothing to recover by hand."""
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    old = {**_merged_results_mr(shas), "FAKE_HEAD_PIPELINE_AFTER_POST": "3022863125"}
+    assert _run(env, "post", str(repo), shas[-1], "ok", **old).returncode == 3
+    assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "failure"
+    now = {
+        **_merged_results_mr(shas),
+        "FAKE_PIPELINES": json.dumps([{"id": 3022863125, "source": "external"}]),
+        "FAKE_HEAD_PIPELINE": "3022863125",
+        "FAKE_HEAD_PIPELINE_SOURCE": "external",
+        "FAKE_CI_FILE": "absent",
+    }
+    r = _run(env, "post", str(repo), shas[-1], "ok", **now)
+    assert r.returncode == 0, r.stderr
+    assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "success"
+    st = json.loads((tmp / "state.json").read_text())["s"][shas[-1]]
+    # The old run's success then failed, and the new run's success is the newest status.
+    assert [s["status"] for s in st] == ["success", "failed", "success"]
+    assert st[-1]["pipeline_id"] is None, "still never attached to the external pipeline"
+
+
+@pytest.mark.parametrize(
+    ("project", "ci_file", "reads_file"),
+    [
+        ({"id": 7, "ci_config_path": None, "auto_devops_enabled": False}, "present", True),  # .gitlab-ci.yml is there
+        ({"id": 7, "ci_config_path": "ci/main.yml", "auto_devops_enabled": False}, "absent", False),  # a custom path
+        ({"id": 7, "ci_config_path": "ci.yml@group/other", "auto_devops_enabled": False}, "absent", False),  # remote
+        ({"id": 7, "ci_config_path": "https://x.example/ci.yml", "auto_devops_enabled": False}, "absent", False),
+        ({"id": 7, "ci_config_path": None, "auto_devops_enabled": True}, "absent", False),  # Auto DevOps runs CI
+    ],
+    ids=["file-present", "custom-path", "remote-path", "url-path", "auto-devops"],
+)
+def test_gitlab_guard_is_unchanged_when_ci_is_configured(world, project, ci_file, reads_file):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = {
+        **_merged_results_mr(shas),
+        "FAKE_PROJECT": json.dumps(project),
+        "FAKE_CI_FILE": ci_file,
+        "FAKE_HEAD_PIPELINE_AFTER_POST": "2983506881",
+    }
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
+    assert r.returncode == 3, r.stderr
+    assert "head_pipeline moved from 2983401888 to 2983506881" in r.stderr
+    assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "failure"
+    assert any("/repository/files/" in c for c in _ci_reads(tmp)) is reads_file
+
+
+@pytest.mark.parametrize(
+    ("extra_env", "why"),
+    [
+        ({"FAKE_PROJECT_FAIL": "1"}, "read the project"),
+        ({"FAKE_CI_FILE": "error"}, "read .gitlab-ci.yml"),
+        ({"FAKE_CI_FILE": "forbidden"}, "read .gitlab-ci.yml"),
+        ({"FAKE_CI_FILE": "empty"}, "read .gitlab-ci.yml"),
+        ({"FAKE_CI_FILE": "project-gone"}, "read .gitlab-ci.yml"),  # a 404 for something other than the file
+    ],
+    ids=["project-read-fails", "file-500", "file-403", "file-empty-answer", "project-404"],
+)
+def test_gitlab_post_fails_closed_when_no_ci_cannot_be_established(world, extra_env, why):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    r = _run(env, "post", str(repo), shas[-1], "ok", **_merged_results_mr(shas), **extra_env)
+    assert r.returncode == 3, r.stderr
+    assert why in r.stderr
+    assert not (tmp / "state.json").exists(), "nothing is posted when the question cannot be answered"
+
+
+def test_gitlab_post_with_a_pipeline_never_asks_whether_there_is_ci(world):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    r = _run(env, "post", str(repo), shas[-1], "ok", FAKE_PIPELINE="77", **_merged_results_mr(shas), FAKE_CI_FILE="absent")
+    assert r.returncode == 0, r.stderr
+    assert _ci_reads(tmp) == []
+
+
+def test_gitlab_bare_post_with_no_open_mr_never_asks_whether_there_is_ci(world):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    assert _run(env, "post", str(repo), shas[0], "ok").returncode == 0
+    assert _ci_reads(tmp) == [], "with no MR at the head there is nothing to guard, so nothing to decide"
 
 
 @pytest.mark.parametrize(("status", "want"), [("failed", "failure"), ("running", "pending"), ("canceled", "failure")])

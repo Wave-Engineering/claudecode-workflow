@@ -19,6 +19,21 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Fixed
+- **`precheck-status.sh post` records a pass on a GitLab project that runs no CI (#1444).** The
+  #1357 guard stops an external pipeline from hiding an MR's CI verdict, but on a project with no CI
+  there is no verdict to hide: the bare post's own external pipeline moved `head_pipeline`, the post
+  replaced its `success` with `failed` ("re-run the MR pipeline"), and every later post was refused
+  because the external pipeline was already there. With no pipeline to re-run, every MR in such a
+  repo (all the `cadre-<name>` repos, which `cadre form` seeds without CI) was blocked at mark-ready.
+  When an open MR needs the guard, `post` now asks whether CI exists at the head and skips the
+  `head_pipeline` pre-check and poll only when "no CI" is positively established: no config of its
+  own in the project (empty, null or `.gitlab-ci.yml` path, Auto DevOps off) and `.gitlab-ci.yml`
+  answers exactly `404 File Not Found` at the head. A custom or remote path, Auto DevOps and a
+  present file keep the guard, and any answer that is none of those exits 3 with nothing posted. A
+  `failed` left by the old behaviour is replaced by the next `post`. `get` and `last-success` needed
+  no change: they read commit statuses by name and ignore the pipeline.
+
 ## [8.23.0] - 2026-11-02
 
 The statusline is rebuilt as two rows of divider-separated panels: absolute context, a runway
