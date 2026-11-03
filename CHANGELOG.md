@@ -25,7 +25,7 @@ are worth keeping apart:
   there is no verdict to hide: the bare post's own external pipeline moved `head_pipeline`, the post
   replaced its `success` with `failed` ("re-run the MR pipeline"), and every later post was refused
   because the external pipeline was already there. With no pipeline to re-run, every MR in such a
-  repo (all the `cadre-<name>` repos, which `cadre form` seeds without CI) was blocked at mark-ready.
+  repo, which includes any repo created without a CI config, was blocked at mark-ready.
   When an open MR needs the guard, `post` now asks whether CI exists at the head and skips the
   `head_pipeline` pre-check and poll only when "no CI" is positively established: no config of its
   own in the project (empty, null or `.gitlab-ci.yml` path, Auto DevOps off) and `.gitlab-ci.yml`

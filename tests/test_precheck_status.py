@@ -563,7 +563,7 @@ def test_gitlab_no_ci_post_passes_though_the_post_creates_an_external_pipeline(w
         **_merged_results_mr(shas),
         "FAKE_PROJECT": json.dumps({"id": 7, "ci_config_path": ci_config_path, "auto_devops_enabled": False}),
         "FAKE_CI_FILE": "absent",
-        "FAKE_HEAD_PIPELINE_AFTER_POST": "3022863125",  # what the repro saw: none -> the external pipeline
+        "FAKE_HEAD_PIPELINE_AFTER_POST": "2983506881",  # none -> the external pipeline the post itself creates
     }
     r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
     assert r.returncode == 0, r.stderr
@@ -575,17 +575,17 @@ def test_gitlab_no_ci_post_passes_though_the_post_creates_an_external_pipeline(w
 
 
 def test_gitlab_no_ci_post_replaces_a_failed_left_by_the_old_guard(world):
-    """The state cerberus found: `failed` on the head, and head_pipeline already on our own
+    """The state the old guard left: `failed` on the head, and head_pipeline already on our own
     external pipeline. A later post must end in `success`, with nothing to recover by hand."""
     repo, env, shas, tmp = world
     _gitlab(repo)
-    old = {**_merged_results_mr(shas), "FAKE_HEAD_PIPELINE_AFTER_POST": "3022863125"}
+    old = {**_merged_results_mr(shas), "FAKE_HEAD_PIPELINE_AFTER_POST": "990"}
     assert _run(env, "post", str(repo), shas[-1], "ok", **old).returncode == 3
     assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "failure"
     now = {
         **_merged_results_mr(shas),
-        "FAKE_PIPELINES": json.dumps([{"id": 3022863125, "source": "external"}]),
-        "FAKE_HEAD_PIPELINE": "3022863125",
+        "FAKE_PIPELINES": json.dumps([{"id": 990, "source": "external"}]),
+        "FAKE_HEAD_PIPELINE": "990",
         "FAKE_HEAD_PIPELINE_SOURCE": "external",
         "FAKE_CI_FILE": "absent",
     }
