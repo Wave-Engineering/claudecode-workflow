@@ -599,6 +599,24 @@ def test_gitlab_no_ci_at_the_head_but_ci_on_the_target_keeps_the_guard(world):
     assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "failure"
 
 
+def test_gitlab_every_open_mrs_target_branch_is_read_url_encoded(world):
+    """Two open MRs at one head, with different targets, one of them slashed: each target gets
+    its own read, once, and the slash goes out as %2F (the files API wants an encoded ref)."""
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = _merged_results_mr(shas)
+    extra["FAKE_COMMIT_MRS"] = json.dumps([
+        {"iid": 3, "state": "opened", "sha": shas[-1], "target_branch": "release/1.x"},
+        {"iid": 5, "state": "opened", "sha": shas[-1], "target_branch": "main"},
+        {"iid": 6, "state": "opened", "sha": shas[-1], "target_branch": "main"},  # a repeat: read once
+    ])
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra, FAKE_CI_FILE="absent", FAKE_CI_FILE_TARGET="absent")
+    assert r.returncode == 0, r.stderr
+    file_reads = [c for c in _ci_reads(tmp) if "/repository/files/" in c]
+    refs = sorted(c.split("?ref=")[1] for c in file_reads)
+    assert refs == sorted([shas[-1], "main", "release%2F1.x"]), refs
+
+
 def test_gitlab_no_ci_is_read_from_a_404_even_when_glab_exits_non_zero(world):
     repo, env, shas, tmp = world
     _gitlab(repo)
