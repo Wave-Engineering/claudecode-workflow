@@ -114,11 +114,16 @@ if tool == "glab" and method == "GET":
         if os.environ.get("FAKE_PROJECT_FAIL") == "1":
             print(json.dumps({"message": "500 Internal Server Error"})); sys.exit(0)
         print(os.environ.get("FAKE_PROJECT", json.dumps({"id": 7, "ci_config_path": None, "auto_devops_enabled": False}))); sys.exit(0)
-    m = re.fullmatch(r"projects/([^/]+)/repository/files/([^?]+)\?ref=([0-9a-f]{40})", endpoint)
+    m = re.fullmatch(r"projects/([^/]+)/repository/files/([^?]+)\?ref=(.+)", endpoint)
     if m:
         from urllib.parse import unquote
-        mode = os.environ.get("FAKE_CI_FILE", "present")
-        if mode == "absent":
+        # A 40-hex ref is the MR's head SHA (FAKE_CI_FILE); any other ref is a target branch
+        # (FAKE_CI_FILE_TARGET, default "present": the target branch has CI).
+        is_sha = re.fullmatch(r"[0-9a-f]{40}", m.group(3)) is not None
+        mode = os.environ.get("FAKE_CI_FILE" if is_sha else "FAKE_CI_FILE_TARGET", "present")
+        if mode == "absent-exit1":
+            print(json.dumps({"message": "404 File Not Found"})); sys.exit(1)  # a glab that exits non-zero on a 404
+        if mode in ("absent", "absent-exit1"):
             print(json.dumps({"message": "404 File Not Found"}))
         elif mode == "error":
             print(json.dumps({"message": "500 Internal Server Error"}))
@@ -348,7 +353,7 @@ def test_gitlab_post_without_a_pipeline_is_bare(world):
 def _merged_results_mr(shas: list[str]) -> dict[str, str]:
     prs = json.dumps({"3": {"sha": shas[-1], "ref": "feature/1-x"}})
     mrs = json.dumps([
-        {"iid": 3, "state": "opened", "sha": shas[-1]},
+        {"iid": 3, "state": "opened", "sha": shas[-1], "target_branch": "main"},
         {"iid": 2, "state": "merged", "sha": shas[-1]},  # never read: not open
         {"iid": 4, "state": "opened", "sha": shas[0]},  # never read: an older head
     ])
@@ -563,6 +568,7 @@ def test_gitlab_no_ci_post_passes_though_the_post_creates_an_external_pipeline(w
         **_merged_results_mr(shas),
         "FAKE_PROJECT": json.dumps({"id": 7, "ci_config_path": ci_config_path, "auto_devops_enabled": False}),
         "FAKE_CI_FILE": "absent",
+        "FAKE_CI_FILE_TARGET": "absent",
         "FAKE_HEAD_PIPELINE_AFTER_POST": "2983506881",  # none -> the external pipeline the post itself creates
     }
     r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
@@ -571,7 +577,35 @@ def test_gitlab_no_ci_post_passes_though_the_post_creates_an_external_pipeline(w
     assert "no CI" in r.stderr, "a reader is told why the guard was skipped"
     assert not any("merge_requests/3" in c[-1] for c in _calls(tmp)), "no head_pipeline pre-check, no poll"
     assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "success"
-    assert any(c.endswith("/repository/files/.gitlab-ci.yml?ref=" + shas[-1]) for c in _ci_reads(tmp))
+    reads = _ci_reads(tmp)
+    assert any(c.endswith("/repository/files/.gitlab-ci.yml?ref=" + shas[-1]) for c in reads)
+    assert any(c.endswith("/repository/files/.gitlab-ci.yml?ref=main") for c in reads), "the target branch is read too"
+
+
+def test_gitlab_no_ci_at_the_head_but_ci_on_the_target_keeps_the_guard(world):
+    """A branch cut before the target gained its CI file has none at its head, yet a
+    merged-results pipeline runs the merge commit's config: the project does run CI."""
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = {
+        **_merged_results_mr(shas),
+        "FAKE_CI_FILE": "absent",  # nothing at the head ...
+        "FAKE_CI_FILE_TARGET": "present",  # ... but the target branch has .gitlab-ci.yml
+        "FAKE_HEAD_PIPELINE_AFTER_POST": "2983506881",
+    }
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
+    assert r.returncode == 3, r.stderr
+    assert "head_pipeline moved from 2983401888 to 2983506881" in r.stderr
+    assert _run(env, "get", str(repo), shas[-1]).stdout.strip() == "failure"
+
+
+def test_gitlab_no_ci_is_read_from_a_404_even_when_glab_exits_non_zero(world):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = {**_merged_results_mr(shas), "FAKE_CI_FILE": "absent-exit1", "FAKE_CI_FILE_TARGET": "absent-exit1"}
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra)
+    assert r.returncode == 0, r.stderr
+    assert "no CI" in r.stderr
 
 
 def test_gitlab_no_ci_post_replaces_a_failed_left_by_the_old_guard(world):
@@ -588,6 +622,7 @@ def test_gitlab_no_ci_post_replaces_a_failed_left_by_the_old_guard(world):
         "FAKE_HEAD_PIPELINE": "990",
         "FAKE_HEAD_PIPELINE_SOURCE": "external",
         "FAKE_CI_FILE": "absent",
+        "FAKE_CI_FILE_TARGET": "absent",
     }
     r = _run(env, "post", str(repo), shas[-1], "ok", **now)
     assert r.returncode == 0, r.stderr
@@ -633,8 +668,17 @@ def test_gitlab_guard_is_unchanged_when_ci_is_configured(world, project, ci_file
         ({"FAKE_CI_FILE": "forbidden"}, "read .gitlab-ci.yml"),
         ({"FAKE_CI_FILE": "empty"}, "read .gitlab-ci.yml"),
         ({"FAKE_CI_FILE": "project-gone"}, "read .gitlab-ci.yml"),  # a 404 for something other than the file
+        ({"FAKE_CI_FILE": "absent", "FAKE_CI_FILE_TARGET": "error"}, "read .gitlab-ci.yml at main"),
+        # A caller without the access gets a project body with the CI fields missing: not "default".
+        ({"FAKE_PROJECT": json.dumps({"id": 7})}, "no ci_config_path or boolean auto_devops_enabled"),
+        ({"FAKE_PROJECT": json.dumps({"id": 7, "auto_devops_enabled": False})}, "no ci_config_path"),
+        ({"FAKE_PROJECT": json.dumps({"id": 7, "ci_config_path": None})}, "boolean auto_devops_enabled"),
+        ({"FAKE_PROJECT": json.dumps({"id": 7, "ci_config_path": None, "auto_devops_enabled": None})}, "boolean auto_devops_enabled"),
     ],
-    ids=["project-read-fails", "file-500", "file-403", "file-empty-answer", "project-404"],
+    ids=[
+        "project-read-fails", "file-500", "file-403", "file-empty-answer", "project-404", "target-read-500",
+        "project-no-fields", "project-no-ci-config-path", "project-no-auto-devops", "project-null-auto-devops",
+    ],
 )
 def test_gitlab_post_fails_closed_when_no_ci_cannot_be_established(world, extra_env, why):
     repo, env, shas, tmp = world
@@ -643,6 +687,18 @@ def test_gitlab_post_fails_closed_when_no_ci_cannot_be_established(world, extra_
     assert r.returncode == 3, r.stderr
     assert why in r.stderr
     assert not (tmp / "state.json").exists(), "nothing is posted when the question cannot be answered"
+
+
+def test_gitlab_post_fails_closed_when_an_open_mr_has_no_target_branch(world):
+    repo, env, shas, tmp = world
+    _gitlab(repo)
+    extra = _merged_results_mr(shas)
+    extra["FAKE_COMMIT_MRS"] = json.dumps([{"iid": 3, "state": "opened", "sha": shas[-1]}])  # no target_branch
+    r = _run(env, "post", str(repo), shas[-1], "ok", **extra, FAKE_CI_FILE="absent", FAKE_CI_FILE_TARGET="absent")
+    assert r.returncode == 3, r.stderr
+    assert "has no target_branch" in r.stderr
+    assert not (tmp / "state.json").exists()
+    assert not any("/repository/files/" in c for c in _ci_reads(tmp)), "no file is read without a target to read"
 
 
 def test_gitlab_post_with_a_pipeline_never_asks_whether_there_is_ci(world):

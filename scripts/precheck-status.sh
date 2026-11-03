@@ -27,8 +27,9 @@
 # `failed` post itself fails 3 times, the script says the success still stands and exits 3.
 # None of that applies to a project that runs no CI (#1444): there is no CI verdict for an
 # external pipeline to hide, and the guard would refuse every pass for good. When an MR
-# needs the guard, ci_absent decides whether CI exists at the head; only a positive "no CI"
-# skips it, and anything it cannot answer is exit 3.
+# needs the guard, ci_absent decides whether CI exists at the head and at each MR's target
+# branch (a merged-results pipeline runs the target's config); only a positive "no CI" skips
+# it, and anything it cannot answer is exit 3.
 #
 # Every read fails closed: `get` prints `success` only when the platform said so. An API
 # error is exit 3, never a state.
@@ -188,28 +189,47 @@ head_pipeline() {
 	printf '%s %s\n' "$id" "${src:-none}"
 }
 
-# ci_absent -> 0 only when the project POSITIVELY runs no CI at $sha, 1 when it runs CI or
-# may (#1444). The external pipeline a bare post creates hides an MR's CI verdict; with no CI
-# there is no verdict to hide, and refusing the pass there blocks every MR for good (nothing
-# to "re-run"). "No CI" needs both: the project says it has no config of its own (an empty or
-# default `ci_config_path`, and no Auto DevOps), and the default `.gitlab-ci.yml` is exactly
-# "404 File Not Found" at the head. A custom, remote or cross-project path, Auto DevOps, a file
-# that is there, and every answer that is none of those (a failed read, a 403, a 500, an empty
-# body, a 404 for something other than the file) keep the guard; a read that fails exits 3
-# through api_fail, so the question is never answered by guessing. Call it directly, not in a
-# command substitution: api_fail exits the shell.
+# ci_file_at <ref> -> 0 when the default `.gitlab-ci.yml` exists at <ref>, 1 when GitLab
+# answers exactly "404 File Not Found"; anything else exits 3 through api_fail. The BODY is
+# read whatever glab's exit code, because a 404 is an answer here, not a failure. <ref> is
+# a SHA or a URL-encoded branch name.
+ci_file_at() {
+	local raw
+	raw="$(glab api --hostname "$host" "projects/$enc/repository/files/.gitlab-ci.yml?ref=$1" </dev/null 2>/dev/null)" || true
+	printf '%s' "$raw" | jq -e 'type == "object" and (has("blob_id") or has("file_path"))' >/dev/null 2>&1 && return 0
+	printf '%s' "$raw" | jq -e 'type == "object" and (.message // "") == "404 File Not Found"' >/dev/null 2>&1 && return 1
+	api_fail "read .gitlab-ci.yml at $1 (neither a file nor a 404)"
+}
+
+# ci_absent [target-branch...] -> 0 only when the project POSITIVELY runs no CI, 1 when it
+# runs CI or may (#1444). The external pipeline a bare post creates hides an MR's CI verdict;
+# with no CI there is no verdict to hide, and refusing the pass there blocks every MR for good
+# (nothing to "re-run"). "No CI" needs all of: the project read carries both `ci_config_path`
+# and a boolean `auto_devops_enabled` (a missing field, which a caller without the access gets,
+# is not "default"), the path is empty, null or the default and Auto DevOps is off, and the
+# default `.gitlab-ci.yml` is exactly "404 File Not Found" at the head AND at each target
+# branch given: a merged-results pipeline runs the merge commit's config, so a branch cut
+# before the target gained its CI file has none at its head and still runs CI. A custom,
+# remote or cross-project path, Auto DevOps, a file that is there, and every answer that is
+# none of those (a failed read, a 403, a 500, an empty body, a 404 for something other than
+# the file) keep the guard or exit 3 through api_fail, so the question is never answered by
+# guessing. Call it directly, not in a command substitution: api_fail exits the shell.
 ci_absent() {
-	local proj path raw
+	local proj path ref
 	proj="$(gl_api "projects/$enc")" || api_fail "read the project (to tell whether it runs CI)"
-	[[ "$(printf '%s' "$proj" | jq -r '.auto_devops_enabled // false' 2>/dev/null)" == true ]] && return 1
+	printf '%s' "$proj" | jq -e '(.auto_devops_enabled | type) == "boolean" and has("ci_config_path")' >/dev/null 2>&1 ||
+		api_fail "read the project (no ci_config_path or boolean auto_devops_enabled in the answer)"
+	[[ "$(printf '%s' "$proj" | jq -r '.auto_devops_enabled')" == true ]] && return 1
 	path="$(printf '%s' "$proj" | jq -er '.ci_config_path // "" | if . == "" then ".gitlab-ci.yml" else . end' 2>/dev/null)" ||
 		api_fail "read the project (unexpected answer)"
 	[[ "$path" == .gitlab-ci.yml ]] || return 1
-	# Read the answer BODY whatever glab's exit code: a 404 is an answer here, not a failure.
-	raw="$(glab api --hostname "$host" "projects/$enc/repository/files/.gitlab-ci.yml?ref=$sha" </dev/null 2>/dev/null)" || true
-	printf '%s' "$raw" | jq -e 'type == "object" and (has("blob_id") or has("file_path"))' >/dev/null 2>&1 && return 1
-	printf '%s' "$raw" | jq -e 'type == "object" and (.message // "") == "404 File Not Found"' >/dev/null 2>&1 && return 0
-	api_fail "read .gitlab-ci.yml at $sha (neither a file nor a 404)"
+	for ref in "$sha" "$@"; do
+		ref="$(printf '%s' "$ref" | jq -sRr @uri)"
+		if ci_file_at "$ref"; then
+			return 1
+		fi
+	done
+	return 0
 }
 
 # refuse_pass <reason> <description>: on GitLab, put `failed` on the head's precheck
@@ -280,10 +300,18 @@ post)
 			iids="$(printf '%s' "$mrs" | jq -er --arg s "$sha" \
 				'if type == "array" then ([.[] | select(.state == "opened" and .sha == $s) | .iid] | map(tostring) | join(" ")) else error end' \
 				2>/dev/null)" || api_fail "list MRs of $sha (unexpected answer)"
-			# A project with no CI has no verdict for the external pipeline to hide (#1444).
-			if [[ -n "$iids" ]] && ci_absent; then
-				echo "precheck-status: this project runs no CI (no .gitlab-ci.yml at ${sha:0:7}, no custom path, no Auto DevOps), so an external pipeline hides no CI verdict; the head_pipeline guard is skipped." >&2
-				iids=""
+			# A project with no CI has no verdict for the external pipeline to hide (#1444). Its
+			# merged-results pipeline would run the TARGET's config too, so each open MR's target
+			# branch is checked as well; an MR with no target_branch in the answer fails closed.
+			if [[ -n "$iids" ]]; then
+				mapfile -t targets < <(printf '%s' "$mrs" | jq -er --arg s "$sha" \
+					'[.[] | select(.state == "opened" and .sha == $s) | .target_branch | if type == "string" and . != "" then . else error("no target_branch") end] | unique | .[]' \
+					2>/dev/null) && [[ ${#targets[@]} -gt 0 ]] ||
+					api_fail "list MRs of $sha (an open MR has no target_branch)"
+				if ci_absent "${targets[@]}"; then
+					echo "precheck-status: this project runs no CI (no .gitlab-ci.yml at ${sha:0:7} or on ${targets[*]}, no custom path, no Auto DevOps), so an external pipeline hides no CI verdict; the head_pipeline guard is skipped." >&2
+					iids=""
+				fi
 			fi
 			for iid in $iids; do
 				hp="$(head_pipeline "$iid")" || api_fail "read MR !$iid"

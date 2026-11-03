@@ -27,10 +27,13 @@ are worth keeping apart:
   because the external pipeline was already there. With no pipeline to re-run, every MR in such a
   repo, which includes any repo created without a CI config, was blocked at mark-ready.
   When an open MR needs the guard, `post` now asks whether CI exists at the head and skips the
-  `head_pipeline` pre-check and poll only when "no CI" is positively established: no config of its
-  own in the project (empty, null or `.gitlab-ci.yml` path, Auto DevOps off) and `.gitlab-ci.yml`
-  answers exactly `404 File Not Found` at the head. A custom or remote path, Auto DevOps and a
-  present file keep the guard, and any answer that is none of those exits 3 with nothing posted. A
+  `head_pipeline` pre-check and poll only when "no CI" is positively established: the project read
+  carries `ci_config_path` and a boolean `auto_devops_enabled` and shows no config of its own
+  (empty, null or `.gitlab-ci.yml` path, Auto DevOps off), and `.gitlab-ci.yml` answers exactly
+  `404 File Not Found` at the head and at each open MR's target branch (a merged-results pipeline
+  runs the target's config, so a branch cut before the target gained its CI file still runs CI). A
+  custom or remote path, Auto DevOps and a present file keep the guard, and any answer that is
+  none of those, including missing project fields, exits 3 with nothing posted. A
   `failed` left by the old behaviour is replaced by the next `post`. `get` and `last-success` needed
   no change: they read commit statuses by name and ignore the pipeline.
 
