@@ -17,10 +17,11 @@ now=$(date +%s)
 # --- Payload: one jq pass --------------------------------------------------------------------
 # Fields are joined with the unit separator (not whitespace, so an empty field stays an empty
 # field). The last field is the remaining-context reading, ready to persist (#1225).
-IFS=$'\x1f' read -r cwd model effort remaining_pct session_id ctx_in_tokens ctx_out_tokens \
+IFS=$'\x1f' read -r cwd proj_dir model effort remaining_pct session_id ctx_in_tokens ctx_out_tokens \
 	five_hour_pct seven_day_pct cost_usd has_limits reading_json < <(printf '%s' "$input" | jq -r --argjson t "$now" '
 	def num: if type == "number" then . else null end;
 	[ (.cwd // .workspace.current_dir // ""),
+	  (.workspace.project_dir // ""),
 	  (.model.display_name // ""),
 	  (.effort.level // ""),
 	  (.context_window.remaining_percentage // ""),
@@ -205,19 +206,28 @@ shortcode_to_emoji() {
 # (transition window — remove fallback after fleet has cycled to the new writer).
 dev_name=""
 dev_avatar=""
-project_root=""
-if [ -n "$cwd" ]; then
-	project_root="${cwd}"
-	agent_file="${project_root}/.claude/agent-identity.json"
+# The identity belongs to the PROJECT, so it is looked up at the project root: workspace.project_dir,
+# where the session was launched. The payload's cwd moves when the agent cds into a subdirectory or
+# another checkout, and then the lookup missed, the dev-name came back empty, and everything keyed on
+# it (the row-2 name, the asks, the floor) switched files mid-session (#1446). cwd stands in for an
+# older payload that has no project_dir, and is tried second for a session launched below the root.
+project_root="${proj_dir:-$cwd}"
+tried=""
+for ident_dir in "$project_root" "$cwd"; do
+	[ -n "$ident_dir" ] && [ "$ident_dir" != "$tried" ] || continue
+	tried="$ident_dir"
+	agent_file="${ident_dir}/.claude/agent-identity.json"
 	if [ ! -f "$agent_file" ]; then
-		dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
+		dir_hash=$(echo -n "$ident_dir" | md5sum | cut -d' ' -f1)
 		agent_file="/tmp/claude-agent-${dir_hash}.json"
 	fi
 	if [ -f "$agent_file" ]; then
 		IFS=$'\x1f' read -r dev_name dev_avatar < <(jq -r '[.dev_name // "", .dev_avatar // ""] | join("\u001f")' "$agent_file" 2>/dev/null)
 		dev_avatar=$(shortcode_to_emoji "$dev_avatar")
+		project_root="$ident_dir" # the directory that holds the identity also holds the project's .claude/status
+		break
 	fi
-fi
+done
 
 # === PANEL ICONS: asks first, then the per-session indicators, then wavemachine ===
 

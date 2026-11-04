@@ -963,7 +963,8 @@ class TestStatuslineContextPanels:
         return env
 
     def _render(self, tmp_path: Path, tokens: int, *, nerf=DARTS, sid: str = "sess-a", window: int | None = 1_000_000,
-                cwd: Path | None = None, raw_nerf: str | None = None, **extra: str) -> str:
+                cwd: Path | None = None, raw_nerf: str | None = None, project_dir: Path | None = None,
+                **extra: str) -> str:
         env = self._env(tmp_path, **extra)
         cfg = tmp_path / "nerf" / f"nerf-{sid}.json"
         if raw_nerf is not None:
@@ -976,8 +977,10 @@ class TestStatuslineContextPanels:
         if window is not None:
             ctx["context_window_size"] = window
         where = cwd or tmp_path
-        return _run_statusline({"cwd": str(where), "session_id": sid, "model": {"id": "claude-opus-5-5"},
-                                "context_window": ctx}, cwd=where, env_override=env)
+        payload = {"cwd": str(where), "session_id": sid, "model": {"id": "claude-opus-5-5"}, "context_window": ctx}
+        if project_dir is not None:  # where the session was launched; cwd is where the agent has since moved to
+            payload["workspace"] = {"current_dir": str(where), "project_dir": str(project_dir)}
+        return _run_statusline(payload, cwd=where, env_override=env)
 
     @staticmethod
     def _panels(out: str) -> list[str]:
@@ -1154,6 +1157,78 @@ class TestStatuslineContextPanels:
         out = self._render(tmp_path, 91_000, nerf=None, sid="solo-1")
         assert self._floor_panel(out) == "floor 91K"
         assert (tmp_path / "state" / "solo-1.floor.json").exists()
+
+    # --- #1446: the identity is the project's, not the cwd's ---
+    def test_the_name_and_floor_follow_the_project_when_the_cwd_moves(self, tmp_path: Path):
+        """One session, rendered at the project root, two levels down, in another checkout, and back:
+        the dev-name shows every time and exactly one floor file exists. Before the fix the lookup
+        read <cwd>/.claude, missed below the root, and the floor switched to a session-keyed file."""
+        proj = self._ident(tmp_path / "p", "floor-h")
+        deep = proj / "scripts" / "lib"
+        deep.mkdir(parents=True)
+        elsewhere = tmp_path / "other-checkout"
+        elsewhere.mkdir()
+        for where in (proj, deep, elsewhere, proj):
+            out = self._render(tmp_path, 91_000, nerf=None, cwd=where, project_dir=proj)
+            assert "floor-h" in _rows(out)[1], f"the dev-name is gone with cwd={where.name}"
+            assert self._floor_panel(out) == "floor 91K"
+        assert sorted(p.name for p in (tmp_path / "state").glob("*.floor.json")) == ["floor-h.floor.json"]
+
+    def test_a_payload_without_project_dir_still_resolves_from_the_cwd(self, tmp_path: Path):
+        proj = self._ident(tmp_path / "p", "floor-i")
+        out = self._render(tmp_path, 91_000, nerf=None, cwd=proj)  # an older payload: no workspace object
+        assert "floor-i" in _rows(out)[1]
+        assert (tmp_path / "state" / "floor-i.floor.json").exists()
+
+    def test_a_session_launched_below_the_root_falls_back_to_the_cwd_identity(self, tmp_path: Path):
+        """project_dir has no identity file, the cwd does: the cwd answers rather than no name at all."""
+        proj = tmp_path / "launch"
+        proj.mkdir()
+        sub = self._ident(tmp_path / "launch" / "sub", "floor-j")
+        out = self._render(tmp_path, 91_000, nerf=None, cwd=sub, project_dir=proj)
+        assert "floor-j" in _rows(out)[1]
+
+    def test_project_dir_wins_over_an_identity_in_the_cwd(self, tmp_path: Path):
+        proj = self._ident(tmp_path / "p", "floor-k1")
+        sub = self._ident(tmp_path / "p" / "sub", "floor-k2")  # a nested project with its own identity
+        out = self._render(tmp_path, 91_000, nerf=None, cwd=sub, project_dir=proj)
+        assert "floor-k1" in _rows(out)[1] and "floor-k2" not in _rows(out)[1]
+
+    def _wave(self, root: Path) -> None:
+        (root / ".claude" / "status").mkdir(parents=True, exist_ok=True)
+        (root / ".claude" / "status" / "state.json").write_text(
+            json.dumps({"wavemachine_active": True, "wavemachine_active_wave": 2, "wavemachine_total_waves": 5}))
+
+    def test_the_wave_status_follows_the_project_when_the_cwd_moves(self, tmp_path: Path):
+        proj = self._ident(tmp_path / "p", "floor-w1")
+        self._wave(proj)
+        deep = proj / "src" / "x"
+        deep.mkdir(parents=True)
+        out = self._render(tmp_path, 91_000, nerf=None, cwd=deep, project_dir=proj)
+        assert "🌊 wave 2/5" in _rows(out)[0]
+
+    def test_the_wave_status_is_read_where_the_identity_was_found(self, tmp_path: Path):
+        """A session launched below its project: project_dir has no identity, the cwd does, and the
+        wave status sits beside that identity. It must not be looked up at project_dir instead."""
+        proj = tmp_path / "launch"
+        proj.mkdir()
+        sub = self._ident(tmp_path / "launch" / "sub", "floor-w2")
+        self._wave(sub)
+        out = self._render(tmp_path, 91_000, nerf=None, cwd=sub, project_dir=proj)
+        assert "🌊 wave 2/5" in _rows(out)[0]
+
+    def test_the_asks_panel_follows_the_project_too(self, tmp_path: Path):
+        dev = f"floor-asks-{os.getpid()}"
+        proj = self._ident(tmp_path / "p", dev)
+        asks = Path(f"/tmp/claude-statusline-{dev}.asks.json")
+        asks.write_text(json.dumps({"asks": [{"kind": "approval", "blocking": True}]}))
+        try:
+            deep = proj / "a" / "b"
+            deep.mkdir(parents=True)
+            out = self._render(tmp_path, 91_000, nerf=None, cwd=deep, project_dir=proj)
+            assert "✅❗" in _rows(out)[0]
+        finally:
+            asks.unlink(missing_ok=True)
 
     def test_no_context_size_means_no_floor_and_no_state(self, tmp_path: Path):
         env = self._env(tmp_path)
