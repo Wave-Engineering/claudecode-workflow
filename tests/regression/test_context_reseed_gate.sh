@@ -283,6 +283,35 @@ for m in ultraviolence hurt-me-plenty not-too-rough; do
 done
 rm -f "$NERF" "$CLAUDE_CONTEXT_STATE_DIR"/*
 
+# --- nerf's project file (#1448) ----------------------------------------------------
+# <project>/.claude/nerf.json holds the settings, so they survive a /clear (a new session id).
+# It beats the legacy per-session file; with none, the legacy file is read as before.
+PNERF="$P/.claude/nerf.json"
+rm -f "$PNERF" "$NERF"
+reading 10
+printf '%s' '{"mode": "hurt-me-plenty"}' >"$PNERF"
+reason_has "project file alone: hurt-me-plenty at 10% → asks first" "ask" "nerf: hurt-me-plenty"
+nerf '{"mode": "ultraviolence"}'
+reason_has "project file beats the legacy per-session file" "nerf: hurt-me-plenty"
+OLD_SID="$SID"
+SID="sess-after-clear"
+reading 10
+reason_has "a NEW session id (a /clear) still reads the project file" "nerf: hurt-me-plenty"
+printf '%s' '{"mode": "ultraviolence", "darts_pct": {"soft": 50, "hard": 60, "ouch": 70}}' >"$PNERF"
+reading 30
+expect "the project file's ouch 70 sets the threshold: blocks at 30%" block
+reading 31
+expect "…and not at 31%" silent
+printf '%s' '{"mode": ' >"$PNERF"
+reading 10
+reason_has "a malformed project file reads as the defaults (ultraviolence)" "run /reseed now, before anything else"
+rm -f "$PNERF"
+SID="$OLD_SID"
+nerf '{"mode": "hurt-me-plenty"}'
+reading 10
+reason_has "no project file: the legacy per-session file is read as before" "nerf: hurt-me-plenty"
+rm -f "$PNERF" "$NERF" "$CLAUDE_CONTEXT_STATE_DIR"/*
+
 # --- loop guards ------------------------------------------------------------------
 reading 5
 out="$(gate true)"

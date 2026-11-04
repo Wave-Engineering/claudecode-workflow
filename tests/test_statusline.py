@@ -1080,6 +1080,58 @@ class TestStatuslineContextPanels:
         assert self._panel(out, ("↻",)) == "↻ 0K auto"
         assert "\033[31m↻ 0K auto" in out
 
+    # --- #1448: nerf's settings are the project's, not the session's ---
+    def _project_nerf(self, root: Path, text: str) -> Path:
+        (root / ".claude").mkdir(parents=True, exist_ok=True)
+        (root / ".claude" / "nerf.json").write_text(text)
+        return root
+
+    def test_a_project_nerf_file_sets_the_mode_with_no_per_session_file(self, tmp_path: Path):
+        proj = self._project_nerf(tmp_path / "p", json.dumps({"mode": "hurt-me-plenty", "darts_pct": DARTS["darts_pct"]}))
+        out = self._render(tmp_path, 400_000, nerf=None, cwd=proj, project_dir=proj)
+        assert self._panel(out, ("↻",)) == "↻ 412K ask"
+
+    def test_the_project_file_beats_a_per_session_file(self, tmp_path: Path):
+        proj = self._project_nerf(tmp_path / "p", json.dumps({"mode": "hurt-me-plenty", "darts_pct": DARTS["darts_pct"]}))
+        legacy = {"mode": "not-too-rough", "darts_pct": DARTS["darts_pct"]}
+        out = self._render(tmp_path, 400_000, nerf=legacy, cwd=proj, project_dir=proj)
+        assert self._panel(out, ("↻",)) == "↻ 412K ask"  # not 'nudge', which the per-session file says
+
+    def test_a_new_session_id_keeps_the_projects_settings(self, tmp_path: Path):
+        """A /clear is a new session id: the per-session file is gone, the project's settings are not."""
+        proj = self._project_nerf(tmp_path / "p", json.dumps({"mode": "not-too-rough", "darts_pct": DARTS["darts_pct"]}))
+        for sid in ("before-clear", "after-clear"):
+            out = self._render(tmp_path, 400_000, nerf=None, sid=sid, cwd=proj, project_dir=proj)
+            assert self._panel(out, ("↻",)) == "↻ 412K nudge", sid
+
+    def test_the_project_file_is_found_from_a_subdirectory_cwd(self, tmp_path: Path):
+        proj = self._project_nerf(tmp_path / "p", json.dumps({"mode": "hurt-me-plenty", "darts_pct": DARTS["darts_pct"]}))
+        deep = proj / "src" / "x"
+        deep.mkdir(parents=True)
+        out = self._render(tmp_path, 400_000, nerf=None, cwd=deep, project_dir=proj)
+        assert self._panel(out, ("↻",)) == "↻ 412K ask"
+
+    def test_the_project_darts_set_the_nerf_panel(self, tmp_path: Path):
+        proj = self._project_nerf(tmp_path / "p", json.dumps({"mode": "ultraviolence", "darts_pct": {"soft": 10, "hard": 20, "ouch": 30}}))
+        out = self._render(tmp_path, 100_000, nerf=None, cwd=proj, project_dir=proj)
+        # 967,000 usable: soft at 96,700 is reached at 100K, so the next dart is hard (193,400);
+        # the bar is the progress from soft to hard: (100,000 - 96,700) / (193,400 - 96,700) = 3%
+        emoji, dart, cells = self._panels(out)[0].split(" ")
+        assert emoji in HARD_SET and dart == "hard" and cells == "▱▱▱▱▱", self._panels(out)[0]
+
+    def test_a_malformed_project_file_reads_as_the_defaults_and_does_not_break_the_render(self, tmp_path: Path):
+        proj = self._project_nerf(tmp_path / "p", "{not json")
+        out = self._render(tmp_path, 400_000, nerf=None, cwd=proj, project_dir=proj)
+        assert _rows(out)[0]  # it rendered
+        assert self._panel(out, ("↻",)) == "↻ 412K auto"  # ultraviolence, the 15% default
+
+    def test_without_a_project_file_the_per_session_file_is_read_as_before(self, tmp_path: Path):
+        proj = tmp_path / "p"
+        proj.mkdir()
+        legacy = {"mode": "hurt-me-plenty", "darts_pct": DARTS["darts_pct"]}
+        out = self._render(tmp_path, 400_000, nerf=legacy, cwd=proj, project_dir=proj)
+        assert self._panel(out, ("↻",)) == "↻ 412K ask"
+
     # --- floor ---
     def _floors(self, tmp_path: Path, key: str) -> list[int]:
         data = json.loads((tmp_path / "state" / f"{key}.floor.json").read_text())

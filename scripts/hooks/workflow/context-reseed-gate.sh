@@ -117,11 +117,13 @@ fi
 # shellcheck source=scripts/lib/context-math.sh
 source "$CM_LIB"
 READING=""
-NERF_FILE=""
 if [[ "$SESSION_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
 	READING="$STATE_DIR/${SESSION_ID}.json"
-	NERF_FILE="${NERF_CONFIG_DIR:-/tmp}/nerf-${SESSION_ID}.json"
 fi
+# nerf's settings are the project's: <project>/.claude/nerf.json when it exists, else the legacy
+# per-session file (#1448). A hook's CLAUDE_PROJECT_DIR is where the session was launched; the
+# payload's cwd moves when the agent does.
+NERF_FILE="$(nerf_config_file "${CLAUDE_PROJECT_DIR:-$HOOK_CWD}" "$SESSION_ID")"
 declare -A CM=()
 while IFS='=' read -r k v; do CM[$k]="$v"; done < <(context_math "$READING" "$NERF_FILE" "${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.json}")
 NERF_MODE="${CM[nerf_mode]:-ultraviolence}"

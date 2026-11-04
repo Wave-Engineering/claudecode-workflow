@@ -164,6 +164,7 @@ def test_ccfold_path_opens_one_refresh_and_survives_a_missing_claude_md():
     ignore = body[body.index("Update `.gitignore`") :]
     ignore = ignore[: ignore.index(" - ")]
     assert "`.claude/agent-identity.json`" in ignore and "`.claude/wtf/`" in ignore
+    assert "`.claude/nerf.json`" in ignore  # nerf's project settings (#1448): untracked, so it must be ignored too
     assert "git check-ignore -q <path>" in ignore
     assert "never stage `.claude/wtf/`" in body
     # A lockfile-free repo can't pass precheck's dependency scan without the declaration, but the

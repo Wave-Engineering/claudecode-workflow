@@ -58,8 +58,16 @@ dart. The gate's threshold is `100 - ouch`, unless `RESEED_CONTEXT_THRESHOLD_PCT
 | `hurt-me-plenty` | the gate blocks the turn, and the agent asks the user before it reseeds |
 | `not-too-rough` | one reminder per session, no block |
 
-The gate reads `mode` and `darts_pct.ouch` from `/tmp/nerf-<session_id>.json`, the file nerf
-writes. A missing or unreadable file means `ultraviolence`.
+The gate and the statusline read `mode` and `darts_pct` from the project's
+`<project>/.claude/nerf.json` when it exists, else from `/tmp/nerf-<session_id>.json`, the file an
+older nerf writes (#1448). A project file survives `/clear`, a reseed, a compact and a reboot; the
+per-session file does not, because a `/clear` is a new session id and the new session reads the
+defaults. Its schema is the per-session file's without `session_id`:
+`{"mode": "hurt-me-plenty", "darts_pct": {"soft": 51, "hard": 63, "ouch": 85}}`. Until
+mcp-server-nerf writes it itself (mcp-server-nerf#45), settings made with `/nerf` are per-session;
+to keep them across a reseed, write that file. **While a project file exists it wins**, so a `/nerf`
+change through an older nerf, which writes the per-session file, is ignored: edit the project file
+(or delete it) instead. A missing or unreadable file means `ultraviolence`.
 
 ## Session ID (required for all calls)
 

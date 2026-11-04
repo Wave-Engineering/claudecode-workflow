@@ -229,6 +229,31 @@ after=$(find "$WORK" -type f | sort | xargs md5sum | md5sum)
 [[ "$before" == "$after" ]] && pass "it writes nothing" || fail "it changed files"
 case "$-" in *e*) fail "sourcing set -e" ;; *) pass "sourcing leaves the shell options alone" ;; esac
 
+# 10. nerf_config_file (#1448): <project>/.claude/nerf.json when it exists, else the legacy
+# per-session file, else nothing. It prints one path and never creates a file.
+PROJ="$WORK/proj"
+NDIR="$WORK/nerfdir"
+mkdir -p "$PROJ/.claude" "$NDIR"
+ncf() { (
+	export NERF_CONFIG_DIR="$NDIR"
+	nerf_config_file "$@"
+); }
+want_ncf() { # <label> <want> <project> <sid>
+	local have
+	have=$(ncf "$3" "$4")
+	[[ "$have" == "$2" ]] && pass "nerf_config_file: $1" || fail "nerf_config_file: $1 (want '$2', got '$have')"
+}
+want_ncf "no project file, safe session id: the legacy path" "$NDIR/nerf-s1.json" "$PROJ" s1
+printf '{}\n' >"$PROJ/.claude/nerf.json"
+want_ncf "a project file wins over the legacy path" "$PROJ/.claude/nerf.json" "$PROJ" s1
+want_ncf "a new session id still finds the project file" "$PROJ/.claude/nerf.json" "$PROJ" s2
+want_ncf "a project file needs no session id" "$PROJ/.claude/nerf.json" "$PROJ" ""
+rm -f "$PROJ/.claude/nerf.json"
+want_ncf "an empty project dir falls back to the legacy path" "$NDIR/nerf-s1.json" "" s1
+want_ncf "an unsafe session id is refused (no path)" "" "$PROJ" "../etc/x"
+want_ncf "neither a project file nor a session id: nothing" "" "$PROJ" ""
+[[ -z "$(ls -A "$NDIR")" && ! -e "$PROJ/.claude/nerf.json" ]] && pass "nerf_config_file creates nothing" || fail "nerf_config_file created a file"
+
 echo
 if [[ $FAILS -eq 0 ]]; then
 	echo "  All context-math checks passed."
