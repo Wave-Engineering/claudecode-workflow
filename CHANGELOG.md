@@ -19,6 +19,14 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+## [8.24.0] - 2026-11-04
+
+An agent's nerf mode and darts now survive a reseed: the statusline and the reseed gate read the
+project's `.claude/nerf.json`, and mcp-server-nerf v2.2.0 is the server that writes it. A new agent's
+chat comes up on its own, because the kit now pins mattermost-crew v0.4.1, whose `crewchat-mcp`
+starts with no identity file and registers itself once `/name` writes one. The statusline finds the
+agent's identity from the project root instead of the current directory.
+
 ### Added
 - **nerf's mode and darts are read from the project's `.claude/nerf.json` (#1448, kit half).** They
   lived only in `/tmp/nerf-<session_id>.json`, and a reseed ends in `/clear`, which is a new session
@@ -32,9 +40,11 @@ are worth keeping apart:
   per-session schema without `session_id`: `{"mode": "...", "darts_pct": {"soft": N, "hard": N,
   "ouch": N}}`; a missing key falls back to the default and a malformed file reads as the defaults.
   `/onboard` now exempts and gitignores `.claude/nerf.json` like the identity file, since an
-  untracked file blocks `/precheck`. Until the nerf server writes the file itself
-  (mcp-server-nerf#45), settings made with `/nerf` are still per-session and a reseed loses them; to
-  keep them, write the file by hand. A repo can ship its own `.claude/nerf.json` and so set the
+  untracked file blocks `/precheck`. The writing half is mcp-server-nerf v2.2.0 (nerf#45): `/nerf`
+  mode and darts now write the project file and, for older kits, the per-session file too, and the
+  server adds `.claude/nerf.json` to the clone's `info/exclude`. A session still running the older
+  nerf server keeps writing only the per-session file until it restarts, so a reseed loses what it set
+  (set it once after the restart); a project file written by hand also works. A repo can ship its own `.claude/nerf.json` and so set the
   gate's mode and threshold: the same trust as its `.claude/settings.json`, noted in the docs.
 
 ### Fixed
@@ -62,6 +72,14 @@ are worth keeping apart:
   drives the nerf indicator refresh and the wavemachine status lookup. `docs/statusline-indicators.md`
   says writers should use `CLAUDE_PROJECT_DIR`. Other scripts that resolve the identity from a cwd were
   not audited here.
+
+### Image
+
+- **MCP servers:** mcp-server-nerf v2.2.0 (from v2.1.0; mode and darts live in the project's
+  `.claude/nerf.json`). mcp-server-sdlc v5.4.0, mcp-server-wtf v1.5.2 and mcp-server-discord v1.4.3 are
+  unchanged. crewchat is still not baked.
+- **trivy 0.74.0**, unchanged. No container source changed since v8.23.0: the MCP servers are fetched
+  at build time from each repo's latest release, so this tag's image carries nerf v2.2.0.
 
 ## [8.23.0] - 2026-11-02
 
