@@ -19,6 +19,19 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Fixed
+- **The statusline's dev-name, ask indicators and floor no longer follow the agent's cwd (#1446).**
+  The identity was read from `<cwd>/.claude/agent-identity.json`, and the payload's `cwd` moves when the
+  agent changes directory. Below the project root the lookup missed, the dev-name came back empty, and
+  everything keyed on it switched files mid-session: the row-2 name and avatar vanished, the ask
+  indicators went with them, and the floor panel started reading a second, session-keyed floor file,
+  so a floor moved from prompt to prompt with no reseed. The lookup is now `workspace.project_dir`
+  (Claude Code's "Project root directory path", set from the session's original cwd), then `cwd` for an
+  older payload or a session launched below its project, then the `/tmp` fallback. The same root now
+  drives the nerf indicator refresh and the wavemachine status lookup. `docs/statusline-indicators.md`
+  says writers should use `CLAUDE_PROJECT_DIR`. Other scripts that resolve the identity from a cwd were
+  not audited here.
+
 ## [8.23.0] - 2026-11-02
 
 The statusline is rebuilt as two rows of divider-separated panels: absolute context, a runway

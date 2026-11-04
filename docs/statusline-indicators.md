@@ -89,10 +89,12 @@ Indicators are joined with spaces. Keep each one short (aim for 8 characters or 
 
 ## Resolving dev_name
 
-The identity file lives at `<project_root>/.claude/agent-identity.json` (reboot-durable). Fall back to the legacy `/tmp/claude-agent-<md5>.json` if absent (transition window):
+The identity file lives at `<project_root>/.claude/agent-identity.json` (reboot-durable). Fall back to the legacy `/tmp/claude-agent-<md5>.json` if absent (transition window).
+
+**`<project_root>` is where the session was launched, not where the agent is now (#1446).** The statusline reads it from the payload's `workspace.project_dir` ("Project root directory path"), which does not move when the agent changes directory. The payload's `cwd` does move, and resolving from it made the dev-name, the ask indicators and the floor change whenever the agent left the project root. It tries `project_dir` first, then `cwd` for an older payload or a session launched below its project, then the `/tmp` fallback. A hook or script that writes indicators should do the same, with `CLAUDE_PROJECT_DIR` (set in a hook's environment) in place of `pwd`:
 
 ```bash
-project_root=$(pwd)
+project_root="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 agent_file="${project_root}/.claude/agent-identity.json"
 if [ ! -f "$agent_file" ]; then
     dir_hash=$(echo -n "$project_root" | md5sum | cut -d' ' -f1)
