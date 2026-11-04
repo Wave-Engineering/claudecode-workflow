@@ -1194,6 +1194,29 @@ class TestStatuslineContextPanels:
         out = self._render(tmp_path, 91_000, nerf=None, cwd=sub, project_dir=proj)
         assert "floor-k1" in _rows(out)[1] and "floor-k2" not in _rows(out)[1]
 
+    def _wave(self, root: Path) -> None:
+        (root / ".claude" / "status").mkdir(parents=True, exist_ok=True)
+        (root / ".claude" / "status" / "state.json").write_text(
+            json.dumps({"wavemachine_active": True, "wavemachine_active_wave": 2, "wavemachine_total_waves": 5}))
+
+    def test_the_wave_status_follows_the_project_when_the_cwd_moves(self, tmp_path: Path):
+        proj = self._ident(tmp_path / "p", "floor-w1")
+        self._wave(proj)
+        deep = proj / "src" / "x"
+        deep.mkdir(parents=True)
+        out = self._render(tmp_path, 91_000, nerf=None, cwd=deep, project_dir=proj)
+        assert "🌊 wave 2/5" in _rows(out)[0]
+
+    def test_the_wave_status_is_read_where_the_identity_was_found(self, tmp_path: Path):
+        """A session launched below its project: project_dir has no identity, the cwd does, and the
+        wave status sits beside that identity. It must not be looked up at project_dir instead."""
+        proj = tmp_path / "launch"
+        proj.mkdir()
+        sub = self._ident(tmp_path / "launch" / "sub", "floor-w2")
+        self._wave(sub)
+        out = self._render(tmp_path, 91_000, nerf=None, cwd=sub, project_dir=proj)
+        assert "🌊 wave 2/5" in _rows(out)[0]
+
     def test_the_asks_panel_follows_the_project_too(self, tmp_path: Path):
         dev = f"floor-asks-{os.getpid()}"
         proj = self._ident(tmp_path / "p", dev)

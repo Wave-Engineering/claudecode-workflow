@@ -224,6 +224,7 @@ for ident_dir in "$project_root" "$cwd"; do
 	if [ -f "$agent_file" ]; then
 		IFS=$'\x1f' read -r dev_name dev_avatar < <(jq -r '[.dev_name // "", .dev_avatar // ""] | join("\u001f")' "$agent_file" 2>/dev/null)
 		dev_avatar=$(shortcode_to_emoji "$dev_avatar")
+		project_root="$ident_dir" # the directory that holds the identity also holds the project's .claude/status
 		break
 	fi
 done

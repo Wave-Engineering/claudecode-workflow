@@ -117,12 +117,12 @@ mv "$tmp" "/tmp/claude-statusline-${dev_name}.json"
 ### Python
 
 ```python
-import json, os, tempfile, hashlib, subprocess
+import json, os, tempfile, hashlib
 
 def set_indicators(indicators: list[str]):
-    root = subprocess.check_output(
-        ["git", "rev-parse", "--show-toplevel"], text=True
-    ).strip()
+    # The project root is where the session was launched: not os.getcwd() after the agent has
+    # changed directory, and not the git toplevel, which differs from it in a worktree (#1446).
+    root = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
     agent_file = os.path.join(root, ".claude", "agent-identity.json")
     if not os.path.exists(agent_file):
         dir_hash = hashlib.md5(root.encode()).hexdigest()
