@@ -386,8 +386,12 @@ def test_clean_tree_check_tolerates_only_the_session_files(temp_git_repo):
     (repo / ".claude" / "wtf").mkdir()
     (repo / ".claude" / "wtf" / "hook-queue.jsonl").write_text("{}\n", encoding="utf-8")
     assert dirt() == "", "the wtf journal the session itself writes must not block step 7"
-    for stray in (".claude/notes.txt", "notes.txt", ".claude/wtf.txt", "wtf/hook-queue.jsonl"):
-        (repo / stray).parent.mkdir(exist_ok=True)
+    # nerf's project settings (#1448) are the session's own too, and are untracked until ignored.
+    (repo / ".claude" / "nerf.json").write_text("{}\n", encoding="utf-8")
+    assert dirt() == "", "nerf's project settings file must not block step 7"
+    for stray in (".claude/notes.txt", "notes.txt", ".claude/wtf.txt", "wtf/hook-queue.jsonl",
+                  ".claude/nerf.json.bak", "sub/.claude/nerf.json", ".claude/nerf.jsonl"):
+        (repo / stray).parent.mkdir(parents=True, exist_ok=True)
         (repo / stray).write_text("x\n", encoding="utf-8")
         assert stray in dirt()
         (repo / stray).unlink()

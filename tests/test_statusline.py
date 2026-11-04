@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -964,10 +965,12 @@ class TestStatuslineContextPanels:
 
     def _render(self, tmp_path: Path, tokens: int, *, nerf=DARTS, sid: str = "sess-a", window: int | None = 1_000_000,
                 cwd: Path | None = None, raw_nerf: str | None = None, project_dir: Path | None = None,
-                **extra: str) -> str:
+                keep_nerf: bool = False, **extra: str) -> str:
         env = self._env(tmp_path, **extra)
         cfg = tmp_path / "nerf" / f"nerf-{sid}.json"
-        if raw_nerf is not None:
+        if keep_nerf:  # leave the per-session file exactly as the test set it (its mtime matters)
+            pass
+        elif raw_nerf is not None:
             cfg.write_text(raw_nerf)
         elif nerf is not None:
             cfg.write_text(json.dumps(nerf))
@@ -1091,11 +1094,37 @@ class TestStatuslineContextPanels:
         out = self._render(tmp_path, 400_000, nerf=None, cwd=proj, project_dir=proj)
         assert self._panel(out, ("↻",)) == "↻ 412K ask"
 
-    def test_the_project_file_beats_a_per_session_file(self, tmp_path: Path):
+    @pytest.mark.parametrize("project_age, session_age, want", [
+        (7200, 0, "↻ 412K nudge"),  # the per-session file is newer: a /nerf made after the project file was written
+        (0, 7200, "↻ 412K ask"),    # the project file is newer: it was edited after the last /nerf
+        (0, 0, "↻ 412K ask"),       # a tie goes to the project file
+    ], ids=["session-newer", "project-newer", "tie"])
+    def test_the_newer_of_the_project_and_per_session_files_wins(self, tmp_path: Path, project_age, session_age, want):
+        """Nerf writes only when something is set, so the newer file is the last thing set. A /nerf
+        through an older server (which writes the per-session file) is not ignored behind the
+        project file."""
         proj = self._project_nerf(tmp_path / "p", json.dumps({"mode": "hurt-me-plenty", "darts_pct": DARTS["darts_pct"]}))
-        legacy = {"mode": "not-too-rough", "darts_pct": DARTS["darts_pct"]}
-        out = self._render(tmp_path, 400_000, nerf=legacy, cwd=proj, project_dir=proj)
-        assert self._panel(out, ("↻",)) == "↻ 412K ask"  # not 'nudge', which the per-session file says
+        (tmp_path / "nerf").mkdir(exist_ok=True)
+        legacy = tmp_path / "nerf" / "nerf-sess-a.json"
+        legacy.write_text(json.dumps({"mode": "not-too-rough", "darts_pct": DARTS["darts_pct"]}))
+        now = time.time()
+        os.utime(proj / ".claude" / "nerf.json", (now - project_age, now - project_age))
+        os.utime(legacy, (now - session_age, now - session_age))
+        out = self._render(tmp_path, 400_000, keep_nerf=True, cwd=proj, project_dir=proj)
+        assert self._panel(out, ("↻",)) == want
+
+    def test_an_unreadable_project_file_does_not_shadow_the_per_session_file(self, tmp_path: Path):
+        proj = self._project_nerf(tmp_path / "p", json.dumps({"mode": "hurt-me-plenty", "darts_pct": DARTS["darts_pct"]}))
+        pfile = proj / ".claude" / "nerf.json"
+        pfile.chmod(0o000)
+        try:
+            if os.access(pfile, os.R_OK):
+                pytest.skip("this user can read a mode-000 file")
+            legacy = {"mode": "not-too-rough", "darts_pct": DARTS["darts_pct"]}
+            out = self._render(tmp_path, 400_000, nerf=legacy, cwd=proj, project_dir=proj)
+            assert self._panel(out, ("↻",)) == "↻ 412K nudge"
+        finally:
+            pfile.chmod(0o600)
 
     def test_a_new_session_id_keeps_the_projects_settings(self, tmp_path: Path):
         """A /clear is a new session id: the per-session file is gone, the project's settings are not."""

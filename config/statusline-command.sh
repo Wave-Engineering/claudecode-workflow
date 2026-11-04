@@ -306,10 +306,12 @@ if [ -n "$model" ]; then
 	model_panel=$(paint "$c_purple" "${model}${effort:+-$effort}")
 fi
 
-# --- nerf's settings (#1448): <project>/.claude/nerf.json, else the legacy per-session file ---
-# The arithmetic library is also where the lookup lives, so the statusline and the reseed gate
-# cannot disagree about which file they read. An install without the library falls back to the
-# legacy per-session path, as before.
+# --- nerf's settings (#1448): <project>/.claude/nerf.json and the legacy per-session file ---
+# The newer of the two that exist wins. The arithmetic library is also where the lookup lives, so
+# the statusline and the reseed gate use the same rule. They can still differ about the project
+# directory when the payload has no workspace.project_dir (an older Claude Code): the statusline
+# then uses the cwd it was handed, the gate its own CLAUDE_PROJECT_DIR. An install without the
+# library falls back to the legacy per-session path, as before.
 cm_lib=""
 for d in "${CLAUDE_STATUSLINE_LIB:-}" "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib" "$HOME/.claude/scripts/lib"; do
 	if [ -n "$d" ] && [ -r "$d/context-math.sh" ]; then
@@ -327,7 +329,7 @@ elif [[ "$session_id" =~ ^[A-Za-z0-9_-]+$ ]]; then
 fi
 
 # === CONTEXT: the absolute size, "312K" or "1.2M" (no bar, no percent) ===
-# Colors key off nerf dart zones when a nerf config exists for this session;
+# Colors key off nerf dart zones when a nerf config exists (the project's or the session's);
 # otherwise fall back to the legacy 13%/25% thresholds against the full window.
 # Current nerf (mcp-server-nerf#32) stores darts as percent of the window used
 # under `darts_pct`; an older nerf stores absolute token counts under `darts`.
@@ -402,7 +404,7 @@ weekly_panel=$(usage_panel "Weekly" "$seven_day_pct")
 # === NERF, RUNWAY, FLOOR (#1428) ===
 # The context arithmetic is scripts/lib/context-math.sh's, shared with the reseed gate so the
 # two cannot disagree. It reads the reading this render just persisted (or a temp copy when the
-# state directory can't be written) and nerf's per-session config.
+# state directory can't be written) and nerf's config (the file picked above).
 declare -A CM=()
 cm_tmp=""
 if [ -n "$cm_lib" ] && [ -n "$reading_json" ] && [[ "${ctx_in_tokens%.*}" =~ ^[0-9]+$ ]]; then

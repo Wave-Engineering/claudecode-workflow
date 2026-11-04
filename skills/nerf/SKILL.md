@@ -59,15 +59,18 @@ dart. The gate's threshold is `100 - ouch`, unless `RESEED_CONTEXT_THRESHOLD_PCT
 | `not-too-rough` | one reminder per session, no block |
 
 The gate and the statusline read `mode` and `darts_pct` from the project's
-`<project>/.claude/nerf.json` when it exists, else from `/tmp/nerf-<session_id>.json`, the file an
-older nerf writes (#1448). A project file survives `/clear`, a reseed, a compact and a reboot; the
+`<project>/.claude/nerf.json` and from `/tmp/nerf-<session_id>.json`, the file an older nerf writes
+(#1448). When both exist, **the newer one wins**: nerf writes a config only when someone sets
+something, so the newer file is the last thing set, and a `/nerf` change is never ignored behind an
+older project file. A project file survives `/clear`, a reseed, a compact and a reboot; the
 per-session file does not, because a `/clear` is a new session id and the new session reads the
-defaults. Its schema is the per-session file's without `session_id`:
+defaults. The project file's schema is the per-session file's without `session_id`:
 `{"mode": "hurt-me-plenty", "darts_pct": {"soft": 51, "hard": 63, "ouch": 85}}`. Until
-mcp-server-nerf writes it itself (mcp-server-nerf#45), settings made with `/nerf` are per-session;
-to keep them across a reseed, write that file. **While a project file exists it wins**, so a `/nerf`
-change through an older nerf, which writes the per-session file, is ignored: edit the project file
-(or delete it) instead. A missing or unreadable file means `ultraviolence`.
+mcp-server-nerf writes it itself (mcp-server-nerf#45), settings made with `/nerf` are per-session
+and a reseed loses them; to keep them, write that file. A project file you don't own the contents
+of is a repo's say over your gate (the same trust as the repo's `.claude/settings.json`): `/onboard`
+gitignores it so a repo you work in doesn't ship one by accident. A missing or unreadable file means
+`ultraviolence`.
 
 ## Session ID (required for all calls)
 
