@@ -164,6 +164,7 @@ def test_ccfold_path_opens_one_refresh_and_survives_a_missing_claude_md():
     ignore = body[body.index("Update `.gitignore`") :]
     ignore = ignore[: ignore.index(" - ")]
     assert "`.claude/agent-identity.json`" in ignore and "`.claude/wtf/`" in ignore
+    assert "`.claude/nerf.json`" in ignore  # nerf's project settings (#1448): untracked, so it must be ignored too
     assert "git check-ignore -q <path>" in ignore
     assert "never stage `.claude/wtf/`" in body
     # A lockfile-free repo can't pass precheck's dependency scan without the declaration, but the
@@ -385,8 +386,12 @@ def test_clean_tree_check_tolerates_only_the_session_files(temp_git_repo):
     (repo / ".claude" / "wtf").mkdir()
     (repo / ".claude" / "wtf" / "hook-queue.jsonl").write_text("{}\n", encoding="utf-8")
     assert dirt() == "", "the wtf journal the session itself writes must not block step 7"
-    for stray in (".claude/notes.txt", "notes.txt", ".claude/wtf.txt", "wtf/hook-queue.jsonl"):
-        (repo / stray).parent.mkdir(exist_ok=True)
+    # nerf's project settings (#1448) are the session's own too, and are untracked until ignored.
+    (repo / ".claude" / "nerf.json").write_text("{}\n", encoding="utf-8")
+    assert dirt() == "", "nerf's project settings file must not block step 7"
+    for stray in (".claude/notes.txt", "notes.txt", ".claude/wtf.txt", "wtf/hook-queue.jsonl",
+                  ".claude/nerf.json.bak", "sub/.claude/nerf.json", ".claude/nerf.jsonl"):
+        (repo / stray).parent.mkdir(parents=True, exist_ok=True)
         (repo / stray).write_text("x\n", encoding="utf-8")
         assert stray in dirt()
         (repo / stray).unlink()

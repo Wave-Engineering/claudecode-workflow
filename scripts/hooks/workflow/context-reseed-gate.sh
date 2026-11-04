@@ -45,9 +45,11 @@
 # report on them, silencing a later, real failure. So a miss must recur on
 # MISS_TURNS consecutive Stops before it is reported.
 #
-# NERF MODES (#1352). nerf (mcp-server-nerf) writes a per-session config to
-# ${NERF_CONFIG_DIR:-/tmp}/nerf-<session_id>.json; this hook reads .mode and
-# .darts_pct.ouch from it. At or below the threshold:
+# NERF MODES (#1352). nerf (mcp-server-nerf) keeps its config in the project's
+# <project>/.claude/nerf.json (CLAUDE_PROJECT_DIR, else the payload cwd) and, in an older nerf,
+# in ${NERF_CONFIG_DIR:-/tmp}/nerf-<session_id>.json; nerf_config_file picks the newer of the
+# two that exist (#1448). This hook reads .mode and .darts_pct.ouch from it. At or below the
+# threshold:
 #   ultraviolence (default)  block: run /reseed now, before anything else
 #   hurt-me-plenty           block: ask the user whether to /reseed now or after
 #                            the current step; do not reseed without the answer
@@ -77,7 +79,7 @@
 #
 # Env: RESEED_CONTEXT_THRESHOLD_PCT — act at <= this many percent; overrides
 #        nerf's ouch dart (see THE THRESHOLD)
-#      NERF_CONFIG_DIR (default /tmp) — where nerf's per-session config lives
+#      NERF_CONFIG_DIR (default /tmp) — where the legacy per-session nerf config lives
 #      RESEED_CONTEXT_GATE_DISABLED=1 — kill-switch
 #      CLAUDE_CONTEXT_STATE_DIR — where the statusline persists readings
 #      CLAUDE_CODE_AUTO_COMPACT_WINDOW — autocompact window override (tokens)
@@ -117,11 +119,13 @@ fi
 # shellcheck source=scripts/lib/context-math.sh
 source "$CM_LIB"
 READING=""
-NERF_FILE=""
 if [[ "$SESSION_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
 	READING="$STATE_DIR/${SESSION_ID}.json"
-	NERF_FILE="${NERF_CONFIG_DIR:-/tmp}/nerf-${SESSION_ID}.json"
 fi
+# nerf's settings are the project's: <project>/.claude/nerf.json when it exists, else the legacy
+# per-session file (#1448). A hook's CLAUDE_PROJECT_DIR is where the session was launched; the
+# payload's cwd moves when the agent does.
+NERF_FILE="$(nerf_config_file "${CLAUDE_PROJECT_DIR:-$HOOK_CWD}" "$SESSION_ID")"
 declare -A CM=()
 while IFS='=' read -r k v; do CM[$k]="$v"; done < <(context_math "$READING" "$NERF_FILE" "${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.json}")
 NERF_MODE="${CM[nerf_mode]:-ultraviolence}"

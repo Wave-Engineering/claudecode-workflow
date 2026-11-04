@@ -135,14 +135,15 @@ learned in steps 3–6 contradicts it (platform, toolchain, CI, labels), or when
 compare (its Steps 1–4, which write nothing) finds sections the upstream template has updated
 or added. If neither file is stale, go to step 8.
 
-1. **The working tree must be clean**, apart from the identity file `/name` just wrote and the
-   untracked `.claude/wtf/` journal. The wtf hook creates that journal on this session's own
-   first tool call in any repo that doesn't ignore it, so without the exemption no refresh
-   would ever run. This prints nothing when the tree is clean:
+1. **The working tree must be clean**, apart from the identity file `/name` just wrote, nerf's
+   settings file `.claude/nerf.json` (#1448), and the untracked `.claude/wtf/` journal. The wtf
+   hook creates that journal on this session's own first tool call in any repo that doesn't
+   ignore it, so without the exemption no refresh would ever run. This prints nothing when the
+   tree is clean:
 
    ```bash
    git status --porcelain --untracked-files=all |
-     grep -Ev '^\?\? \.claude/(agent-identity\.json$|wtf/)' || true
+     grep -Ev '^\?\? \.claude/(agent-identity\.json$|nerf\.json$|wtf/)' || true
    ```
 
    If it prints anything, leave the tree alone and report the stale files at tag-up. Never
@@ -160,10 +161,10 @@ or added. If neither file is stale, go to step 8.
      template, or `CLAUDE.md` already matches upstream. Either way, still run its Steps 9 and 10,
      which write `.claude-project.md` and pin the committer identity. For a copied template,
      first set its `Dev-Team:` to the team `/name` used.
-   - Update `.gitignore` as part of this. For each of `.claude/agent-identity.json` and
-     `.claude/wtf/`, if `git check-ignore -q <path>` fails, add that path. Item 1 exempts both,
-     but `/precheck` won't mark a PR/MR ready over any untracked file it can see, so the refresh
-     must ignore them itself.
+   - Update `.gitignore` as part of this. For each of `.claude/agent-identity.json`,
+     `.claude/nerf.json` and `.claude/wtf/`, if `git check-ignore -q <path>` fails, add that
+     path. Item 1 exempts all three, but `/precheck` won't mark a PR/MR ready over any untracked
+     file it can see, so the refresh must ignore them itself.
    - A repo with no lockfiles fails `/precheck`'s dependency scan (Job C in `/precheck`) unless
      a `.no-scannable-dependencies` file at its root declares, with a reason, that it has nothing
      to scan. Add that declaration only when it is true: the repo has no lockfile **and** no

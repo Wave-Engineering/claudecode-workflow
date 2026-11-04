@@ -17,9 +17,10 @@
 #   reading.json   the statusline's per-session reading (config/statusline-command.sh writes it to
 #                  ${CLAUDE_CONTEXT_STATE_DIR:-~/.claude/state/context}/<session_id>.json):
 #                  used_tokens, window_tokens and model_id. Missing or unreadable: no recompute.
-#   nerf.json      nerf's per-session config (${NERF_CONFIG_DIR:-/tmp}/nerf-<session_id>.json):
-#                  .mode and .darts_pct.{soft,hard,ouch}. Missing or unreadable: ultraviolence,
-#                  no darts (a gate that can't read nerf must never get weaker).
+#   nerf.json      nerf's config: <project>/.claude/nerf.json and the legacy per-session file
+#                  (${NERF_CONFIG_DIR:-/tmp}/nerf-<session_id>.json), the newer of the two when both
+#                  exist. `nerf_config_file` below picks it (#1448). .mode and .darts_pct.{soft,hard,ouch}. Missing or
+#                  unreadable: ultraviolence, no darts (a gate that can't read nerf must never get weaker).
 #   settings.json  where modelSettings.<model>.autoCompactWindow is read. Default
 #                  ${CLAUDE_SETTINGS_FILE:-~/.claude/settings.json}.
 #
@@ -89,6 +90,35 @@ _cm_model_keys() {
 	local m="$1" c
 	c="$(sed -E 's/\[1m\]$//; s/^([a-z]{2,8}(-[a-z]+)?\.)?anthropic\.//; s/-v[0-9]+(:[0-9]+)?$//; s/@.*$//; s/-[0-9]{8}$//' <<<"$m")"
 	printf '%s\n' "$m" "${m%\[1m\]}" "$c"
+}
+
+# nerf_config_file <project_dir> <session_id> -> the nerf config file to READ (#1448). Prints one
+# path and always returns 0; nothing is created or written.
+#   - <project_dir>/.claude/nerf.json is the project's settings: it survives a /clear (a new
+#     session id), a reseed, a compact, a restart and a reboot. A readable regular file only.
+#   - the legacy per-session file ${NERF_CONFIG_DIR:-/tmp}/nerf-<session_id>.json is what an older
+#     nerf writes. The session id becomes part of a file name, so anything outside
+#     [A-Za-z0-9_-] is refused.
+# When both exist, the NEWER one wins. Nerf writes a config only when someone sets something, so
+# the newer file is the last thing set: a /nerf change through an older server (which writes the
+# per-session file) is not silently ignored behind a project file, and after a /clear the new
+# session has no per-session file, so the project file is used. With no project file the
+# per-session path is printed whether or not it exists, so a caller that tests for it behaves as
+# before. With neither, an empty line.
+nerf_config_file() {
+	local project="${1:-}" sid="${2:-}" pf="" sf=""
+	if [[ -n "$project" && -f "$project/.claude/nerf.json" && -r "$project/.claude/nerf.json" ]]; then
+		pf="$project/.claude/nerf.json"
+	fi
+	if [[ "$sid" =~ ^[A-Za-z0-9_-]+$ ]]; then
+		sf="${NERF_CONFIG_DIR:-/tmp}/nerf-${sid}.json"
+	fi
+	if [[ -n "$pf" && (-z "$sf" || ! "$sf" -nt "$pf") ]]; then
+		printf '%s\n' "$pf"
+	else
+		printf '%s\n' "$sf"
+	fi
+	return 0
 }
 
 context_math() {

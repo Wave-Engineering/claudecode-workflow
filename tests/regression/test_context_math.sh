@@ -229,6 +229,49 @@ after=$(find "$WORK" -type f | sort | xargs md5sum | md5sum)
 [[ "$before" == "$after" ]] && pass "it writes nothing" || fail "it changed files"
 case "$-" in *e*) fail "sourcing set -e" ;; *) pass "sourcing leaves the shell options alone" ;; esac
 
+# 10. nerf_config_file (#1448): <project>/.claude/nerf.json when it exists, else the legacy
+# per-session file, else nothing. It prints one path and never creates a file.
+PROJ="$WORK/proj"
+NDIR="$WORK/nerfdir"
+mkdir -p "$PROJ/.claude" "$NDIR"
+ncf() { (
+	export NERF_CONFIG_DIR="$NDIR"
+	nerf_config_file "$@"
+); }
+want_ncf() { # <label> <want> <project> <sid>
+	local have
+	have=$(ncf "$3" "$4")
+	[[ "$have" == "$2" ]] && pass "nerf_config_file: $1" || fail "nerf_config_file: $1 (want '$2', got '$have')"
+}
+want_ncf "no project file, safe session id: the legacy path" "$NDIR/nerf-s1.json" "$PROJ" s1
+printf '{}\n' >"$PROJ/.claude/nerf.json"
+want_ncf "a project file is used when there is no per-session file" "$PROJ/.claude/nerf.json" "$PROJ" s1
+want_ncf "a new session id still finds the project file" "$PROJ/.claude/nerf.json" "$PROJ" s2
+want_ncf "a project file needs no session id" "$PROJ/.claude/nerf.json" "$PROJ" ""
+# With both, the NEWER wins: nerf writes only when something is set, so the newer file is the last
+# thing set, and a /nerf change through an older server is not ignored behind the project file.
+printf '{}\n' >"$NDIR/nerf-s1.json"
+touch -d '2 hours ago' "$PROJ/.claude/nerf.json"
+want_ncf "both exist, the per-session file is newer: it wins" "$NDIR/nerf-s1.json" "$PROJ" s1
+touch -d '2 hours ago' "$NDIR/nerf-s1.json"
+touch -d '1 hour ago' "$PROJ/.claude/nerf.json"
+want_ncf "both exist, the project file is newer: it wins" "$PROJ/.claude/nerf.json" "$PROJ" s1
+want_ncf "…and a new session id (no per-session file) still gets the project file" "$PROJ/.claude/nerf.json" "$PROJ" s2
+touch -r "$PROJ/.claude/nerf.json" "$NDIR/nerf-s1.json" # exactly the same timestamp
+want_ncf "equal timestamps: the project file wins" "$PROJ/.claude/nerf.json" "$PROJ" s1
+chmod 000 "$PROJ/.claude/nerf.json"
+if [[ ! -r "$PROJ/.claude/nerf.json" ]]; then
+	want_ncf "an unreadable project file does not shadow the per-session file" "$NDIR/nerf-s1.json" "$PROJ" s1
+else
+	pass "nerf_config_file: (skipped: running as a user who can read a mode-000 file)"
+fi
+chmod 600 "$PROJ/.claude/nerf.json"
+rm -f "$PROJ/.claude/nerf.json" "$NDIR/nerf-s1.json"
+want_ncf "an empty project dir falls back to the legacy path" "$NDIR/nerf-s1.json" "" s1
+want_ncf "an unsafe session id is refused (no path)" "" "$PROJ" "../etc/x"
+want_ncf "neither a project file nor a session id: nothing" "" "$PROJ" ""
+[[ -z "$(ls -A "$NDIR")" && ! -e "$PROJ/.claude/nerf.json" ]] && pass "nerf_config_file creates nothing" || fail "nerf_config_file created a file"
+
 echo
 if [[ $FAILS -eq 0 ]]; then
 	echo "  All context-math checks passed."

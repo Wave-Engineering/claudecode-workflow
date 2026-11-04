@@ -33,6 +33,9 @@ export CLAUDE_CONTEXT_STATE_DIR="$WORK/state"
 # Never the real /tmp: a live nerf config for this session id would change every case.
 export NERF_CONFIG_DIR="$WORK/nerf"
 unset RESEED_CONTEXT_THRESHOLD_PCT
+# The gate prefers a hook's CLAUDE_PROJECT_DIR to the payload cwd (#1448). A runner started from a
+# Claude Code session may carry the real checkout's, and every case would then read ITS .claude.
+unset CLAUDE_PROJECT_DIR
 P="$WORK/proj"
 mkdir -p "$P/.claude" "$CLAUDE_CONTEXT_STATE_DIR" "$NERF_CONFIG_DIR"
 SID="sess-1"
@@ -282,6 +285,57 @@ for m in ultraviolence hurt-me-plenty not-too-rough; do
 	expect "$m at 50% → no output" silent
 done
 rm -f "$NERF" "$CLAUDE_CONTEXT_STATE_DIR"/*
+
+# --- nerf's project file (#1448) ----------------------------------------------------
+# <project>/.claude/nerf.json holds the settings, so they survive a /clear (a new session id).
+# With both it and the legacy per-session file, the NEWER wins (nerf writes only when something is
+# set, so the newer is the last thing set); with only the legacy file, it is read as before.
+PNERF="$P/.claude/nerf.json"
+rm -f "$PNERF" "$NERF"
+reading 10
+printf '%s' '{"mode": "hurt-me-plenty"}' >"$PNERF"
+reason_has "project file alone: hurt-me-plenty at 10% → asks first" "ask" "nerf: hurt-me-plenty"
+nerf '{"mode": "ultraviolence"}'
+touch -d '2 hours ago' "$NERF"
+reason_has "both exist, the project file is newer: it wins" "nerf: hurt-me-plenty"
+touch -d '2 hours ago' "$PNERF"
+touch "$NERF"
+reason_has "both exist, the per-session file is newer (a /nerf after the file was written): it wins" "run /reseed now, before anything else"
+touch -d '2 hours ago' "$NERF"
+touch "$PNERF"
+# CLAUDE_PROJECT_DIR is where the session was launched; the payload's cwd moves when the agent does.
+gate_at() { # <payload cwd> [CLAUDE_PROJECT_DIR] — the gate's block reason
+	jq -cn --arg s "$SID" --arg c "$1" '{session_id: $s, cwd: $c, stop_hook_active: false}' |
+		env ${2:+CLAUDE_PROJECT_DIR="$2"} bash "$GATE" | jq -r '.reason // empty'
+}
+mkdir -p "$P/sub" "$WORK/other"
+rm -f "$NERF"
+r="$(gate_at "$P/sub" "$P")"
+[[ "$r" == *"nerf: hurt-me-plenty"* ]] && pass "CLAUDE_PROJECT_DIR finds the project file though the payload cwd moved below it" ||
+	fail "CLAUDE_PROJECT_DIR with a moved cwd: '$r'"
+r="$(gate_at "$P")"
+[[ "$r" == *"nerf: hurt-me-plenty"* ]] && pass "no CLAUDE_PROJECT_DIR: the payload cwd is used" || fail "payload cwd fallback: '$r'"
+r="$(gate_at "$P" "$WORK/other")"
+[[ "$r" == *"run /reseed now, before anything else"* ]] && pass "CLAUDE_PROJECT_DIR wins: a project file at the payload cwd is ignored when it points elsewhere" ||
+	fail "CLAUDE_PROJECT_DIR elsewhere: '$r'"
+OLD_SID="$SID"
+SID="sess-after-clear"
+reading 10
+reason_has "a NEW session id (a /clear) still reads the project file" "nerf: hurt-me-plenty"
+printf '%s' '{"mode": "ultraviolence", "darts_pct": {"soft": 50, "hard": 60, "ouch": 70}}' >"$PNERF"
+reading 30
+expect "the project file's ouch 70 sets the threshold: blocks at 30%" block
+reading 31
+expect "…and not at 31%" silent
+printf '%s' '{"mode": ' >"$PNERF"
+reading 10
+reason_has "a malformed project file reads as the defaults (ultraviolence)" "run /reseed now, before anything else"
+rm -f "$PNERF"
+SID="$OLD_SID"
+nerf '{"mode": "hurt-me-plenty"}'
+reading 10
+reason_has "no project file: the legacy per-session file is read as before" "nerf: hurt-me-plenty"
+rm -f "$PNERF" "$NERF" "$CLAUDE_CONTEXT_STATE_DIR"/*
 
 # --- loop guards ------------------------------------------------------------------
 reading 5

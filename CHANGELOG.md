@@ -19,6 +19,24 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Added
+- **nerf's mode and darts are read from the project's `.claude/nerf.json` (#1448, kit half).** They
+  lived only in `/tmp/nerf-<session_id>.json`, and a reseed ends in `/clear`, which is a new session
+  id: the new session found no file and read the defaults, so an agent's settings reverted at every
+  reseed (and at every reboot). The statusline's nerf and runway panels and the reseed gate now read
+  `<project>/.claude/nerf.json` and the per-session file and take the newer of the two that exist,
+  through one `nerf_config_file` in `scripts/lib/context-math.sh` (nerf writes only when something
+  is set, so the newer is the last thing set, and a `/nerf` change is never ignored behind an older
+  project file). The project is `workspace.project_dir` in the statusline and `CLAUDE_PROJECT_DIR`
+  in the gate; an unreadable project file does not shadow the per-session one. The file is the
+  per-session schema without `session_id`: `{"mode": "...", "darts_pct": {"soft": N, "hard": N,
+  "ouch": N}}`; a missing key falls back to the default and a malformed file reads as the defaults.
+  `/onboard` now exempts and gitignores `.claude/nerf.json` like the identity file, since an
+  untracked file blocks `/precheck`. Until the nerf server writes the file itself
+  (mcp-server-nerf#45), settings made with `/nerf` are still per-session and a reseed loses them; to
+  keep them, write the file by hand. A repo can ship its own `.claude/nerf.json` and so set the
+  gate's mode and threshold: the same trust as its `.claude/settings.json`, noted in the docs.
+
 ### Fixed
 - **The statusline's dev-name, ask indicators and floor no longer follow the agent's cwd (#1446).**
   The identity was read from `<cwd>/.claude/agent-identity.json`, and the payload's `cwd` moves when the

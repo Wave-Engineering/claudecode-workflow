@@ -306,8 +306,30 @@ if [ -n "$model" ]; then
 	model_panel=$(paint "$c_purple" "${model}${effort:+-$effort}")
 fi
 
+# --- nerf's settings (#1448): <project>/.claude/nerf.json and the legacy per-session file ---
+# The newer of the two that exist wins. The arithmetic library is also where the lookup lives, so
+# the statusline and the reseed gate use the same rule. They can still differ about the project
+# directory when the payload has no workspace.project_dir (an older Claude Code): the statusline
+# then uses the cwd it was handed, the gate its own CLAUDE_PROJECT_DIR. An install without the
+# library falls back to the legacy per-session path, as before.
+cm_lib=""
+for d in "${CLAUDE_STATUSLINE_LIB:-}" "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib" "$HOME/.claude/scripts/lib"; do
+	if [ -n "$d" ] && [ -r "$d/context-math.sh" ]; then
+		cm_lib="$d/context-math.sh"
+		break
+	fi
+done
+nerf_file=""
+if [ -n "$cm_lib" ]; then
+	# shellcheck source=scripts/lib/context-math.sh
+	source "$cm_lib"
+	nerf_file="$(nerf_config_file "$project_root" "$session_id")"
+elif [[ "$session_id" =~ ^[A-Za-z0-9_-]+$ ]]; then
+	nerf_file="${NERF_CONFIG_DIR:-/tmp}/nerf-${session_id}.json"
+fi
+
 # === CONTEXT: the absolute size, "312K" or "1.2M" (no bar, no percent) ===
-# Colors key off nerf dart zones when a nerf config exists for this session;
+# Colors key off nerf dart zones when a nerf config exists (the project's or the session's);
 # otherwise fall back to the legacy 13%/25% thresholds against the full window.
 # Current nerf (mcp-server-nerf#32) stores darts as percent of the window used
 # under `darts_pct`; an older nerf stores absolute token counts under `darts`.
@@ -318,10 +340,7 @@ if ctx_text=$(fmt_tokens "$ctx_in_tokens"); then
 		remaining_int=${remaining_pct%.*}
 
 		nerf_config=""
-		if [ -n "$session_id" ]; then
-			candidate="${NERF_CONFIG_DIR:-/tmp}/nerf-${session_id}.json"
-			[ -f "$candidate" ] && nerf_config="$candidate"
-		fi
+		[ -n "$nerf_file" ] && [ -f "$nerf_file" ] && nerf_config="$nerf_file"
 
 		nerf_pct_soft="" nerf_pct_hard="" nerf_pct_ouch=""
 		if [ -n "$nerf_config" ]; then
@@ -385,17 +404,8 @@ weekly_panel=$(usage_panel "Weekly" "$seven_day_pct")
 # === NERF, RUNWAY, FLOOR (#1428) ===
 # The context arithmetic is scripts/lib/context-math.sh's, shared with the reseed gate so the
 # two cannot disagree. It reads the reading this render just persisted (or a temp copy when the
-# state directory can't be written) and nerf's per-session config.
+# state directory can't be written) and nerf's config (the file picked above).
 declare -A CM=()
-cm_lib=""
-for d in "${CLAUDE_STATUSLINE_LIB:-}" "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/lib" "$HOME/.claude/scripts/lib"; do
-	if [ -n "$d" ] && [ -r "$d/context-math.sh" ]; then
-		cm_lib="$d/context-math.sh"
-		break
-	fi
-done
-nerf_file=""
-if [[ "$session_id" =~ ^[A-Za-z0-9_-]+$ ]]; then nerf_file="${NERF_CONFIG_DIR:-/tmp}/nerf-${session_id}.json"; fi
 cm_tmp=""
 if [ -n "$cm_lib" ] && [ -n "$reading_json" ] && [[ "${ctx_in_tokens%.*}" =~ ^[0-9]+$ ]]; then
 	cm_reading="$persisted_reading"
@@ -403,8 +413,6 @@ if [ -n "$cm_lib" ] && [ -n "$reading_json" ] && [[ "${ctx_in_tokens%.*}" =~ ^[0
 		cm_reading="$cm_tmp"
 	fi
 	if [ -n "$cm_reading" ]; then
-		# shellcheck source=scripts/lib/context-math.sh
-		source "$cm_lib"
 		while IFS='=' read -r k v; do CM[$k]="$v"; done < <(context_math "$cm_reading" "$nerf_file" 2>/dev/null)
 	fi
 	[ -n "$cm_tmp" ] && rm -f "$cm_tmp"

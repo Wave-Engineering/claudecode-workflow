@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -964,10 +965,12 @@ class TestStatuslineContextPanels:
 
     def _render(self, tmp_path: Path, tokens: int, *, nerf=DARTS, sid: str = "sess-a", window: int | None = 1_000_000,
                 cwd: Path | None = None, raw_nerf: str | None = None, project_dir: Path | None = None,
-                **extra: str) -> str:
+                keep_nerf: bool = False, **extra: str) -> str:
         env = self._env(tmp_path, **extra)
         cfg = tmp_path / "nerf" / f"nerf-{sid}.json"
-        if raw_nerf is not None:
+        if keep_nerf:  # leave the per-session file exactly as the test set it (its mtime matters)
+            pass
+        elif raw_nerf is not None:
             cfg.write_text(raw_nerf)
         elif nerf is not None:
             cfg.write_text(json.dumps(nerf))
@@ -1079,6 +1082,84 @@ class TestStatuslineContextPanels:
         out = self._render(tmp_path, 900_000)
         assert self._panel(out, ("↻",)) == "↻ 0K auto"
         assert "\033[31m↻ 0K auto" in out
+
+    # --- #1448: nerf's settings are the project's, not the session's ---
+    def _project_nerf(self, root: Path, text: str) -> Path:
+        (root / ".claude").mkdir(parents=True, exist_ok=True)
+        (root / ".claude" / "nerf.json").write_text(text)
+        return root
+
+    def test_a_project_nerf_file_sets_the_mode_with_no_per_session_file(self, tmp_path: Path):
+        proj = self._project_nerf(tmp_path / "p", json.dumps({"mode": "hurt-me-plenty", "darts_pct": DARTS["darts_pct"]}))
+        out = self._render(tmp_path, 400_000, nerf=None, cwd=proj, project_dir=proj)
+        assert self._panel(out, ("↻",)) == "↻ 412K ask"
+
+    @pytest.mark.parametrize("project_age, session_age, want", [
+        (7200, 0, "↻ 412K nudge"),  # the per-session file is newer: a /nerf made after the project file was written
+        (0, 7200, "↻ 412K ask"),    # the project file is newer: it was edited after the last /nerf
+        (0, 0, "↻ 412K ask"),       # a tie goes to the project file
+    ], ids=["session-newer", "project-newer", "tie"])
+    def test_the_newer_of_the_project_and_per_session_files_wins(self, tmp_path: Path, project_age, session_age, want):
+        """Nerf writes only when something is set, so the newer file is the last thing set. A /nerf
+        through an older server (which writes the per-session file) is not ignored behind the
+        project file."""
+        proj = self._project_nerf(tmp_path / "p", json.dumps({"mode": "hurt-me-plenty", "darts_pct": DARTS["darts_pct"]}))
+        (tmp_path / "nerf").mkdir(exist_ok=True)
+        legacy = tmp_path / "nerf" / "nerf-sess-a.json"
+        legacy.write_text(json.dumps({"mode": "not-too-rough", "darts_pct": DARTS["darts_pct"]}))
+        now = time.time()
+        os.utime(proj / ".claude" / "nerf.json", (now - project_age, now - project_age))
+        os.utime(legacy, (now - session_age, now - session_age))
+        out = self._render(tmp_path, 400_000, keep_nerf=True, cwd=proj, project_dir=proj)
+        assert self._panel(out, ("↻",)) == want
+
+    def test_an_unreadable_project_file_does_not_shadow_the_per_session_file(self, tmp_path: Path):
+        proj = self._project_nerf(tmp_path / "p", json.dumps({"mode": "hurt-me-plenty", "darts_pct": DARTS["darts_pct"]}))
+        pfile = proj / ".claude" / "nerf.json"
+        pfile.chmod(0o000)
+        try:
+            if os.access(pfile, os.R_OK):
+                pytest.skip("this user can read a mode-000 file")
+            legacy = {"mode": "not-too-rough", "darts_pct": DARTS["darts_pct"]}
+            out = self._render(tmp_path, 400_000, nerf=legacy, cwd=proj, project_dir=proj)
+            assert self._panel(out, ("↻",)) == "↻ 412K nudge"
+        finally:
+            pfile.chmod(0o600)
+
+    def test_a_new_session_id_keeps_the_projects_settings(self, tmp_path: Path):
+        """A /clear is a new session id: the per-session file is gone, the project's settings are not."""
+        proj = self._project_nerf(tmp_path / "p", json.dumps({"mode": "not-too-rough", "darts_pct": DARTS["darts_pct"]}))
+        for sid in ("before-clear", "after-clear"):
+            out = self._render(tmp_path, 400_000, nerf=None, sid=sid, cwd=proj, project_dir=proj)
+            assert self._panel(out, ("↻",)) == "↻ 412K nudge", sid
+
+    def test_the_project_file_is_found_from_a_subdirectory_cwd(self, tmp_path: Path):
+        proj = self._project_nerf(tmp_path / "p", json.dumps({"mode": "hurt-me-plenty", "darts_pct": DARTS["darts_pct"]}))
+        deep = proj / "src" / "x"
+        deep.mkdir(parents=True)
+        out = self._render(tmp_path, 400_000, nerf=None, cwd=deep, project_dir=proj)
+        assert self._panel(out, ("↻",)) == "↻ 412K ask"
+
+    def test_the_project_darts_set_the_nerf_panel(self, tmp_path: Path):
+        proj = self._project_nerf(tmp_path / "p", json.dumps({"mode": "ultraviolence", "darts_pct": {"soft": 10, "hard": 20, "ouch": 30}}))
+        out = self._render(tmp_path, 100_000, nerf=None, cwd=proj, project_dir=proj)
+        # 967,000 usable: soft at 96,700 is reached at 100K, so the next dart is hard (193,400);
+        # the bar is the progress from soft to hard: (100,000 - 96,700) / (193,400 - 96,700) = 3%
+        emoji, dart, cells = self._panels(out)[0].split(" ")
+        assert emoji in HARD_SET and dart == "hard" and cells == "▱▱▱▱▱", self._panels(out)[0]
+
+    def test_a_malformed_project_file_reads_as_the_defaults_and_does_not_break_the_render(self, tmp_path: Path):
+        proj = self._project_nerf(tmp_path / "p", "{not json")
+        out = self._render(tmp_path, 400_000, nerf=None, cwd=proj, project_dir=proj)
+        assert _rows(out)[0]  # it rendered
+        assert self._panel(out, ("↻",)) == "↻ 412K auto"  # ultraviolence, the 15% default
+
+    def test_without_a_project_file_the_per_session_file_is_read_as_before(self, tmp_path: Path):
+        proj = tmp_path / "p"
+        proj.mkdir()
+        legacy = {"mode": "hurt-me-plenty", "darts_pct": DARTS["darts_pct"]}
+        out = self._render(tmp_path, 400_000, nerf=legacy, cwd=proj, project_dir=proj)
+        assert self._panel(out, ("↻",)) == "↻ 412K ask"
 
     # --- floor ---
     def _floors(self, tmp_path: Path, key: str) -> list[int]:
