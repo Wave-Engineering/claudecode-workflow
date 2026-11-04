@@ -288,8 +288,10 @@ def test_install_pins_crewchat_v030() -> None:
     # v0.3.0: it carries `crewchat-waiter` (mattermost-crew #204), which the kit's hooks run,
     # and a hook registered with no waiter behind it is a silent dead channel. #1440 needs
     # v0.4.0: the waiter batches (mattermost-crew #212), so one wake carries every event that
-    # queued while the agent was busy; v0.3.0 wakes once per event.
-    assert _TAG == "v0.4.0"
+    # queued while the agent was busy; v0.3.0 wakes once per event. #1450 needs v0.4.1:
+    # `crewchat-mcp` starts with no identity file and registers once `/name` writes it
+    # (mattermost-crew #226); v0.4.0 exited at start and stayed dead until `/mcp` reconnect.
+    assert _TAG == "v0.4.1"
 
 
 def test_install_without_doorbell_does_not_register(stubs: Path, live_socket: Path) -> None:

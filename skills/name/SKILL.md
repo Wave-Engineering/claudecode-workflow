@@ -82,12 +82,12 @@ Report the current session identity, or pick one if not yet established.
 
    Both accept the channel name directly (`"roll-call"`), so no jq lookup against `~/.claude/discord.json` is needed.
 
-   **Report the chat mode.** The crewchat shim reads `.claude/agent-identity.json` **once, when the session starts**, and registers from it. It does not see what you just wrote. With no identity file at start, it doesn't come up at all.
+   **Report the chat mode.** From crewchat-clients v0.4.1 the shim starts with no identity and reads `.claude/agent-identity.json` when it needs it, until the file names a `dev_name`. The name you just wrote is picked up in this session: the shim's timer registers within about 5 seconds, and so does your next chat call. A shim older than v0.4.1 read the file **once, when the session started**, and with no file it never came up (the last case below).
    - **`chat_send` is in your tool list:** call `chat_health()` and report the backends it lists, for example `chat: mattermost:dev, discord`.
-     - If you changed the identity just now (a new name, team or avatar), add `chat: restart the session to register the new identity`.
+     - If this run **changed a name the shim had already registered** (the identity file named a different `dev_name` before step 5), add `chat: restart the session to register the new name`. The shim keeps the name it first resolved. A first name needs no restart.
      - A `chat_health` error is reported as such.
    - **No `chat_send`, but the daemon socket is usable** (`test -S /run/crewchat/crewchat.sock && test -w /run/crewchat/crewchat.sock`, the same test `install-crewchat.sh` gates on). The cause depends on where the identity came from:
-     - **This run created the identity file** (step 5): report `chat: crewchat not started (no identity at session start); restart the session`. The shim had nothing to register.
+     - **This run created the identity file** (step 5): the shim exited at start because it predates v0.4.1 and had no name to register. Report `chat: crewchat not started (shim older than v0.4.1 exited at start); run /mcp to reconnect, or restart the session`, and `scripts/install-crewchat.sh install` brings the host to a shim that waits for the name.
      - **The identity file already existed:** a restart won't help. Report `chat: crewchat not registered or not running; run scripts/install-crewchat.sh check`. Usually `./install` hasn't run since the daemon was deployed.
    - **No `chat_send` and no socket:** report `chat: Discord only (no crewchat daemon on this host)`.
 

@@ -41,7 +41,7 @@
 set -euo pipefail
 
 # The one pinned release. Bump it with each mattermost-crew release the kit adopts.
-CREWCHAT_TAG="v0.4.0"
+CREWCHAT_TAG="v0.4.1"
 # SSH, never HTTPS: the repo is private, and git to github.com goes over SSH, not a token.
 CREWCHAT_REPO="ssh://git@github.com/Wave-Engineering/mattermost-crew.git"
 CREWCHAT_SOCKET="${CREWCHAT_SOCKET:-/run/crewchat/crewchat.sock}"

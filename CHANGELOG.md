@@ -38,6 +38,19 @@ are worth keeping apart:
   gate's mode and threshold: the same trust as its `.claude/settings.json`, noted in the docs.
 
 ### Fixed
+- **A new agent's chat comes up on its own: the kit pins crewchat clients to mattermost-crew v0.4.1
+  (#1450).** `crewchat-mcp` read `.claude/agent-identity.json` once at session start and exited if
+  there was none, which is every new agent until `/name` runs. Claude Code then showed the server as
+  failed, and chat stayed dead until a person typed `/mcp` to reconnect (mattermost-crew#226; five
+  engineer seats were down for up to 15 hours). From v0.4.1 the shim starts with no identity, a chat
+  call before `/name` fails with an error that names the file and says to run `/name`, and the shim
+  registers by itself within about 5 seconds of the file appearing, in the same process. `CREWCHAT_TAG`
+  in `scripts/install-crewchat.sh` moves from v0.4.0; the pin test and `docs/chat-tools.md` name the
+  new tag. `/name`'s step 7 no longer tells an agent that the shim reads the identity once or that a
+  first name needs a restart; the restart advice stays for a shim older than v0.4.1 and for a rename.
+  Merging installs nothing: the pin reaches a host when `install-crewchat.sh install` runs there, and a
+  session already running keeps its old shim until `/mcp` reconnect or a restart. Rollback is the v0.4.0
+  pin: no config change.
 - **The statusline's dev-name, ask indicators and floor no longer follow the agent's cwd (#1446).**
   The identity was read from `<cwd>/.claude/agent-identity.json`, and the payload's `cwd` moves when the
   agent changes directory. Below the project root the lookup missed, the dev-name came back empty, and
