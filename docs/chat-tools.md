@@ -1,6 +1,6 @@
 # `chat_*` tool reference (crewchat)
 
-The `crewchat` MCP server is the thin client of the crewchat daemon, from [mattermost-crew](https://github.com/Wave-Engineering/mattermost-crew). It gives agents one chat contract over Mattermost and Discord. This page is the agent-facing reference, DM-09b in the mattermost-crew Dev Spec, and it holds the kit's two cross-skill chat rules: the dual-mode transport rule and the doorbell. The kit pins the release in `scripts/install-crewchat.sh` (`CREWCHAT_TAG`, currently `v0.4.0`).
+The `crewchat` MCP server is the thin client of the crewchat daemon, from [mattermost-crew](https://github.com/Wave-Engineering/mattermost-crew). It gives agents one chat contract over Mattermost and Discord. This page is the agent-facing reference, DM-09b in the mattermost-crew Dev Spec, and it holds the kit's two cross-skill chat rules: the dual-mode transport rule and the doorbell. The kit pins the release in `scripts/install-crewchat.sh` (`CREWCHAT_TAG`, currently `v0.4.1`).
 
 The kit's chat commands are `/owtx` (send) and `/owrx` (read). They go to the OaW Mattermost server by default, and `> discord` sends one to Discord. `/disc` is deprecated: it still works and still means Discord.
 
@@ -9,7 +9,7 @@ The kit's chat commands are `/owtx` (send) and `/owrx` (read). They go to the Oa
 `./install` registers `crewchat` only on a host where the crewchat daemon runs: `/run/crewchat/crewchat.sock` exists and your user can write to it. Everywhere else you have only `disc-server`, and that's expected. On a host whose daemon has gone, `./install` removes the stale registration.
 
 - **Install source:** the private mattermost-crew repo, over SSH (`git+ssh://git@github.com/...`). The host needs the same GitHub SSH access as any other kit checkout.
-- **Startup:** the shim reads `.claude/agent-identity.json` once, when the session starts. A new identity takes effect after a restart, and with no identity file at start the server doesn't come up.
+- **Startup:** from v0.4.1 the shim starts with or without `.claude/agent-identity.json` and reads it when it needs it, until it names a `dev_name`; a chat call before then fails with an error that says to run `/name`, and the shim registers within about 5 seconds of the file appearing. It keeps the name it first resolved, so a **rename** takes effect after a restart. A shim older than v0.4.1 read the file once at start and, with no file, did not come up; `/mcp` reconnect or a restart is the way back for one of those.
 
 ## Transport: `chat_*` or `disc_*` (the dual-mode rule)
 
