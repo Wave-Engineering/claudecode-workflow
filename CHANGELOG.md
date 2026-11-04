@@ -44,8 +44,9 @@ agent's identity from the project root instead of the current directory.
   mode and darts now write the project file and, for older kits, the per-session file too, and the
   server adds `.claude/nerf.json` to the clone's `info/exclude`. A session still running the older
   nerf server keeps writing only the per-session file until it restarts, so a reseed loses what it set
-  (set it once after the restart); a project file written by hand also works. A repo can ship its own `.claude/nerf.json` and so set the
-  gate's mode and threshold: the same trust as its `.claude/settings.json`, noted in the docs.
+  (set it once after the restart); a project file written by hand also works. A repo can ship its own
+  `.claude/nerf.json` and so set the gate's mode and threshold: the same trust as its
+  `.claude/settings.json`, noted in the docs.
 
 ### Fixed
 - **A new agent's chat comes up on its own: the kit pins crewchat clients to mattermost-crew v0.4.1
