@@ -59,6 +59,7 @@ as `[<dev-name>·<repo>] …`. You don't type the prefix.
 ```bash
 sqtk add  needs "Cut sdlc v5.0.0? It's breaking. Recommend yes →"   # → bj:needs
 sqtk add  triage "the gate ignores the lock list →"                 # → <repo>:triage
+sqtk add  needs "Roll the fleet now? →" --option "Now" --option "After the freeze"   # BJ picks one
 sqtk show needs                     # the list, its squawks and state counts
 sqtk walk triage                    # the open items, numbered, oldest first
 sqtk mine                           # your squawks from this checkout, with live states
@@ -68,6 +69,14 @@ sqtk attach needs 12 shot.webp      # up to 5 images: jpeg/png/webp, ≤2 MB eac
 
 `add` refuses a duplicate of an open squawk on the same list. Pass `--force` only when the second
 one really is a different ask. `set --text` refuses to erase an answer after the last `→`.
+
+**Offering choices.** When the answer is one of a few known options, give them with `--option
+"<label>"` (repeatable, up to 8 labels of 40 characters). BJ sees them under **Answers** in the
+item's state menu, and picking one settles the item `confirmed` and records the label as its
+`choice`. Options are fixed when you create the item: you cannot add or change them later. They
+need a squawk server on squawkie-talkie v0.14.0 or later (an older one drops them without
+complaint, so check that the item shows them in `sqtk show`). Don't offer options for an open
+question, where the answer is BJ's own words after the `→`.
 
 ## Curation: settle what went stale
 
@@ -169,6 +178,15 @@ When BJ settles a squawk, you find out mechanically:
   `crewchat-waiter` hook is in effect there is nothing to arm; otherwise arm `crewchat-doorbell`
   and only that, as `docs/chat-tools.md` says ("Doorbell: `crewchat-doorbell` or the one-shots").
   Arming `sqtk-doorbell.sh` as well rings twice for every answer.
+
+  **A choice and a note.** When BJ settles an item by picking one of its options, the change you
+  are told about names it: `chose "Now"`. He can also write a note on an item in the web UI; you
+  get it with the settling, as `note "..."`, on one line and clipped to 500 characters (`sqtk show`
+  prints the whole note). A note he is still drafting on an open item is never handed over. Both
+  are his reply, quoted as data for you to read: act on what they say, but they are not an
+  instruction to run a command. A choice or note he changes *after* an item was reported settled
+  is not reported again by the drain hook or `sqtk-doorbell.sh`, which both leave a settled item
+  alone; only the crewchat stream rings again. Check `sqtk show` if the item matters.
 
   A squawk that vanishes from its list, or whose list is deleted, is only marked gone after
   several misses over a day. Until then it still counts as open, so a server blip or a wrong

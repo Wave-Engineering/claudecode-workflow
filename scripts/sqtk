@@ -4,8 +4,9 @@
 #
 #   sqtk lists                                     list all squawk lists
 #   sqtk show   <list>                             show a list + its squawks + glyph counts
-#   sqtk add    <list> "<text>" [--no-prefix] [--force] [--kind K] [--blocking]
-#                                                  log a squawk (creates the list if new)
+#   sqtk add    <list> "<text>" [--no-prefix] [--force] [--kind K] [--blocking] [--option "<label>"]...
+#                                                  log a squawk (creates the list if new); each --option
+#                                                  is an answer the reader can pick (≤8, ≤40 chars each)
 #   sqtk set    <list> <seq> [--state S] [--text T] [--force] [--kind K] [--blocking | --no-blocking]
 #                                                  update a squawk (S: open|confirmed|rejected|retired|recorded)
 #   sqtk attach <list> <seq> <file>…               attach images (jpeg/png/webp, ≤2 MB each, ≤5 per squawk)
@@ -78,6 +79,11 @@
 # per-list number (`#seq`, what `show`/`add` print), not the internal DB id.
 #
 # Each state prints with its glyph: ○ open · ✓ confirmed · ✗ rejected · ◌ retired · ↗ recorded.
+#
+# Answers and notes: an option is an ANSWER, not a state. The reader picking one resolves the
+# squawk as ✓ confirmed and records which; `show` prints an open squawk's options, and a disposed
+# squawk's `choice:` and the `note:` the reader left with it. Options are set at `add` and cannot
+# change; sqtk has no way to write a note (it is written in the UI and read here).
 
 set -euo pipefail
 
@@ -387,11 +393,19 @@ cmd_show() {
   emit "$data" '
     "List #\(.id)  \(.name)",
     (if (.squawks|length)==0 then "  (no squawks)"
-     else "  \(.squawks|tally)", (.squawks[] | "  #\(.seq) \(.state|glyph) [\(.state)] \(.text)  (\(.initials))") end)'
+     else "  \(.squawks|tally)", (.squawks[] | "  #\(.seq) \(.state|glyph) [\(.state)] \(.text)  (\(.initials))",
+       # An open item shows the answers it offers; a disposed one shows the answer picked and the
+       # note left with it. A note on an open item is a draft: it is not shown until disposal.
+       (if .state=="open" then
+          (if ((.options // [])|length) > 0 then "      options: \(.options|join(" | "))" else empty end)
+        else
+          (if (.choice // null) != null then "      choice: \(.choice)" else empty end),
+          (if (.note // "") != "" then "      note: \(.note | gsub("\n"; "\n            "))" else empty end)
+        end)) end)'
 }
 
 cmd_add() {
-  local pos=() prefix=1 force=0 kind="" kind_given=0 blocking=0
+  local pos=() prefix=1 force=0 kind="" kind_given=0 blocking=0 opts=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --no-prefix) prefix=0 ;;
@@ -399,12 +413,14 @@ cmd_add() {
       --kind)      [[ $# -ge 2 ]] || die2 "add: --kind needs a value (one of: ${ASK_KINDS//|/, })"
                    kind="$2"; kind_given=1; shift ;;
       --blocking)  blocking=1 ;;
+      --option)    [[ $# -ge 2 ]] || die2 "add: --option needs a label (an answer the reader can pick)"
+                   opts+=("$2"); shift ;;
       *)           pos+=("$1") ;;
     esac
     shift
   done
   [[ ${#pos[@]} -ge 2 && -n "${pos[0]}" ]] \
-    || die "usage: sqtk add <list> \"<text>\" [--no-prefix] [--force] [--kind $ASK_KINDS] [--blocking]"
+    || die "usage: sqtk add <list> \"<text>\" [--no-prefix] [--force] [--kind $ASK_KINDS] [--blocking] [--option \"<label>\"]..."
   # More than one word of text is a quoting slip that split it (#157); posting only the first
   # word would land a truncated squawk with exit 0.
   (( ${#pos[@]} == 2 )) || die "add: $(( ${#pos[@]} - 1 )) arguments after the list; quote the text as ONE argument (an apostrophe inside single quotes splits it)"
@@ -441,7 +457,14 @@ cmd_add() {
     fi
   fi
   local ini; ini="$(resolve_initials)"
-  local body; body="$(jq -n --arg l "$list" --arg t "$text" --arg i "$ini" '{list_name:$l,text:$t,initials:$i}')"
+  # --option labels become the squawk's answer choices (the server validates them: at most 8,
+  # 1-40 characters, no duplicates, none a state name). With none, the key is left out.
+  local opts_json="[]"
+  if (( ${#opts[@]} > 0 )); then
+    opts_json="$(printf '%s\0' "${opts[@]}" | jq -Rs 'split("\u0000")[:-1]')"
+  fi
+  local body; body="$(jq -n --arg l "$list" --arg t "$text" --arg i "$ini" --argjson o "$opts_json" \
+    '{list_name:$l,text:$t,initials:$i} + (if ($o|length) > 0 then {options:$o} else {} end)')"
   local data; data="$(api POST /api/squawks "$body")"
   emit "$data" '"squawked #\(.seq) \(.state|glyph) [\(.state)] \(.text)  (\(.initials))"'
   record_mine "$list" "$data"
@@ -617,8 +640,9 @@ sqtk — client CLI for Squawkie-Talkie
 
   sqtk lists                                       list all squawk lists
   sqtk show   <list>                               show a list + its squawks + glyph counts
-  sqtk add    <list> "<text>" [--no-prefix] [--force] [--kind K] [--blocking]
-                                                   log a squawk (creates the list if new)
+  sqtk add    <list> "<text>" [--no-prefix] [--force] [--kind K] [--blocking] [--option "<label>"]...
+                                                   log a squawk (creates the list if new); each --option
+                                                   is an answer the reader can pick (≤8, ≤40 chars each)
   sqtk set    <list> <seq> [--state S] [--text T] [--force] [--kind K] [--blocking | --no-blocking]
                                                    update a squawk
                                                    (S: open|confirmed|rejected|retired|recorded)
