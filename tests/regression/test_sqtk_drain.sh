@@ -479,16 +479,16 @@ c=$(ctx "$out")
 out=$(run)
 [[ -z "$out" ]] && pass "same choice and note: not reported again" || fail "choice repeated (out='$out')"
 
-# B. The known limit: a squawk reported in a terminal state is final to the drain, so its list
-#    is not fetched again. A choice changed, or a note written, after disposal is not seen
-#    here. The doorbell (the live stream) and the chat daemon do ring on those; a busy agent
-#    reads them with `sqtk show`.
+# B. The known limit: a list whose squawks are all reported in a terminal state is not fetched
+#    again. A choice changed, or a note written, after disposal is not seen here (it would be if
+#    another item on the list were still open). The chat daemon's stream does ring on those; a
+#    busy agent reads them with `sqtk show`.
 before=$(calls)
 body '{"name":"bj:needs","squawks":[{"id":71,"seq":7,"state":"confirmed","text":"deploy now?","choice":"Hold","note":"changed my mind"}]}'
 out=$(run)
 [[ -z "$out" && "$(calls)" == "$before" ]] &&
-	pass "a settled squawk is final to the drain: a later choice or note is not fetched" ||
-	fail "settled squawk refetched (out='$out' calls=$(calls) before=$before)"
+	pass "an all-settled list is not fetched again: a later choice or note is not seen" ||
+	fail "settled list refetched (out='$out' calls=$(calls) before=$before)"
 
 # C. An open squawk answered in its text, with a draft note the by-name GET returns: the draft
 #    is never printed or keyed.
