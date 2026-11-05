@@ -32,9 +32,11 @@ are worth keeping apart:
   twice on upgrade. `skills/sqtk/SKILL.md` documents `--option`, and the vendored `sqtk` moves from
   v0.13.0 to v0.14.0.
   - **Known limit.** The drain does not fetch a list whose items are all settled (the cost guard),
-    and `sqtk-doorbell.sh` skips settled items, so a choice or note BJ changes after an item was
-    reported is usually missed. The drain does pick it up when another item on that list is still
-    open. The chat daemon's stream rings again on it (mattermost-crew#233).
+    and `sqtk-doorbell.sh` skips settled items, so a choice BJ changes after an item was reported
+    is usually missed. The drain does pick it up when another item on that list is still open. The
+    chat daemon's stream rings again on it (mattermost-crew#233). A note can no longer change after
+    settling on a squawk server at v0.15.0 or later (squawkie-talkie#173 locks it); on an older
+    server a note changed after settling is missed the same way (#1456).
   - **Needs a v0.14.0 squawk server for `--option`.** An older server ignores the option labels
     without complaint, so the item shows none. The vendored client works unchanged against either.
 

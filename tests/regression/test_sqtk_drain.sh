@@ -480,9 +480,10 @@ out=$(run)
 [[ -z "$out" ]] && pass "same choice and note: not reported again" || fail "choice repeated (out='$out')"
 
 # B. The known limit: a list whose squawks are all reported in a terminal state is not fetched
-#    again. A choice changed, or a note written, after disposal is not seen here (it would be if
-#    another item on the list were still open). The chat daemon's stream does ring on those; a
-#    busy agent reads them with `sqtk show`.
+#    again. A choice changed after disposal is not seen here (it would be if another item on the
+#    list were still open), and neither is a note changed on a server older than v0.15.0, which
+#    locks a note once settled. The chat daemon's stream does ring on those; a busy agent reads
+#    them with `sqtk show`.
 before=$(calls)
 body '{"name":"bj:needs","squawks":[{"id":71,"seq":7,"state":"confirmed","text":"deploy now?","choice":"Hold","note":"changed my mind"}]}'
 out=$(run)
