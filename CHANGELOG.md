@@ -19,6 +19,25 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Added
+
+- **The sqtk drain tells an agent which answer option BJ picked, and what his note said** (#1454).
+  squawkie-talkie v0.14.0 lets an agent offer answer options on a squawk (`sqtk add --option`) and
+  lets BJ write a note on it. The drain printed only the state and the typed answer, so an item BJ
+  settled by picking an option, or with a note, told the agent nothing about which or what.
+  `sqtk-drain.sh` now reports `chose "<option>"` and `note "<note>"` beside the answer, as quoted
+  data with a line saying so, and `--pending` (the doorbell's check) carries both fields. A note
+  still being drafted on an open item is never handed over or keyed, since the by-name `GET` returns
+  it. A squawk with neither keeps its `sqtk-seen.json` key byte for byte, so nothing is reported
+  twice on upgrade. `skills/sqtk/SKILL.md` documents `--option`, and the vendored `sqtk` moves from
+  v0.13.0 to v0.14.0.
+  - **Known limit.** The drain does not fetch a list whose items are all settled (the cost guard),
+    and `sqtk-doorbell.sh` skips settled items, so a choice or note BJ changes after an item was
+    reported is usually missed. The drain does pick it up when another item on that list is still
+    open. The chat daemon's stream rings again on it (mattermost-crew#233).
+  - **Needs a v0.14.0 squawk server for `--option`.** An older server ignores the option labels
+    without complaint, so the item shows none. The vendored client works unchanged against either.
+
 ## [8.24.0] - 2026-11-04
 
 An agent's nerf mode and darts now survive a reseed: the statusline and the reseed gate read the
