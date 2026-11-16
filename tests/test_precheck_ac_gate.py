@@ -333,6 +333,19 @@ def test_evidence_nested_under_a_checkbox_is_not_a_criterion(tmp_path, body):
     assert r.returncode == 0, r.stdout
 
 
+def test_tab_nested_evidence_is_not_a_criterion(tmp_path):
+    body = "## Acceptance Criteria\n\n- [x] A.\n\t- *Evidence:* the released sections stay identical.\n"
+    r = _run("lint", _file(tmp_path, body))
+    assert r.returncode == 0, r.stdout
+
+
+def test_a_checkbox_does_not_hide_an_indented_item_in_the_next_section(tmp_path):
+    body = "## Acceptance Criteria\n\n- [x] A.\n\n## DoD\n\n  - soak for 24 hours\n"
+    r = _run("lint", _file(tmp_path, body))
+    assert r.returncode == 2, r.stdout
+    assert f"{tmp_path / 'body.md'}:7 P8" in r.stdout
+
+
 def test_a_sibling_after_a_checkbox_is_still_a_criterion(tmp_path):
     body = "## Acceptance Criteria\n\n- [x] A.\n  - *Evidence:* fine.\n- soak for 24 hours\n"
     r = _run("lint", _file(tmp_path, body))

@@ -189,18 +189,22 @@ def criteria_items(body):
             continue
         if ANY_HEAD.match(line):
             in_crit = bool(CRIT_HEAD.match(line))
+            cb_indent = None  # a new section starts clean
             continue
         if CRIT_LABEL.match(line):
             in_crit = True
+            cb_indent = None
             continue
         if BOLD_ONLY.match(line):
             in_crit = False  # another bold label ends a bold-label section
+            cb_indent = None
             continue
         if not in_crit:
             continue
         # A list item nested under a checkbox is that box's evidence or note (the box is
         # graded on its own), never a criterion: "- [x] X" then "  - *Evidence:* ...".
-        indent = len(line) - len(line.lstrip(" "))
+        expanded = line.expandtabs(4)
+        indent = len(expanded) - len(expanded.lstrip(" "))
         if line.strip():
             if cb_indent is not None and indent <= cb_indent:
                 cb_indent = None
