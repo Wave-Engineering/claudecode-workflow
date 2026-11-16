@@ -79,27 +79,37 @@ POST_MERGE = [
     # line that waits for the close, for time to pass, for a later event, for a live
     # environment, or for someone's later word. The false-positive override and the
     # waiver forms apply to every id.
+    # "closed" alone is ordinary code vocabulary (a file handle, a socket), so a close counts
+    # only when the item is named or pointed at ("the epic closes", "once it is closed"), or
+    # when it is the bare noun at a clause end ("filed on close", "after close,").
     ("P7", re.compile(
-        r"\b(after|once|when|upon|following)\s+(the\s+|this\s+|its\s+|it\s+|that\s+)?"
-        r"(issue\s+|epic\s+|plan\s+|story\s+|item\s+|ticket\s+)?(is\s+|has\s+been\s+|gets\s+|are\s+)?"
+        r"\b(after|once|when|upon|following)\s+((the|this|that|its)\s+)?"
+        r"(issue|epic|plan|story|item|ticket|pr|mr)\s+(is\s+|has\s+been\s+|gets\s+)?"
         r"clos(e|es|ed|ing|ure)\b"
-        r"|\b(on|at)\s+clos(e|ure)\b"
+        r"|\b(after|once|when|upon)\s+(it|this|that)\s+(is\s+|has\s+been\s+|gets\s+)?clos(e|es|ed)\b"
+        r"|\b(after|upon)\s+clos(e|ure)\b(?!\s*\()"
+        r"|\b(on|at)\s+clos(e|ure)\b(?=\s*([.,;:)]|$))"
         r"|\b(this|the|that)\s+(issue|epic|plan|story|ticket)\s+(is|gets|was)\s+(then\s+)?closed\b"
         r"|\b(after|once|when|upon)\s+(the\s+|this\s+|a\s+|its\s+)?"
         r"(roll-?out|launch|go-?live|cut-?over|promotion|shipping|sign-?off|hand-?off)\b", re.I)),
+    # A span of days alone is a TTL or a retention value; it is a wait only beside a word that
+    # says something must hold or happen over it ("no regressions for one week", "runs clean
+    # within 3 days"), so the span needs that context.
     ("P8", re.compile(
-        r"\b(for|over|within|across)\s+(the\s+next\s+|the\s+following\s+)?"
+        r"\b(no|zero|without|stable|clean|green|healthy|passing|passes|holds?|stays?|remains?|runs?|running|"
+        r"succeeds?|works?|working)\b[^.;]{0,60}?\b(for|over|within|across)\s+(the\s+next\s+|the\s+following\s+)?"
         r"(a|an|one|two|three|four|five|six|seven|\d+)\s+(business\s+)?(days?|weeks?|months?|sprints?|nights?)\b"
-        r"|\b(a|one|two|three|\d+)\s+(days?|weeks?|months?|sprints?)\s+(after|later|of)\b"
+        r"|\b(a|one|two|three|\d+)\s+(days?|weeks?|months?|sprints?)\s+(after|later|of\s+(clean|stable|soak|monitoring|uptime|no|green))\b"
         r"|\b(soaks?|soaked|soak[- ]test(ed|ing)?|overnight|tomorrow|next\s+(day|week|month|sprint))\b", re.I)),
     ("P9", re.compile(
         r"\bnext\s+(\./)?(install(ation)?|deploy(ment)?|roll-?out|campaign|nightly|cycle)\b", re.I)),
     ("P10", re.compile(
-        r"\b(on|in|at)\s+(the\s+)?(aws-(test|prod|dev)|staging|the\s+field)\b"
+        r"\b(on|in|at)\s+(the\s+)?(aws-(test|prod|dev)|the\s+field)\b"
+        r"|\b(on|in|at)\s+(the\s+)?staging\b(?!\s+(fixtures?|dir\w*|folders?|files?|areas?|buffers?|tables?|config\w*))"
         r"|\blive\s+(server|site|fleet|system|environment|deployment)\b"
-        r"|\b(first|next)\s+real\b|\breal[- ]world\b"
+        r"|\b(first|next)\s+real\b"
         r"|\b(is|are|was|gets|get|then|been)\s+(rolled\s+out|re-?pinned|promoted)\b"
-        r"|\bre-?pins?\b|\brolls?\s+(it|this|that|the)\s+out\b|\brolls?\s+out\b", re.I)),
+        r"|\b(operator|ops|admin|deployer|sre|someone|mother)\s+(re-?pins?|rolls?\s+(it\s+|this\s+|that\s+|the\s+\w+\s+)?out)\b", re.I)),
     ("P11", re.compile(
         r"\bobserved\s+(working|running|in|on|to|over|for)\b"
         r"|\bno\s+(regressions?|incidents?|complaints?|alerts?|errors?|reports?)\s+(are\s+|is\s+)?"
@@ -111,8 +121,11 @@ POST_MERGE = [
 # BJ, 2026-11-16: the lint reads more than checkboxes. A list item or table row under an
 # acceptance-criteria or definition-of-done heading, or under a bold DoD/AC label, is a
 # criterion too, and a numbered or bulleted DoD is as easy to write as a box.
+# The phrase must END the heading (a trailing parenthetical or dash note is fine), so that
+# "Why the DoD changed" is prose about the section and not the section.
 CRIT_HEAD = re.compile(
-    r"^#{2,4}\s+.*\b(acceptance criteria|definition of done|dod|done when|success criteria|exit criteria)\b", re.I)
+    r"^#{2,4}\s+.*\b(acceptance criteria|definition of done|dod|done when|success criteria|exit criteria)"
+    r"(\s*[(\[:\u2014-].*)?\s*$", re.I)
 CRIT_LABEL = re.compile(
     r"^\s*\*\*(acceptance criteria|ac|definition of done|dod|done when|success criteria|exit criteria)\s*:?\*\*\s*:?\s*$",
     re.I)
@@ -163,7 +176,8 @@ def criteria_items(body):
     an AC/DoD heading or a bold AC/DoD label, outside a fence. Checkboxes are `boxes()`'s."""
     fence = None
     in_crit = False
-    for n, line in enumerate(body.splitlines(), 1):
+    lines = body.splitlines()
+    for n, line in enumerate(lines, 1):
         f = FENCE.match(line)
         if fence:
             if f and f.group(1)[0] == fence[0] and len(f.group(1)) >= len(fence) and not f.group(2).strip():
@@ -189,6 +203,8 @@ def criteria_items(body):
             continue
         t = TABLE_ROW.match(line)
         if t and not TABLE_RULE.match(line):
+            if n < len(lines) and TABLE_RULE.match(lines[n]):
+                continue  # the header row (the rule line follows it) names columns, not criteria
             yield n, t.group(1).strip()
 
 

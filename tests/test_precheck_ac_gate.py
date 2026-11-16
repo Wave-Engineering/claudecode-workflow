@@ -307,13 +307,32 @@ def test_each_post_close_pattern_flags(tmp_path, pid, line, box):
     "a pre-close review runs before it is closed",
     "the retry waits 5 s",
     "a daily summary is written",
+    # precheck review of #1461: ordinary code vocabulary that a looser P7/P8/P10 flagged
+    "The file handle is flushed when closed",
+    "Cleanup runs on close() of the context manager",
+    "Logs are retained for 7 days (asserted by config test)",
+    "The Dockerfile re-pins the base image digest",
+    "handles real-world fixtures",
+    "reads the staging fixture directory",
 ])
 def test_pre_close_phrases_do_not_flag(tmp_path, line):
     r = _run("lint", _file(tmp_path, f"- [ ] {line}\n"))
     assert r.returncode == 0, r.stdout
 
 
+@pytest.mark.parametrize("body", [
+    # a heading that merely mentions DoD is prose about the section, not the section
+    "## Why the DoD changed\n\n- the soak week was dropped\n",
+    # a table's header row names columns; "Verified in" here is a column, not a criterion
+    "## Acceptance Criteria\n\n| Verified in | Evidence |\n|---|---|\n| the unit test | green |\n",
+])
+def test_non_criteria_text_near_ac_headings_does_not_flag(tmp_path, body):
+    r = _run("lint", _file(tmp_path, body))
+    assert r.returncode == 0, r.stdout
+
+
 @pytest.mark.parametrize("body,ln", [
+    ("## Acceptance Criteria (per story)\n\n- After close, a retro is posted\n", 3),
     ("## Acceptance Criteria\n\n- After close, a retro is posted\n", 3),
     ("## Acceptance Criteria\n\n1. Verified in aws-test by the operator\n", 3),
     ("## Definition of Done\n\n* the fleet picks it up on the next ./install\n", 3),

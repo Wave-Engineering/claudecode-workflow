@@ -19,12 +19,14 @@ shapes the lint knows (pattern ids in parentheses):
 |---|---|---|
 | Waits for a merge, release, tag, install or deploy | "after merge", "v1.2 is tagged", "the fix is released", "deployed" | P1-P6 |
 | Waits for the close or a launch | "after close", "once it is closed", "when the epic closes", "after rollout", "after go-live" | P7 |
-| Waits for time to pass | "no regressions for one week", "soak 24 h", "within 3 days", "tomorrow", "overnight" | P8 |
+| Waits for time to pass | "no regressions for one week", "soak 24 h", "runs clean within 3 days", "tomorrow", "overnight" | P8 |
 | Waits for a later event | "on the next ./install", "the next campaign runs clean" | P9 |
 | Waits for a live environment | "verified in aws-test", "the live server shows X", "first real run", "The operator re-pins it", "is promoted" | P10 |
 | Waits for someone's later word or a watch | "observed working", "no incidents are reported", "the customer signs off", "monitored for errors" | P11 |
 
-The lint reads every checkbox, and every list item and table row under an Acceptance Criteria,
+A span of days, a `close` or a `re-pin` alone is not enough: "logs are retained for 7 days", "flushed when closed" and "the Dockerfile re-pins the digest" are checkable on the head and pass. The lint flags a span beside a word that says something must hold over it ("no regressions for one week"), a close only when the item is named ("when the epic closes") or the bare noun ends a clause ("filed on close"), and a re-pin or roll-out only when an operator does it.
+
+The lint reads every checkbox, and every list item and table row (header rows excepted) under an Acceptance Criteria,
 Definition of Done, DoD, Done when, Success criteria or Exit criteria heading, or under a bold
 `**DoD:**` or `**Acceptance Criteria:**` label. It does not read prose. It cannot decide a
 person's judgment ("BJ confirms the chime sounds subtle") or an artifact the release writes
