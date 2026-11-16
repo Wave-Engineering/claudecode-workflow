@@ -346,6 +346,7 @@ class TestInstallCreatesArtifacts:
             "docs/chat-tools.md",
             "docs/operations/log-rotation.md",
             "docs/operations/branch-protection-checklist.md",
+            "docs/ac-checkable-before-close.md",
         ):
             assert (claude_dir / rel).exists(), f"kit doc not globalized: {rel}"
 

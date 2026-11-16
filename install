@@ -1240,7 +1240,8 @@ if [[ "$INSTALL_CONFIG" == true ]]; then
 	# ANY repo resolves them from $CLAUDE_DIR — single source, no per-repo vendor,
 	# no drift. Source of truth stays the repo; this copies repo→global each run.
 	for kdoc in WAVE_AXIOMS.md docs/mcp-scoping.md docs/chat-tools.md \
-		docs/operations/log-rotation.md docs/operations/branch-protection-checklist.md; do
+		docs/operations/log-rotation.md docs/operations/branch-protection-checklist.md \
+		docs/ac-checkable-before-close.md; do
 		if [[ -f "$REPO_DIR/$kdoc" ]]; then
 			if [[ "$DRY_RUN" != true ]]; then
 				mkdir -p "$(dirname "$CLAUDE_DIR/$kdoc")"

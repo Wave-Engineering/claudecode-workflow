@@ -258,6 +258,140 @@ def test_pre_merge_phrases_do_not_flag(tmp_path, line):
     assert r.returncode == 0, r.stdout
 
 
+# --- BJ, 2026-11-16: nothing may wait for the item to be CLOSED (P7-P11) ---------------
+
+
+@pytest.mark.parametrize("pid,line", [
+    ("P7", "After close, a retro is posted"),
+    ("P7", "once it is closed the dashboard drops the row"),
+    ("P7", "When the epic closes, every child shows done"),
+    ("P7", "the issue is closed with a link to the release"),
+    ("P7", "a retro is filed on close"),
+    ("P7", "a week after rollout the error rate is below 1%"),
+    ("P7", "after go-live the operator re-reads the log"),
+    ("P8", "no regressions for one week"),
+    ("P8", "Soak for 24 hours with no restarts"),
+    ("P8", "the nightly job succeeds tomorrow"),
+    ("P8", "runs clean within 3 days"),
+    ("P8", "2 weeks later the count still matches"),
+    ("P9", "the fleet picks it up on the next ./install"),
+    ("P9", "the next campaign runs clean"),
+    ("P10", "Verified in aws-test by the operator"),
+    ("P10", "the reconcile on aws-dev shows the template"),
+    ("P10", "the live server shows 0.16.0"),
+    ("P10", "observed on the first real run"),
+    ("P10", "The operator re-pins the server to the new image"),
+    ("P10", "the rc is promoted to a v tag"),
+    ("P10", "the service is rolled out"),
+    ("P11", "Observed working end to end"),
+    ("P11", "no regressions are reported"),
+    ("P11", "the customer signs off on the demo"),
+    ("P11", "monitored for errors"),
+])
+@pytest.mark.parametrize("box", ["[ ]", "[x]"])
+def test_each_post_close_pattern_flags(tmp_path, pid, line, box):
+    r = _run("lint", _file(tmp_path, f"- {box} {line}\n"))
+    assert r.returncode == 2, r.stdout
+    assert f"[post-merge] {tmp_path / 'body.md'}:1 {pid}:" in r.stdout
+
+
+@pytest.mark.parametrize("line", [
+    "CI is green on the PR head",
+    "A unit test asserts the retry (`tests/test_x.py`)",
+    "`CHANGELOG.md` carries an entry under `[Unreleased]`",
+    "every child issue is closed",  # an epic's DoD: checkable before the epic closes
+    "the cache expires after 24 hours (fake clock)",  # hours are a TTL, not a wait
+    "the stub `bao` is used; no write runs against any live instance",
+    "a closed PR is never re-opened",
+    "the closing keyword `Closes #N` is in the body",
+    "a pre-close review runs before it is closed",
+    "the retry waits 5 s",
+    "a daily summary is written",
+])
+def test_pre_close_phrases_do_not_flag(tmp_path, line):
+    r = _run("lint", _file(tmp_path, f"- [ ] {line}\n"))
+    assert r.returncode == 0, r.stdout
+
+
+@pytest.mark.parametrize("body,ln", [
+    ("## Acceptance Criteria\n\n- After close, a retro is posted\n", 3),
+    ("## Acceptance Criteria\n\n1. Verified in aws-test by the operator\n", 3),
+    ("## Definition of Done\n\n* the fleet picks it up on the next ./install\n", 3),
+    ("### DoD\n\n- no regressions for one week\n", 3),
+    ("## Acceptance Criteria\n\n| Check | Evidence |\n|---|---|\n| soak for 24 hours | log |\n", 5),
+    ("### Phase 1 — Build\n**DoD:**\n- the live server shows it\n", 3),
+    ("**Acceptance Criteria:**\n\n1. once deployed to prod it works\n", 3),
+])
+def test_list_and_table_items_under_ac_headings_are_linted(tmp_path, body, ln):
+    r = _run("lint", _file(tmp_path, body))
+    assert r.returncode == 2, r.stdout
+    assert f"[post-merge] {tmp_path / 'body.md'}:{ln} P" in r.stdout
+
+
+@pytest.mark.parametrize("body", [
+    "## Summary\n\n- After close, a retro is posted\n",  # not an AC section: ordinary prose
+    "## Acceptance Criteria\n\n- ok\n\n## Notes\n\n- After close, a retro is posted\n",  # section ended
+    "## Acceptance Criteria\n\n```\n- After close, a retro is posted\n```\n",  # fenced
+    "**DoD:**\n- ok\n**Notes**\n- After close, a retro is posted\n",  # a bold label ends it
+    "## Acceptance Criteria\n\n| Check | Evidence |\n|---|---|\n| a unit test | `tests/x.py` |\n",
+])
+def test_non_checkbox_lint_stays_inside_ac_sections(tmp_path, body):
+    r = _run("lint", _file(tmp_path, body))
+    assert r.returncode == 0, r.stdout
+
+
+def test_non_checkbox_item_honours_override_and_waiver(tmp_path):
+    ov = "- After close, a retro is posted <!-- ac-gate: pre-merge -->"
+    wv = f"- the live server shows it — {WAIVER}"
+    r = _run("lint", _file(tmp_path, _ac(ov, wv)))
+    assert r.returncode == 0, r.stdout
+    assert "[override]" in r.stdout and "[waived]" in r.stdout
+
+
+# The 21-line battery from the 2026-11-16 measurement (#1460): the lint flagged 2 of the 19 bad
+# lines before. It must flag these 17, pass both controls, and may miss only the two that
+# no pattern can decide (a person's later word, an artifact the release writes).
+BATTERY_BAD = [
+    "After merge, the pipeline is green",
+    "Verified in aws-test by the operator",
+    "Once deployed to prod, the dashboard shows the new field",
+    "The next campaign runs clean with no manual intervention",
+    "No regressions reported for one week",
+    "The fleet picks it up on the next ./install",
+    "Soak for 24 hours with no restarts",
+    "The issue is closed with a link to the release",
+    "When the epic closes, all child issues are closed",
+    "After close, a retro is posted",
+    "A week after rollout, the error rate is below 1%",
+    "The live server shows 0.16.0",
+    "The operator re-pins the server to the new image",
+    "Observed working on the first real run",
+    "Confirm the nightly job succeeds tomorrow",
+    "Customer signs off on the demo",
+    "The rc is promoted to a v tag",
+]
+BATTERY_UNDECIDABLE = [
+    "BJ confirms the chime sounds subtle",
+    "Image digest appears in the release notes",
+]
+BATTERY_GOOD = [
+    "CI is green on the PR head",
+    "A unit test asserts the retry (tests/test_x.py)",
+]
+
+
+def test_battery_recall(tmp_path):
+    body = "\n".join(f"- [ ] {t}" for t in BATTERY_BAD + BATTERY_UNDECIDABLE + BATTERY_GOOD) + "\n"
+    r = _run("lint", _file(tmp_path, body))
+    assert r.returncode == 2, r.stdout
+    flagged = r.stdout
+    for t in BATTERY_BAD:
+        assert f" {t}\n" in flagged, f"not flagged: {t}"
+    for t in BATTERY_GOOD:
+        assert f" {t}\n" not in flagged, f"wrongly flagged: {t}"
+    assert flagged.count("[post-merge]") == len(BATTERY_BAD)
+
+
 def test_override_marker_passes_and_is_listed(tmp_path):
     line = "the merged-results pipeline is read <!-- ac-gate: pre-merge -->"
     r = _run("lint", _file(tmp_path, f"- [ ] {line}\n"))

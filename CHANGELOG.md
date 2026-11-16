@@ -19,6 +19,22 @@ are worth keeping apart:
 
 ## [Unreleased]
 
+### Changed
+
+- **AC and DoD must be checkable before the item closes, and the lint now catches it** (#1460).
+  BJ's 2026-10-24 rule (#1365) covered only lines that "need a merge to assess"; BJ kept finding
+  lines in skill-created items that wait for something after the close (a soak week, the next
+  install, "verified in aws-test", a customer's sign-off). Measured on 2026-11-16, the old
+  `precheck-ac-gate.sh lint` flagged 2 of 19 such lines, read only `- [ ]` lines, and ran only
+  when an agent chose to follow `/issue` Step 2.5. The rule is now one sentence, stated in terms
+  of closing, in `/issue`, `/ibm`, `/scpmr`, `/scpmmr`, `/mmr`, `/devspec`, `/prepwaves`,
+  `/autochain`, `/sdlc` and `/sqtk` (`tests/test_ac_rule_in_skills.py` fails if one drops it),
+  with the long form in `docs/ac-checkable-before-close.md`. The lint gains pattern ids P7 to P11
+  (the close or a launch, elapsed time, a later event, a live environment, someone's later word),
+  reads list items and table rows under an AC or DoD heading as well as checkboxes, and flags 17
+  of the 19. Still not covered: prose, a person's judgment, and an item created by `gh`, `glab`
+  or the `work_item` tool directly, which no creation-time check reads yet.
+
 ### Added
 
 - **The sqtk drain tells an agent which answer option BJ picked, and what his note said** (#1454).
