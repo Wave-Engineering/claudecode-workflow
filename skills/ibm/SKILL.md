@@ -26,3 +26,4 @@ description: Verify Issue → Branch → PR/MR workflow compliance via MCP tool
 - **No pushes without a branch**
 - **No merges without a PR/MR**
 - **Always target the branch the tool resolves** — never override with a guess
+- **AC and DoD must be checkable before the item closes.** No acceptance criterion or definition-of-done line, in an issue, epic, plan, PR or MR, may wait for something that happens after the item is closed: a merge, release, install, deploy or roll, time passing, a live observation, or someone's later sign-off. Details and rewrites: `docs/ac-checkable-before-close.md`. When the issue or PR/MR this check reads carries such a line, say so in the report.

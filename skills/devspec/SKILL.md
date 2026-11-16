@@ -13,6 +13,8 @@ description: Create a Development Specification — deliverables manifest, final
 
 This skill provides a structured, interactive workflow for creating Development Specifications. It walks each Dev Spec section collaboratively, manages the Deliverables Manifest, and runs a mechanical finalization checklist.
 
+**AC and DoD must be checkable before the item closes.** No acceptance criterion or definition-of-done line, in an issue, epic, plan, PR or MR, may wait for something that happens after the item is closed: a merge, release, install, deploy or roll, time passing, a live observation, or someone's later sign-off. Details and rewrites: `docs/ac-checkable-before-close.md`. (Here "epic" means the optional PM-layer parent tracker, not a pipeline primitive.) This binds every Story's acceptance criteria, every Phase's `dod` line and the Plan issue, and Step 3.5 lints them before anything is created.
+
 ## Pipeline Taxonomy (authoritative — locked 2026-04-26)
 
 The wave-pattern pipeline is built from four primitives. This skill teaches them explicitly so every Pair walking a Dev Spec shares the same vocabulary (per `docs/phase-epic-taxonomy-devspec.md` R-02..R-04, R-12):
@@ -455,7 +457,7 @@ Call `devspec_parse_section_8(path)` — returns `{ ok, phases: [{ name, dod, wa
 
 ### Step 3.5: Pre-merge lint (before any issue is created)
 
-BJ ruled on 2026-10-24 that no AC or DoD line may need a merge to assess (#1365). Upshift creates Stories and writes `phases-waves.json` without going through `/prepwaves`, so it runs the same lint itself, before the `work_item` loop in Step 4. Write each Story's body, exactly as Step 4 will hand it to its sub-agent, to its own file with the Write tool. Write each Phase's `dod` lines to one more file, each `dod` line as `- [ ] <line>`: the lint reads only checkbox lines, so a plain bullet passes with nothing read. Fetch the Plan issue body to a file (`gh api repos/<owner>/<repo>/issues/<plan_id> --jq .body`, or `glab api projects/<enc>/issues/<plan_id> --jq .description`). Take `<owner>/<repo>` (the full project path on GitLab) from `git remote get-url origin`, never from the CLI's own repo resolution, which can pick an upstream; `<enc>` is that path URL-encoded (`/` → `%2F`). Resolve `precheck-ac-gate.sh` with the `PATH`, `.claude/bin`, `scripts/` ladder `/precheck` Step 0 uses, then run:
+BJ ruled on 2026-10-24 that no AC or DoD line may need a merge to assess (#1365), and on 2026-11-16 widened it to any line that cannot be checked until after the item is closed. Upshift creates Stories and writes `phases-waves.json` without going through `/prepwaves`, so it runs the same lint itself, before the `work_item` loop in Step 4. Write each Story's body, exactly as Step 4 will hand it to its sub-agent, to its own file with the Write tool. Write each Phase's `dod` lines to one more file, each `dod` line as `- [ ] <line>`: the lint reads a plain bullet only under an AC or DoD heading, and this file has none, so only the checkbox form is read. Fetch the Plan issue body to a file (`gh api repos/<owner>/<repo>/issues/<plan_id> --jq .body`, or `glab api projects/<enc>/issues/<plan_id> --jq .description`). Take `<owner>/<repo>` (the full project path on GitLab) from `git remote get-url origin`, never from the CLI's own repo resolution, which can pick an upstream; `<enc>` is that path URL-encoded (`/` → `%2F`). Resolve `precheck-ac-gate.sh` with the `PATH`, `.claude/bin`, `scripts/` ladder `/precheck` Step 0 uses, then run:
 
 ```bash
 "$ACGATE" lint <story files> <dod file> <plan file>; echo "exit=$?"

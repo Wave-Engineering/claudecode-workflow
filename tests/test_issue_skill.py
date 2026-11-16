@@ -861,10 +861,13 @@ def test_plan_templates_pass_the_lint(skill_text: str, tmp_path: Path) -> None:
 
 
 def test_issue_skill_lints_before_create(skill_text: str) -> None:
-    lint = skill_text.index("## Step 2.5: Pre-merge lint")
+    lint = skill_text.index("## Step 2.5: Pre-close lint")
     assert lint < skill_text.index("## Step 4: Create the Issue")
     body = skill_text[lint:skill_text.index("## Step 3: Determine Labels")]
     assert '"$ACGATE" lint <file>; echo "exit=$?"' in body
     assert "**Never create an issue with a flagged line.**" in body
     assert "<!-- ac-gate: pre-merge -->" in body
-    assert "`precheck-ac-gate.sh lint` refuses one that is not." in skill_text
+    assert "`precheck-ac-gate.sh lint` (Step 2.5) refuses" in skill_text
+    # #1460: the lint covers every issue type and PR/MR bodies, in terms of closing
+    assert "every issue type" in body and "PR/MR bodies" in body
+    assert "cannot be checked until after the item is closed" in body

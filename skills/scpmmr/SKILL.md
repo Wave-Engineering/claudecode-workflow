@@ -13,6 +13,8 @@ description: Commit, push, open + precheck the PR/MR, then merge it — /scpmr t
 
 `/scpmr`, then `/mmr` (#1235). The underlying skills use Origin Operations MCP tools: `/scpmr` uses `pr_list` + `pr_create` (draft) and `/precheck`; `/mmr` uses `pr_status` + `pr_wait_ci` + `pr_merge` + `ci_wait_run`.
 
+**AC and DoD must be checkable before the item closes.** No acceptance criterion or definition-of-done line, in an issue, epic, plan, PR or MR, may wait for something that happens after the item is closed: a merge, release, install, deploy or roll, time passing, a live observation, or someone's later sign-off. Details and rewrites: `docs/ac-checkable-before-close.md`. The PR/MR body this skill opens holds to it.
+
 ## Two ways in
 
 - **BJ types it after a precheck STOP.** The PR/MR is already prechecked and ready, so `/scpmmr` **is the merge call**. Skip straight to `/mmr`. Do not re-run `/scp` or `/precheck`; nothing changed. (If HEAD moved since the pass, `/mmr` runs `/precheck rearm` itself.)

@@ -17,6 +17,8 @@ Two stages. `plan` decides the order and stops. `run` executes an approved order
 lifecycle are stated there once. This skill points at them; it does not restate them, because two
 homes for one rule drift apart.
 
+**AC and DoD must be checkable before the item closes.** No acceptance criterion or definition-of-done line, in an issue, epic, plan, PR or MR, may wait for something that happens after the item is closed: a merge, release, install, deploy or roll, time passing, a live observation, or someone's later sign-off. Details and rewrites: `docs/ac-checkable-before-close.md`. A chain holds to it twice: an issue whose criteria wait for the close is not executable and goes on the cannot-work list, and every PR/MR the chain opens carries criteria checkable on its head.
+
 ## Stage 1 — `/autochain plan <epic-or-issue-list>`
 
 Read-only. Produces a reviewable order and **stops for approval.**

@@ -13,6 +13,8 @@ description: Merge a PR/MR with squash and source branch deletion
 
 Squash-merge a pull request (GitHub) or merge request (GitLab) with a detailed commit message and source branch deletion. All platform differences are handled inside the MCP tools — no inline `gh`/`glab` bash.
 
+**AC and DoD must be checkable before the item closes.** No acceptance criterion or definition-of-done line, in an issue, epic, plan, PR or MR, may wait for something that happens after the item is closed: a merge, release, install, deploy or roll, time passing, a live observation, or someone's later sign-off. Details and rewrites: `docs/ac-checkable-before-close.md`. Step 6.5 re-grades the bodies against it; never rewrite a line to dodge the grade, and never merge on a post-close line.
+
 ## Tools Used
 - `mcp__sdlc-server__pr_status` — state, merge_state, mergeable, checks summary, target branch
 - `mcp__sdlc-server__branch_guard` — validate the merge target against the live default (protected-gated, `kahuna/*`-exempt)

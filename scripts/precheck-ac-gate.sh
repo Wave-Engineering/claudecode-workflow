@@ -4,15 +4,19 @@
 # Two of BJ's rules, which no tool enforced before this:
 #   1. Every AC box is checked, or carries a waiver BJ already gave for it. The issue's
 #      `## Acceptance Criteria` boxes and every box in the PR/MR body are graded.
-#   2. No AC or DoD line may need a merge to assess (BJ, 2026-10-24). `lint` refuses one,
-#      wherever it is written: /issue, /prepwaves, devspec upshift, and /precheck.
+#   2. No AC or DoD line may need a merge to assess (BJ, 2026-10-24), widened by BJ on
+#      2026-11-16 to anything that cannot be checked until after the item is closed (#1460).
+#      `lint` refuses one, wherever it is written: /issue, /prepwaves, devspec upshift, and
+#      /precheck. The long form is docs/ac-checkable-before-close.md.
 #
 # /precheck runs `pr` as Job E and reads its exit code itself (#1275: no sub-agent relays a
 # gate value).
 #
 # Usage:
 #   precheck-ac-gate.sh lint <file>...
-#       The post-merge lint over every checkbox line in each file. Exit 0 or 2.
+#       The post-close lint (pattern ids P1-P11) over every checkbox line in each file, and
+#       every list item and table row under an AC or DoD heading or a bold **DoD:** /
+#       **Acceptance Criteria:** label. Prose is not read. Exit 0 or 2.
 #   precheck-ac-gate.sh boxes <label> <file> [--section "Acceptance Criteria" | --all]
 #       The checkbox rule over one body: the boxes under that H2 (default), or every box.
 #       Exit 0 or 1.
@@ -70,7 +74,66 @@ POST_MERGE = [
         r"|\btagged (release|version|rc)s?\b"
         r"|\btagged\s+(as\s+|with\s+)?[\"'`]?(v\d|\d+\.\d|:\w)", re.I)),
     ("P6", re.compile(r"\b(in prod(uction)?|on the (live )?fleet|observed live|in the wild)\b", re.I)),
+    # BJ, 2026-11-16: no AC or DoD line may need the item to be CLOSED before it can be
+    # checked. P1-P6 above are keyed to a merge; P7-P11 cover what #1365's list missed: a
+    # line that waits for the close, for time to pass, for a later event, for a live
+    # environment, or for someone's later word. The false-positive override and the
+    # waiver forms apply to every id.
+    # "closed" alone is ordinary code vocabulary (a file handle, a socket), so a close counts
+    # only when the item is named or pointed at ("the epic closes", "once it is closed"), or
+    # when it is the bare noun at a clause end ("filed on close", "after close,").
+    ("P7", re.compile(
+        r"\b(after|once|when|upon|following)\s+((the|this|that|its)\s+)?"
+        r"(issue|epic|plan|story|item|ticket|pr|mr)\s+(is\s+|has\s+been\s+|gets\s+)?"
+        r"clos(e|es|ed|ing|ure)\b"
+        r"|\b(after|once|when|upon)\s+(it|this|that)\s+(is\s+|has\s+been\s+|gets\s+)?clos(e|es|ed)\b"
+        r"|\b(after|upon)\s+clos(e|ure)\b(?!\s*\()"
+        r"|\b(on|at)\s+clos(e|ure)\b(?=\s*([.,;:)]|$))"
+        r"|\b(this|the|that)\s+(issue|epic|plan|story|ticket)\s+(is|gets|was)\s+(then\s+)?closed\b"
+        r"|\b(after|once|when|upon)\s+(the\s+|this\s+|a\s+|its\s+)?"
+        r"(roll-?out|launch|go-?live|cut-?over|promotion|shipping|sign-?off|hand-?off)\b", re.I)),
+    # A span of days alone is a TTL or a retention value; it is a wait only beside a word that
+    # says something must hold or happen over it ("no regressions for one week", "runs clean
+    # within 3 days"), so the span needs that context.
+    ("P8", re.compile(
+        r"\b(no|zero|without|stable|clean|green|healthy|passing|passes)\b[^.;]{0,60}?\b(for|over|within|across)\s+(the\s+next\s+|the\s+following\s+)?"
+        r"(a|an|one|two|three|four|five|six|seven|\d+)\s+(business\s+)?(days?|weeks?|months?|sprints?|nights?)\b"
+        r"|\b(a|one|two|three|\d+)\s+(days?|weeks?|months?|sprints?)\s+(after|later|of\s+(clean|stable|soak|monitoring|uptime|no|green))\b"
+        r"|\b(soaks?|soaked|soak[- ]test(ed|ing)?|overnight|tomorrow|next\s+(day|week|month|sprint))\b", re.I)),
+    ("P9", re.compile(
+        r"\bnext\s+(\./)?(install(ation)?|deploy(ment)?|roll-?out|campaign|nightly|cycle)\b", re.I)),
+    ("P10", re.compile(
+        r"\b(on|in|at)\s+(the\s+)?(aws-(test|prod|dev)|the\s+field)\b"
+        r"|\b(on|in|at)\s+(the\s+)?staging\b(?!\s+(fixtures?|dir\w*|folders?|files?|areas?|buffers?|tables?|config\w*))"
+        r"|\blive\s+(server|site|fleet|system|environment|deployment)\b"
+        r"|\b(first|next)\s+real\b"
+        r"|\b(is|are|was|gets|get|then|been)\s+(rolled\s+out|re-?pinned|promoted)\b"
+        r"|\b(operator|ops|admin|deployer|sre|someone|mother)\s+(re-?pins?|rolls?\s+(it\s+|this\s+|that\s+|the\s+\w+\s+)?out)\b", re.I)),
+    ("P11", re.compile(
+        r"\bobserved\s+(working|running|in|on|to|over|for)\b"
+        r"|\bno\s+(regressions?|incidents?|complaints?|alerts?|errors?|reports?)\s+(are\s+|is\s+)?"
+        r"(reported|seen|filed|raised|logged|observed)\b"
+        r"|\b(customers?|stakeholders?|clients?)\s+(signs?\s+off|accepts?|approves?|confirms?)\b"
+        r"|\bmonitor(ed|ing)?\s+(for|over)\b", re.I)),
 ]
+
+# BJ, 2026-11-16: the lint reads more than checkboxes. A list item or table row under an
+# acceptance-criteria or definition-of-done heading, or under a bold DoD/AC label, is a
+# criterion too, and a numbered or bulleted DoD is as easy to write as a box.
+# The phrase must END the heading (a trailing parenthetical or dash note is fine), so that
+# "Why the DoD changed" is prose about the section and not the section.
+CRIT_HEAD = re.compile(
+    r"^#{2,4}\s+.*\b(acceptance criteria|definition of done|dod|done when|success criteria|exit criteria)"
+    r"(\s*[(\[:\u2014-].*)?\s*$", re.I)
+CRIT_LABEL = re.compile(
+    r"^\s*\*\*(acceptance criteria|ac|definition of done|dod|done when|success criteria|exit criteria)\s*:?\*\*\s*:?\s*$",
+    re.I)
+ANY_HEAD = re.compile(r"^#{1,6}\s")
+BOLD_ONLY = re.compile(r"^\s*\*\*[^*]+\*\*\s*:?\s*$")
+LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(?!\[[ xX]\])(\S.*)$")
+CHECKBOX_LINE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\[[ xX]\]")
+TABLE_ROW = re.compile(r"^\s*\|(.+)\|\s*$")
+TABLE_RULE = re.compile(r"^\s*\|[\s:|-]+\|\s*$")
 
 
 def waiver(text):
@@ -108,6 +171,59 @@ def boxes(body):
             yield n, m.group(1) != " ", m.group(2), in_ac
 
 
+def criteria_items(body):
+    """Yield (line_no, text) for every NON-checkbox list item and table row that sits under
+    an AC/DoD heading or a bold AC/DoD label, outside a fence. Checkboxes are `boxes()`'s."""
+    fence = None
+    in_crit = False
+    lines = body.splitlines()
+    cb_indent = None
+    for n, line in enumerate(lines, 1):
+        f = FENCE.match(line)
+        if fence:
+            if f and f.group(1)[0] == fence[0] and len(f.group(1)) >= len(fence) and not f.group(2).strip():
+                fence = None
+            continue
+        if f:
+            fence = f.group(1)
+            continue
+        if ANY_HEAD.match(line):
+            in_crit = bool(CRIT_HEAD.match(line))
+            cb_indent = None  # a new section starts clean
+            continue
+        if CRIT_LABEL.match(line):
+            in_crit = True
+            cb_indent = None
+            continue
+        if BOLD_ONLY.match(line):
+            in_crit = False  # another bold label ends a bold-label section
+            cb_indent = None
+            continue
+        if not in_crit:
+            continue
+        # A list item nested under a checkbox is that box's evidence or note (the box is
+        # graded on its own), never a criterion: "- [x] X" then "  - *Evidence:* ...".
+        expanded = line.expandtabs(4)
+        indent = len(expanded) - len(expanded.lstrip(" "))
+        if line.strip():
+            if cb_indent is not None and indent <= cb_indent:
+                cb_indent = None
+            if CHECKBOX_LINE.match(line):
+                cb_indent = indent
+                continue
+        m = LIST_ITEM.match(line)
+        if m:
+            if cb_indent is not None and indent > cb_indent:
+                continue
+            yield n, m.group(1)
+            continue
+        t = TABLE_ROW.match(line)
+        if t and not TABLE_RULE.match(line):
+            if n < len(lines) and TABLE_RULE.match(lines[n]):
+                continue  # the header row (the rule line follows it) names columns, not criteria
+            yield n, t.group(1).strip()
+
+
 def grade(ref, body, mode, lint):
     """mode: section | all | none (lint only). Returns (worst exit code, output lines)."""
     total = checked = waived = unchecked = post = 0
@@ -143,6 +259,19 @@ def grade(ref, body, mode, lint):
             # Every waiver reaches the output, graded box or not (a graded one is listed
             # above): the script checks its form only, so BJ must see each one.
             out.append(f"  [waived] {ref}:{n} BJ {w[0]} {w[1]}")
+    if lint:
+        # Non-checkbox criteria: only the lint reads them (they carry no tick to grade).
+        for n, text in criteria_items(body):
+            if waiver(text):
+                out.append(f"  [waived] {ref}:{n} BJ {waiver(text)[0]} {waiver(text)[1]}")
+                continue
+            hit = next((pid for pid, rx in POST_MERGE if rx.search(text)), None)
+            if hit and OVERRIDE.search(text):
+                out.append(f"  [override] {ref}:{n} {text}")
+            elif hit:
+                post += 1
+                out.append(f"  [post-merge] {ref}:{n} {hit}: {text}")
+                code = 2
     if mode == "section" and total == 0:
         out.append(f"  [no-ac] {ref} no AC checkbox under ## Acceptance Criteria")
         code = max(code, 1)

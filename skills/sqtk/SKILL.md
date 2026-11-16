@@ -209,6 +209,10 @@ every agent prints it:
 
 `SQTK_BANNER_LIST` picks another list. `SQTK_BANNER_HUMAN` names who it's waiting on.
 
+## Filing what a walk records
+
+**AC and DoD must be checkable before the item closes.** No acceptance criterion or definition-of-done line, in an issue, epic, plan, PR or MR, may wait for something that happens after the item is closed: a merge, release, install, deploy or roll, time passing, a live observation, or someone's later sign-off. Details and rewrites: `docs/ac-checkable-before-close.md`. A `record` decision files an issue: write it with `/issue`, lint its body there (Step 2.5), and set the squawk `recorded` only after it exists.
+
 ## Walking a list with BJ
 
 When he wants to walk a list (usually a project's triage), run `sqtk walk <list>` and lay out

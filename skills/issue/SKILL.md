@@ -136,7 +136,9 @@ Extract three things:
 
 Use the prompt (or conversation context) to fill in the appropriate template below. The agent should flesh out the template sections intelligently — don't just echo the prompt back. Think about what a spec-driven implementing agent would need.
 
-**Quality standard:** Every issue should be detailed enough that a spec-driven agent can execute without making design decisions. Implementation steps should read like paint-by-numbers. Acceptance criteria and DoD lines must be checkable before the PR/MR merges. `precheck-ac-gate.sh lint` refuses one that is not.
+**Quality standard:** Every issue should be detailed enough that a spec-driven agent can execute without making design decisions. Implementation steps should read like paint-by-numbers. `precheck-ac-gate.sh lint` (Step 2.5) refuses an acceptance criterion or DoD line that is not checkable, and it covers every type below, epic and plan included.
+
+**AC and DoD must be checkable before the item closes.** No acceptance criterion or definition-of-done line, in an issue, epic, plan, PR or MR, may wait for something that happens after the item is closed: a merge, release, install, deploy or roll, time passing, a live observation, or someone's later sign-off. Details and rewrites: `docs/ac-checkable-before-close.md`.
 
 ### Plan Template
 
@@ -458,9 +460,9 @@ planning belongs to the Plan's `/devspec` → `/prepwaves` pipeline, not to the
 PM-layer Epic. If human users want a thematic grouping with a wave map, they
 can add one by hand after creation.
 
-## Step 2.5: Pre-merge lint
+## Step 2.5: Pre-close lint
 
-BJ ruled on 2026-10-24 that no AC or DoD line may need a merge to assess (#1365). Before creating anything, write the drafted body to a file with the Write tool, then run the lint on it:
+BJ ruled on 2026-10-24 that no AC or DoD line may need a merge to assess (#1365), and on 2026-11-16 widened it to any line that cannot be checked until after the item is closed. The lint applies to every issue type (plan, epic, feature, story, bug, chore, doc) and to PR/MR bodies. Before creating anything, write the drafted body to a file with the Write tool, then run the lint on it:
 
 ```bash
 ACGATE=""
@@ -473,7 +475,7 @@ done
 "$ACGATE" lint <file>; echo "exit=$?"
 ```
 
-- **Exit 2** names each flagged line and its pattern id (`P1`–`P6`: post-merge, after the release, merged, CI green on main, released, deployed or a release tagged, in prod or on the fleet). Rewrite each one as something checkable on the PR/MR head: a hermetic test, a read of the diff, or CI on the merge result. Then lint again. **Never create an issue with a flagged line.**
+- **Exit 2** names each flagged line and its pattern id (`P1`–`P11`: waits for a merge, release, tag, install or deploy; for the close or a launch; for time to pass; for a later event; for a live environment; or for someone's later word, see `docs/ac-checkable-before-close.md`). It reads every checkbox, and every list item and table row under an Acceptance Criteria or Definition of Done heading. Rewrite each one as something checkable on the PR/MR head: a hermetic test, a read of the diff, or CI on the merge result. A check that really is post-close moves out of the criteria, to a runbook step or a follow-up item. Then lint again. **Never create an issue with a flagged line.**
 - A criterion that names one of those words while being checkable before merge (e.g. "the merged-results pipeline is read") ends with the literal `<!-- ac-gate: pre-merge -->`. `/precheck` lists every such override at the merge call, so use it only for a real false positive.
 - **Exit 0** → continue to Step 3. If the script can't be found, the kit is broken: say so and stop.
 

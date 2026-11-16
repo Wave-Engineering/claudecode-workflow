@@ -13,6 +13,8 @@ description: Commit and push, open a draft PR/MR, run /precheck — on a pass th
 
 The PR/MR gate in one command (#1235): `/scp`, then `/precheck`, which opens the draft and on a pass marks it ready. It stops for BJ's merge call. It never merges; that is `/mmr`.
 
+**AC and DoD must be checkable before the item closes.** No acceptance criterion or definition-of-done line, in an issue, epic, plan, PR or MR, may wait for something that happens after the item is closed: a merge, release, install, deploy or roll, time passing, a live observation, or someone's later sign-off. Details and rewrites: `docs/ac-checkable-before-close.md`. The PR/MR body you write holds to it, including its `## Test Plan`: list what ran, never what will be watched later.
+
 ## Tools Used
 
 - `mcp__sdlc-server__pr_list` — does a PR/MR already exist for this branch?
