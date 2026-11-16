@@ -96,8 +96,7 @@ POST_MERGE = [
     # says something must hold or happen over it ("no regressions for one week", "runs clean
     # within 3 days"), so the span needs that context.
     ("P8", re.compile(
-        r"\b(no|zero|without|stable|clean|green|healthy|passing|passes|holds?|stays?|remains?|runs?|running|"
-        r"succeeds?|works?|working)\b[^.;]{0,60}?\b(for|over|within|across)\s+(the\s+next\s+|the\s+following\s+)?"
+        r"\b(no|zero|without|stable|clean|green|healthy|passing|passes)\b[^.;]{0,60}?\b(for|over|within|across)\s+(the\s+next\s+|the\s+following\s+)?"
         r"(a|an|one|two|three|four|five|six|seven|\d+)\s+(business\s+)?(days?|weeks?|months?|sprints?|nights?)\b"
         r"|\b(a|one|two|three|\d+)\s+(days?|weeks?|months?|sprints?)\s+(after|later|of\s+(clean|stable|soak|monitoring|uptime|no|green))\b"
         r"|\b(soaks?|soaked|soak[- ]test(ed|ing)?|overnight|tomorrow|next\s+(day|week|month|sprint))\b", re.I)),

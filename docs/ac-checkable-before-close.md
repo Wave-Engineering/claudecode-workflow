@@ -26,8 +26,10 @@ shapes the lint knows (pattern ids in parentheses):
 
 A span of days, a `close` or a `re-pin` alone is not enough: "logs are retained for 7 days", "flushed when closed" and "the Dockerfile re-pins the digest" are checkable on the head and pass. The lint flags a span beside a word that says something must hold over it ("no regressions for one week"), a close only when the item is named ("when the epic closes") or the bare noun ends a clause ("filed on close"), and a re-pin or roll-out only when an operator does it.
 
-The lint reads every checkbox, and every list item and table row (header rows excepted) under an Acceptance Criteria,
-Definition of Done, DoD, Done when, Success criteria or Exit criteria heading, or under a bold
+The lint reads every checkbox, and every list item and table row (header rows excepted) under a heading that
+ENDS in Acceptance Criteria, Definition of Done, DoD, Done when, Success criteria or Exit criteria
+(a trailing parenthetical or dash note is fine; "Acceptance Criteria for Phase 2" is not read, so
+end the heading with the phrase), or under a bold
 `**DoD:**` or `**Acceptance Criteria:**` label. It does not read prose. It cannot decide a
 person's judgment ("BJ confirms the chime sounds subtle") or an artifact the release writes
 ("the digest appears in the release notes"): the author has to catch those.

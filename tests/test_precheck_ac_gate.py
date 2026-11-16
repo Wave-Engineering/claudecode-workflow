@@ -273,6 +273,7 @@ def test_pre_merge_phrases_do_not_flag(tmp_path, line):
     ("P8", "Soak for 24 hours with no restarts"),
     ("P8", "the nightly job succeeds tomorrow"),
     ("P8", "runs clean within 3 days"),
+    ("P8", "CI stays green for two weeks"),
     ("P8", "2 weeks later the count still matches"),
     ("P9", "the fleet picks it up on the next ./install"),
     ("P9", "the next campaign runs clean"),
@@ -313,7 +314,9 @@ def test_each_post_close_pattern_flags(tmp_path, pid, line, box):
     "Logs are retained for 7 days (asserted by config test)",
     "The Dockerfile re-pins the base image digest",
     "handles real-world fixtures",
-    "reads the staging fixture directory",
+    "runs on the staging fixture directory",  # reaches P10's staging lookahead
+    "The token remains valid for 7 days",  # a TTL beside an ordinary verb, not a wait
+    "A session stays valid for 30 days",
 ])
 def test_pre_close_phrases_do_not_flag(tmp_path, line):
     r = _run("lint", _file(tmp_path, f"- [ ] {line}\n"))
