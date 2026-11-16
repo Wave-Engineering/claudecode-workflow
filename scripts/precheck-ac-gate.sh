@@ -131,6 +131,7 @@ CRIT_LABEL = re.compile(
 ANY_HEAD = re.compile(r"^#{1,6}\s")
 BOLD_ONLY = re.compile(r"^\s*\*\*[^*]+\*\*\s*:?\s*$")
 LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(?!\[[ xX]\])(\S.*)$")
+CHECKBOX_LINE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+\[[ xX]\]")
 TABLE_ROW = re.compile(r"^\s*\|(.+)\|\s*$")
 TABLE_RULE = re.compile(r"^\s*\|[\s:|-]+\|\s*$")
 
@@ -176,6 +177,7 @@ def criteria_items(body):
     fence = None
     in_crit = False
     lines = body.splitlines()
+    cb_indent = None
     for n, line in enumerate(lines, 1):
         f = FENCE.match(line)
         if fence:
@@ -196,8 +198,19 @@ def criteria_items(body):
             continue
         if not in_crit:
             continue
+        # A list item nested under a checkbox is that box's evidence or note (the box is
+        # graded on its own), never a criterion: "- [x] X" then "  - *Evidence:* ...".
+        indent = len(line) - len(line.lstrip(" "))
+        if line.strip():
+            if cb_indent is not None and indent <= cb_indent:
+                cb_indent = None
+            if CHECKBOX_LINE.match(line):
+                cb_indent = indent
+                continue
         m = LIST_ITEM.match(line)
         if m:
+            if cb_indent is not None and indent > cb_indent:
+                continue
             yield n, m.group(1)
             continue
         t = TABLE_ROW.match(line)

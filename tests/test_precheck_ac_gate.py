@@ -324,6 +324,23 @@ def test_pre_close_phrases_do_not_flag(tmp_path, line):
 
 
 @pytest.mark.parametrize("body", [
+    # a sub-bullet under a checkbox is that box's evidence, and the box is graded on its own
+    "## Acceptance Criteria\n\n- [x] The unit test passes.\n  - *Evidence:* the released sections stay byte-identical.\n",
+    "## Acceptance Criteria\n\n- [x] A.\n\n  - *Evidence:* soak for 24 hours was not needed.\n",
+])
+def test_evidence_nested_under_a_checkbox_is_not_a_criterion(tmp_path, body):
+    r = _run("lint", _file(tmp_path, body))
+    assert r.returncode == 0, r.stdout
+
+
+def test_a_sibling_after_a_checkbox_is_still_a_criterion(tmp_path):
+    body = "## Acceptance Criteria\n\n- [x] A.\n  - *Evidence:* fine.\n- soak for 24 hours\n"
+    r = _run("lint", _file(tmp_path, body))
+    assert r.returncode == 2, r.stdout
+    assert f"{tmp_path / 'body.md'}:5 P8" in r.stdout
+
+
+@pytest.mark.parametrize("body", [
     # a heading that merely mentions DoD is prose about the section, not the section
     "## Why the DoD changed\n\n- the soak week was dropped\n",
     # a table's header row names columns; "Verified in" here is a column, not a criterion
