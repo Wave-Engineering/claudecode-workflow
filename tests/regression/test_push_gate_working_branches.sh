@@ -251,6 +251,8 @@ check BLOCK "bash -c \"git push origin :scratch-1\""
 check_reason "git push origin --delete main" "git push <remote> --delete <branch>" "core.sshCommand" "ask the user" "its own Bash call"
 check_reason "cd /tmp && git push origin --delete x" "git push <remote> --delete <branch>" "core.sshCommand" "ask the user" "its own Bash call"
 check_reason "git push origin main" "Cannot push untested code" # a non-delete keeps the test reason
+# #1462: the refusal names the -C form, so an agent in another worktree does not read -C as a route-around
+check_reason "cd /tmp/x && git push origin feature/1-a" "git -C <plain path> push <remote> <branch>" "not \`cd <dir> && git push\`" "is never a plain push"
 
 # a git-detect.sh older than the gate (mid-./install) blocks; it must not fail open
 old_dir=$(mktemp -d)
