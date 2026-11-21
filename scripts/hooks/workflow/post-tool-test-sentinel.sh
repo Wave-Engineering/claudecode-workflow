@@ -12,6 +12,10 @@
 #   any script named like `…/lint.sh`, `run_lint.sh`, `run-tests.sh`, `validate.sh` (#1287)
 #   any command the repo declares in its `.claude-project.md` Toolchain Validation,
 #   Tests or Lint line (#1287): a repo's own entrypoint counts without a kit change
+#   any command declared for the repo in ~/.claude/declared-toolchains.md (#1464): for a
+#   repo we do not configure, whose owners did not ask for our file. A `## <key>` section
+#   (the origin as host/owner/repo, either `git@host:o/r.git` or `https://host/o/r` form, or
+#   the repo's absolute path) holding `- **Tests:** `cmd`` lines, in the Toolchain shape
 #
 # The payload (#1361). The Claude Code hooks reference
 # (https://code.claude.com/docs/en/hooks) gives PostToolUse `tool_input` and
@@ -53,19 +57,78 @@ BG=$(printf '%s' "$INPUT" | jq -r '(.tool_input.run_in_background // false) or (
 
 TEST_PATTERN='(pytest|python[0-9.]* -m pytest|npm test|npx vitest|make (test|lint|check)|\.\/scripts\/ci\/(validate|test)\.sh|ruff check|cargo test|go test|bun test|[/_-](lint|test|tests|validate)\.sh)'
 
-# The commands this repo declares under Toolchain in its .claude-project.md: every backtick
-# span on a Validation, Tests or Lint line. Spans shorter than 4 characters are ignored, so
+# The commands declared for this repo: every backtick span on a Validation, Tests or Lint
+# line, from the repo's own .claude-project.md Toolchain and from the per-user file
+# ~/.claude/declared-toolchains.md (#1464). Spans shorter than 4 characters are ignored, so
 # a stray `x` cannot make every command count.
 DECLARED=""
+# shellcheck disable=SC2016  # the backticks are literal markdown, not expansions
+TOOLCHAIN_LINE='^[[:space:]]*[-*][[:space:]]*\*\*(Validation|Tests|Lint):\*\*'
+
+# toolchain_spans: the commands on every Toolchain line read from stdin.
+toolchain_spans() {
+	# shellcheck disable=SC2016
+	grep -E "$TOOLCHAIN_LINE" | grep -oE '`[^`]+`' | tr -d '`' | awk 'length($0) >= 4'
+}
+
+# normalize_key <remote URL | path>: a remote as host/owner/repo (scheme and user@ stripped,
+# the scp-style `:` made `/`, a trailing `.git` or `/` dropped, lower-cased), so
+# git@github.com:o/r.git and https://github.com/o/r are one key. An absolute path stays as is.
+normalize_key() {
+	local k="$1" auth
+	k="${k#"${k%%[![:space:]]*}"}"
+	k="${k%"${k##*[![:space:]]}"}"
+	k="${k//\`/}"
+	if [[ "$k" == /* ]]; then
+		printf '%s' "${k%/}"
+		return 0
+	fi
+	if [[ "$k" == *://* ]]; then
+		k="${k#*://}"
+		auth="${k%%/*}"
+		k="${auth##*@}${k#"$auth"}"
+	else
+		k="${k#*@}"
+		k="${k/://}"
+	fi
+	k="${k%/}"
+	k="${k%.git}"
+	printf '%s' "$k" | tr '[:upper:]' '[:lower:]'
+}
+
+# The per-user file is markdown in the Toolchain shape, one section per repo we do not
+# configure, keyed by the repo's remote URL or its absolute path:
+#
+#   ## github.com/partner/repo
+#   - **Tests:** `bash tests/run_unit.sh`
+#
+# Only the section whose key matches this repo's origin or top-level path counts.
+user_declared() {
+	local root="$1" cfg="${HOME:-/nonexistent}/.claude/declared-toolchains.md"
+	local origin okey="" key line in_match=0 spans=""
+	[[ -f "$cfg" ]] || return 0
+	origin=$(git -C "$root" remote get-url origin 2>/dev/null || true)
+	[[ -n "$origin" ]] && okey=$(normalize_key "$origin")
+	while IFS= read -r line || [[ -n "$line" ]]; do
+		if [[ "$line" =~ ^##[[:space:]]+(.+)$ ]]; then
+			key=$(normalize_key "${BASH_REMATCH[1]}")
+			in_match=0
+			if [[ "$key" == "${root%/}" || (-n "$okey" && "$key" == "$okey") ]]; then in_match=1; fi
+			continue
+		fi
+		((in_match)) && spans+="$(printf '%s\n' "$line" | toolchain_spans)"$'\n'
+	done <"$cfg"
+	printf '%s' "$spans"
+}
+
 load_declared() {
-	local root cfg
+	local root cfg repo_spans="" user_spans=""
 	[[ -n "$HOOK_CWD" ]] || return 0
 	root=$(git -C "$HOOK_CWD" rev-parse --show-toplevel 2>/dev/null) || return 0
 	cfg="$root/.claude-project.md"
-	[[ -f "$cfg" ]] || return 0
-	# shellcheck disable=SC2016  # the backticks are literal markdown, not expansions
-	DECLARED=$(grep -E '^[[:space:]]*[-*][[:space:]]*\*\*(Validation|Tests|Lint):\*\*' "$cfg" |
-		grep -oE '`[^`]+`' | tr -d '`' | awk 'length($0) >= 4')
+	[[ -f "$cfg" ]] && repo_spans=$(toolchain_spans <"$cfg")
+	user_spans=$(user_declared "$root")
+	DECLARED=$(printf '%s\n%s\n' "$repo_spans" "$user_spans" | awk 'NF')
 }
 load_declared
 
@@ -141,6 +204,10 @@ declared_match() {
 	seg="${seg#sh }"
 	while IFS= read -r span; do
 		[[ -n "$span" ]] || continue
+		# A span may itself be written `bash tests/run.sh`: compare without the interpreter.
+		span="${span#bash }"
+		span="${span#sh }"
+		((${#span} >= 4)) || continue # the floor holds after the strip too
 		[[ "$seg" == "$span" || "$seg" == "$span "* ]] && return 0
 	done <<<"$DECLARED"
 	return 1

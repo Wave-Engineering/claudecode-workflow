@@ -126,6 +126,59 @@ check NONE "pytest" "" "$WORK/repo" false '.tool_input.run_in_background = true'
 check NONE "pytest" "" "$WORK/repo" false '.tool_response.backgroundTaskId = "b1x2"'
 check SENTINEL "pytest" "" "$WORK/repo" false '.tool_input.run_in_background = false'
 
+# #1464: a repo we do not configure has no .claude-project.md, and its test command is
+# declared in the per-user ~/.claude/declared-toolchains.md instead (HOME is the temp dir).
+WORKP="$(cd "$WORK" && pwd -P)"
+for r in partner partner-scp partner-path other; do git init -q "$WORK/$r"; done
+git -C "$WORK/partner" remote add origin https://github.com/Partner/Lib.git
+git -C "$WORK/partner-scp" remote add origin git@gitlab.example.com:team/svc.git
+git -C "$WORK/other" remote add origin https://github.com/partner/other.git
+cat >"$WORK/home/.claude/declared-toolchains.md" <<MD
+# Declared toolchains (per user, never in the repo)
+
+## github.com/partner/lib
+- **Tests:** \`bash tests/run_unit.sh\`
+- **Lint:** \`ab\`
+- **Lint:** \`bash x\`
+
+## https://gitlab.example.com/team/svc
+- **Validation:** \`./ci/verify.sh\`
+
+## $WORKP/partner-path
+- **Tests:** \`make -C suite run\`
+
+## github.com/unrelated/repo
+- **Tests:** \`./only-for-unrelated.sh\`
+MD
+UT='bash tests/run_unit.sh > log 2>&1; echo "exit=$?"'
+check SENTINEL "$UT" $'exit=0' "$WORK/partner" # https origin, any case, .git dropped
+check SENTINEL "bash tests/run_unit.sh" "" "$WORK/partner"
+check SENTINEL "./ci/verify.sh --all" "" "$WORK/partner-scp" # git@host:o/r.git matches an https key
+check SENTINEL "make -C suite run" "" "$WORK/partner-path"   # keyed by the repo's absolute path
+check NONE "$UT" $'exit=1' "$WORK/partner"                   # a failing run
+check NONE "bash tests/run_unit.sh" "" "$WORK/partner" true  # interrupted
+check NONE "bash tests/run_unit.sh" "" "$WORK/partner" false '.tool_input.run_in_background = true'
+check NONE "bash tests/run_unit.sh | tail -3" "" "$WORK/partner" # a pipe hides the status
+check NONE "bash tests/run_unit.sh" "" "$WORK/other"            # another repo's origin: no section
+check NONE "./only-for-unrelated.sh" "" "$WORK/other"           # a section for a repo that is not this one
+check NONE "cat tests/run_unit.sh" "" "$WORK/partner"           # a mention, not a command start
+check NONE "ab" "" "$WORK/partner"                              # a span under 4 characters
+check NONE "x --anything" "" "$WORK/partner"                    # `bash x` is 1 character once the interpreter goes
+check NONE "make -C suite run" "" "$WORK/partner"               # path-keyed section is not this repo's
+# The kit's own pattern never carries a partner's entrypoint.
+if grep -q '^TEST_PATTERN=.*run_unit' "$HOOK"; then
+	echo "  WRONG TEST_PATTERN carries tests/run_unit.sh"
+	fail=1
+else
+	n=$((n + 1))
+	echo "  ok    TEST_PATTERN carries no partner entrypoint"
+fi
+# No per-user file at all: nothing changes for a repo with no declaration.
+mv "$WORK/home/.claude/declared-toolchains.md" "$WORK/home/.claude/declared-toolchains.off"
+check NONE "bash tests/run_unit.sh" "" "$WORK/partner"
+check SENTINEL "pytest" "" "$WORK/partner"
+mv "$WORK/home/.claude/declared-toolchains.off" "$WORK/home/.claude/declared-toolchains.md"
+
 # Each SENTINEL case logs one metrics line, into the temp HOME, never the real one.
 if [[ ! -s "$WORK/home/.claude/logs/context-metrics.jsonl" ]]; then
 	echo "  WRONG no metrics line in the temp HOME (did the hook write elsewhere?)"
