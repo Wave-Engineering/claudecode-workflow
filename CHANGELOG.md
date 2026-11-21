@@ -21,6 +21,19 @@ are worth keeping apart:
 
 ### Changed
 
+- **The push test gate reads a per-user declaration for repos we do not configure** (#1464).
+  The sentinel counted only its built-in pattern and the repo's own `.claude-project.md`, so in
+  a partner repo whose suite is `tests/run_unit.sh` and which carries no file of ours, no honest
+  run could open a `release/*` push, and the fix was not to put our tooling into their repo.
+  `~/.claude/declared-toolchains.md` now holds `## <remote or path>` sections in the Toolchain
+  shape (`- **Tests:** `bash tests/run_unit.sh``); the section matching the repo's origin
+  (`git@host:o/r.git` and `https://host/o/r` are one key) or path feeds the same declared-command
+  list, so the #1361 rules apply unchanged: a failing, piped, backgrounded or interrupted run does
+  not count, and a command counts only where it starts. A declared span written with a leading
+  `bash ` now matches too (it never could), and the 4-character floor holds after that strip. The
+  refusal message names the file. The kit's `TEST_PATTERN` stays free of any partner's entrypoint;
+  keymaker's malory-only `tests/run_unit.sh` edit is overwritten by the next install, and the
+  per-user file is what replaces it.
 - **AC and DoD must be checkable before the item closes, and the lint now catches it** (#1460).
   BJ's 2026-10-24 rule (#1365) covered only lines that "need a merge to assess"; BJ kept finding
   lines in skill-created items that wait for something after the close (a soak week, the next
