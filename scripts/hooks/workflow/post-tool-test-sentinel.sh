@@ -136,6 +136,13 @@ load_declared
 mentions_declared() {
 	local span
 	while IFS= read -r span; do
+		[[ -n "$span" ]] || continue
+		[[ "$COMMAND" == *"$span"* ]] && return 0
+		# declared_match compares a span without its interpreter, so this prefilter must too
+		# (a declared `bash tests/run.sh` run as `sh tests/run.sh`). No length floor here:
+		# this only decides whether to look further, and declared_match holds the floor.
+		span="${span#bash }"
+		span="${span#sh }"
 		[[ -n "$span" && "$COMMAND" == *"$span"* ]] && return 0
 	done <<<"$DECLARED"
 	return 1

@@ -153,6 +153,8 @@ MD
 UT='bash tests/run_unit.sh > log 2>&1; echo "exit=$?"'
 check SENTINEL "$UT" $'exit=0' "$WORK/partner" # https origin, any case, .git dropped
 check SENTINEL "bash tests/run_unit.sh" "" "$WORK/partner"
+check SENTINEL "sh tests/run_unit.sh" "" "$WORK/partner" # the interpreter is not part of the declaration
+check SENTINEL "tests/run_unit.sh" "" "$WORK/partner"
 check SENTINEL "./ci/verify.sh --all" "" "$WORK/partner-scp" # git@host:o/r.git matches an https key
 check SENTINEL "make -C suite run" "" "$WORK/partner-path"   # keyed by the repo's absolute path
 check NONE "$UT" $'exit=1' "$WORK/partner"                   # a failing run
@@ -161,9 +163,11 @@ check NONE "bash tests/run_unit.sh" "" "$WORK/partner" false '.tool_input.run_in
 check NONE "bash tests/run_unit.sh | tail -3" "" "$WORK/partner" # a pipe hides the status
 check NONE "bash tests/run_unit.sh" "" "$WORK/other"            # another repo's origin: no section
 check NONE "./only-for-unrelated.sh" "" "$WORK/other"           # a section for a repo that is not this one
-check NONE "cat tests/run_unit.sh" "" "$WORK/partner"           # a mention, not a command start
+check NONE "echo bash tests/run_unit.sh" "" "$WORK/partner"   # contains the span, yet is a mention, not a command start
+check NONE "cat tests/run_unit.sh" "" "$WORK/partner"           # a mention without the interpreter
 check NONE "ab" "" "$WORK/partner"                              # a span under 4 characters
-check NONE "x --anything" "" "$WORK/partner"                    # `bash x` is 1 character once the interpreter goes
+check NONE "bash x --anything" "" "$WORK/partner"                # `bash x` is 1 character once the interpreter goes: the floor, reached
+check NONE "x --anything" "" "$WORK/partner"
 check NONE "make -C suite run" "" "$WORK/partner"               # path-keyed section is not this repo's
 # The kit's own pattern never carries a partner's entrypoint.
 if grep -q '^TEST_PATTERN=.*run_unit' "$HOOK"; then
